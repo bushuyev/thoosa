@@ -5,15 +5,36 @@ use std::{
     pin::Pin,
     sync::atomic::{AtomicU64, Ordering},
 };
-
+use std::fmt::{Debug, Formatter};
+use log::error;
 use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
-use tracing::debug;
+use tokio::sync::watch::Receiver;
+use tracing::{debug, warn};
+use std::borrow::BorrowMut;
+use std::sync::Arc;
+use std::sync::atomic::Ordering::Relaxed;
+use crate::{Cause, ThoError};
 
-type BoxFuture = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
+enum IsOOM {
+    Yes,
+    No
+}
+
+impl From<bool> for IsOOM {
+    fn from(value: bool) -> Self {
+        if value {
+            IsOOM::Yes
+        } else {
+            IsOOM::No
+        }
+    }
+}
+
+type BoxFuture = Pin<Box<dyn Future<Output = IsOOM> + Send + 'static>>;
 type JobId = u64;
 type ExecutorId = u64;
 
@@ -44,7 +65,7 @@ struct Job {
 impl Job {
     fn new<F>(id: JobId, max_other_parallel: usize, fut: F) -> Self
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = IsOOM> + Send + 'static,
     {
         Self {
             id,
@@ -57,8 +78,17 @@ impl Job {
         self.max_other_parallel.saturating_add(1)
     }
 
-    async fn run(self) {
-        self.fut.await;
+    async fn run(self) -> IsOOM {
+        self.fut.await
+    }
+}
+
+impl Debug for Job {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Jon")
+            .field("id", &self.id)
+            .field("max_other_parallel", &self.max_other_parallel)
+            .finish()
     }
 }
 
@@ -231,10 +261,10 @@ impl DynamicTaskExecutor {
         &self,
         max_other_parallel: usize,
         fut: F,
-    ) -> Result<T, SubmitError>
+    ) -> Result<T, ThoError>
     where
-        F: Future<Output = T> + Send + 'static,
-        T: Send + 'static,
+        F: Future<Output = Result<T, ThoError>> + Send + 'static,
+        T: Send + Debug + 'static,
     {
 
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
@@ -245,11 +275,15 @@ impl DynamicTaskExecutor {
         suspend_guard.maybe_suspend().await?;
 
         let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
-        let (result_tx, result_rx) = oneshot::channel::<T>();
+        let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
 
         let wrapped = async move {
             let value = fut.await;
+            debug!("DynamicTaskExecutor::submit: wrapped value={value:?}");
+            let is_oom = value.as_ref().is_err_and(|e|e.is_oom());
             let _ = result_tx.send(value);
+
+            is_oom.into()
         };
 
         if self
@@ -259,10 +293,10 @@ impl DynamicTaskExecutor {
             .is_err()
         {
             let _ = suspend_guard.resume().await;
-            return Err(SubmitError::Closed);
+            return Err(ThoError::new_with_error("", Cause::SubmitErrorClosed));
         }
 
-        let result = result_rx.await.map_err(|_| SubmitError::Cancelled);
+        let result = result_rx.await?;
 
         suspend_guard.resume().await?;
         result
@@ -302,10 +336,10 @@ impl DynamicTaskExecutor {
         let mut input_closed = false;
         let mut limit_closed = false;
         let mut cmd_closed = false;
-        let mut global_limit = *limit_rx.borrow();
+        let mut global_limit = Arc::new(AtomicU64::new(2)); //*limit_rx.borrow();
 
         loop {
-            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} running.len={}, pending.len={}", running.len(), pending.len());
+            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} running.len={}, pending.len={} global_limit={global_limit:?}", running.len(), pending.len());
             Self::drain_finished(
                 &mut running,
                 &mut done_rx,
@@ -318,7 +352,7 @@ impl DynamicTaskExecutor {
                 &mut jobs,
                 &mut active_caps,
                 &mut active_count,
-                global_limit,
+                global_limit.load(Relaxed) as usize,
             );
 
             Self::try_spawn_ready_jobs(
@@ -327,7 +361,7 @@ impl DynamicTaskExecutor {
                 &mut jobs,
                 &mut active_caps,
                 &mut active_count,
-                global_limit,
+                Arc::clone(&global_limit),
                 &done_tx,
                 &cmd_tx_for_tasks,
             );
@@ -373,7 +407,7 @@ impl DynamicTaskExecutor {
                                         &mut jobs,
                                         &mut active_caps,
                                         &mut active_count,
-                                        global_limit,
+                                        global_limit.load(Relaxed) as usize,
                                         job_id,
                                         reply,
                                     );
@@ -386,16 +420,16 @@ impl DynamicTaskExecutor {
                     }
                 }
 
-                changed = limit_rx.changed(), if !limit_closed => {
-                    match changed {
-                        Ok(()) => {
-                            global_limit = *limit_rx.borrow_and_update();
-                        }
-                        Err(_) => {
-                            limit_closed = true;
-                        }
-                    }
-                }
+                // changed = limit_rx.changed(), if !limit_closed => {
+                //     match changed {
+                //         Ok(()) => {
+                //             global_limit = *limit_rx.borrow_and_update();
+                //         }
+                //         Err(_) => {
+                //             limit_closed = true;
+                //         }
+                //     }
+                // }
 
                 join_result = running.join_next(), if !running.is_empty() => {
                     if let Some(Err(err)) = join_result {
@@ -418,10 +452,12 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        global_limit: usize,
+        global_limit: Arc<AtomicU64>,
         done_tx: &mpsc::UnboundedSender<JobId>,
         cmd_tx_for_tasks: &mpsc::UnboundedSender<ManagerCmd>,
     ) {
+        debug!("DynamicTaskExecutor::try_spawn_ready_jobs: pending={pending:?}");
+
         loop {
             let mut spawned_any = false;
             let mut idx = 0usize;
@@ -431,7 +467,7 @@ impl DynamicTaskExecutor {
                     let job = &pending[idx];
                     Self::can_activate_now(
                         *active_count,
-                        global_limit,
+                        global_limit.load(Relaxed) as usize,
                         active_caps,
                         job.total_parallel_cap(),
                     )
@@ -455,7 +491,7 @@ impl DynamicTaskExecutor {
 
                     let done_tx = done_tx.clone();
                     let cmd_tx_for_tasks = cmd_tx_for_tasks.clone();
-
+                    let global_limit = Arc::clone(&global_limit);
                     running.spawn(async move {
                         struct DoneGuard {
                             job_id: JobId,
@@ -470,17 +506,27 @@ impl DynamicTaskExecutor {
 
                         let _guard = DoneGuard { job_id, done_tx };
 
-                        CURRENT_JOB
+                        match CURRENT_JOB
                             .scope(
                                 CurrentJob {
                                     job_id,
                                     cmd_tx: cmd_tx_for_tasks,
                                 },
                                 async move {
-                                    job.run().await;
+                                    job.run().await
                                 },
-                            )
-                            .await;
+                            ).await {
+                            IsOOM::Yes => {
+                                if global_limit.load(Relaxed) > 2 {//TODO config
+                                    global_limit.fetch_sub(1, Ordering::SeqCst);
+                                }
+                            }
+                            IsOOM::No => {
+                                if global_limit.load(Relaxed)  < 32 {//TODO config
+                                    global_limit.fetch_add(1, Ordering::SeqCst);
+                                }
+                            }
+                        }
                     });
 
                     spawned_any = true;
@@ -504,7 +550,12 @@ impl DynamicTaskExecutor {
     ) -> bool {
         let next_total = active_count.saturating_add(1);
         let current_group_cap = Self::current_group_cap(global_limit, active_caps);
-        next_total <= current_group_cap.min(new_cap)
+
+        let min = current_group_cap.min(new_cap);
+        let r = next_total <= min;
+
+        debug!("DynamicTaskExecutor::can_activate_now: active_count={active_count} global_limit={global_limit} min={min} r={r}");
+        r
     }
 
     fn current_group_cap(
@@ -621,6 +672,8 @@ impl DynamicTaskExecutor {
                 })
                 .collect();
 
+            debug!("DynamicTaskExecutor::try_resume_waiters: waiting_ids={waiting_ids:?}");
+
             let mut progressed = false;
 
             for job_id in waiting_ids {
@@ -657,9 +710,13 @@ impl DynamicTaskExecutor {
         job_id: JobId,
     ) {
         if let Some(job) = jobs.remove(&job_id) {
+            debug!("DynamicTaskExecutor::note_job_finished: job={job:?}");
+
             if job.active {
                 Self::remove_active(active_caps, active_count, job.cap);
             }
+        } else {
+            warn!("DynamicTaskExecutor::note_job_finished: no {job_id}");
         }
     }
 
@@ -676,7 +733,7 @@ impl DynamicTaskExecutor {
 
         while let Some(res) = running.try_join_next() {
             if let Err(err) = res {
-                eprintln!("job failed: {err}");
+                error!("DynamicTaskExecutor::drain_finished: err={err:?}");
             }
         }
     }
@@ -886,4 +943,22 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_oom() -> Result<(), SubmitError> {
+        let exec = DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap());
+
+        let x = exec
+            .submit(0, async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                123
+            })
+            .await?;
+
+        assert_eq!(x, 123);
+
+        exec.shutdown().await;
+        Ok(())
+    }
+
 }

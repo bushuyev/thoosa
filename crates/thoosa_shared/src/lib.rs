@@ -347,6 +347,8 @@ pub enum Cause {
     },
     SomethingElse(String),
     NotFound,
+    SubmitErrorClosed,
+    SubmitErrorCancelled,
 }
 
 pub struct ThoError {

@@ -986,6 +986,7 @@ async fn run_all(
 
     info!("train label nets done: run_ids={train_label_nets_run_ids:?}");
 
+    /*
     ////////////////////////
 
     //gpt Pre-create context and shared handles for final-net stage construction.
@@ -1016,6 +1017,8 @@ async fn run_all(
         },
         || root_ctx.branch(Some("train final nets"), true, false),
     ).await?;
+    */
+
     Ok(())
 }
 
@@ -1085,11 +1088,11 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 5001 }, step: Some((500, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((50, 0)) },
         freq_filter: Some(vec![
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(2),
+                step: RangeOrValue::Value(10),
             }),
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
@@ -1284,21 +1287,21 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
 
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    // let find_and_select =  FindAndSelect::GridOnly {
-    //     find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
-    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-    //     select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
-    // };
-
-    let find_and_select =  FindAndSelect::WithOpt {
-        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-            id: None,
-            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select),
-            select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
-        },
+    let find_and_select =  FindAndSelect::GridOnly {
+        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+        select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     };
+
+    // let find_and_select =  FindAndSelect::WithOpt {
+    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
+    //         id: None,
+    //         find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select),
+    //         select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
+    //     },
+    //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+    //     find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    // };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
@@ -1377,9 +1380,9 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
             head_size: RangeOrValue::Range { range: Range { start: 128, end: 256 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            // ff_mult: RangeOrValue::Value(2),
+            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
+            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
             dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.1 }, step: None },
         })
