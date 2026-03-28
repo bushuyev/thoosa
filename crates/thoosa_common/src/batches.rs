@@ -93,7 +93,7 @@ mod tests {
     use tokio::sync::Semaphore;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn prefetch_next_batch_stream_prefetches_only_one_batch_ahead() -> Result<(), ThoError> {
+    async fn test_prefetch_next_batch_stream_prefetches_only_one_batch_ahead() -> Result<(), ThoError> {
         let started = Arc::new(AtomicUsize::new(0));
         let release_batches = Arc::new(Semaphore::new(0));
         let started_for_futures = Arc::clone(&started);

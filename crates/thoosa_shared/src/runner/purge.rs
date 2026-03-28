@@ -99,7 +99,7 @@ where
                         if let Err(e) = v.dump_to_cpu(device_idx).await {
                             warn!("purge_gpu failed: key={key:?} err={e:?}");
                         } else {
-                            info!("purge_gpu ok: key={key:?}");
+                            debug!("purge_gpu ok: key={key:?}");
                         }
                     }
                     Err(e) => warn!("purge_gpu: Err key={key:?} err={e:?}"),

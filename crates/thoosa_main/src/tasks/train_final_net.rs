@@ -366,9 +366,7 @@ where
                         0,
                     )?;
 
-                    debug!("LogitsResourcesBatch::build_batch_stream: x=
-{x} y=
-{y}");
+                    debug!("LogitsResourcesBatch::build_batch_stream: x={x} y={y}");
 
                     Ok::<_, ThoError>((x.into(), None, y.into()))
                 })
