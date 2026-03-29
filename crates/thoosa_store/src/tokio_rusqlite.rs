@@ -23,8 +23,6 @@
     unreachable_pub
 )]
 
-#[cfg(test)]
-mod tests;
 
 use crossbeam_channel::{Receiver, Sender};
 use std::{

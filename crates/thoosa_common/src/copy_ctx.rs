@@ -55,7 +55,7 @@ impl CopyCtx {
         Arc::new(Pool::from_iter((0..num_buffs).map(|_| {
             (
                 PinnedHostBuffer::new(buf_size).unwrap(),
-                Arc::new(ThoCudaStream::new(device)),
+                Arc::new(ThoCudaStream::from_pool(device, true).unwrap()),//TODO unwrap
             )
         })))
     }
@@ -73,7 +73,7 @@ impl CopyCtx {
             &mut self.bufs_pool,
             Arc::new(Pool::from_vec(vec![(
                 PinnedHostBuffer::new(1).unwrap(),
-                Arc::new(ThoCudaStream::new(self.cu_ctx.ordinal() as i32)),
+                Arc::new(ThoCudaStream::from_pool(self.cu_ctx.ordinal() as i32, true).unwrap()),
             )])),
         )));
 

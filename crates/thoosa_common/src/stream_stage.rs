@@ -5,12 +5,13 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
+use thoosa_shims::stream::with_pooled_cuda_stream;
 use crate::cuda_utils::with_cuda_stream;
 
 #[derive(Debug)]
 pub struct StreamStage<S>
 where
- S:SyncStage
+    S:SyncStage
 {
     stage:Arc<S>
 }
@@ -39,11 +40,11 @@ where
 {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
-        let (out, stream) = with_cuda_stream(ctx.device_idx(), move ||{
+        let (out, stream) = with_pooled_cuda_stream(ctx.device_idx(), false,move |_|{
             Arc::clone(&self.stage).do_run(input, ctx)
-        });
+        })?;
         if let Some(stream) = stream {
-            stream.synchronize().map_err(|msg|ThoError::new(msg))?;
+            stream.synchronize()?;
         }
 
         out
@@ -92,4 +93,63 @@ impl<S> Adjustable for StreamStage<S>
 where
     S: SyncStage + Adjustable,
 {
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Mul;
+    use log::debug;
+    use rayon::yield_now;
+    use tch::kind::FLOAT_CUDA;
+    use tch::Tensor;
+    use tokio::time::Instant;
+    use thoosa_shared::os_thread_id;
+    use thoosa_shims::stream::with_pooled_cuda_stream;
+    use crate::tho_tensor::ThoTensor;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_0() {
+
+        fn run_tensor_ops(label:&str) {
+            let inst = Instant::now();
+            let mut t = Tensor::rand([100, 100, 100_000], FLOAT_CUDA);
+            for i in  0..1000 {
+                t = if i % 2 == 0 {
+                    t.pow_tensor_scalar(2.0)
+                } else {
+                    t.pow_tensor_scalar(0.5)
+                };
+
+                // debug!("{label}_{i}_{}", os_thread_id());
+            }
+            debug!("{label} done in {}", inst.elapsed().as_millis())
+        }
+        const WITH_STREAM:bool = true;
+        let inst = Instant::now();
+        tokio::join!(
+            tokio::spawn(async move {
+                if WITH_STREAM {
+                    with_pooled_cuda_stream(1, false, |_|{
+                        run_tensor_ops("aaa");
+                    }).unwrap();
+                } else {
+                    run_tensor_ops("aaa");
+                }
+            }),
+            tokio::spawn(async {
+                if WITH_STREAM {
+                    with_pooled_cuda_stream(1, false, |_|{
+                        run_tensor_ops("bbb");
+                    }).unwrap();
+                } else {
+                    run_tensor_ops("bbb");
+                }
+
+            })
+        );
+
+        debug!("all done in {} with_stream={WITH_STREAM}", inst.elapsed().as_millis())
+    }
+
 }

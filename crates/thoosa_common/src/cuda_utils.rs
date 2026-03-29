@@ -201,6 +201,7 @@ pub async fn copy_d2h_from_ptr(
                     let stream = buf_stream.1.clone();
 
                     tokio::task::spawn_blocking(move || {
+                        let _guard = ThoStreamGuard::new(stream.as_ref()).map_err(|te|te.what().clone())?;
                         let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                             buf_ptr as *mut c_void,
                             src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
@@ -364,6 +365,7 @@ pub async fn copy_h2d_from_ptr(
                         //----------------------------------------------------------
                         // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                         //----------------------------------------------------------
+                        let _guard = ThoStreamGuard::new(buf_stream.1.as_ref()).unwrap();
                         let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                             dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                             buf_ptr as *const c_void,
@@ -653,7 +655,7 @@ mod tests {
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
                 PinnedHostBuffer::new(buf_size as usize).unwrap(),
-                Arc::new(ThoCudaStream::new(0)),
+                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
             )
         })));
 
@@ -720,7 +722,7 @@ mod tests {
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
                 PinnedHostBuffer::new(buf_size as usize).unwrap(),
-                Arc::new(ThoCudaStream::new(0)),
+                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
             )
         })));
 
@@ -776,7 +778,7 @@ mod tests {
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_| {
             (
                 PinnedHostBuffer::new(buf_size).unwrap(),
-                Arc::new(ThoCudaStream::new(0)),
+                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
             )
         })));
 
@@ -924,14 +926,14 @@ where
     F:FnMut() -> R
 {
 
-    if tho_device_idx > 0 {
-        let motifs_stream = ThoCudaStream::new((tho_device_idx - 1) as i32); //TODO
-        let _guard = ThoStreamGuard::set(&motifs_stream);
-
-        (f(), Some(motifs_stream))
-    } else {
+    // if tho_device_idx > 0 {
+    //     let stream = ThoCudaStream::new((tho_device_idx - 1) as i32); //TODO
+    //     let _guard = ThoStreamGuard::set(&stream);
+    //
+    //     (f(), Some(stream))
+    // } else {
         (f(), None)
-    }
+    // }
 }
 
 tokio::task_local! {

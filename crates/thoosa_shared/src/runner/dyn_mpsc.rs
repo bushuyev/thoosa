@@ -156,7 +156,7 @@ impl ParentSuspendGuard {
         }
     }
 
-    async fn maybe_suspend(&mut self) -> Result<(), SubmitError> {
+    async fn maybe_suspend(&mut self) -> Result<(), ThoError> {
         let Some(parent) = &self.parent else {
             return Ok(());
         };
@@ -175,7 +175,7 @@ impl ParentSuspendGuard {
         Ok(())
     }
 
-    async fn resume(&mut self) -> Result<(), SubmitError> {
+    async fn resume(&mut self) -> Result<(), ThoError> {
         if !self.suspended {
             return Ok(());
         }
@@ -742,18 +742,18 @@ impl DynamicTaskExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_util::StreamExt;
+    use futures_util::{StreamExt, TryStreamExt};
     use std::{sync::Arc, time::Duration};
     use rand::prelude::IndexedRandom;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_return_value() -> Result<(), SubmitError> {
+    async fn test_return_value() -> Result<(), ThoError> {
         let exec = DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap());
 
         let x = exec
             .submit(0, async move {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                123
+                Ok(123)
             })
             .await?;
 
@@ -764,7 +764,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_nested_submit_no_deadlock() -> Result<(), SubmitError> {
+    async fn test_nested_submit_no_deadlock() -> Result<(), ThoError> {
         let exec = Arc::new(DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap()));
 
         let results = futures_util::stream::iter(0..3)
@@ -775,31 +775,31 @@ mod tests {
 
                     let values = exec
                         .submit(0, async move {
-                            futures_util::stream::iter(0..3)
+                            Ok(futures_util::stream::iter(0..3)
                                 .map(|j| {
                                     let exec_for_inner = Arc::clone(&exec_for_inner);
                                     async move {
                                         let v = exec_for_inner
                                             .submit(usize::MAX, async move {
                                                 tokio::time::sleep(Duration::from_millis(20)).await;
-                                                i * j
+                                                Ok(i * j)
                                             })
                                             .await?;
-                                        Ok::<i32, SubmitError>(v)
+                                        Ok::<i32, ThoError>(v)
                                     }
                                 })
                                 .buffer_unordered(3)
-                                .collect::<Vec<Result<i32, SubmitError>>>()
-                                .await
+                                .try_collect::<Vec<i32>>()
+                                .await?)
                         })
                         .await?;
 
-                    let sum = values.into_iter().filter_map(Result::ok).sum::<i32>();
-                    Ok::<i32, SubmitError>(sum)
+                    let sum = values.into_iter().sum::<i32>();
+                    Ok::<i32, ThoError>(sum)
                 }
             })
             .buffer_unordered(3)
-            .collect::<Vec<Result<i32, SubmitError>>>()
+            .collect::<Vec<Result<i32, ThoError>>>()
             .await;
 
         let sums: Vec<i32> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
@@ -811,7 +811,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_load_ahead() -> Result<(), SubmitError> {
+    async fn test_load_ahead() -> Result<(), ThoError> {
         let exec = Arc::new(DynamicTaskExecutor::new(4, NonZeroUsize::new(4).unwrap()));
 
         let results = futures_util::stream::iter(0..100)
@@ -825,7 +825,7 @@ mod tests {
                         .submit(max_par, async move {
                             tokio::time::sleep(Duration::from_millis(10)).await;
 
-                            futures_util::stream::iter(0..12)
+                            Ok(futures_util::stream::iter(0..12)
                                 .map(|j| {
                                     let exec_for_inner = Arc::clone(&exec_for_inner);
 
@@ -834,26 +834,26 @@ mod tests {
                                         exec_for_inner
                                             .submit(max_par_inner, async move {
                                                 tokio::time::sleep(Duration::from_millis(10)).await;
-                                                i * j
+                                               Ok(i * j)
                                             })
                                             .await?;
-                                        Ok::<i32, SubmitError>(j)
+                                        Ok::<i32, ThoError>(j)
                                     }
                                 })
                                 .buffer_unordered(3)
-                                .collect::<Vec<Result<i32, SubmitError>>>()
-                                .await
+                                .try_collect::<Vec<i32>>()
+                                .await)
                         })
                         .await?
                         .into_iter()
-                        .filter_map(Result::ok)
+                        .flat_map(|x|x.into_iter())
                         .sum::<i32>();
 
-                    Ok::<i32, SubmitError>(sum)
+                    Ok::<i32, ThoError>(sum)
                 }
             })
             .buffer_unordered(3)
-            .collect::<Vec<Result<i32, SubmitError>>>()
+            .collect::<Vec<Result<i32, ThoError>>>()
             .await;
 
         let sums: Vec<i32> = results.into_iter().collect::<Result<Vec<_>, _>>()?;
@@ -866,7 +866,7 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_multistep() -> Result<(), SubmitError> {
+    async fn test_multistep() -> Result<(), ThoError> {
         async fn some_fn_1(i:i32, j:i32){
             println!("xxxxxxxxxxxx__{i}_{j}");
         }
@@ -904,8 +904,8 @@ mod tests {
 
                                         tokio::time::sleep(Duration::from_millis(500)).await;
 
-                                        Ok::<_, SubmitError>(())
-                                    }).await.expect("1").expect("2");
+                                        Ok::<_, ThoError>(())
+                                    }).await.expect("1");
 
                                 }).await.unwrap();
                             }
@@ -928,8 +928,8 @@ mod tests {
 
                                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                                    Ok::<_, SubmitError>(())
-                                }).await.expect("1").expect("2");
+                                    Ok::<_, ThoError>(())
+                                }).await.expect("1");
 
                                 }).await.unwrap();
                             }
@@ -944,21 +944,5 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_oom() -> Result<(), SubmitError> {
-        let exec = DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap());
-
-        let x = exec
-            .submit(0, async move {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                123
-            })
-            .await?;
-
-        assert_eq!(x, 123);
-
-        exec.shutdown().await;
-        Ok(())
-    }
 
 }

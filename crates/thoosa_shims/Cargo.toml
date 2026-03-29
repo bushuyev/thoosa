@@ -8,6 +8,7 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
+thoosa_shared = {path = "../thoosa_shared" }
 torch-sys.workspace = true
 
 cmake = "0.1"
