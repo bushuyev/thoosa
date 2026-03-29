@@ -2,7 +2,7 @@ use std::backtrace::Backtrace;
 use crate::runner::permits::{NumPermits, MAX_PERMITS};
 use crate::runner::permits::runner_queue::Arbiter;
 use crate::runner::permits::{PermitSource, RunnerPerm};
-use thoosa_shared::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::FuturesRunnerMapPurger;
 use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
@@ -14,12 +14,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{backtrace_head_lines, Cause, ThoError};
+use thoosa_shared::{backtrace_head_lines, with_async_perf_log, with_perf_log, Cause, ThoError, LOCK_TIMEOUT};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
-use crate::{with_async_perf_log, with_perf_log, LOCK_TIMEOUT};
-use crate::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 
 #[derive(Debug)]
@@ -354,16 +353,16 @@ impl GlobalCtx {
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
     use std::sync::Arc;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::permits::{NumPermits, PermitSource, RunnerPerm};
-    use crate::Cause;
-    use crate::ThoError;
+    use thoosa_shared::Cause;
+    use thoosa_shared::ThoError;
     use async_trait::async_trait;
-    use crate::traits::CachableIdTr;
+    use thoosa_shared::traits::CachableIdTr;
     use mockall::predicate::eq;
     use tokio::sync::Semaphore;
     use tokio::task::block_in_place;
-    use crate::comp_id::SynKey;
+    use thoosa_shared::comp_id::SynKey;
     use crate::runner::global_ctx::MockGlobalCtx;
 
     #[derive(Clone, Copy, Debug)]

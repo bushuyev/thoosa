@@ -501,7 +501,7 @@ mod tests {
     use tokio::time::Instant;
     use tokio_utils::Pool;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use crate::dims::AnyDims;

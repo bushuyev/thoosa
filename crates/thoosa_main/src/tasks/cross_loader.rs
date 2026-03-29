@@ -2,13 +2,13 @@ use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputB
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_shared::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, info, warn};
@@ -27,14 +27,14 @@ use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::{simple_id, CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
-use thoosa_shared::runner::cache_areas::CacheArea;
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
+use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::mono_key;
@@ -946,7 +946,7 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
     }
 }
 
-impl thoosa_shared::runner::common::cachable::WithDataRefSend for CrossInputSelectorWrap {
+impl thoosa_common::runner::common::cachable::WithDataRefSend for CrossInputSelectorWrap {
     fn with_data_ref_send<Rt, F, P>(
         &self,
         to_device_idx: usize,
@@ -962,7 +962,7 @@ impl thoosa_shared::runner::common::cachable::WithDataRefSend for CrossInputSele
     }
 }
 
-impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<CrossInputSelector> for CrossInputSelectorWrap {
+impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<CrossInputSelector> for CrossInputSelectorWrap {
     fn with_selected_data_ref_send<'o, Rt, F, C>(
         &self,
         to_device_idx: usize,
@@ -981,8 +981,8 @@ impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<CrossInputSe
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_shared::runner::common::{OutId, RunCtx};
+    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_common::runner::common::{OutId, RunCtx};
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use std::fmt::Debug;
     use std::marker::PhantomData;
@@ -1118,8 +1118,8 @@ pub(crate) mod mock_cross_loader_clc {
 #[cfg(test)]
 #[allow(refining_impl_trait)]
 pub(crate) mod mock_cross_loader_receiver {
-    use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_shared::runner::common::RunCtx;
+    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_common::runner::common::RunCtx;
     use mockall::mock;
     use std::fmt::Debug;
     use std::future::Future;
@@ -1222,12 +1222,12 @@ mod tests {
         CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
     };
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
-    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::{debug, set_max_level};
     use parking_lot::RwLock;

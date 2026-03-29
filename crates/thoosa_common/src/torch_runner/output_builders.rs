@@ -4,7 +4,7 @@ use std::hash::Hash;
 use log::debug;
 use tch::Device;
 use tch::Kind;
-use thoosa_shared::runner::adjusters::splits::OutputBuilder;
+use crate::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{Named, WithId};
@@ -96,7 +96,7 @@ mod tests {
     use tch::Kind::Float;
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
-    use thoosa_shared::runner::adjusters::splits::OutputBuilder;
+    use crate::runner::adjusters::splits::OutputBuilder;
     use crate::dims::{AnyMetrics, AnySub, Dims};
     use thoosa_shared::simple_id;
     use thoosa_shared::ThoError;

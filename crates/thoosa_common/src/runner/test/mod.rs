@@ -321,7 +321,7 @@ where
 
 #[cfg(test)]
 // Shared fixtures for tests that must bypass the MockGlobalCtx from `tests`.
-pub(crate) mod fixtures {
+pub mod fixtures {
     use std::cmp::min;
     use std::ops::Range;
     use std::sync::atomic::AtomicUsize;
@@ -340,17 +340,17 @@ pub(crate) mod fixtures {
     use crate::runner::common::runnable::{AsyncStage, Stage};
     use crate::runner::run_ctx_2::RunCtxWithPermits;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
-    use crate::traits::Adjustable;
+    use thoosa_shared::traits::Adjustable;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     #[name = "MulTaskOutputId"]
-    pub(crate) struct DMulTaskOutputId(pub(crate) &'static str);
+    pub struct DMulTaskOutputId(pub &'static str);
 
 
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "LoadedTensorId"]
-    pub(crate) struct DummyLoader {
-        pub(crate) run_count: AtomicUsize,
+    pub struct DummyLoader {
+        pub run_count: AtomicUsize,
         len: usize,
     }
 
@@ -366,9 +366,9 @@ pub(crate) mod fixtures {
 
     }
 
-    pub(crate) struct DLoadedTensor {
-        pub(crate) id: SimpleId,
-        pub(crate) data: DummyTensor,
+    pub struct DLoadedTensor {
+        pub id: SimpleId,
+        pub data: DummyTensor,
     }
 
     impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
@@ -434,7 +434,7 @@ pub(crate) mod fixtures {
     impl Input for DLoadedTensor {}
 
     impl DummyLoader {
-        pub(crate) fn new(len: usize) -> DummyLoader {
+        pub fn new(len: usize) -> DummyLoader {
             DummyLoader {
                 run_count: Default::default(),
                 len,
@@ -444,11 +444,11 @@ pub(crate) mod fixtures {
     }
 
     #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
-    pub(crate) struct DLoaderInputId(pub(crate) &'static str);
+    pub struct DLoaderInputId(pub &'static str);
 
     #[derive(Debug, Clone)]
-    pub(crate) struct DLoaderInput {
-        pub(crate) id: DLoaderInputId,
+    pub struct DLoaderInput {
+        pub id: DLoaderInputId,
     }
     impl Input for DLoaderInput {  }
     impl WithId for DLoaderInput {
@@ -557,9 +557,9 @@ mod tests {
     use crate::runner::purge::FuturesRunnerMapPurger;
     use crate::runner::run_ctx_2::RunCtxWithPermits;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
-    use crate::traits::Adjustable;
+    use thoosa_shared::traits::Adjustable;
     #[double]
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx;
 
     #[ctor::ctor]
@@ -574,8 +574,8 @@ mod tests {
     });
 
     #[derive(Debug, Named)]
-    pub(crate) struct DummyLoader {
-        pub(crate) run_count: AtomicUsize,
+    pub struct DummyLoader {
+        pub run_count: AtomicUsize,
         len: usize,
     }
 
@@ -623,7 +623,7 @@ mod tests {
     }
 
     impl DummyLoader {
-        pub(crate) fn new(len: usize) -> DummyLoader {
+        pub fn new(len: usize) -> DummyLoader {
             DummyLoader {
                 run_count: Default::default(),
                 len,
@@ -1214,7 +1214,7 @@ mod tests_no_global_ctx_mock{
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test::fixtures::{DLoaderInput, DummyLoader};
     use crate::runner::run_ctx_2::RunCtxWithPermits;
-    use crate::ThoError;
+    use thoosa_shared::ThoError;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_cache_areas() -> Result<(), ThoError> {

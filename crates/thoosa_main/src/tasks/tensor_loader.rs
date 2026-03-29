@@ -1,14 +1,14 @@
 use crate::tasks::cross_dims::ChannelsData2;
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use tch::Device;
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::{mono_key, ThoError};
@@ -18,7 +18,7 @@ use thoosa_shared::traits::WithId;
 use thoosa_named_derive::Named;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 use thoosa_with_data::with_data;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
@@ -120,10 +120,10 @@ pub(crate) mod mock_tensor_loader {
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::sync::Arc;
-    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::{MockRunCtx, OutId};
-    use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::{MockRunCtx, OutId};
+    use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;
     use thoosa_named_derive::Named;
@@ -219,12 +219,12 @@ pub(crate) mod mock_tensor_loader {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::runner::common::RunCtx;
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::RunCtx;
     use rand::{Fill, Rng, RngExt};
     use parking_lot::RwLock;
     use std::sync::Arc;

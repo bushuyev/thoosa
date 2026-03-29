@@ -17,7 +17,7 @@ use tracing::{debug, warn};
 use std::borrow::BorrowMut;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
-use crate::{Cause, ThoError};
+use thoosa_shared::{Cause, ThoError};
 
 enum IsOOM {
     Yes,

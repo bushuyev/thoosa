@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use thoosa_shared::runner::common::RunCtx;
+use crate::runner::common::RunCtx;
 use thoosa_shared::ThoError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -143,7 +143,7 @@ pub mod mock_async_data_batch {
     use mockall::mock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use thoosa_shared::runner::common::RunCtx;
+    use crate::runner::common::RunCtx;
     use thoosa_shared::ThoError;
 
     mock! {

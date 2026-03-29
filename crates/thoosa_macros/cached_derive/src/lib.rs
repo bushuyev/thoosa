@@ -7,7 +7,7 @@ pub fn derive_acachable(_input: TokenStream) -> TokenStream {
     TokenStream::new()
 }
 
-// Derive macro for thoosa_shared::runner::common::cachable::Cached
+// Derive macro for thoosa_common::runner::common::cachable::Cached
 #[proc_macro_derive(Cached, attributes(cache_name))]
 pub fn derive_cached(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -16,11 +16,11 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
 
     let map_type = quote! {
         dashmap::DashMap<
-            <<Self as thoosa_shared::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
+            <<Self as thoosa_common::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
             futures_util::future::Shared<
                 futures_util::future::BoxFuture<'static, Result<
-                    std::sync::Arc<thoosa_shared::runner::common::cachable::DevicesWrap<
-                        <Self as thoosa_shared::runner::common::runnable::Stage>::Out
+                    std::sync::Arc<thoosa_common::runner::common::cachable::DevicesWrap<
+                        <Self as thoosa_common::runner::common::runnable::Stage>::Out
                     >>,
                     thoosa_shared::ThoosaError
                 >>
@@ -40,7 +40,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
         static #register_static_ident: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
         #[async_trait::async_trait]
-        impl #impl_generics thoosa_shared::runner::common::cachable::Cached for #name #ty_generics #where_clause {
+        impl #impl_generics thoosa_common::runner::common::cachable::Cached for #name #ty_generics #where_clause {
             async fn cache() -> &'static #map_type
             where
                 Self: Sized,
@@ -59,10 +59,10 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
                     .get_or_init(|| async move {
                         use thoosa_shared::traits::Named;
 
-                        thoosa_shared::runner::global_ctx::GlobalCtx::global()
+                        thoosa_common::runner::global_ctx::GlobalCtx::global()
                             .register_cache((
                                 Self::name(),
-                                map as &'static dyn thoosa_shared::runner::purge::FuturesRunnerMapPurger,
+                                map as &'static dyn thoosa_common::runner::purge::FuturesRunnerMapPurger,
                             ))
                             .await;
                     })

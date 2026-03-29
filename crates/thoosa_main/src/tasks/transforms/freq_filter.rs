@@ -8,11 +8,11 @@ use tch::Device::Cuda;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_common::debug_plot;
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use thoosa_shared::runner::common::OutId;
-use thoosa_shared::runner::common::RunCtx;
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::OutId;
+use thoosa_common::runner::common::RunCtx;
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
@@ -26,7 +26,7 @@ use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -339,10 +339,10 @@ mod tests {
     use parking_lot::RwLock;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use thoosa_shared::runner::common::cachable::DevicesWrap;
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, AverageFilterParams, Padding, SavGolFilterParams};
     use thoosa_shared::ThoError;
@@ -351,10 +351,10 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::transforms::smoothing::{median, moving_average};
     use crate::tasks::transforms::freq_filter::FreqFilter;
-    use thoosa_shared::runner::common::RunCtx;
+    use thoosa_common::runner::common::RunCtx;
     use thoosa_with_data::with_data;
 
     #[tokio::test]

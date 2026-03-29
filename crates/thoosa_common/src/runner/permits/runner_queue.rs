@@ -12,7 +12,7 @@ use thoosa_shared::{Cause, ThoError};
 use tokio::sync::{Notify, Semaphore, TryAcquireError, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
-use crate::comp_id::SynKey;
+use thoosa_shared::comp_id::SynKey;
 use crate::runner::permits::{DropSignal, NumPermits, PermitSource, RunnerPerm};
 
 pub struct Arbiter {
@@ -584,9 +584,9 @@ mod tests {
 
     use log::debug;
     use std::sync::Arc;
-    use crate::mono_key;
+    use thoosa_shared::mono_key;
     use crate::runner::global_ctx::GlobalCtx;
-    use crate::simple_id;
+    use thoosa_shared::simple_id;
     use crate::runner::permits::MAX_PERMITS;
 
 

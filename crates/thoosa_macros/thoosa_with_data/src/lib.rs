@@ -140,7 +140,7 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
     quote! {
         {
             use thoosa_shared::traits::WithId;
-            use thoosa_shared::runner::common::PermitsCtx;
+            // use thoosa_shared::runner::common::PermitsCtx;
 
             let mut __with_data_ctx = #ctx_expr;
             let __device_idx = __with_data_ctx.device_idx();

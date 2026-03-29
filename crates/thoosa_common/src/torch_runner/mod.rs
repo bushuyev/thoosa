@@ -37,7 +37,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
 mod tests {
 
     use dashmap::DashMap;
-    use thoosa_shared::runner::common::*;
+    use crate::runner::common::*;
     use futures_util::future::{BoxFuture, Shared};
     use log::debug;
     use parking_lot::RwLock;
@@ -56,15 +56,15 @@ mod tests {
     use tracing_subscriber::{fmt, EnvFilter};
     use thoosa_shared::comp_id::{MonoKey, SynKey};
     use thoosa_shared::copy_mode::CpuOnly;
-    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_named_derive::Named;
-    use thoosa_shared::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
-    use thoosa_shared::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use thoosa_shared::runner::test::FailUntil::MinPermits;
-    use thoosa_shared::runner::test_utils::parse_numeric_part;
+    use crate::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
+    use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
+    use crate::runner::test::FailUntil::MinPermits;
+    use crate::runner::test_utils::parse_numeric_part;
     use crate::cuda_utils::cuda_mem;
     use crate::dims::{AnyDims, Dims};
     use crate::tho_device::ThoDevice;
@@ -74,7 +74,7 @@ mod tests {
     use std::ops::Add;
     use std::time::Duration;
     use futures_util::StreamExt;
-    use thoosa_shared::runner::tmp_cache::TmpCached;
+    use crate::runner::tmp_cache::TmpCached;
 
     #[ctor::ctor]
     fn init() {

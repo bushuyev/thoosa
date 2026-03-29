@@ -4,10 +4,10 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::sync::Arc;
 use log::debug;
-use crate::ThoError;
-use crate::traits::CachableIdTr;
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::CachableIdTr;
 use tokio::sync::{Notify, OwnedSemaphorePermit, mpsc};
-use crate::comp_id::SynKey;
+use thoosa_shared::comp_id::SynKey;
 use crate::runner::global_ctx::GlobalCtx;
 
 pub mod runner_queue;

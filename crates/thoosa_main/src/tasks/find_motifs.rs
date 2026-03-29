@@ -4,12 +4,12 @@ use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
-use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use futures_util::FutureExt;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
@@ -35,8 +35,8 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, Th
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use thoosa_shared::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
 use thoosa_common::dims::MotifSlices;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
@@ -476,13 +476,13 @@ mod tests {
     use crate::cli::{import_resources, run_grid};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
-    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
-    use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use log::{debug, set_max_level};
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -495,7 +495,7 @@ mod tests {
     use tch::{Device, IndexOp, Tensor};
     use tch::display::set_print_options_full;
     use tch::kind::INT64_CPU;
-    use thoosa_shared::runner::common::cachable::Cached;
+    use thoosa_common::runner::common::cachable::Cached;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
