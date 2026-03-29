@@ -11,10 +11,10 @@ use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
 
-use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-use thoosa_shared::runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
-use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+use thoosa_common::runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
+use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::cuda_utils::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
@@ -33,7 +33,7 @@ use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::runner::permits::{NumPermits, RunnerPerm};
+use thoosa_common::runner::permits::{NumPermits, RunnerPerm};
 
 
 pub struct ClcResourcesMotifsDist<C>

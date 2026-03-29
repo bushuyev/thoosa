@@ -3,8 +3,8 @@ use futures_util::future::BoxFuture;
 use log::{debug, error, trace, warn};
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use crate::{panic_to_err, panic_to_err_async, ThoError};
+use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
+use crate::runner::global_ctx::GlobalCtx;
 
 pub enum PurgeCmd {
     Gpu {

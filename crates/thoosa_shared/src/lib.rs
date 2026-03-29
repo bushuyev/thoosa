@@ -57,7 +57,6 @@ pub mod traits;
 pub mod data_with_extra;
 pub mod perf_logging;
 pub mod copy_mode;
-pub mod runner;
 pub mod comp_id;
 pub mod collect_futures_eta;
 pub mod math;

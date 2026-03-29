@@ -2,8 +2,8 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
-use thoosa_shared::runner::common::runnable::Stage;
-use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError};
+use crate::runner::common::runnable::Stage;
+use crate::runner::oom_handler::{Adjuster, AdjusterError};
 use thoosa_shared::traits::Adjustable;
 
 #[derive(Debug)]

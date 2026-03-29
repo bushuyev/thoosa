@@ -4,7 +4,8 @@ use futures_util::StreamExt;
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use thoosa_shared::runner::common::RunCtx;
+use log::debug;
+use crate::runner::common::RunCtx;
 use thoosa_shared::ThoError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +55,31 @@ impl<DX: Dims, DY: Dims, C: RunCtx, B: AsyncDataBatch<DX, DY, C>> AsyncDataBatch
         self.as_ref().valid_batch_stream(ctx)
     }
 
+}
+
+pub fn preload_one<S>(source: S) -> BoxStream<'static, S::Item>
+where
+    S: futures::stream::Stream + Send + 'static,
+    S::Item: Send + 'static,
+{
+    debug!("preload_one");
+
+    let (tx, rx) = tokio::sync::mpsc::channel(1); // exactly one ready batch ahead
+
+    tokio::spawn(async move {
+        futures_util::pin_mut!(source);
+
+        while let Some(item) = source.next().await {
+            if tx.send(item).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    futures::stream::unfold(rx, |mut rx| async move {
+        rx.recv().await.map(|item| (item, rx))
+    })
+        .boxed()
 }
 
 // Prefetch at most one batch ahead. Reserve channel capacity before starting the next batch
@@ -143,7 +169,7 @@ pub mod mock_async_data_batch {
     use mockall::mock;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use thoosa_shared::runner::common::RunCtx;
+    use crate::runner::common::RunCtx;
     use thoosa_shared::ThoError;
 
     mock! {

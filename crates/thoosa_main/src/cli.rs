@@ -6,11 +6,11 @@ use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
 use async_trait::async_trait;
-use thoosa_shared::runner::common::runnable::Stage;
+use thoosa_common::runner::common::runnable::Stage;
 use clap::{Args, Parser, Subcommand};
 use futures_util::future::{join_all, try_join_all};
 use futures_util::{StreamExt, TryStreamExt};
@@ -76,16 +76,16 @@ use thoosa_common::copy_ctx::CopyCtx;
 
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter, SavGolFilter, MedianFilter, AverageFilter};
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
-use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::common::runnable::AsyncStage;
-use thoosa_shared::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::common::runnable::AsyncStage;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
-use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
@@ -394,6 +394,7 @@ where
                     }
                     debug!("run_cli: purge_cpu tick");
                     GlobalCtx::global().purge_cpu(10).await;
+                    debug!("run_cli: purge_cpu done");
                 }
                 _ = rx.changed() => {
                     if *rx.borrow() {
@@ -1287,21 +1288,21 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
 
 fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    let find_and_select =  FindAndSelect::GridOnly {
-        find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
-        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
-    };
-
-    // let find_and_select =  FindAndSelect::WithOpt {
-    //     find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-    //         id: None,
-    //         find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select),
-    //         select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
-    //     },
+    // let find_and_select =  FindAndSelect::GridOnly {
+    //     find_motifs_run_config_range_or_value: run_all_find_motifs_config_grid_0(2, 2, 4),
     //     fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-    //     find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    //     select_motifs_run_config: run_all_select_motifs_config_grid_0::<SelectMotifsRunConfigFields>(),
     // };
+
+    let find_and_select =  FindAndSelect::WithOpt {
+        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
+            id: None,
+            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select),
+            select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
+        },
+        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+    };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
@@ -2577,13 +2578,13 @@ mod cli_tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
-    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use thoosa_shared::runner::common::mock_run_ctx::MockRunCtxBuilder;
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};

@@ -8,7 +8,7 @@ use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tch::Device::Cpu;
 use tub::{Guard, Pool};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
+use crate::runner::global_ctx::GlobalCtx;
 use thoosa_shared::ThoError;
 use crate::tho_device::ThoDevice;
 

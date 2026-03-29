@@ -2,7 +2,7 @@ use std::backtrace::Backtrace;
 use crate::runner::permits::{NumPermits, MAX_PERMITS};
 use crate::runner::permits::runner_queue::Arbiter;
 use crate::runner::permits::{PermitSource, RunnerPerm};
-use thoosa_shared::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::purge::FuturesRunnerMapPurger;
 use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
@@ -14,12 +14,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{backtrace_head_lines, Cause, ThoError};
+use thoosa_shared::{backtrace_head_lines, with_async_perf_log, with_perf_log, Cause, ThoError, LOCK_TIMEOUT};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
-use crate::{with_async_perf_log, with_perf_log, LOCK_TIMEOUT};
-use crate::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 
 #[derive(Debug)]
@@ -64,7 +63,7 @@ impl GlobalCtx {
                 .map(|_| Arc::new(AsyncRwLock::new(())))
                 .collect(),
 
-            executors: (0..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(32).unwrap()))
+            executors: (1..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(16).unwrap()))
                 .collect(),
 
             caches: tokio::sync::RwLock::new(HashMap::new()),
@@ -81,7 +80,7 @@ impl GlobalCtx {
     }
 
     pub fn get_executor(&self, device:usize)-> &DynamicTaskExecutor {
-        &self.executors[device]
+        &self.executors[device-1]
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) ->Result<(), ThoError>{
@@ -260,13 +259,13 @@ impl GlobalCtx {
         assert_ne!(device_idx, 0);
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
 
-        //should be ok to read lock -  caches are expected to be updated (GlobalCtx::register_cache) rarely, perhaps on app startup only or before running set of runs
+
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
             let maps = with_async_perf_log(
                 async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock"),
                 "GlobalCtx/dump_all_to_cpu/read_caches",
-            )
-                .await;
+            ).await;
+
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
 
@@ -281,6 +280,8 @@ impl GlobalCtx {
         }
 
         self.is_all_on_cpu[device_idx].store(true, Relaxed);
+        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} done");
+
         Ok(())
     }
 
@@ -354,16 +355,16 @@ impl GlobalCtx {
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
     use std::sync::Arc;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::permits::{NumPermits, PermitSource, RunnerPerm};
-    use crate::Cause;
-    use crate::ThoError;
+    use thoosa_shared::Cause;
+    use thoosa_shared::ThoError;
     use async_trait::async_trait;
-    use crate::traits::CachableIdTr;
+    use thoosa_shared::traits::CachableIdTr;
     use mockall::predicate::eq;
     use tokio::sync::Semaphore;
     use tokio::task::block_in_place;
-    use crate::comp_id::SynKey;
+    use thoosa_shared::comp_id::SynKey;
     use crate::runner::global_ctx::MockGlobalCtx;
 
     #[derive(Clone, Copy, Debug)]

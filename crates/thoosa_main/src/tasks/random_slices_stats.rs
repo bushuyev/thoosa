@@ -23,11 +23,11 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::traits::{Adjustable, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_store::Store;
@@ -291,11 +291,11 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::cachable::WithDataRef;
-    use thoosa_shared::runner::common::mock_run_ctx;
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::cachable::WithDataRef;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_store::MockStoreBuilder;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

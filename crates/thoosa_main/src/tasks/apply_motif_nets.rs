@@ -14,11 +14,9 @@ use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tracing::warn;
-use cached_derive::Cached;
 use thoosa_named_derive::Named;
-
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::debug_plot;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
@@ -43,21 +41,21 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use thoosa_shared::runner::adjusters::splits::SplitsAdjusterContext;
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 
 
-#[derive(Debug, Cached, Named)]
+#[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
@@ -461,7 +459,7 @@ where
                 let step_aligned_min_split_len = ((motif_width_i64 + self.slice_step as i64 - 1) / self.slice_step as i64) * self.slice_step as i64;
                 let min_split_len = step_aligned_min_split_len.max(motif_width_i64);
                 let overlap_len = motif_width.saturating_sub(self.slice_step) as i64;
-                let input_len = input.size().dim::<1>() as i64;
+                let input_len = input.size().dim::<1>();
                 let slices = if input_len >= motif_width_i64 {
                     ((input_len - motif_width_i64) / self.slice_step as i64) + 1
                 } else {
@@ -481,7 +479,7 @@ where
 
                     let r = OOMHandler::new(
                         vec![
-                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
                             Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),
@@ -509,13 +507,13 @@ where
                                 ),
                             ),
                         ).await;
-                    debug!("ApplyMotifNets::run: r={r:?}");
+                    debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
                     r
                 }
 
             });
 
-        let matches = collect_futures_with_progress(
+        let motif_nets_applied = collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
@@ -526,14 +524,14 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        debug!("ApplyMotifNets::run: matches.len={} matches={matches:?}", matches.len());
+        debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
 
-        let match_lens = matches.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
-        let unique_match_lens = match_lens.iter().copied().collect::<HashSet<_>>();
-        let max_match_len = match_lens.iter().copied().max().unwrap_or(0);
-        let matches = if unique_match_lens.len() > 1 {
-            debug!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={match_lens:?}. Padding to max len={max_match_len} for concat.");
-            matches.into_iter().map(|v| {
+        let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
+        let unique_motif_nets_applied_lens = motif_nets_applied_lens.iter().copied().collect::<HashSet<_>>();
+        let max_match_len = motif_nets_applied_lens.iter().copied().max().unwrap_or(0);
+        let motif_nets_applied = if unique_motif_nets_applied_lens.len() > 1 {
+            debug!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
+            motif_nets_applied.into_iter().map(|v| {
                 let size = v.t.size();
                 if size[0] == max_match_len {
                     return Ok(v);
@@ -546,13 +544,13 @@ where
                 ThoTensor::new(id.clone(), t)
             }).collect::<Result<Vec<_>, ThoError>>()?
         } else {
-            matches
+            motif_nets_applied
         };
 
-        trace!("ApplyMotifNets::run: matches_={matches:?}");
+        trace!("ApplyMotifNets::run: matches_={motif_nets_applied:?}");
 
         let res_t = Tensor::f_vstack(
-            &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(),
+            &motif_nets_applied.into_iter().map(|v| v.t).collect::<Vec<_>>(),
         )?;
 
         debug!("ApplyMotifNets::run: res_t.size={:?}", res_t.size());
@@ -562,7 +560,7 @@ where
             res_t, //.f_transpose(0, 1)?,
         )?;
 
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, match_lens), cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens), cache_area.into())))
 
     }
 
@@ -701,13 +699,10 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P: RunCtx,
     {
-        let selected_batch = self
-            .batch
-            .with_selected_data(to_device_idx, permits_ctx.branch(Some("apply_motif_net_input_selected_batch"), false, false), selector, |selected_batch, _ctx| Ok(selected_batch))
-            .await?;
 
-        with_data!(permits_ctx, self.motif_net; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
-            let input = ApplyMotifNetInput::new(&selected_batch, motif_net);
+        with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData2, SynKey>|{
+            let b = batch.subview(selector)?;
+            let input = ApplyMotifNetInput::new(&b, motif_net);
             debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
             let r = do_run(&input, &ctx);
 
@@ -720,7 +715,7 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     }
 }
 
-impl thoosa_shared::runner::common::cachable::WithDataRefSend for ApplyMotifNetInputWrapper {
+impl thoosa_common::runner::common::cachable::WithDataRefSend for ApplyMotifNetInputWrapper {
     fn with_data_ref_send<R, F, P>(
         &self,
         to_device_idx: usize,
@@ -736,7 +731,7 @@ impl thoosa_shared::runner::common::cachable::WithDataRefSend for ApplyMotifNetI
     }
 }
 
-impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
+impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     fn with_selected_data_ref_send<'o, R, F, P>(
         &self,
         to_device_idx: usize,
@@ -1019,12 +1014,12 @@ pub(crate) mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::{nn, Device, IndexOp, Kind, Tensor};
     use tch::nn::{LinearConfig, VarStore};
-    use thoosa_shared::runner::common::cachable::DevicesWrap;
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::mock_run_ctx;
-    use thoosa_shared::runner::common::{PermitsCtx, RunCtx};
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::common::{PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::builder::SeqBuilder;
     use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;

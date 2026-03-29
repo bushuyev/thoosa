@@ -380,6 +380,8 @@ pub async fn copy_h2d_from_ptr(
                         }
                         let _ = buf_stream.1.synchronize();
                         drop(buf_stream); // return buffer/stream to pool
+                        debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?} done", os_thread_id());
+
                     }).await.unwrap();
 
                     // wait for GPU work to finish before recycling buffer
@@ -501,7 +503,7 @@ mod tests {
     use tokio::time::Instant;
     use tokio_utils::Pool;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use crate::dims::AnyDims;

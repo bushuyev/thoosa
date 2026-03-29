@@ -8,7 +8,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
-use crate::traits::{Adjustable, CachableIdTr};
+use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::RunCtx;
 use crate::runner::permits::{NumPermits, RunnerPerm, MAX_PERMITS};
 use crate::runner::adjusters::dump_to_cpu::*;

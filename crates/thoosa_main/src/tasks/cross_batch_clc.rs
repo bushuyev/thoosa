@@ -1,12 +1,12 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
+use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+use thoosa_common::runner::common::{OutId, PermitsCtx, RunCtx};
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -533,9 +533,9 @@ mod tests {
     use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::find_motifs::{MasksCtx, MeanDistsCtx};
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
-    use thoosa_shared::runner::common::MockRunCtx;
-    use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::common::MockRunCtx;
+    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
@@ -550,7 +550,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {
