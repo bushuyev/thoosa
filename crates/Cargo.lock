@@ -5164,6 +5164,7 @@ version = "0.1.0"
 dependencies = [
  "cmake",
  "log",
+ "thoosa_shared",
  "torch-sys",
 ]
 
