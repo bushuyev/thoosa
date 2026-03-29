@@ -1,5 +1,5 @@
 
-use thoosa_shared::runner::oom_handler::{Adjuster, InputContext};
+use crate::runner::oom_handler::{Adjuster, InputContext};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
 use log::debug;
@@ -216,14 +216,14 @@ mod tests {
     use async_trait::async_trait;
     use mockall::mock;
     use thoosa_shared::ThoError;
-    use crate::applicables_runner::{Input, Output};
-    use crate::copy_mode::CpuOrGpu;
-    use crate::CopyToDevice;
+    use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::copy_mode::CpuOrGpu;
+    use thoosa_shared::CopyToDevice;
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::MockRunCtx;
     use crate::runner::common::runnable::{Stage, SyncStage};
-    use crate::traits::{Adjustable, Data, WithId};
-    use crate::traits::mock_cachable_id::MockCachableId;
+    use thoosa_shared::traits::{Adjustable, Data, WithId};
+    use thoosa_shared::traits::mock_cachable_id::MockCachableId;
 
     mock! {
         #[derive(Debug)]

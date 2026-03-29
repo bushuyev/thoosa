@@ -825,12 +825,12 @@ mod tests {
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunId};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::cachable::DevicesWrap;
-    use thoosa_shared::runner::common::mock_run_ctx;
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::common::{MockRunCtx, RunCtx};
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::common::{MockRunCtx, RunCtx};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::TensorIdSliceIdx;

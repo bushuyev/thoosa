@@ -70,7 +70,8 @@ tokio-utils.workspace = true
 
 anyhow = "1.0.99"
 tracing.workspace = true
-tracing-subscriber = "0.3.22"
+console-subscriber.workspace = true
+tracing-subscriber.workspace = true
 with-id = "1.0.2"
 tub = "0.3"
 [build-dependencies]

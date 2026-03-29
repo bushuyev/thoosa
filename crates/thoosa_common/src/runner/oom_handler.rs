@@ -1,12 +1,12 @@
 use std::borrow::Borrow;
-use crate::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{PermitsCtx, RunCtx};
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::common::{DropIf, OutId};
 #[double]
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::statistics::Statistics;
+use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use log::{debug, warn};
 use mockall::automock;
@@ -15,8 +15,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use crate::{os_thread_id, panic_to_err_async};
-use thoosa_shared::CopyToDevice;
+use thoosa_shared::{os_thread_id, panic_to_err_async, CopyToDevice};
 use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{Cause, ThoError};
 use crate::runner::permits::MAX_PERMITS;
@@ -56,8 +55,8 @@ where
 
 #[cfg(test)]
 pub mod mock_input_context {
-    use thoosa_shared::runner::oom_handler::mock_runnable::MockRunnable;
-    use thoosa_shared::runner::oom_handler::test_types::TestOutput;
+    use crate::runner::oom_handler::mock_runnable::MockRunnable;
+    use crate::runner::oom_handler::test_types::TestOutput;
     use mockall::mock;
     use thoosa_shared::ThoError;
 
@@ -1082,7 +1081,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use async_trait::async_trait;
     use thoosa_shared::{Cause, ThoError};
-    use thoosa_shared::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::traits::{Adjustable, WithId};
     use super::{Adjuster, InputContext};
     type Selector = Range<[usize; 1]>;

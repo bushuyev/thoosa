@@ -4,8 +4,8 @@ use ambassador::delegatable_trait;
 use futures_util::future::BoxFuture;
 use runnable::Stage;
 use std::fmt::Debug;
-use crate::ThoError;
-use crate::traits::{Named, WithId};
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::{Named, WithId};
 pub mod cachable;
 pub mod runnable;
 
@@ -56,8 +56,8 @@ pub mod mock_run_ctx {
     use mockall::predicate::always;
     use thoosa_shared::traits::{Adjustable, Named};
     use thoosa_shared::{mono_key, ThoError};
-    use crate::comp_id::MonoKey;
-    use crate::traits::WithId;
+    use thoosa_shared::comp_id::MonoKey;
+    use thoosa_shared::traits::WithId;
 
     mock! {
         #[derive(Debug)]

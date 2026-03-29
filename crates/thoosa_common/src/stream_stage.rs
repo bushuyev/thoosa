@@ -1,8 +1,8 @@
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
-use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
+use crate::runner::common::{OutId, RunCtx};
+use crate::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
 use crate::cuda_utils::with_pooled_cuda_stream;

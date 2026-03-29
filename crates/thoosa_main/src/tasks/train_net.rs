@@ -1,14 +1,14 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use async_trait::async_trait;
-use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::common::{OutId, PermitsCtx, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::{mono_key, now_ms};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace, warn};
@@ -271,7 +271,7 @@ where
                 let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false, false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
-                let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), batch.num_batches(), 1);
+                let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
@@ -293,7 +293,7 @@ where
 
                     debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?}", input.id());
 
-                    collect_eta_record_completion(epoch_eta_guard.id());
+                    collect_eta_record_completion(batch_eta_guard.id());
 
                 }
 
@@ -568,7 +568,7 @@ impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
     }
 }
 
-impl<DI: Dims, DO: Dims> thoosa_shared::runner::common::cachable::WithDataRefSend for TrainStepInput<DI, DO> {
+impl<DI: Dims, DO: Dims> thoosa_common::runner::common::cachable::WithDataRefSend for TrainStepInput<DI, DO> {
     fn with_data_ref_send<R, F, P>(
         &self,
         to_device_idx: usize,
@@ -584,7 +584,7 @@ impl<DI: Dims, DO: Dims> thoosa_shared::runner::common::cachable::WithDataRefSen
     }
 }
 
-impl<DI: Dims, DO: Dims> thoosa_shared::runner::common::cachable::WithSelectDataRefSend<()> for TrainStepInput<DI, DO> {
+impl<DI: Dims, DO: Dims> thoosa_common::runner::common::cachable::WithSelectDataRefSend<()> for TrainStepInput<DI, DO> {
     fn with_selected_data_ref_send<'o, R, F, P>(
         &self,
         to_device_idx: usize,
@@ -762,18 +762,18 @@ mod tests {
     use std::future::ready;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use thoosa_shared::runner::common::cachable::DevicesWrap;
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::{mock_run_ctx, RunCtx};
-    use thoosa_shared::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
+    use thoosa_common::runner::common::runnable::AsyncStage;
     use futures_util::StreamExt;
     use futures::stream::{self, BoxStream};
     use parking_lot::RwLock;
     use tch::nn::{AdamW, LinearConfig, OptimizerConfig, VarStore};
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::runner::common::MockRunCtx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::batches::mock_async_data_batch;
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, Dims, ThoBatch};

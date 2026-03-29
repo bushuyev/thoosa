@@ -15,20 +15,19 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use crate::CopyToDevice;
-use crate::Cause;
+use thoosa_shared::{with_async_perf_log, with_perf_log, CopyToDevice, LOCK_TIMEOUT};
+use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
-use thoosa_shared::runner::cache_areas::CacheArea;
-use crate::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
+use crate::runner::cache_areas::CacheArea;
+use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use crate::runner::cache_areas::CacheAreaId;
-use crate::traits::{Data, Named, Select};
+use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
 #[cfg(test)]
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-use crate::ThoError;
-use crate::traits::WithId;
-use crate::{with_async_perf_log, with_perf_log, LOCK_TIMEOUT};
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::WithId;
 
 async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
     with_async_perf_log(
@@ -507,7 +506,12 @@ where
             match wrap.load_from_any_device_(to_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
+
+                    let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let r =DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    stream.synchronize()?;
+                    r
                 }
                 Err(e) => Err(e),
             }
@@ -556,7 +560,11 @@ where
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                let r =DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                stream.synchronize()?;
+                return r;
             }
         }
 
@@ -606,7 +614,13 @@ where
 
                     let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+
+                    stream.synchronize()?;
+
+                    return r;
                 }
             }
 
@@ -1296,7 +1310,7 @@ mod tests {
     use crate::runner::global_ctx::MockGlobalCtx;
     use thoosa_with_data::with_data;
     extern crate self as caching_runner;
-    pub use thoosa_shared::runner::common::*;
+    pub use crate::runner::common::*;
     use crate::runner::cache_areas::CacheArea;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx;
@@ -1304,7 +1318,7 @@ mod tests {
     use crate::runner::common::mock_run_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;
-
+    use crate as thoosa_common;
 
 
     #[tokio::test]

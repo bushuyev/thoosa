@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use log::debug;
-use crate::{Cause, ThoError};
+use thoosa_shared::{Cause, ThoError};
 
 /// Public “area handle”: global bit index (0..n_areas).
 pub type CacheAreaId = u64;

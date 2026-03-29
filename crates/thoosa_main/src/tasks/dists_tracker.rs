@@ -24,8 +24,8 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
-use thoosa_shared::runner::common::RunCtx;
+use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+use thoosa_common::runner::common::RunCtx;
 use thoosa_shims::stream::ThoCudaStream;
 use thoosa_shims::stream::ThoStreamGuard;
 use thoosa_store::fs_store::FileMotifTrackerStore;
@@ -1681,7 +1681,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use thoosa_common::utils::reset_print_options;
     use thoosa_shared::{Cause, ThoError};
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
 
     #[ctor::ctor]
     pub fn init() {

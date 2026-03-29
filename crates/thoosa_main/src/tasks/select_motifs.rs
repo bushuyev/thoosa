@@ -17,16 +17,16 @@ use tch::kind::FLOAT_CUDA;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::{JoinHandle, JoinSet};
-use thoosa_shared::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
-use thoosa_shared::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_shared::runner::cache_areas::CacheArea;
-use thoosa_shared::runner::common::{OutId, RunCtx};
-use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_shared::runner::global_ctx::GlobalCtx;
-use thoosa_shared::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::runner::tmp_cache::TmpCached;
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::loader::rayon_pool;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::stream_stage::StreamStage;
@@ -51,7 +51,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
@@ -61,7 +61,7 @@ use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
 use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
 use crate::tasks::find_motifs::config_to_stage;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -146,6 +146,7 @@ struct SelectedMotifEvaluation {
 
 impl SelectedMotifEvaluation {
     fn to_savable_score(&self) -> (u32, f64) {
+
         (self.motif_id, self.avg_score)
     }
 }
@@ -491,7 +492,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
     }
 }
 
-impl thoosa_shared::runner::common::cachable::WithDataRefSend for SelectMotifsInputSelectorWrap {
+impl thoosa_common::runner::common::cachable::WithDataRefSend for SelectMotifsInputSelectorWrap {
     fn with_data_ref_send<R, F, P>(
         &self,
         to_device_idx: usize,
@@ -507,7 +508,7 @@ impl thoosa_shared::runner::common::cachable::WithDataRefSend for SelectMotifsIn
     }
 }
 
-impl thoosa_shared::runner::common::cachable::WithSelectDataRefSend<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
+impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
     fn with_selected_data_ref_send<'o, R, F, P>(
         &self,
         to_device_idx: usize,
@@ -1592,15 +1593,15 @@ pub mod tests {
     use tch::Device::Cuda;
     use tch::Kind::Bool;
     use tokio::fs;
-    use thoosa_shared::runner::adjusters::splits::OutputBuilder;
-    use thoosa_shared::runner::common::cachable::{DevicesWrap, WithDataRef};
-    use thoosa_shared::runner::cache_areas::CacheArea;
-    use thoosa_shared::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
-    use thoosa_shared::runner::common::DropIf::IfNotMax;
-    use thoosa_shared::runner::common::runnable::AsyncStage;
-    use thoosa_shared::runner::global_ctx;
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::runner::permits::MAX_PERMITS;
+    use thoosa_common::runner::adjusters::splits::OutputBuilder;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
+    use thoosa_common::runner::common::DropIf::IfNotMax;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::permits::MAX_PERMITS;
     use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceConstraint, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioConstraint, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
@@ -1630,7 +1631,7 @@ pub mod tests {
     use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::tasks::slices_stats::{Aggr, Metrics};
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsInput, SelectMotifsSavableResultBuilder, SelectMotifsStage};
     use crate::tasks::slices_iter::SlicesIter;

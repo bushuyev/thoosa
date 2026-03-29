@@ -11,14 +11,14 @@ mod tests {
     use tch::IndexOp;
     use tch::{nn, nn::OptimizerConfig, Device, Kind, Tensor};
 
-    use thoosa_shared::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use thoosa_shared::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use thoosa_shared::runner::common::{OutId, PermitsCtx, RunCtx};
-    use thoosa_shared::runner::global_ctx::GlobalCtx;
-    use thoosa_shared::runner::oom_handler::{
+    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use crate::runner::common::{OutId, PermitsCtx, RunCtx};
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::oom_handler::{
         Adjusters, Contexts, NoopRunnableContext, OOMHandler,
     };
-    use thoosa_shared::runner::permits::{PermitStep, MAX_PERMITS};
+    use crate::runner::permits::{PermitStep, MAX_PERMITS};
 
     use crate::tho_tensor::ThoTensor;
     use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
@@ -35,12 +35,13 @@ mod tests {
     use thoosa_shared::traits::{CachableIdTr, Metrics, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::copy_mode::CpuOnly;
-    use thoosa_shared::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
-    use thoosa_shared::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
-    use thoosa_shared::runner::test_utils::parse_numeric_part;
+    use crate::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
+    use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
+    use crate::runner::test_utils::parse_numeric_part;
     use thoosa_with_data::with_data;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use thoosa_shared::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::runner::run_ctx_2::RunCtxWithPermits;
+    use crate as thoosa_common;
 
     #[ctor::ctor]
     fn init() {
@@ -580,7 +581,7 @@ mod tests {
         in_dim: i64,
         epochs: i64,
         lr: f64,
-        fail_until: Vec<thoosa_shared::runner::test::FailUntil>,
+        fail_until: Vec<crate::runner::test::FailUntil>,
     }
     impl Classifier {
         fn new(
@@ -588,7 +589,7 @@ mod tests {
             in_dim: i64,
             epochs: i64,
             lr: f64,
-            fail_until: Vec<thoosa_shared::runner::test::FailUntil>,
+            fail_until: Vec<crate::runner::test::FailUntil>,
         ) -> Self {
             Self {
                 id,
@@ -635,7 +636,7 @@ mod tests {
                             debug!("t.size()={:?}", t.size());
                         // Simulate OOM conditions based on batch size t.size()[0]
                         for fail_until in fails {
-                            use thoosa_shared::runner::test::FailUntil::{DumpedToCpu, MemLimit, MinPermits, Never};
+                            use crate::runner::test::FailUntil::{DumpedToCpu, MemLimit, MinPermits, Never};
                             match fail_until {
                                 MemLimit(m) => {
                                     if t.size()[0] > *m as i64 {
@@ -901,7 +902,7 @@ mod tests {
             4,
             200,
             0.1,
-            vec![thoosa_shared::runner::test::FailUntil::Never],
+            vec![crate::runner::test::FailUntil::Never],
         ));
 
         let join_and_cls = Arc::new(JoinAndClassifyTask::new(
@@ -953,7 +954,7 @@ mod tests {
             4,
             100,
             0.1,
-            vec![thoosa_shared::runner::test::FailUntil::Never],
+            vec![crate::runner::test::FailUntil::Never],
         ));
 
         let join_and_cls = Arc::new(JoinAndClassifyTask::new(
@@ -1011,8 +1012,8 @@ mod tests {
             50,
             0.1,
             vec![
-                thoosa_shared::runner::test::FailUntil::MinPermits(MAX_PERMITS),
-                thoosa_shared::runner::test::FailUntil::MemLimit(128),
+                crate::runner::test::FailUntil::MinPermits(MAX_PERMITS),
+                crate::runner::test::FailUntil::MemLimit(128),
             ],
         ));
 
