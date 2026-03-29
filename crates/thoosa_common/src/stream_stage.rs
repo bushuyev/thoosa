@@ -5,7 +5,7 @@ use thoosa_shared::runner::common::{OutId, RunCtx};
 use thoosa_shared::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
-use thoosa_shims::stream::with_pooled_cuda_stream;
+use crate::cuda_utils::with_pooled_cuda_stream;
 use crate::cuda_utils::with_cuda_stream;
 
 #[derive(Debug)]
@@ -40,14 +40,14 @@ where
 {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
-        let (out, stream) = with_pooled_cuda_stream(ctx.device_idx(), false,move |_|{
+        // let (out, stream) = with_pooled_cuda_stream(ctx.device_idx(), false,move |_|{
             Arc::clone(&self.stage).do_run(input, ctx)
-        })?;
-        if let Some(stream) = stream {
-            stream.synchronize()?;
-        }
+        // })?;
+        // if let Some(stream) = stream {
+        //     stream.synchronize()?;
+        // }
 
-        out
+        // out
     }
 
     fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send + 'f {
@@ -105,7 +105,7 @@ mod tests {
     use tch::Tensor;
     use tokio::time::Instant;
     use thoosa_shared::os_thread_id;
-    use thoosa_shims::stream::with_pooled_cuda_stream;
+    use crate::cuda_utils::with_pooled_cuda_stream;
     use crate::tho_tensor::ThoTensor;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

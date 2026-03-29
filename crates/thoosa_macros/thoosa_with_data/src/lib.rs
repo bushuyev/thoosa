@@ -106,7 +106,14 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
     let invoke_closure = if await_closure {
         quote! { (#closure)(__with_data_ctx #(, #arg_refs)*).await }
     } else {
-        quote! { (#closure)(__with_data_ctx #(, #arg_refs)*) }
+
+        quote! {
+            let stream = thoosa_common::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+            let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
+            stream.synchronize()?;
+            r
+        }
     };
 
     let permits = if await_closure {

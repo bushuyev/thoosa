@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tch::Device::Cpu;
-use tokio_utils::Pool;
+use tub::{Guard, Pool};
 use thoosa_shared::runner::global_ctx::GlobalCtx;
 use thoosa_shared::ThoError;
 use crate::tho_device::ThoDevice;
@@ -16,6 +16,7 @@ pub struct CopyCtx {
     cu_ctx: Arc<ThoCudaContext>,
     buffs: usize,
     buf_size: usize,
+    stream_pool: Arc<Pool<ThoCudaStream>>,
     bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 }
 
@@ -39,6 +40,7 @@ impl CopyCtx {
             cu_ctx,
             buffs,
             buf_size,
+            stream_pool: Arc::new(Pool::from_iter((0..32).map(|i|ThoCudaStream::from_pool(0, false).unwrap()))),//TODO unwrap)),
             bufs_pool,
         }
     }
@@ -99,6 +101,10 @@ impl CopyCtx {
             (0..num_gpu_devices).map(|_|Self::make_instance(0.2, 16)).collect()//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
 
         }).get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}"))
+    }
+
+    pub async fn acquire_stream(&self) -> Guard<ThoCudaStream> {
+        self.stream_pool.acquire().await
     }
 
     pub fn make_instance(mem_k: f64, buffs: usize) -> CopyCtx {
