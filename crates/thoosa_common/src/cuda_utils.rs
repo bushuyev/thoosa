@@ -9,9 +9,11 @@ use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{Cause, ThoError};
 use tokio_utils::Pool;
+use tub::Guard;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_shared::os_thread_id;
+use crate::copy_ctx::CopyCtx;
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
@@ -938,4 +940,26 @@ where
 
 tokio::task_local! {
     pub static CURRENT_GUARD: ThoStreamGuard;
+}
+
+/// Your old "tho device index" shape:
+/// 0 => CPU / no CUDA stream
+/// 1 => CUDA:0
+/// 2 => CUDA:1
+pub fn with_pooled_cuda_stream<F, R>(
+    tho_device_idx: usize,
+    high_pri: bool,
+    f: F,
+) -> Result<(R, Option<ThoCudaStream>), ThoError>
+where
+    F: FnOnce(Option<&ThoCudaStream>) -> R,
+{
+    if tho_device_idx == 0 {
+        return Ok((f(None), None));
+    }
+
+    let cuda_device = (tho_device_idx - 1) as i32;
+    let stream = ThoCudaStream::from_pool(cuda_device, high_pri)?;//CopyCtx::instance(0).acquire_stream();
+    let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
+    Ok((out, Some(stream)))
 }
