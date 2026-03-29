@@ -1413,8 +1413,8 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
-        train_motifs_opt_config: Arc::new(OptConfig::new(10, 3)),
-        train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+        train_motifs_opt_config: Arc::new(OptConfig::new(50, 3)),
+        train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
         train_final_opt_config: Arc::new(OptConfig::new(30, 10))
     }
 }
@@ -1929,7 +1929,7 @@ where
         motifs_len,
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
         StreamBuffering::Unordered,
-        "run_plot_slices",
+        &format!("plot_found_motifs_for_run_id_{find_motifs_run_id}"),
     )
     .await;
 
@@ -1999,7 +1999,7 @@ where
         motifs_len,
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
         StreamBuffering::Unordered,
-        "run_plot_slices",
+        &format!("plot_selected_motifs_for_run_id_{select_motifs_run_id}"),
     )
     .await;
 

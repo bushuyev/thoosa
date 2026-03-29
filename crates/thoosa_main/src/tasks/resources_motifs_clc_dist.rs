@@ -154,8 +154,8 @@ where
 
         let channel_masks_dists_ids = {
 
-            let (mask_dists_result, motifs_stream) = with_cuda_stream(device_idx, || {
-                thoosa_motifs::distance::clc_dist_d2_and_mask(
+            // let (mask_dists_result, motifs_stream) = //with_cuda_stream(device_idx, || {
+            let (mask, dists)  = thoosa_motifs::distance::clc_dist_d2_and_mask(
                     input
                         .stacked_motifs_output
                         .motifs
@@ -165,10 +165,10 @@ where
                     batch_1_t.shallow_clone(),
                     true,
                     &mut mask_makers,
-                )
-            });
+                )?;
+            // });
 
-            let (mask, dists) = mask_dists_result?;
+            // let (mask, dists) = mask_dists_result?;
 
             //motif ids are channel-specific so have to build DistsMask from folded
             (0..self.num_channels)
@@ -187,14 +187,14 @@ where
                         } else {
                             DistsMaskType::MaskPacked(mask.size(), dists.as_ref().map(|t| t.size()))
                         };
-                        let stream = if mask.device().eq(&Cpu) {
-                            None
-                        } else {
-                            motifs_stream.clone()
-                        };
+                        // let stream = if mask.device().eq(&Cpu) {
+                        //     None
+                        // } else {
+                        //     motifs_stream.clone()
+                        // };
                         Ok(Some((
                             //unsqueeze is to put back dimension for channel removed before folding
-                            DistsMask::new(mask.f_unsqueeze(0)?, dists.map(|t| t.f_unsqueeze(0)).transpose()?, mask_type, stream)?,
+                            DistsMask::new(mask.f_unsqueeze(0)?, dists.map(|t| t.f_unsqueeze(0)).transpose()?, mask_type, None)?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
                                     if !acc.1.contains(d) {

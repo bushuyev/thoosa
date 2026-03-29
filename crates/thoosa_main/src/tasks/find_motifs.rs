@@ -285,16 +285,16 @@ where
                             //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
                             debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
-                            let (clc_dist_d2_and_mask_result, motifs_stream) = with_cuda_stream(device_idx, || {
-                                thoosa_motifs::distance::clc_dist_d2_and_mask(
+                            // let (clc_dist_d2_and_mask_result, motifs_stream) =// with_cuda_stream(device_idx, || {
+                            let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
                                     t_0.shallow_clone(),
                                     t_1.shallow_clone(),
                                     fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
                                     &mut mask_makers,
-                                )
-                            });
+                                )?;
+                            // });
 
-                            let (mask, dists) = clc_dist_d2_and_mask_result?;
+                            // let (mask, dists) = clc_dist_d2_and_mask_result?;
 
                             trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
                             debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
@@ -303,8 +303,8 @@ where
                             } else {
                                 DistsMaskType::AsIs
                             };
-                            let stream = if device_idx > 0 { motifs_stream } else { None };
-                            Ok(DistsMask::new(mask, dists, mask_type, stream)?)
+                            // let stream = if device_idx > 0 { motifs_stream } else { None };
+                            Ok(DistsMask::new(mask, dists, mask_type, None)?)
                         }),
                         masks_ctx,
                         UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),

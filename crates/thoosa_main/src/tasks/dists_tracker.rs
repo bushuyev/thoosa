@@ -503,9 +503,10 @@ impl DistsMask {
         }
 
         let _guard = if stream_to_sync.is_some() && mask.device().ne(&Cpu) {
-            Some(ThoStreamGuard::set(
-                stream_to_sync.as_ref().expect("guard stream missing"),
-            ))
+            // Some(ThoStreamGuard::set(
+            //     stream_to_sync.as_ref().expect("guard stream missing"),
+            // ))
+            Some(ThoStreamGuard::new(stream_to_sync.as_ref().expect("guard stream missing")).unwrap())
         } else {
             None
         };
@@ -590,7 +591,7 @@ impl DistsMask {
         debug!("DistsMask::to_cpu: self.mask.device={:?}", self.mask.device());
 
         if let Some(stream) = self.stream_to_sync.as_ref() {
-            stream.synchronize().map_err(|e|ThoError::new(e))?;
+            stream.synchronize()?;
         }
 
         match self.mask_type {
@@ -890,10 +891,10 @@ impl CrossClcResultMerge for DistsMask {
         let right = other;
 
         if let Some(stream) = left.stream_to_sync.as_ref() {
-            stream.synchronize().map_err(|e|ThoError::new(e))?;
+            stream.synchronize()?;
         }
         if let Some(stream) = right.stream_to_sync.as_ref() {
-            stream.synchronize().map_err(|e|ThoError::new(e))?;
+            stream.synchronize()?;
         }
 
         let DistsMask {
@@ -1086,7 +1087,7 @@ impl CrossClcResultMerge for DistsMask {
 
         for part in &parts {
             if let Some(stream) = part.stream_to_sync.as_ref() {
-                stream.synchronize().map_err(|e|ThoError::new(e))?;
+                stream.synchronize()?;
             }
         }
 
