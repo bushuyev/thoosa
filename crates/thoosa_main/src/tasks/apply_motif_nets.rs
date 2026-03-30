@@ -479,7 +479,7 @@ where
 
                     let r = OOMHandler::new(
                         vec![
-                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
                             Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),
@@ -507,13 +507,13 @@ where
                                 ),
                             ),
                         ).await;
-                    debug!("ApplyMotifNets::run: r={r:?}");
+                    debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
                     r
                 }
 
             });
 
-        let matches = collect_futures_with_progress(
+        let motif_nets_applied = collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
@@ -524,14 +524,14 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        debug!("ApplyMotifNets::run: matches.len={} matches={matches:?}", matches.len());
+        debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
 
-        let match_lens = matches.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
-        let unique_match_lens = match_lens.iter().copied().collect::<HashSet<_>>();
-        let max_match_len = match_lens.iter().copied().max().unwrap_or(0);
-        let matches = if unique_match_lens.len() > 1 {
-            debug!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={match_lens:?}. Padding to max len={max_match_len} for concat.");
-            matches.into_iter().map(|v| {
+        let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
+        let unique_motif_nets_applied_lens = motif_nets_applied_lens.iter().copied().collect::<HashSet<_>>();
+        let max_match_len = motif_nets_applied_lens.iter().copied().max().unwrap_or(0);
+        let motif_nets_applied = if unique_motif_nets_applied_lens.len() > 1 {
+            debug!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
+            motif_nets_applied.into_iter().map(|v| {
                 let size = v.t.size();
                 if size[0] == max_match_len {
                     return Ok(v);
@@ -544,13 +544,13 @@ where
                 ThoTensor::new(id.clone(), t)
             }).collect::<Result<Vec<_>, ThoError>>()?
         } else {
-            matches
+            motif_nets_applied
         };
 
-        trace!("ApplyMotifNets::run: matches_={matches:?}");
+        trace!("ApplyMotifNets::run: matches_={motif_nets_applied:?}");
 
         let res_t = Tensor::f_vstack(
-            &matches.into_iter().map(|v| v.t).collect::<Vec<_>>(),
+            &motif_nets_applied.into_iter().map(|v| v.t).collect::<Vec<_>>(),
         )?;
 
         debug!("ApplyMotifNets::run: res_t.size={:?}", res_t.size());
@@ -560,7 +560,7 @@ where
             res_t, //.f_transpose(0, 1)?,
         )?;
 
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, match_lens), cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens), cache_area.into())))
 
     }
 
@@ -699,13 +699,10 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
         P: RunCtx,
     {
-        let selected_batch = self
-            .batch
-            .with_selected_data(to_device_idx, permits_ctx.branch(Some("apply_motif_net_input_selected_batch"), false, false), selector, |selected_batch, _ctx| Ok(selected_batch))
-            .await?;
 
-        with_data!(permits_ctx, self.motif_net; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
-            let input = ApplyMotifNetInput::new(&selected_batch, motif_net);
+        with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData2, SynKey>|{
+            let b = batch.subview(selector)?;
+            let input = ApplyMotifNetInput::new(&b, motif_net);
             debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
             let r = do_run(&input, &ctx);
 

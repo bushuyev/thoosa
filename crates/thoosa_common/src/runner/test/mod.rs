@@ -330,7 +330,7 @@ pub mod fixtures {
 
     use async_trait::async_trait;
     use thoosa_named_derive::Named;
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Select, SimpleId, WithId};
     use thoosa_shared::ThoError;
@@ -341,6 +341,7 @@ pub mod fixtures {
     use crate::runner::run_ctx_2::RunCtxWithPermits;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use thoosa_shared::traits::Adjustable;
+    use crate as thoosa_common;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     #[name = "MulTaskOutputId"]
@@ -361,7 +362,7 @@ pub mod fixtures {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            crate::simple_id!(format!("loaded_{}", input_id.0))
+            simple_id!(format!("loaded_{}", input_id.0))
         }
 
     }
@@ -543,7 +544,7 @@ mod tests {
     use log::{debug, error};
     use thoosa_named_derive::Named;
     use mockall_double::double;
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::{Data, WithId};
@@ -561,6 +562,7 @@ mod tests {
     #[double]
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx;
+    use crate as thoosa_common;
 
     #[ctor::ctor]
     fn init() {
@@ -636,7 +638,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            crate::simple_id!(format!("loaded_{}", input_id.0))
+            simple_id!(format!("loaded_{}", input_id.0))
         }
     }
 
@@ -1023,8 +1025,7 @@ mod tests {
         let ctx_device_0_run = ctx_device_0.branch(Some("test_load_and_mul_no_oom_run"), false, false);
         let ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false, false);
 
-        let multed = load_and_mut
-            .run_cached(
+        let multed = load_and_mut.run_cached(
                 Arc::new(DevicesWrap::wrap(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
                                 }, 0.into())),

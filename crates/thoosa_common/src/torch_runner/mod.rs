@@ -75,7 +75,8 @@ mod tests {
     use std::time::Duration;
     use futures_util::StreamExt;
     use crate::runner::tmp_cache::TmpCached;
-
+    use crate as thoosa_common;
+    
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();

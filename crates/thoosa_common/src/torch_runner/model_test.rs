@@ -41,6 +41,7 @@ mod tests {
     use thoosa_with_data::with_data;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::runner::run_ctx_2::RunCtxWithPermits;
+    use crate as thoosa_common;
 
     #[ctor::ctor]
     fn init() {

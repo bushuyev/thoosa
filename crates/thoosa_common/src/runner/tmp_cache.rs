@@ -176,7 +176,7 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::simple_id;
+    use thoosa_shared::{simple_id, CopyToDevice, ThoError};
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
     use thoosa_shared::traits::{Data, SimpleId, WithId};

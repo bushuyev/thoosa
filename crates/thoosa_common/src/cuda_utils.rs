@@ -380,6 +380,8 @@ pub async fn copy_h2d_from_ptr(
                         }
                         let _ = buf_stream.1.synchronize();
                         drop(buf_stream); // return buffer/stream to pool
+                        debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?} done", os_thread_id());
+
                     }).await.unwrap();
 
                     // wait for GPU work to finish before recycling buffer

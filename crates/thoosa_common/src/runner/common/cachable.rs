@@ -506,7 +506,12 @@ where
             match wrap.load_from_any_device_(to_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
+
+                    let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let r =DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    stream.synchronize()?;
+                    r
                 }
                 Err(e) => Err(e),
             }
@@ -555,7 +560,11 @@ where
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                let r =DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                stream.synchronize()?;
+                return r;
             }
         }
 
@@ -605,7 +614,13 @@ where
 
                     let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+
+                    stream.synchronize()?;
+
+                    return r;
                 }
             }
 
@@ -1303,7 +1318,7 @@ mod tests {
     use crate::runner::common::mock_run_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;
-
+    use crate as thoosa_common;
 
 
     #[tokio::test]

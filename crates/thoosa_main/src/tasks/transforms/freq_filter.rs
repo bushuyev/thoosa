@@ -323,9 +323,13 @@ where
                 device_idx,
                ctx_for_data, None, |input_tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
 
-               self.apply_tho_tensor(input_tensor)
+               let r= self.apply_tho_tensor(input_tensor);
+                debug!("FreqFilter::run, with_data_ref: r={r:?} done");
+                r
            })
             .await?;
+
+        debug!("FreqFilter::run: filtered={filtered:?} done");
 
         Ok(Arc::new(DevicesWrap::wrap(filtered, cache_area.into())))
     }

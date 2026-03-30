@@ -288,12 +288,11 @@ impl DynamicTaskExecutor {
 
         if self
             .tx
-            .send(Job::new(job_id, max_other_parallel, wrapped))
-            .await
+            .try_send(Job::new(job_id, max_other_parallel, wrapped))
             .is_err()
         {
             let _ = suspend_guard.resume().await;
-            return Err(ThoError::new_with_error("", Cause::SubmitErrorClosed));
+            return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
         }
 
         let result = result_rx.await?;
@@ -433,7 +432,7 @@ impl DynamicTaskExecutor {
 
                 join_result = running.join_next(), if !running.is_empty() => {
                     if let Some(Err(err)) = join_result {
-                        eprintln!("job failed: {err}");
+                        error!("job failed: {err}");
                     }
                 }
             }
@@ -441,7 +440,7 @@ impl DynamicTaskExecutor {
 
         while let Some(res) = running.join_next().await {
             if let Err(err) = res {
-                eprintln!("job failed during shutdown: {err}");
+                error!("job failed during shutdown: {err}");
             }
         }
     }
@@ -517,14 +516,14 @@ impl DynamicTaskExecutor {
                                 },
                             ).await {
                             IsOOM::Yes => {
-                                if global_limit.load(Relaxed) > 2 {//TODO config
-                                    global_limit.fetch_sub(1, Ordering::SeqCst);
-                                }
+                                // if global_limit.load(Relaxed) > 2 {//TODO config
+                                //     global_limit.fetch_sub(1, Ordering::SeqCst);
+                                // }
                             }
                             IsOOM::No => {
-                                if global_limit.load(Relaxed)  < 32 {//TODO config
-                                    global_limit.fetch_add(1, Ordering::SeqCst);
-                                }
+                                // if global_limit.load(Relaxed)  < 32 {//TODO config
+                                //     global_limit.fetch_add(1, Ordering::SeqCst);
+                                // }
                             }
                         }
                     });
@@ -747,7 +746,7 @@ mod tests {
     use rand::prelude::IndexedRandom;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_return_value() -> Result<(), ThoError> {
+    async fn test_returns_value() -> Result<(), ThoError> {
         let exec = DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap());
 
         let x = exec
@@ -762,6 +761,24 @@ mod tests {
         exec.shutdown().await;
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_returns_error() -> Result<(), ThoError> {
+        let exec = DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap());
+
+        let x = exec
+            .submit::<_, ThoError>(0, async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Err(ThoError::new("test"))
+            })
+            .await;
+
+        assert!(x.is_err());
+
+        exec.shutdown().await;
+        Ok(())
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_nested_submit_no_deadlock() -> Result<(), ThoError> {

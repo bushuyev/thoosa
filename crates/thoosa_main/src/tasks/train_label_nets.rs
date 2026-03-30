@@ -27,7 +27,7 @@ use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
+use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream, preload_one};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
@@ -637,7 +637,9 @@ where
     Y:Dims+ 'static,
 {
     fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
-        let futures = resource_indexes_for_batches.into_iter().map(move |batch_keys| {
+        debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
+
+        let futures = futures::stream::iter(resource_indexes_for_batches.into_iter().enumerate()).then(move |(i, batch_keys)|   {
             let build_batch_fn = Arc::clone(&build_batch_fn);
             let loader = Arc::clone(&loader);
             let x_1 = Arc::clone(&x_1);
@@ -645,6 +647,8 @@ where
             let mut ctx_for_build_fn = ctx.branch(Some("for_build_fn"), false, false);
 
             async move {
+                debug!("ResourcesBatch::build_batch_stream: batch_i={i}");
+
                 let batch_len = batch_keys.len();
                 let futures = batch_keys.into_iter().map(|index| {
                     let loader = Arc::clone(&loader);
@@ -668,21 +672,26 @@ where
                     StreamBuffering::Ordered,
                     "ResourcesBatch::build_batch_stream",
                 )
-                .await
-                .into_iter()
-                .collect::<Vec<_>>()
-                .into_iter()
-                .fold((vec![], vec![]), |mut a, v| {
-                    a.0.push(v.0);
-                    a.1.push(v.1);
-                    a
-                });
+                    .await
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .fold((vec![], vec![]), |mut a, v| {
+                        a.0.push(v.0);
+                        a.1.push(v.1);
+                        a
+                    });
 
-                build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await
+                let r = build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await;
+
+                debug!("ResourcesBatch::build_batch_stream: batch_i={i} r={r:?}");
+
+                r
             }
         });
 
-        prefetch_next_batch_stream(futures)
+        // preload_one(futures)
+        futures.boxed()
     }
 
 }

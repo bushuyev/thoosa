@@ -271,7 +271,7 @@ where
                 let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false, false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
-                let epoch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_in_{descr}"), batch.num_batches(), 1);
+                let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
@@ -293,7 +293,7 @@ where
 
                     debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?}", input.id());
 
-                    collect_eta_record_completion(epoch_eta_guard.id());
+                    collect_eta_record_completion(batch_eta_guard.id());
 
                 }
 
