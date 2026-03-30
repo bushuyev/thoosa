@@ -15,7 +15,6 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, PermitsCtx, RunCtx};
 use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_common::cuda_utils::with_cuda_stream;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};

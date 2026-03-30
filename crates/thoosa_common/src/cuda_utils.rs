@@ -925,20 +925,6 @@ mod tests {
 
 }
 
-pub fn with_cuda_stream<F, R>(tho_device_idx:usize, mut f:F) -> (R, Option<ThoCudaStream>)
-where
-    F:FnMut() -> R
-{
-
-    // if tho_device_idx > 0 {
-    //     let stream = ThoCudaStream::new((tho_device_idx - 1) as i32); //TODO
-    //     let _guard = ThoStreamGuard::set(&stream);
-    //
-    //     (f(), Some(stream))
-    // } else {
-        (f(), None)
-    // }
-}
 
 tokio::task_local! {
     pub static CURRENT_GUARD: ThoStreamGuard;
@@ -948,11 +934,11 @@ tokio::task_local! {
 /// 0 => CPU / no CUDA stream
 /// 1 => CUDA:0
 /// 2 => CUDA:1
-pub fn with_pooled_cuda_stream<F, R>(
+pub async fn with_pooled_cuda_stream<F, R>(
     tho_device_idx: usize,
     high_pri: bool,
     f: F,
-) -> Result<(R, Option<ThoCudaStream>), ThoError>
+) -> Result<(R, Option<Guard<ThoCudaStream>>), ThoError>
 where
     F: FnOnce(Option<&ThoCudaStream>) -> R,
 {
@@ -961,7 +947,7 @@ where
     }
 
     let cuda_device = (tho_device_idx - 1) as i32;
-    let stream = ThoCudaStream::from_pool(cuda_device, high_pri)?;//CopyCtx::instance(0).acquire_stream();
+    let stream = CopyCtx::instance(0).acquire_stream().await;//ThoCudaStream::from_pool(cuda_device, high_pri)?;//
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
     Ok((out, Some(stream)))
 }

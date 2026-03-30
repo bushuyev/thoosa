@@ -120,7 +120,7 @@ where
 {
 
 }
-//TODO too many type params
+
 pub struct TrainNet<C, B, BF, DX, DY, P, RC, NF, NP, FO, XF, FC>
 where
     C: RunCtx + Adjustable + 'static,
