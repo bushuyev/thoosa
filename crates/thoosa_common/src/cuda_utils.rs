@@ -102,6 +102,31 @@ pub fn tensor_mem_size(init_type: Kind, size: &[i64]) -> usize {//TODO rename to
     size.iter().fold(1, |a, v| a * (*v as usize)) * init_type.elt_size_in_bytes()
 }
 
+fn ensure_copy_d2h_source_is_device_memory(src_ptr: usize) -> Result<(), ThoError> {
+    let mut is_device_memory = 0i32;
+    let raw = unsafe {
+        thoosa_shims::memcpy::tho_cu_pointer_is_device_memory(
+            &mut is_device_memory,
+            src_ptr as thoosa_shims::memcpy::CuDevicePtr,
+        )
+    };
+    let result: sys::CUresult = unsafe { std::mem::transmute(raw) };
+
+    if result != sys::CUresult::CUDA_SUCCESS {
+        return Err(Cause::SomethingElse(format!(
+            "copy_d2h_from_ptr source pointer validation failed for src_ptr={src_ptr} with {result:?}"
+        )).into());
+    }
+
+    if is_device_memory == 0 {
+        return Err(Cause::SomethingElse(format!(
+            "copy_d2h_from_ptr expected CUDA device memory but src_ptr={src_ptr} is not device memory"
+        )).into());
+    }
+
+    Ok(())
+}
+
 #[allow(dead_code)]
 pub fn speed_gib_per_s(bytes: u64, time_ms: u64) -> f64 {
     if time_ms == 0 {
@@ -170,13 +195,18 @@ pub async fn copy_d2h_from_ptr(
 ) -> Result<Tensor, ThoError> {
     let tensor_mem_size = tensor_mem_size(init_type, &src_size);
 
-    debug!("copy_d2h: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes}",src_size);
+    if tensor_mem_size != 0 {
+        ensure_copy_d2h_source_is_device_memory(src_ptr)?;
+    }
 
     let chunks = tensor_mem_size / buf_size_bytes;
 
     let last = tensor_mem_size % buf_size_bytes;
 
     let dst_t = Tensor::empty(src_size, (init_type, Cpu));
+
+    debug!("copy_d2h_from_ptr: src_t.size={:?} chunks={chunks} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes} dst_t={dst_t:?}",src_size);
+
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
 
@@ -191,12 +221,12 @@ pub async fn copy_d2h_from_ptr(
             .map(|(i, c_buf_size)| {
                 let off = i * buf_size_bytes;
 
-                let src_off_ptr = src_ptr.add(off as usize) as thoosa_shims::memcpy::CuDevicePtr;
-                let dst_off_ptr: usize = dst_ptr.add(off as usize);
+                let src_off_ptr = src_ptr.add(off) as thoosa_shims::memcpy::CuDevicePtr;
+                let dst_off_ptr: usize = dst_ptr.add(off);
 
                 let pool = Arc::clone(&bufs_pool);
                 async move {
-                    debug!("starting {i} thread_name={:?}", os_thread_id());
+                    debug!("copy_d2h_from_ptr: starting {i} thread_name={:?} src_off_ptr={src_off_ptr:?} off={off}", os_thread_id());
                     let buf_stream = pool.acquire().await;
                     let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
 
@@ -214,6 +244,8 @@ pub async fn copy_d2h_from_ptr(
                         if r != sys::CUresult::CUDA_SUCCESS {
                             return Err::<(), Cause>(Cause::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
                         }
+
+                        debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={r:?}");
 
                         match stream.synchronize() {
                             Ok(_) => {}
@@ -245,6 +277,7 @@ pub async fn copy_d2h_from_ptr(
             .into_iter()
             .collect::<Result<(), Cause>>()?;
     }
+    debug!("copy_d2h_from_ptr: dst_t={dst_t:?} dst_t.device={:?}", dst_t.device());
     Ok(dst_t)
 }
 
@@ -770,6 +803,7 @@ mod tests {
     async fn test_copy_d2h_from_ptr_reports_error() {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+            // let _lib = libloading::Library::new("/home/bu/dvl/rust/thoosa/crates/target/debug/libthoosa_shims.so").expect("no libtorch_cuda.so");
         }
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
         cu_ctx
@@ -787,7 +821,9 @@ mod tests {
         })));
 
         // Use a CPU pointer as if it were a device pointer — should error
-        let bogus_cpu_tensor = Tensor::zeros([4], (Kind::Int, Cpu));
+        let bogus_cpu_tensor = Tensor::from_slice(&[1,2,3,4,5,6,7,8]);
+        debug!("bogus_cpu_tensor={bogus_cpu_tensor:?} d={:?}", bogus_cpu_tensor.device());
+
         let bogus_device_ptr = bogus_cpu_tensor.data_ptr() as usize; // not a CUdeviceptr
 
         let res = super::copy_d2h_from_ptr(
@@ -798,6 +834,9 @@ mod tests {
             &bogus_cpu_tensor.size(),
         )
         .await;
+
+        debug!("res={res:?} device={:?}", res.as_ref().map(|v|v.device()));
+
         assert!(
             res.is_err(),
             "expected copy_d2h_from_ptr_result to error for invalid device ptr"

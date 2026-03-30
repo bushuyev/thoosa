@@ -11,6 +11,11 @@ unsafe extern "C" {
         stream: *mut c_void,
     ) -> CuResult;
 
+    pub fn tho_cu_pointer_is_device_memory(
+        is_device_memory: *mut i32,
+        ptr: CuDevicePtr,
+    ) -> CuResult;
+
     pub fn tho_cu_memcpy_htod_async(
         dst_device: CuDevicePtr,
         src_host: *const c_void,
