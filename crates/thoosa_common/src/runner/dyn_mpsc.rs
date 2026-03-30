@@ -516,14 +516,14 @@ impl DynamicTaskExecutor {
                                 },
                             ).await {
                             IsOOM::Yes => {
-                                // if global_limit.load(Relaxed) > 2 {//TODO config
-                                //     global_limit.fetch_sub(1, Ordering::SeqCst);
-                                // }
+                                if global_limit.load(Relaxed) > 2 {//TODO config
+                                    global_limit.fetch_sub(1, Ordering::SeqCst);
+                                }
                             }
                             IsOOM::No => {
-                                // if global_limit.load(Relaxed)  < 32 {//TODO config
-                                //     global_limit.fetch_add(1, Ordering::SeqCst);
-                                // }
+                                if global_limit.load(Relaxed)  < 32 {//TODO config
+                                    global_limit.fetch_add(1, Ordering::SeqCst);
+                                }
                             }
                         }
                     });
@@ -553,7 +553,7 @@ impl DynamicTaskExecutor {
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!("DynamicTaskExecutor::can_activate_now: active_count={active_count} global_limit={global_limit} min={min} r={r}");
+        debug!("DynamicTaskExecutor::can_activate_now: active_count={active_count} next_total={next_total} global_limit={global_limit} min={min} r={r}");
         r
     }
 
@@ -736,6 +736,17 @@ impl DynamicTaskExecutor {
             }
         }
     }
+
+    pub fn spawn<F>(future: F) -> JoinHandle<F::Output>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
+        let current_job = CURRENT_JOB.get();
+        tokio::spawn(async move {
+            CURRENT_JOB.scope(current_job, future).await
+        })
+    }
 }
 
 #[cfg(test)]
@@ -759,6 +770,67 @@ mod tests {
         assert_eq!(x, 123);
 
         exec.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_exhaust_runner() -> Result<(), ThoError> {
+        let exec = Arc::new(DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap()));
+
+        let x = Arc::clone(&exec).submit(0, async move {
+             tokio::spawn(async {
+                futures::stream::iter(0..10).map(|i|{
+                    async move {
+                        debug!("inner {i}");
+                        Ok::<_, ThoError>(i)
+                    }
+                })
+                .buffer_unordered(10)
+                .try_collect::<Vec<_>>()
+                .await?;
+
+                 Ok(())
+             }).await?
+
+        }).await?;
+
+        debug!("x={x:?}");
+        // assert_eq!(x, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_inner_spawn() -> Result<(), ThoError> {
+        let exec = Arc::new(DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap()));
+
+        let x = Arc::clone(&exec).submit(0, async move {
+
+                futures::stream::iter(0..10).map(|i|{
+                    let exec = Arc::clone(&exec);
+
+                    async move {
+                        DynamicTaskExecutor::spawn(async move {
+
+                            Arc::clone(&exec).submit(0, async move {
+                                debug!("inner {i}");
+                                Ok::<_, ThoError>(i)
+                            }).await
+
+                        }).await?
+
+                    }
+                })
+                    .buffer_unordered(10)
+                    .try_collect::<Vec<_>>()
+                    .await
+
+
+        }).await?;
+
+        debug!("x={x:?}");
+        // assert_eq!(x, 1);
+
         Ok(())
     }
 
