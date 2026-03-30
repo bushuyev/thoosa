@@ -24,14 +24,14 @@ impl Deref for PermitStep {
 
     fn deref(&self) -> &Self::Target {
         match self {
-            PermitStep::TEN => &10,
-            PermitStep::TWENTY => &20,
-            PermitStep::FIFTY => &51,
+            PermitStep::TEN => &2,
+            PermitStep::TWENTY => &4,
+            PermitStep::FIFTY => &16,
         }
     }
 }
 
-pub const MAX_PERMITS: NumPermits = 100;
+pub const MAX_PERMITS: NumPermits = 32;
 
 #[async_trait]
 pub trait PermitSource: Debug + Send + Sync {
