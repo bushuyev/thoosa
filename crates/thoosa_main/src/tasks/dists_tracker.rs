@@ -616,7 +616,8 @@ impl DistsMask {
                     let mask = if self.mask.is_contiguous() {
                         self.mask
                     } else {
-                        self.mask.f_contiguous()?
+                        let mask = self.mask;
+                        mask.f_contiguous()?
                     };
                     let device = ThoDevice::from(mask.device());
                     let kind = mask.kind();

@@ -37,7 +37,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::cuda_utils::{pack_bits_bool, with_cuda_stream};
+use thoosa_common::cuda_utils::{pack_bits_bool, with_pooled_cuda_stream};
 use thoosa_common::dims::MotifSlices;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -286,7 +286,7 @@ where
                             debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
                             // let (clc_dist_d2_and_mask_result, motifs_stream) =// with_cuda_stream(device_idx, || {
-                            let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(
+                            let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(//stream is set in CrossInputSelectorWrap/with_[select]_data_ref + with_data
                                     t_0.shallow_clone(),
                                     t_1.shallow_clone(),
                                     fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite

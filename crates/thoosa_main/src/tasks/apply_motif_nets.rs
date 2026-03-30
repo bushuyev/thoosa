@@ -21,7 +21,6 @@ use thoosa_common::debug_plot;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
-use thoosa_common::cuda_utils::with_cuda_stream;
 use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -481,8 +480,7 @@ where
                 async move {
                     let map = HashMap::new();
 
-                    debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
-                    if let Ok(r)= OOMHandler::new(
+                    let r = OOMHandler::new(
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
@@ -511,7 +509,9 @@ where
                                     DumpToCpuContextImpl::new(&map),
                                 ),
                             ),
-                        ).await {
+                        ).await;
+                    debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
+                    if let Ok(r)= r {
                         tmp_cache.lock().insert(r);
                     }
 
