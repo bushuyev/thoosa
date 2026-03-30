@@ -15,6 +15,28 @@ extern "C" {
     return cuMemcpyDtoHAsync(dst_host, src_device, byte_count, cu_stream);
   }
 
+  CUresult tho_cu_pointer_is_device_memory(
+      int *is_device_memory,
+      CUdeviceptr ptr) {
+    if (is_device_memory == nullptr) {
+      return CUDA_ERROR_INVALID_VALUE;
+    }
+
+    unsigned int memory_type = 0;
+    CUresult result = cuPointerGetAttribute(
+        &memory_type,
+        CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+        ptr);
+
+    if (result != CUDA_SUCCESS) {
+      *is_device_memory = 0;
+      return result;
+    }
+
+    *is_device_memory = memory_type == CU_MEMORYTYPE_DEVICE;
+    return CUDA_SUCCESS;
+  }
+
   CUresult tho_cu_memcpy_htod_async(
       CUdeviceptr dst_device,
       const void *src_host,
