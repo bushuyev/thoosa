@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use async_trait::async_trait;
 use log::{debug, error, info, trace};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tch::{nn, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
@@ -49,6 +49,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
+use thoosa_common::runner::tmp_cache::TmpCached;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
@@ -447,6 +448,8 @@ where
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
+        let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await));
+
         let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
         let futures = apply_motif_nets
             .into_iter()
@@ -474,10 +477,12 @@ where
                 debug!("ApplyMotifNets::run: input.size={:?} motif_width={motif_width:?} self.motif_width(max)={:?} slice_step={slice_step} slices={slices} min_split_len={min_split_len} overlap_len={overlap_len}", input.size(), self.motif_width);
 
                 let out_id_arc = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
+                let tmp_cache = Arc::clone(&tmp_cache);
                 async move {
                     let map = HashMap::new();
 
-                    let r = OOMHandler::new(
+                    debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
+                    if let Ok(r)= OOMHandler::new(
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new())),
@@ -506,9 +511,11 @@ where
                                     DumpToCpuContextImpl::new(&map),
                                 ),
                             ),
-                        ).await;
-                    debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
-                    r
+                        ).await {
+                        tmp_cache.lock().insert(r);
+                    }
+
+                    Ok(())
                 }
 
             });
@@ -524,6 +531,8 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
+        let motif_nets_applied = Arc::into_inner(tmp_cache).unwrap().into_inner().take_all(device_idx).await?;
+        //all is sync until return
         debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
 
         let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
@@ -540,7 +549,7 @@ where
                 to_size[0] = max_match_len;
                 // let t = pad_to(&v.t, to_size.as_slice(), 0.0)?;
                 let id = v.id().clone();
-                let t = stretch(v, max_match_len as usize, 0)?;
+                let t = stretch(v, max_match_len as usize, 0)?;//stretch instead of pad to keep it time-aligned in motif nets with different window
                 ThoTensor::new(id.clone(), t)
             }).collect::<Result<Vec<_>, ThoError>>()?
         } else {
