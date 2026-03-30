@@ -5,8 +5,8 @@ use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
-use crate::cuda_utils::with_pooled_cuda_stream;
-use crate::cuda_utils::with_cuda_stream;
+
+
 
 #[derive(Debug)]
 pub struct StreamStage<S>
@@ -132,7 +132,7 @@ mod tests {
                 if WITH_STREAM {
                     with_pooled_cuda_stream(1, false, |_|{
                         run_tensor_ops("aaa");
-                    }).unwrap();
+                    }).await.unwrap();
                 } else {
                     run_tensor_ops("aaa");
                 }
@@ -141,7 +141,7 @@ mod tests {
                 if WITH_STREAM {
                     with_pooled_cuda_stream(1, false, |_|{
                         run_tensor_ops("bbb");
-                    }).unwrap();
+                    }).await.unwrap();
                 } else {
                     run_tensor_ops("bbb");
                 }
