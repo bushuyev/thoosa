@@ -25,6 +25,7 @@ use tch::nn::{Optimizer, VarStore};
 use tch::Device;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
+use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
@@ -536,7 +537,13 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
 
         if self.x.device_idx() == to_device_idx {
-            do_run(self, &permits_ctx)
+            let stream = CopyCtx::instance(1).acquire_stream().await;
+            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+
+            let r = do_run(self, &permits_ctx);
+            stream.synchronize()?;
+
+            r
 
         } else {
 
@@ -549,7 +556,11 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
             let input = TrainStepInput::new(x, lengths, expected_y);
 
-            do_run(&input, &permits_ctx)
+            let stream = CopyCtx::instance(1).acquire_stream().await;
+            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+            let r = do_run(&input, &permits_ctx);
+            stream.synchronize()?;
+            r
         }
     }
 

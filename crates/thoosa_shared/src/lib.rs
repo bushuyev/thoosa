@@ -352,7 +352,7 @@ pub enum Cause {
 
 pub struct ThoError {
     //TODO enum
-    msg: String,
+    pub msg: String,
     #[allow(dead_code)]
     backtrace: Backtrace,
     is_oom: bool,
