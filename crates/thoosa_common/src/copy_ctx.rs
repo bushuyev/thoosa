@@ -4,12 +4,15 @@ use thoosa_shims::stream::ThoCudaStream;
 use log::debug;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, OnceLock};
+use mockall_double::double;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tch::Device::Cpu;
 use tub::{Guard, Pool};
+#[double]
 use crate::runner::global_ctx::GlobalCtx;
 use thoosa_shared::ThoError;
+
 use crate::tho_device::ThoDevice;
 
 pub struct CopyCtx {
@@ -94,6 +97,9 @@ impl CopyCtx {
         debug!("CopyCtx::instance: device={device:?} device.gpu_ordinal={}", gpu_device_ordinal);
 
         INSTANCE.get_or_init(|| {
+            #[cfg(test)]
+            let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+
             let num_gpu_devices = GlobalCtx::global().device_count() - 1;
             debug!("CopyCtx::instance, init: num_gpu_devices={num_gpu_devices}");
 

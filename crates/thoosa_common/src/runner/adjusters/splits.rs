@@ -215,15 +215,17 @@ mod tests {
     use std::sync::Arc;
     use async_trait::async_trait;
     use mockall::mock;
-    use thoosa_shared::ThoError;
+    use parking_lot::RwLock;
+    use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::CopyToDevice;
-    use crate::runner::adjusters::splits::OutputBuilder;
+    use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::runner::common::MockRunCtx;
     use crate::runner::common::runnable::{Stage, SyncStage};
     use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::traits::mock_cachable_id::MockCachableId;
+    use crate::runner::oom_handler::{Adjuster, AdjusterError, InputContext};
 
     mock! {
         #[derive(Debug)]
@@ -383,39 +385,39 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     async fn test_degrade_once() -> Result<(), ThoError>{
-        // let ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
-        //
-        // let _from_ctx = MockTestSelectorBuilder::finish_with_from_ranges(Arc::clone(&ranges));
-        //
-        // let splits_adjuster: SplitsAdjuster<MockTestSelector, i64> = SplitsAdjuster::new(1);
-        // let output_builder = MockTestOutputBuilderBuilder::default();
-        // let mut context_impl:SplitsAdjusterContextImpl<MockTestTask, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
-        //
-        //
-        // let mut selector = MockTestSelector::new();
-        //
-        //
-        // let _adjusted = splits_adjuster.adjust(&mut selector, &mut context_impl).await?;
-        //
-        // assert!(splits_adjuster.degrade(&mut context_impl));//returns true, can degrade further
-        //
-        // let _adjusted = splits_adjuster.adjust(&mut selector, &mut context_impl).await?;
-        //
-        // context_impl.add_partial_output(MockTestOutput::new()).await;
-        //
-        // let _adjusted = splits_adjuster.adjust(&mut selector, &mut context_impl).await?;
-        //
-        // context_impl.add_partial_output(MockTestOutput::new()).await;
-        //
-        // assert!(context_impl.all_done());
-        //
-        // assert_eq!(
-        //     &vec![
-        //         0..100i64, //degrade ->
-        //         0..50, 50..100
-        //     ],
-        //     &*ranges.read()
-        // );
+        let ranges:Arc<parking_lot::RwLock<Vec<Range<i64>>>> = Arc::new(RwLock::new(vec![]));
+
+        let _from_ctx = MockTestSelectorBuilder::finish_with_from_ranges(Arc::clone(&ranges));
+
+        let splits_adjuster: SplitsAdjuster<MockTestSelector, i64> = SplitsAdjuster::new(1);
+        let output_builder = MockTestOutputBuilderBuilder::default();
+        let mut context_impl:SplitsAdjusterContextImpl<MockTestTask, MockTestOutputBuilder>= SplitsAdjusterContextImpl::new(100, output_builder);
+
+
+        let mut selector = MockTestSelector::new();
+
+
+        let adjusted_selector = splits_adjuster.adjust(selector, &mut context_impl).await.map_err(|e|ThoError::new_with_error("msg 0", Cause::AdjusterFailed))?;
+
+        assert!(splits_adjuster.degrade(&mut context_impl));//returns true, can degrade further
+
+        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_error("msg 1", Cause::AdjusterFailed))?;
+
+        context_impl.add_partial_output(MockTestOutput::new()).await;
+
+        let adjusted_selector = splits_adjuster.adjust(adjusted_selector, &mut context_impl).await.map_err(|e|ThoError::new_with_error("msg 2", Cause::AdjusterFailed))?;
+
+        context_impl.add_partial_output(MockTestOutput::new()).await;
+
+        assert!(context_impl.all_done());
+
+        assert_eq!(
+            &vec![
+                0..100i64, //degrade ->
+                0..50, 50..100
+            ],
+            &*ranges.read()
+        );
 
         Ok(())
 
