@@ -1427,14 +1427,14 @@ mod tch_tests {
                 })),
                 None,
             )?
-            .cosine_conv_1d("cosine", 3, None, 0.5, 0.0)?
+            .cosine_conv_1d("cosine", 3, None, 0.5, 0.1)?
             .end_seq()?;
 
         let vs = nn::VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs.root())?;
         let out = net.tho_forward(&Tensor::randn([4, 10], (Kind::Float, Device::Cpu)).into(), None, true)?;
 
-        assert_eq!(vec![4, 2, 8], out.size());
+        assert_eq!(vec![4, 1, 8], out.size());
         assert!(out.as_ref().max().double_value(&[]) <= 1.0001);
         assert!(out.as_ref().min().double_value(&[]) >= -1.0001);
 

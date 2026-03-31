@@ -22,7 +22,7 @@ pub fn resource_tensor_from_patterns(resource_len: usize, channels_patterns: &[V
     let mut channels_intervals = Vec::with_capacity(channels_patterns.len());
     for (channel_idx, channel_patterns) in channels_patterns.iter().enumerate() {
         let seed = 0x9E37_79B9u32 ^ (channel_idx as u32).wrapping_mul(0x85EB_CA6B);
-        let mut signal = deterministic_noise(resource_len, seed, 0.2);
+        let mut signal = deterministic_noise(resource_len, seed, 0.1);
         if channel_patterns.is_empty() {
             channels_signals.push(signal);
             channels_intervals.push(Vec::new());

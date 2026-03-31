@@ -9,6 +9,9 @@ edition.workspace = true
 path = "src/lib.rs"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+"mock_global_ctx" = []
+
 [dependencies]
 cust = "0.3.2"
 rand.workspace = true
@@ -74,6 +77,8 @@ console-subscriber.workspace = true
 tracing-subscriber.workspace = true
 with-id = "1.0.2"
 tub = "0.3"
+
+
 [build-dependencies]
 chrono.workspace = true
 

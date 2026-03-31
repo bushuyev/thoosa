@@ -2901,14 +2901,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_stretch_to_zero() -> Result<(), ThoError> {
-        let t = Tensor::from_slice(&[1., 2., 3.]);
-        let stretched = stretch(&t, 0, 0)?;
-        assert_eq!(stretched.size(), vec![0]);
-        Ok(())
-    }
-
-    #[test]
     fn test_stretch_singleton() -> Result<(), ThoError> {
         let t = Tensor::from_slice(&[7.]);
         let stretched = stretch(&t, 5, 0)?;

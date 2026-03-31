@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
+use mockall_double::double;
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cuda;
@@ -12,9 +13,13 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::OutId;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
+
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
@@ -315,6 +320,9 @@ where
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
 
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let num_devices = GlobalCtx::global().device_count();
         let mut ctx_for_data = ctx.branch(Some("freq_filter_data"), false, false);
 
@@ -346,7 +354,6 @@ mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, AverageFilterParams, Padding, SavGolFilterParams};
     use thoosa_shared::ThoError;
@@ -359,6 +366,8 @@ mod tests {
     use crate::tasks::transforms::smoothing::{median, moving_average};
     use crate::tasks::transforms::freq_filter::FreqFilter;
     use thoosa_common::runner::common::RunCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_with_data::with_data;
 
     #[tokio::test]
@@ -439,6 +448,9 @@ mod tests {
 
     async fn run_freq_filter(filter_configs: Vec<InputFilter>) -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
 
         let bf = FreqFilter::new(&filter_configs, &ws, 0)?;

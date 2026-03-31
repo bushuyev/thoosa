@@ -97,8 +97,8 @@ impl CopyCtx {
         debug!("CopyCtx::instance: device={device:?} device.gpu_ordinal={}", gpu_device_ordinal);
 
         INSTANCE.get_or_init(|| {
-            #[cfg(test)]
-            let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+            // #[cfg(test)]
+            // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
             let num_gpu_devices = GlobalCtx::global().device_count() - 1;
             debug!("CopyCtx::instance, init: num_gpu_devices={num_gpu_devices}");

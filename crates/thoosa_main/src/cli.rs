@@ -31,6 +31,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
 use std::marker::PhantomData;
 use std::time::Instant;
+use mockall_double::double;
 use plotters::prelude::BLACK;
 use plotters::style::ShapeStyle;
 use serde::Serialize;
@@ -80,6 +81,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCo
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::AsyncStage;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
@@ -2540,13 +2542,14 @@ mod cli_tests {
     use std::{fs, ptr};
     use std::ops::Range;
     use std::time::Duration;
+    use mockall_double::double;
     use tch::Device::{Cpu, Cuda};
     use tch::display::{set_print_options, PrinterOptions};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-    use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter};
+    use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, NotchBandFilter};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
@@ -2556,7 +2559,7 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-    use thoosa_common::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding};
+    use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding};
     use thoosa_common::debug_plot;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
@@ -2583,7 +2586,8 @@ mod cli_tests {
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::{NamedVal, Val};
@@ -2654,11 +2658,29 @@ mod cli_tests {
 
     #[test]
     fn test_run_all_config_0_preserves_dynamic_find_and_select_fields() {
-        let config = run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select);
+        let config =     FindMotifsRunConfigRangeOrValue {
+            id: None,
+            step: RangeOrValue::Value(10),
+
+            window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((50, 0)) },
+            freq_filter: Some(vec![
+                AverageFilter(AverageFilterParamsRangeOrValue {
+                    window: RangeOrValue::dynamic(median_window_from_find_and_select),
+                    step: RangeOrValue::Value(10),
+                }),
+
+            ]),
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+                }),
+            }),
+            max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        };
         let freq_filter = config.freq_filter.as_ref().expect("find-and-select sample config should include freq_filter");
 
         let median_window = match &freq_filter[0] {
-            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::MedianFilter(params) => &params.window,
+            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter(params) => &params.window,
             other => panic!("expected median filter in find-and-select sample config, got {other:?}"),
         };
 
@@ -2677,11 +2699,43 @@ mod cli_tests {
 
     #[test]
     fn test_run_all_find_motifs_config_grid_0_uses_captured_window_bounds() {
-        let config = run_all_find_motifs_config_grid_0(3, 4, 7);
+        let median_window = move |named_vals: &[NamedVal<FindMotifsRunConfigFields>]| {
+            match named_vals.iter().find(|field| field.path().eq(&FindMotifsRunConfigFields::Window)) {
+                None => RangeOrValue::Value(100),
+                Some(value) => {
+                    let window = value.val().to_i64(0) as u32;
+                    let end = window.saturating_mul(3);
+                    let start = window / 4;
+                    RangeOrValue::Range { range: Range { start, end }, step: Some(((end-start)/7, 0)) }
+                }
+            }
+        };
+        let config = FindMotifsRunConfigRangeOrValue {
+            id: None,
+            step: RangeOrValue::Value(10),
+            // window: RangeOrValue::Value(200),
+            window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((50, 0)) },
+            freq_filter: Some(vec![
+                AverageFilter(AverageFilterParamsRangeOrValue {
+                    window: RangeOrValue::dynamic(median_window),
+                    step: RangeOrValue::Value(10),
+                }),
+            ]),
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Value(0.05),
+                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                }),
+            }),
+            max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        };
+
+
+        // let config = run_all_find_motifs_config_grid_0(3, 4, 7);
         let freq_filter = config.freq_filter.as_ref().expect("grid sample config should include freq_filter");
 
         let median_window = match &freq_filter[0] {
-            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::MedianFilter(params) => &params.window,
+            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter(params) => &params.window,
             other => panic!("expected median filter in grid sample config, got {other:?}"),
         };
 
@@ -2692,7 +2746,7 @@ mod cli_tests {
 
         let resolved = resolve(&[NamedVal::new(FindMotifsRunConfigFields::Window, Val::UInt(120))]);
 
-        assert_eq!(resolved, RangeOrValue::Range { range: Range { start: 40, end: 480 }, step: Some((7, 0)) });
+        assert_eq!(resolved, RangeOrValue::Range { range: Range { start: 30, end: 360 }, step: Some((47, 0)) });
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2746,6 +2800,8 @@ mod cli_tests {
     async fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
 
         GlobalCtx::init_devices(2);
+        // unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (pulse_triangle_t, intervals, _) = resource_tensor_two_easy_motifs(
             1000,
@@ -3068,100 +3124,5 @@ mod cli_tests {
             println!("test_log_info");
         }
          */
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_apply_moitf_net() -> Result<(), ThoError>{
-        GlobalCtx::init_devices(2);
-        let ws = Arc::new(RwLock::new(FsWorkspace::new("/home/bu/tmp/ws_test_hbac", 20, 684400, 200)?));
-        let tensors_path = ws.read().tensors_path().clone();
-        let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
-        let mut ctx = RunCtxWithPermits::new(0, "run_plot_slices");
-
-        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
-            move |key, _| {
-                ThoTensor::new(
-                    SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
-                    Tensor::load(tensors_path.join(format!(
-                        "{}_{}.pt",
-                        key.import_id(),
-                        key.file_stem()
-                    )))?,
-                )
-            },
-            ThoDevice::from(Device::Cpu),//it's always cpu
-        ));
-
-
-        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            &ws
-        ));
-
-
-        let clc_dist = Arc::new(MotifStats::new(
-            Arc::clone(&store),
-            Arc::clone(&loader),
-            Arc::clone(&ws),
-            Arc::clone(&motif_loader_impl),
-        ));
-
-        let resource = "1315636310"; //3879494837";
-
-        let t = Tensor::load(format!("/home/bu/tmp/ws_test_hbac/tensors/1_{resource}.pt"))?;
-
-        let channel = 13;
-        let motif_id= 22127;
-        let run_id = 7777772;
-
-        let motif = Arc::clone(&motif_loader_impl).run(
-            Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), None), CacheArea::default())),
-            ctx.branch(Some("plot_motif_loader"), false, false),
-        ).await?;
-
-        let motif_t = Arc::into_inner(motif).expect("no motif").take_data(0).await?;
-
-
-        let channel_t = t.i((channel, ..));
-        debug_plot!(&channel_t.view((1, -1)), "resource_1_{resource}_{channel}")?;
-        debug!("motif_t.data.size={:?}", motif_t.data().size());
-        debug_plot!(&motif_t.data().as_ref().view((1, -1)), "motif_{motif_id}")?;
-
-
-
-        /*let t_1 = white_tophat1d(&channel_16_t, 101)?;
-        debug!("t_1={:?}", t_1.size());
-        let mask = local_max_1d(&t_1.view((1,1,-1)), 101)?;
-        let t_1_masked = t_1 * mask;
-        plot_t(&t_1_masked.squeeze_dim(1), "1_2722809500_t_1_masked")?;*/
-
-
-
-        let (params, module)  = ws.read().load_motif_net(&PathBuf::from(format!("{channel}/{motif_id}_{run_id}/")), &Cpu)?;
-        match params.net_type {
-            MotifNetTypeParams::LinNetParams(_) => {
-                debug!("LinNetParams");
-                todo!()
-            }
-            MotifNetTypeParams::ConvNetParams(_) => {
-                debug!("ConvNetParams");
-                todo!()
-            }
-            MotifNetTypeParams::CosineNetParams(MotifCosineNetParams{ .. }) => {
-                // debug!("CosineNetParams: num_features={num_features} stride={stride}  kernel={kernel}");
-                //
-                // let out = module.tho_forward(&channel_t.unfold(0, num_features as i64, stride as i64).into(), None, false)?;
-                //
-                // debug!("out.size={:?}", out.size());
-                //
-                // // plot_t(&out.t.softmax(0, Float).view((1, -1)), &format!("{motif_id}_applied_to_{resource}"))?;
-                // debug_plot!(&out.t.view((1, -1)), "{motif_id}_applied_to_{resource}")?;
-            }
-        }
-
-
-
-        Ok(())
-    }
 
 }

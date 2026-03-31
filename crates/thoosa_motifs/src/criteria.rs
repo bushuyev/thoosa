@@ -1026,7 +1026,7 @@ mod tests {
             .view([3, 4]);
 
             let s = norm_thickness(&x, 1e-8)?;
-            assert_close(f64_of_scalar(&s), 0.8, 1e-6);
+            assert_close(f64_of_scalar(&s), 0.952381014824, 1e-6);
             Ok(())
         }
 

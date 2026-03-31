@@ -790,13 +790,13 @@ mod tests {
                 .with_load_motif_nets(vec![
                     vec![
                         //channel 0
-                        motif_test_net_(Cpu, Arc::clone(&pulse_motif), 10),
-                        motif_test_net_(Cpu, Arc::clone(&triangle_motif), 10),
-                        motif_test_net_(Cpu, Arc::clone(&sin_motif), 10),
+                        motif_test_net_(Cpu, Arc::clone(&pulse_motif), 10, 100),
+                        motif_test_net_(Cpu, Arc::clone(&triangle_motif), 10, 100),
+                        motif_test_net_(Cpu, Arc::clone(&sin_motif), 10, 100),
                     ],
                     vec![
                         //channel 1
-                        motif_test_net_(Cpu, Arc::clone(&sin_motif), 10),
+                        motif_test_net_(Cpu, Arc::clone(&sin_motif), 10, 100),
                     ],
                     vec![],
                 ])

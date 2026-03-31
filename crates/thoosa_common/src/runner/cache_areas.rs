@@ -106,7 +106,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn first_area_is_one_and_never_zero() -> Result<(), ThoError> {
+    fn test_first_area_is_one_and_never_zero() -> Result<(), ThoError> {
         let mut k = CacheAreasKeeper::new(1);
         let a = k.next_available_cache_area()?;
         assert_eq!(a, 1);
@@ -115,7 +115,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn allocates_sequentially_within_one_word_and_then_full() -> Result<(), ThoError> {
+    fn test_allocates_sequentially_within_one_word_and_then_full() -> Result<(), ThoError> {
         let mut k = CacheAreasKeeper::new(1);
 
         let areas = alloc_n(&mut k, 64)?;
@@ -130,7 +130,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn dispose_and_reuse_within_one_word_lowest_free_first() -> Result<(), ThoError> {
+    fn test_dispose_and_reuse_within_one_word_lowest_free_first() -> Result<(), ThoError> {
         let mut k = CacheAreasKeeper::new(1);
         let _ = alloc_n(&mut k, 64)?;
 
@@ -164,7 +164,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn full_two_words_then_error() -> Result<(), ThoError> {
+    fn test_full_two_words_then_error() -> Result<(), ThoError> {
         let mut k = CacheAreasKeeper::new(2);
         let _ = alloc_n(&mut k, 128)?;
         assert!(k.next_available_cache_area().is_err());
@@ -175,7 +175,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn dispose_zero_is_ignored_and_does_not_change_state() -> Result<(), ThoError> {
+    fn test_dispose_zero_is_ignored_and_does_not_change_state() -> Result<(), ThoError> {
         let mut k = CacheAreasKeeper::new(1);
 
         let a1 = k.next_available_cache_area()?;
@@ -190,7 +190,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn dispose_out_of_range_is_ignored_and_does_not_change_state() -> Result<(), ThoError> {
+    fn test_dispose_out_of_range_is_ignored_and_does_not_change_state() -> Result<(), ThoError> {
         let mut k = CacheAreasKeeper::new(1);
         let _ = alloc_n(&mut k, 10)?;
 
@@ -204,7 +204,7 @@ mod cache_area_keeper_tests {
     }
 
     #[test]
-    fn reuse_after_dispose_may_depend_on_cursor_across_words() -> Result<(), ThoError> {
+    fn test_reuse_after_dispose_may_depend_on_cursor_across_words() -> Result<(), ThoError> {
         // This test documents current behavior: allocation starts scanning from `cursor`.
         let mut k = CacheAreasKeeper::new(2);
         let _ = alloc_n(&mut k, 128)?;

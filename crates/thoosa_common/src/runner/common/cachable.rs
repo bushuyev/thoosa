@@ -1,14 +1,17 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
-
+use crate as thoosa_common;
 #[double]
-use crate::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::global_ctx::GlobalCtx;
+
+#[cfg(any(test, feature = "mock_global_ctx"))]
+use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use log::{debug, trace, warn};
+use log::{debug, error, trace, warn};
 use mockall_double::double;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
@@ -24,10 +27,9 @@ use crate::runner::cache_areas::CacheAreaId;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage};
-#[cfg(test)]
-use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
+
 
 async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
     with_async_perf_log(
@@ -99,6 +101,8 @@ where
         let device_idx = ctx.device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let cache = Self::cache().await;
         let key_for_purger = key.clone();
@@ -106,8 +110,8 @@ where
         ctx.add_purge_gpu_closure(
             Box::new( move || {
 
-                #[cfg(test)]
-                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                // #[cfg(any(test, feature = "mock_global_ctx"))]
+                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 let key_for_purger = key_for_purger.clone();
                 trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
@@ -144,8 +148,8 @@ where
 
        );
 
-        #[cfg(test)]
-        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global().do_age();
 
@@ -413,8 +417,6 @@ where
 {
 
     fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
-        #[cfg(test)]
-        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let id = o.id().clone();
         let size = o.size();
@@ -422,6 +424,9 @@ where
         let mem_size = o.mem_size();
 
         debug!("DevicesWrapCopyMode<O> for CpuOrGpu<O>::wrap: id={id:?} device_ordinal={device_ordinal}");
+
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let num_devices: usize = GlobalCtx::global().device_count();
         let mut o_op = Some(o);
@@ -687,8 +692,10 @@ where
 
         async move {
             if wrap.is_all_on_cpu().await {
-                #[cfg(test)]
-                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                error!("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+
+                // #[cfg(any(test, feature = "mock_global_ctx"))]
+                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
                 return Ok(());
@@ -720,8 +727,8 @@ where
             if is_all_on_cpu {
                 //may rewrite previous Some, but shouldn't be a problem
 
-                #[cfg(test)]
-                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                // #[cfg(any(test, feature = "mock_global_ctx"))]
+                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
             }

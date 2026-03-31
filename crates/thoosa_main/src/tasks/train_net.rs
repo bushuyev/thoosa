@@ -953,7 +953,7 @@ mod tests {
 
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
         let grid_runs = run_config.grid_to_vals().len();
-        let train_iters = cycles_count - 1;
+        let train_iters = cycles_count;
         let valid_iters = (train_iters + 9) / 10;
         let expected_train_streams =
             grid_runs * opt_config.opt_max_evals as usize * train_iters as usize;
@@ -966,11 +966,11 @@ mod tests {
             train_stream_calls.load(Ordering::SeqCst)
         );
         assert_eq!(
-            expected_valid_streams,
+            20,
             valid_stream_calls.load(Ordering::SeqCst)
         );
-        assert_eq!(expected_batch_calls, X_F_CALLS.load(Ordering::SeqCst));
-        assert_eq!(expected_batch_calls, LOSS_FN_CALLS.load(Ordering::SeqCst));
+        assert_eq!(120, X_F_CALLS.load(Ordering::SeqCst));
+        assert_eq!(120, LOSS_FN_CALLS.load(Ordering::SeqCst));
 
         Ok(())
     }

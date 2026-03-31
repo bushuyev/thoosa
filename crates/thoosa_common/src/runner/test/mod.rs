@@ -611,8 +611,13 @@ mod tests {
 
             let cache_name: &'static str = "LoadedTensorId";
 
+
+
             DUMMY_LOADER_REGISTER
                 .get_or_init(|| async move {
+                    // #[cfg(any(test, feature = "mock_global_ctx"))]
+                    // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
                     GlobalCtx::global()
                         .register_cache((
                             cache_name,
@@ -706,6 +711,8 @@ mod tests {
 
         fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
+            // #[cfg(any(test, feature = "mock_global_ctx"))]
+            // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
             let deive_idx = ctx.device_idx();
 
@@ -965,7 +972,7 @@ mod tests {
         ));
 
         assert_eq!(loader.run_count.load(Relaxed), 1);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let mut ctx_device_1 = RunCtxWithPermits::new(1, "noname");
         let ctx_device_1_0 = ctx_device_1.branch(Some("test_load_dummy_1_0"), false, false);
         let ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false, false);

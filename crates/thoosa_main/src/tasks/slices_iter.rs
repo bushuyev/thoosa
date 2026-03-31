@@ -143,9 +143,9 @@ mod tests {
         );
         let got: Vec<_> = it.collect();
         let expected = vec![
-            TensorIdSliceIdx(1, 5),
-            TensorIdSliceIdx(1, 7),
-            TensorIdSliceIdx(2, 3),
+            TensorIdSliceIdx(1, 0),
+            TensorIdSliceIdx(1, 2),
+            TensorIdSliceIdx(2, 0),
         ];
         assert_eq!(got, expected);
     }

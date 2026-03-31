@@ -52,12 +52,14 @@ pub trait RunCtx: PermitsCtx + WithId {//TODO remove PermitsCtx from RunCtx
 pub mod mock_run_ctx {
     use super::{DropIf, PermitsCtx, RunCtx};
     use futures_util::future::BoxFuture;
+    use log::debug;
     use mockall::mock;
     use mockall::predicate::always;
     use thoosa_shared::traits::{Adjustable, Named};
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::MonoKey;
     use thoosa_shared::traits::WithId;
+    use crate::runner::permits::MAX_PERMITS;
 
     mock! {
         #[derive(Debug)]
@@ -148,15 +150,17 @@ pub mod mock_run_ctx {
             self
         }
 
-        pub fn with_branch(mut self, depth: u8) -> Self {
+        pub fn with_branch(mut self, depth: u32) -> Self {
             self.mock.expect_branch()
                 // .with(always(), always())
                 .returning(move |_name:Option<&str>, _with_new_cache_area:bool, _give_permits_back_to_parent:bool| {
 
+                    debug!("with_branch: depth={depth}");
+
                     let builder = build()
-                        .with_id(depth as u32)
+                        .with_id(depth)
                         .with_device_idx(self.device_idx.unwrap_or(0))
-                        .with_acquired_permits(100)
+                        .with_acquired_permits(MAX_PERMITS)
                         .with_add_permits()
                         .with_drop_permits(vec![DropIf::IfNotMax])
                         .with_add_purge_gpu_closure()
@@ -194,7 +198,7 @@ pub mod mock_run_ctx {
             .with_add_permits()
             .with_drop_permits(vec![DropIf::IfNotMax])
             .with_cache_area(0)
-            .with_branch(255)
+            .with_branch(1024)
             .with_acquired_permits(1)
             .with_add_purge_gpu_closure()
             .finish()

@@ -1,10 +1,17 @@
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use log::{debug, error, trace, warn};
+use mockall_double::double;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
+
+#[double]
 use crate::runner::global_ctx::GlobalCtx;
+
+#[cfg(any(test, feature = "mock_global_ctx"))]
+use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+
 
 pub enum PurgeCmd {
     Gpu {
@@ -51,7 +58,11 @@ impl Purger {
                                 }
                             }
 
-                            match panic_to_err!(Ok::<_, ThoError>(GlobalCtx::global().dispose_cache_area(cache_area))){
+                        // #[cfg(any(test, feature = "mock_global_ctx"))]
+                        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+
+                        match panic_to_err!(Ok::<_, ThoError>(GlobalCtx::global().dispose_cache_area(cache_area))){
                                 Ok(_) => {
                                     trace!("Purger::new, loop: done dispose_cache_area ")
                                 }
