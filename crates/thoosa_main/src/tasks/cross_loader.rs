@@ -20,6 +20,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 use futures_util::FutureExt;
+use mockall_double::double;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
 use thoosa_common::dims::{AnyDims, AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
@@ -32,6 +33,7 @@ use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, Permit
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
@@ -1227,7 +1229,7 @@ mod tests {
     use crate::tasks::slices_iter::SlicesIter;
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    // use thoosa_common::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
     use log::{debug, set_max_level};
     use parking_lot::RwLock;
@@ -1257,6 +1259,8 @@ mod tests {
     use tokio::time::sleep;
     use tracing::subscriber::NoSubscriber;
     use thoosa_common::copy_ctx::CopyCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::Cause::SomethingElse;
     use thoosa_shared::perf_logging::set_perf_log_level;
@@ -1615,6 +1619,7 @@ mod tests {
         F:Fn((Vec<i64>, Option<Vec<i64>>))->DistsMaskType + Send + Sync + 'static
     {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let tensor_len = 10usize;
         let unfold_size = 2i64;
@@ -1759,7 +1764,7 @@ mod tests {
 
         for (i_0, resource_0) in resources.iter().enumerate() {
             let base_0 = (i_0 + 1) as f32;
-            for (i_1, resource_1) in resources.iter().enumerate().skip(i_0 + 1) {
+            for (i_1, resource_1) in resources.iter().enumerate().skip(i_0) {
                 let base_1 = (i_1 + 1) as f32;
                 for slice_0 in 0..slices_per_resource {
                     for slice_1 in 0..slices_per_resource {
@@ -1775,6 +1780,7 @@ mod tests {
                 }
             }
         }
+        debug!("test_cross_clc: expected={expected:?}");
 
         let expected_len = expected.len();
         assert!(expected_len > 0);

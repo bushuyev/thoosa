@@ -115,6 +115,7 @@ where
             debug!("PermitsAdjuster::adjust: name={adjustable_name:?} adding dummy permits={permits_to_acquire}");
             adjustable.add_permit(RunnerPerm::dummy(permits_to_acquire));
         }
+        debug!("PermitsAdjuster::adjust: name={adjustable_name:?} adjustable.acquired_permits={}", adjustable.acquired_permits());
 
         Ok(adjustable)
     }

@@ -14,7 +14,7 @@ pub async fn acquire_many_waiting_once(device_idx: usize, num_permits: NumPermit
     let global_ctx = GlobalCtx::global();
     match global_ctx.acquire_many(device_idx, num_permits, Arc::clone(&requester_id)).await {
         Err(te) if matches!(te.what(), Cause::OutOfPermits) => {
-            global_ctx.wait_for_permits_hint(device_idx).await;
+            // global_ctx.wait_for_permits_hint(device_idx).await;
             global_ctx.acquire_many(device_idx, num_permits, requester_id).await
         }
         other => other,

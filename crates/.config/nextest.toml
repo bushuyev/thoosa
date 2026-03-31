@@ -7,7 +7,7 @@ heavy = { max-threads = 1 }
 [profile.default]
 test-threads = 3
 default-filter = 'not test(/::heavy[^:]*$/)'
-retries = 3
+#retries = 3
 
 
 [profile.stress]

@@ -3478,10 +3478,11 @@ mod train_tests {
 
     #[test]
     fn shapes_ok() {
+        let batch_len = 3;
         let (x, y, lengths) = gen_motifs_output(
-            3,
+            batch_len,
             5,
-            5..=8,
+            70..=80,
             LabelSignal::ByMotifs,
             0.2,
             Some(123),
@@ -3492,12 +3493,12 @@ mod train_tests {
 
         let xs = x.size();
         assert_eq!(xs.len(), 3);
-        assert_eq!(xs[0], 16);
-        assert_eq!(xs[1], 7);
+        assert_eq!(xs[0], batch_len as i64);
+        assert_eq!(xs[1], 5);
         assert!(xs[2] >= 50 && xs[2] <= 80);
 
         let ys = y.size();
-        assert_eq!(ys, vec![16]);
+        assert_eq!(ys, vec![batch_len as i64]);
     }
 
     mod test_conv_net {

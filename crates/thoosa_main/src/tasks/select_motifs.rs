@@ -1600,9 +1600,10 @@ pub mod tests {
     use thoosa_common::runner::common::DropIf::IfNotMax;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::permits::MAX_PERMITS;
     use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceConstraint, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioConstraint, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
@@ -1668,9 +1669,11 @@ pub mod tests {
         let test_dir = Path::new("/tmp/test_single_label_one_motif");//.join(cdt_for_dir());
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(LevelFilter::Debug);
-        reset_print_options();
+        // log::set_max_level(LevelFilter::Debug);
+        // reset_print_options();
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
 
@@ -1746,6 +1749,8 @@ pub mod tests {
         log::set_max_level(LevelFilter::Info);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
 
@@ -1826,6 +1831,8 @@ pub mod tests {
         log::set_max_level(LevelFilter::Info);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
 
@@ -1925,6 +1932,8 @@ pub mod tests {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
 
@@ -2057,6 +2066,9 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_by_criteria_filters_by_slices_and_score() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let find_motifs_run_id: RunId = 11;
         let select_motifs_run_id: RunId = 22;
 
@@ -2126,7 +2138,10 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_select_motifs_run_reuses_criterion_scores_for_constraint_metrics() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(1);
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        
         let find_motifs_run_id: RunId = 31;
         let select_motifs_run_id: RunId = 32;
         let resources_group = "constraint_metrics_group";
@@ -2269,7 +2284,9 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(1);
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         let find_motifs_run_id = 7u32;
@@ -2314,7 +2331,7 @@ pub mod tests {
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 
-        let mut ctx = mock_run_ctx::default(0);
+        let mut ctx = mock_run_ctx::default(1);
         let select_motifs_run_config = SelectMotifsRunConfig::new_(Some(101), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
         let motifs_stats = SelectMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(
             clc_dist,
@@ -2346,8 +2363,10 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_uses_existing_slices_when_extend_config_is_none() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(1);
-        reset_print_options();
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // reset_print_options();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
         let resources_group = "group";
@@ -2426,7 +2445,9 @@ pub mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_filters_motifs_by_criteria_threshold() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(1);
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         reset_print_options();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));

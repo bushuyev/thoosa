@@ -540,6 +540,7 @@ mod tests {
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
     use crate::dims::AnyDims;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
 
@@ -922,7 +923,7 @@ mod tests {
     #[tokio::test]
     async fn roundtrip_pack_unpack_copy() -> Result<(), ThoError>{
         use tch::{Device, Kind, Tensor};
-
+        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }

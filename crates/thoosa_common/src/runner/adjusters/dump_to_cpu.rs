@@ -8,10 +8,13 @@ use std::sync::Arc;
 use mockall_double::double;
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
+
+use crate as thoosa_common;
 #[double]
-use crate::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::global_ctx::GlobalCtx;
+
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
-use crate::runner::permits::MAX_PERMITS;
+use crate::runner::permits::{RunnerPerm, MAX_PERMITS};
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>
@@ -92,29 +95,35 @@ where
             // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
             // dumping tensors still in use by other tasks.
             let requested_permits = MAX_PERMITS - adjustable.acquired_permits();
-            match super::acquire_many_waiting_once(
-                adjustable.device_idx(),
-                requested_permits,
-                Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
-            ).await {
-                Ok(permits) => {
-                    debug!("DumpToCpu::adjust: acquired {permits:?} adjustable.id={:?}", adjustable.id());
-                    adjustable.add_permit(permits);
-                }
-                Err(e) => {
-                    debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
-                    adjustable.drop_permits(DropIf::Always);
 
-                    return Err(AdjusterError::AdjustFailed(adjustable));
-                }
-            }
+            adjustable.add_permit(RunnerPerm::dummy(requested_permits));
+
+            // match super::acquire_many_waiting_once(
+            //     adjustable.device_idx(),
+            //     requested_permits,
+            //     Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
+            // ).await {
+            //     Ok(permits) => {
+            //         debug!("DumpToCpu::adjust: acquired {permits:?} adjustable.id={:?}", adjustable.id());
+            //         adjustable.add_permit(permits);
+            //     }
+            //     Err(e) => {
+            //         debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
+            //         adjustable.drop_permits(DropIf::Always);
+            //
+            //         return Err(AdjusterError::AdjustFailed(adjustable));
+            //     }
+            // }
         }
-
+        //
         let ids_to_exclude = adjust_context.ids_to_exclude();
         debug!("DumpToCpu::adjust: acquired 100 permits, dumping");
-
-        #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx).await;
+        //
+        // #[cfg(tho_debug)]
+        // GlobalCtx::global().debug_caches(device_idx).await;
+        //
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)
@@ -123,13 +132,14 @@ where
             AdjusterError::<A>::SomethingElse
         })?;
 
-        #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx).await;
+        // #[cfg(tho_debug)]
+        // GlobalCtx::global().debug_caches(device_idx).await;
 
-        *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
-        
+        // *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
 
-        debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+        // debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
         Ok(adjustable.branch(None, false, false))
     }
