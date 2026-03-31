@@ -37,7 +37,7 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    // #[test]
+    #[test]
     fn test_morlet_wavelet() -> Result<(), ThoError> {
         let sample_rate = 1000.0; // Hz
         let duration_secs = 2.0;

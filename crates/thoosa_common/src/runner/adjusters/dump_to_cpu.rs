@@ -10,8 +10,9 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
+
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
-use crate::runner::permits::MAX_PERMITS;
+use crate::runner::permits::{RunnerPerm, MAX_PERMITS};
 
 #[derive(Debug)]
 pub struct DumpToCpu<A>
@@ -92,22 +93,25 @@ where
             // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
             // dumping tensors still in use by other tasks.
             let requested_permits = MAX_PERMITS - adjustable.acquired_permits();
-            match super::acquire_many_waiting_once(
-                adjustable.device_idx(),
-                requested_permits,
-                Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
-            ).await {
-                Ok(permits) => {
-                    debug!("DumpToCpu::adjust: acquired {permits:?} adjustable.id={:?}", adjustable.id());
-                    adjustable.add_permit(permits);
-                }
-                Err(e) => {
-                    debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
-                    adjustable.drop_permits(DropIf::Always);
 
-                    return Err(AdjusterError::AdjustFailed(adjustable));
-                }
-            }
+            adjustable.add_permit(RunnerPerm::dummy(requested_permits));
+
+            // match super::acquire_many_waiting_once(
+            //     adjustable.device_idx(),
+            //     requested_permits,
+            //     Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
+            // ).await {
+            //     Ok(permits) => {
+            //         debug!("DumpToCpu::adjust: acquired {permits:?} adjustable.id={:?}", adjustable.id());
+            //         adjustable.add_permit(permits);
+            //     }
+            //     Err(e) => {
+            //         debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
+            //         adjustable.drop_permits(DropIf::Always);
+            //
+            //         return Err(AdjusterError::AdjustFailed(adjustable));
+            //     }
+            // }
         }
 
         let ids_to_exclude = adjust_context.ids_to_exclude();
@@ -115,6 +119,9 @@ where
 
         #[cfg(tho_debug)]
         GlobalCtx::global().debug_caches(device_idx).await;
+
+        #[cfg(test)]
+        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)

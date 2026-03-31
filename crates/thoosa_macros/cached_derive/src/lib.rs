@@ -45,6 +45,10 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
             where
                 Self: Sized,
             {
+                use mockall_double::double;
+                #[double]
+                use thoosa_common::runner::global_ctx::GlobalCtx;
+
                 let ptr_ref = #cache_static_ident.get_or_init(|| {
                     let map: &'static #map_type = Box::leak(Box::new(Default::default()));
                     map as *const #map_type as usize
@@ -59,7 +63,10 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
                     .get_or_init(|| async move {
                         use thoosa_shared::traits::Named;
 
-                        thoosa_common::runner::global_ctx::GlobalCtx::global()
+                        #[cfg(any(test, feature = "mock_global_ctx"))]
+                        let _mock_ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+
+                        GlobalCtx::global()
                             .register_cache((
                                 Self::name(),
                                 map as &'static dyn thoosa_common::runner::purge::FuturesRunnerMapPurger,

@@ -14,7 +14,9 @@ mod tests {
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::common::{OutId, PermitsCtx, RunCtx};
-    use crate::runner::global_ctx::GlobalCtx;
+    use crate as thoosa_common;
+    #[double]
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use crate::runner::oom_handler::{
         Adjusters, Contexts, NoopRunnableContext, OOMHandler,
     };
@@ -28,6 +30,7 @@ mod tests {
     use rand::seq::SliceRandom;
     use rand::{rngs::StdRng, SeedableRng};
     use std::sync::OnceLock;
+    use mockall_double::double;
     use crate::tho_device::ThoDevice;
     use crate::dims::Dims;
     use thoosa_shared::{simple_id, CopyToDevice};
@@ -41,7 +44,8 @@ mod tests {
     use thoosa_with_data::with_data;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::runner::run_ctx_2::RunCtxWithPermits;
-    use crate as thoosa_common;
+
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[ctor::ctor]
     fn init() {
@@ -460,6 +464,8 @@ mod tests {
 
             let device_idx = ctx.device_idx();
             let cache_area = ctx.cache_area();
+            #[cfg(test)]
+            let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
 
             // Materialize all features to the target device and build a single stacked batch
@@ -647,7 +653,7 @@ mod tests {
                                 MinPermits(min_permits) => {
                                     let acquired_permits = ctx.acquired_permits();
                                     if acquired_permits < *min_permits {
-                                        debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits}");
+                                        debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits} ctx.id={:?}", ctx.id());
                                         return Err(Cause::OutOfMemory.into());
                                     } else {
                                         debug!("Err(MyError::OutOfMemory) MinPermits: ok, acquired_permits={acquired_permits}");
@@ -875,6 +881,8 @@ mod tests {
             .await?;
 
             let final_device_idx = device_idx;
+            #[cfg(test)]
+            let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(
@@ -892,8 +900,8 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // CPU-only global ctx
-        init_ctx_once();
+        let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let mut ctx = RunCtxWithPermits::new(1, "test");
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
@@ -944,8 +952,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // CPU-only global ctx
-        init_ctx_once();
+        let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let ctx = Arc::new(RwLock::new(RunCtxWithPermits::new(0, "test")));
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
@@ -1000,7 +1007,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        init_ctx_once();
+        let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let mut ctx = RunCtxWithPermits::new(1, "test");
 
 

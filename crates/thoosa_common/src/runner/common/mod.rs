@@ -58,6 +58,7 @@ pub mod mock_run_ctx {
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::MonoKey;
     use thoosa_shared::traits::WithId;
+    use crate::runner::permits::MAX_PERMITS;
 
     mock! {
         #[derive(Debug)]
@@ -156,7 +157,7 @@ pub mod mock_run_ctx {
                     let builder = build()
                         .with_id(depth as u32)
                         .with_device_idx(self.device_idx.unwrap_or(0))
-                        .with_acquired_permits(100)
+                        .with_acquired_permits(MAX_PERMITS)
                         .with_add_permits()
                         .with_drop_permits(vec![DropIf::IfNotMax])
                         .with_add_purge_gpu_closure()

@@ -105,6 +105,7 @@ impl PermitsCtx for RunCtxWithPermits {
             "RunCtxWithPermits/drop_permits/permits",
         );
         let acquired_permits: NumPermits = permits.iter().map(|p| p.num_permits()).sum();
+        debug!("RunCtxWithPermits: permits={permits:?} ctx.id={:?}",self.id);
         debug!("RunCtxWithPermits: acquired_permits={acquired_permits} ctx.id={:?} drop_if={drop_if:?}",self.id);
 
         match drop_if {
@@ -182,7 +183,9 @@ impl RunCtx for RunCtxWithPermits {
         };
 
 
-        let parent_permits = mem::replace(&mut self.permits, Arc::new(Mutex::new(Vec::new())));
+        let parent_permits = self.permits.clone(); //mem::replace(&mut self.permits, Arc::new(Mutex::new(Vec::new())));
+
+        debug!("RunCtxWithPermits::branch: parent_permits={parent_permits:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
 
         branched_ctx.permits = parent_permits;
 
@@ -245,53 +248,53 @@ impl Drop for RunCtxWithPermits {
             }
         }
 
-        if let Some((return_to_id, return_to_perms)) = self.return_to.take() {
-            debug!(
-                "Drop for RunCtxWithPermits::drop: id={:?} giving permits back to parent self.perms.permits.len={}",
-                self.id,
-                with_perf_log(
-                    || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
-                    "RunCtxWithPermits/drop/permits_len",
-                )
-                .len()
-            );
-
-            let mut local_perms = mem::take(
-                &mut *with_perf_log(
-                    || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
-                    "RunCtxWithPermits/drop/permits_take",
-                ),
-            );
-            if !local_perms.is_empty() {
-                for local_perm in &mut local_perms {
-                    local_perm.update_requester_id(Arc::new(return_to_id.clone()));
-                }
-                with_perf_log(
-                    || return_to_perms.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for return_to_perms lock"),
-                    "RunCtxWithPermits/drop/return_to_perms",
-                )
-                .append(&mut local_perms);
-
-                // #[cfg(debug_assertions)] TODO
-                {
-                    let id_len = self.id.as_slice().len();
-                    assert!(id_len > 1);
-                    #[cfg(tho_debug)]
-                    GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &return_to_id);
-                }
-            }
-
-        } else {
-            debug!(
-                "Drop for RunCtxWithPermits::drop: id={:?} dropping permits self.perms.permits.len={}",
-                self.id,
-                with_perf_log(
-                    || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
-                    "RunCtxWithPermits/drop/permits_len_final",
-                )
-                .len()
-            );
-        }
+        // if let Some((return_to_id, return_to_perms)) = self.return_to.take() {
+        //     debug!(
+        //         "Drop for RunCtxWithPermits::drop: id={:?} giving permits back to parent self.perms.permits.len={}",
+        //         self.id,
+        //         with_perf_log(
+        //             || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
+        //             "RunCtxWithPermits/drop/permits_len",
+        //         )
+        //         .len()
+        //     );
+        //
+        //     let mut local_perms = mem::take(
+        //         &mut *with_perf_log(
+        //             || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
+        //             "RunCtxWithPermits/drop/permits_take",
+        //         ),
+        //     );
+        //     if !local_perms.is_empty() {
+        //         for local_perm in &mut local_perms {
+        //             local_perm.update_requester_id(Arc::new(return_to_id.clone()));
+        //         }
+        //         with_perf_log(
+        //             || return_to_perms.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for return_to_perms lock"),
+        //             "RunCtxWithPermits/drop/return_to_perms",
+        //         )
+        //         .append(&mut local_perms);
+        //
+        //         // #[cfg(debug_assertions)] TODO
+        //         {
+        //             let id_len = self.id.as_slice().len();
+        //             assert!(id_len > 1);
+        //             #[cfg(tho_debug)]
+        //             GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &return_to_id);
+        //         }
+        //     }
+        //
+        // } else {
+        //     debug!(
+        //         "Drop for RunCtxWithPermits::drop: id={:?} dropping permits self.perms.permits.len={}",
+        //         self.id,
+        //         with_perf_log(
+        //             || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
+        //             "RunCtxWithPermits/drop/permits_len_final",
+        //         )
+        //         .len()
+        //     );
+        // }
     }
 }
 

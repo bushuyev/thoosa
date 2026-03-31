@@ -23,7 +23,7 @@ use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
-    semaphores: Vec<Box<dyn PermitSource>>,
+    // semaphores: Vec<Box<dyn PermitSource>>,
     executors: Vec<DynamicTaskExecutor>,
     num_devices: usize,
     device_locks: Vec<Arc<AsyncRwLock<()>>>,
@@ -55,7 +55,7 @@ impl GlobalCtx {
 
 
         Self {
-            semaphores: vec![],
+            // semaphores: vec![],
 
             num_devices,
 
@@ -163,15 +163,13 @@ impl GlobalCtx {
         num_permits: NumPermits,
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
-        debug!("GlobalCtx::acquire_many: num_permits={num_permits} requester_id={requester_id:?} asking for many permits, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], Backtrace::capture());
+        debug!("GlobalCtx::acquire_many: num_permits={num_permits} requester_id={requester_id:?} asking for many permits, \nbacktrace={}", Backtrace::capture());
         assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
 
-        self.semaphores[device_idx].acquire(num_permits, requester_id).await
+        // self.semaphores[device_idx].acquire(num_permits, requester_id).await
+        todo!()
     }
 
-    pub async fn wait_for_permits_hint(&self, device_idx:usize) {
-        self.semaphores[device_idx].wait_for_permits_hint().await;
-    }
 
     pub async fn acquire_one(
         &self,
@@ -179,43 +177,45 @@ impl GlobalCtx {
         requester_id: Arc<dyn CachableIdTr>,
     ) -> Result<RunnerPerm, ThoError> {
 
-        assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
-
-        let mut num_tries = 0;
-
-        debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, self.semaphores[{device_idx}]={:?} \nbacktrace={}", self.semaphores[device_idx], backtrace_head_lines(8));
-
-        //can't handle OutOfPermits in with_data! and similar calls - acquire_one is needed to ensure no other thread acquired 100 permits and can drop all to cpu.
-        loop {
-            debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for single permit, {num_tries} attempt");
-
-            match self.semaphores[device_idx].acquire(1, Arc::clone(&requester_id)).await {
-                Ok(permit) => {
-                    debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
-                    return Ok(permit);
-                }
-                Err(e) => {
-                    match e.what {
-                        Cause::OutOfPermits => {
-                            num_tries+=1;
-                            if num_tries > 1000 {//TODO config
-                                return Err(ThoError::new("Can't get single permit"));
-                            }
-                            self.semaphores[device_idx].wait_for_permits_hint().await;
-                        }
-
-                        e => {
-                            return Err(ThoError::new(format!("Can't get single permit, got {e:?}")));
-                        }
-                    }
-                }
-            }
-        }
+        // assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
+        //
+        // let mut num_tries = 0;
+        //
+        // debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, \nbacktrace={}", backtrace_head_lines(8));
+        //
+        // //can't handle OutOfPermits in with_data! and similar calls - acquire_one is needed to ensure no other thread acquired 100 permits and can drop all to cpu.
+        // loop {
+        //     debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for single permit, {num_tries} attempt");
+        //
+        //     match self.semaphores[device_idx].acquire(1, Arc::clone(&requester_id)).await {
+        //         Ok(permit) => {
+        //             debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
+        //             return Ok(permit);
+        //         }
+        //         Err(e) => {
+        //             match e.what {
+        //                 Cause::OutOfPermits => {
+        //                     num_tries+=1;
+        //                     if num_tries > 1000 {//TODO config
+        //                         return Err(ThoError::new("Can't get single permit"));
+        //                     }
+        //                     self.semaphores[device_idx].wait_for_permits_hint().await;
+        //                 }
+        //
+        //                 e => {
+        //                     return Err(ThoError::new(format!("Can't get single permit, got {e:?}")));
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+        todo!()
     }
 
     #[cfg(any(test, tho_debug))]
     pub fn debug_semaphore(&self, device_idx:usize) -> &Box<dyn PermitSource>{
-        &self.semaphores[device_idx]
+        // &self.semaphores[device_idx]
+        todo!()
     }
 
     #[cfg(tho_debug)]
@@ -343,9 +343,6 @@ impl GlobalCtx {
         self.shutting_down.store(true, Relaxed);
         //TODO
 
-        for a in &self.semaphores {
-            a.shutdown().await;
-        }
 
     }
 
@@ -573,61 +570,16 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_acquire_many(mut self, behavior: AcquireBehavior) -> Self {
-            if let Some(real) = self.real {
-                self.mock.expect_acquire_many().times(0..).returning({
-                    move |device_idx, num_permits, requester_id| {
-                        tokio::runtime::Handle::current().block_on(real.acquire_many(device_idx, num_permits, requester_id))
-                    }
-                });
-            } else {
-                self.mock.expect_acquire_many().times(0..).returning({
-                    move |_device_idx, num_permits, _requester_id| {
-                        match behavior {
-                            AcquireBehavior::Grant => Ok(make_permit(num_permits)),
-                            AcquireBehavior::Deny => Err(Cause::OutOfPermits.into()),
-                            AcquireBehavior::Boom(msg) => Err(Cause::SomethingElse(msg.to_string()).into())
-                        }
-                    }
-                });
-            }
-
-            self
-        }
-
-        pub fn with_acquire_one(mut self, behavior: AcquireBehavior) -> Self {
-            if let Some(real) = self.real {
-                self.mock.expect_acquire_one().times(0..).returning({
-                    move |device_idx, requester_id| {
-                        tokio::runtime::Handle::current().block_on(real.acquire_one(device_idx, requester_id))
-                    }
-                });
-            } else {
-                self.mock.expect_acquire_one().times(0..).returning({
-                    move |_device_idx, _requester_id| {
-                        match behavior {
-                            AcquireBehavior::Grant => Ok(make_permit(1)),
-                            AcquireBehavior::Deny => Err(Cause::OutOfPermits.into()),
-                            AcquireBehavior::Boom(msg) => Err(Cause::SomethingElse(msg.to_string()).into())
-                        }
-                    }
-                });
-            }
-
-            self
-        }
-
-
         pub fn with_wait_for_permits_hint(mut self) -> Self {
-            if let Some(real) = self.real {
-                let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning({
-                    move |device_idx| {
-                        tokio::runtime::Handle::current().block_on(real.wait_for_permits_hint(device_idx));
-                    }
-                });
-            } else {
-                let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning(|_device_idx| {});
-            }
+            // if let Some(real) = self.real {
+            //     let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning({
+            //         move |device_idx| {
+            //             // tokio::runtime::Handle::current().block_on(real.wait_for_permits_hint(device_idx));
+            //         }
+            //     });
+            // } else {
+            //     let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning(|_device_idx| {});
+            // }
 
             self
         }
@@ -724,8 +676,6 @@ pub mod mock_global_ctx {
             .with_register_cache()
             .with_remove_cache()
             .with_next_cache_area(params.next_cache_areas)
-            .with_acquire_many(params.acquire_many)
-            .with_acquire_one(params.acquire_one)
             .with_wait_for_permits_hint()
             .with_run_purge_gpu()
             .with_debug_semaphore()

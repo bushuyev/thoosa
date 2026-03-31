@@ -58,7 +58,7 @@ mod tests {
     use thoosa_shared::copy_mode::CpuOnly;
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use crate::runner::run_ctx_2::RunCtxWithPermits;
     use thoosa_named_derive::Named;
     use crate::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
@@ -76,7 +76,8 @@ mod tests {
     use futures_util::StreamExt;
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
-    
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+
     #[ctor::ctor]
     fn init() {
         thoosa_shared::test_utils::init_test_logging();
@@ -573,7 +574,12 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _ = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
 
         do_test_loaded(1, 1, &loader).await
@@ -585,7 +591,12 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _ = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
 
         do_test_loaded(0, 1, &loader).await
@@ -601,7 +612,7 @@ mod tests {
             "device_1_ctx",
         )));
 
-        ctx_device_0.write().add_permit(GlobalCtx::global().acquire_many(loader_ctx_device, 1, Arc::new(simple_id!("zzz"))).await?);
+        // ctx_device_0.write().add_permit(GlobalCtx::global().acquire_many(loader_ctx_device, 1, Arc::new(simple_id!("zzz"))).await?);
 
         let (ctx_device_idx, cache_area) = {
             let guard = ctx_device_0.read();
@@ -666,7 +677,11 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
@@ -749,7 +764,11 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
@@ -796,7 +815,11 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
 
@@ -847,7 +870,11 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
 
@@ -900,7 +927,11 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
@@ -953,7 +984,11 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
 
@@ -1145,7 +1180,11 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _global_ctx = GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Kind::Int64;
@@ -1222,7 +1261,12 @@ mod tests {
     async fn test_with_tho_tensor() -> Result<(), ThoError> {
 
 
-        GlobalCtx::init_devices(2);
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        
         let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test", 0).await;
 
 

@@ -295,7 +295,7 @@ where
             |task, input, selector, device_idx, run_ctx| async move {
 
 
-                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?}");
+                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.acquired_permits());
 
                 oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
 
@@ -1213,7 +1213,7 @@ mod tests {
                 Contexts::new(
                     super::mock_input_context::build()
                         .with_partial_output(TestOutput::new(111.))
-                        .with_all_done(&[true]) //TODO should
+                        .with_all_done(&[true]) 
                         .with_build_final_output(TestOutput::new(111.))
                         .finish(),
                     super::MockRunnableContext::new(),

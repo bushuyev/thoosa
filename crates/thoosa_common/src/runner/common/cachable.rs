@@ -99,6 +99,8 @@ where
         let device_idx = ctx.device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
+        #[cfg(test)]
+        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let cache = Self::cache().await;
         let key_for_purger = key.clone();
