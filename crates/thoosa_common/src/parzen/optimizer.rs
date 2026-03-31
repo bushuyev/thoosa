@@ -876,9 +876,9 @@ mod tpe_optimizer_tests {
         let best_config = opt.optimize().await;
 
         debug!("best_config={best_config:?}");
-        // assert!((300. - <Primitives as Into<f32>>::into(best_config[0])).abs() < 3.);
-        // assert!((300. - <Primitives as Into<f32>>::into(best_config[1])).abs() < 3.);
-        // assert!((300. - <Primitives as Into<f32>>::into(best_config[2])).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[0]).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()).abs() < 3.);
+        assert!((300. - <&Val as TryInto<f32>>::try_into(&best_config[2]).unwrap()).abs() < 3.);
     }
 
     #[tokio::test]

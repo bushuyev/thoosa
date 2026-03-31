@@ -144,6 +144,9 @@ where
 
        );
 
+        #[cfg(test)]
+        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         GlobalCtx::global().do_age();
 
         #[cfg(debug_assertions)]
@@ -684,6 +687,10 @@ where
 
         async move {
             if wrap.is_all_on_cpu().await {
+                #[cfg(test)]
+                let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+                *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
                 return Ok(());
             }
 
@@ -734,7 +741,7 @@ where
 
     fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
         let on_cpu_since = timed_parking_rw_read(&wrap.on_cpu_since, "CpuOrGpu::is_on_cpu_since on_cpu_since.read");
-        let r = on_cpu_since.as_ref().map(|age| threshold_age < *age).unwrap_or(false);
+        let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age ).unwrap_or(false);
 
         debug!("DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}",wrap.id, wrap.on_cpu_since);
 

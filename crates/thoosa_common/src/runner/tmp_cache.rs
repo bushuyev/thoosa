@@ -135,10 +135,10 @@ where
         Ok(())
     }
 
-    async fn purge_cpu(&self, i: u64) -> usize{
-        debug!("TmpCached::purge_cpu: purge_since={i}");
+    async fn purge_cpu(&self, purge_until: u64) -> usize{
+        debug!("TmpCached::purge_cpu: purge_since={purge_until}");
         self.retain(|key, value| {
-            let keep = !value.is_on_cpu_before(i);
+            let keep = !value.is_on_cpu_before(purge_until);
             if !keep {
                 debug!("TmpCached::purge_cpu: key={key:?} removed");
             }
