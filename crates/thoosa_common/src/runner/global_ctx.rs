@@ -30,7 +30,7 @@ pub struct GlobalCtx {
     caches: tokio::sync::RwLock<HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>,
     is_all_on_cpu: Vec<AtomicBool>,
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
-    cache_age: AtomicU64, //for tracking CPU-only lifetime
+    cache_time: AtomicU64, //for tracking CPU-only lifetime
     purge_lock: tokio::sync::Mutex<()>,
     purger: Purger,
     shutting_down:AtomicBool//TODO not needed if tokios shutdown_background in project main
@@ -72,7 +72,7 @@ impl GlobalCtx {
 
             caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(1000)), //100 * 64 cache areas
 
-            cache_age: Default::default(),
+            cache_time: Default::default(),
             purge_lock: tokio::sync::Mutex::new(()),
             purger: Purger::new(),
             shutting_down: false.into()
@@ -223,7 +223,7 @@ impl GlobalCtx {
         self.semaphores[device_idx].remove_granted_counts(requester_id, count);
     }
 
-    // #[cfg(debug_assertions)] TODO
+    #[cfg(tho_debug)]
     pub async fn debug_caches(&self, device_idx:usize) {
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
             let maps = with_async_perf_log(
@@ -285,7 +285,7 @@ impl GlobalCtx {
         Ok(())
     }
 
-    pub async fn purge_cpu(&self, purge_last: u64) {
+    pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
 
         //should be ok to read lock - see dump_all_to_cpu
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
@@ -297,17 +297,19 @@ impl GlobalCtx {
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
 
-        let purge_since = self.cache_age.load(Relaxed).saturating_sub(purge_last);
+        let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
 
-        debug!("GlobalCtx::purge_cpu: purge_since={purge_since} maps.len={}", maps.len());
-        if purge_since > 0 {
-            // GlobalCtx::global().debug_caches(1).await;
+        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} maps.len={}", maps.len());
+        if purge_until > 0 {
+            #[cfg(tho_debug)]
+            GlobalCtx::global().debug_caches(1).await;
 
             for (type_name, map) in maps {
-                info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_since).await, type_name);
+                info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_until).await, type_name);
             }
 
-            // GlobalCtx::global().debug_caches(1).await;
+            #[cfg(tho_debug)]
+            GlobalCtx::global().debug_caches(1).await;
         }
     }
 
@@ -329,11 +331,11 @@ impl GlobalCtx {
     }
 
     pub fn do_age(&self) {
-        self.cache_age.fetch_add(1, Relaxed);
+        self.cache_time.fetch_add(1, Relaxed);
     }
 
     pub fn cache_age(&self) -> u64 {
-        self.cache_age.load(Relaxed)
+        self.cache_time.load(Relaxed)
     }
 
 
