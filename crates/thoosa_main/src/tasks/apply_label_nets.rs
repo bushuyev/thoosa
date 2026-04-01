@@ -386,7 +386,8 @@ mod tests {
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::MockStoreBuilder;
@@ -471,8 +472,10 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
-        set_max_level(Trace);
+        // set_max_level(Trace);
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let batch = 3;
         let train_motif_nets_run_id = 10;
         let train_label_nets_run_id = 20;

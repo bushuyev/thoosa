@@ -58,8 +58,8 @@ impl Purger {
                                 }
                             }
 
-                        #[cfg(any(test, feature = "mock_global_ctx"))]
-                        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                        // #[cfg(any(test, feature = "mock_global_ctx"))]
+                        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
                         match panic_to_err!(Ok::<_, ThoError>(GlobalCtx::global().dispose_cache_area(cache_area))){

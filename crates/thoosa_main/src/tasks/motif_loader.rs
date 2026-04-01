@@ -900,7 +900,7 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
     use thoosa_properties_map::ToHashmap;
@@ -913,6 +913,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
     use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use thoosa_common::dims::MotifSlices;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::average_euclidean_distance;
@@ -920,8 +921,11 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_motifs() -> Result<(), ThoError> {
-        set_max_level(Trace);
+        // set_max_level(Trace);
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
         let run_id = 1;
 

@@ -4,8 +4,10 @@ use crate::runner::common::{PermitsCtx, RunCtx};
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::common::{DropIf, OutId};
+use crate as thoosa_common;
 #[double]
-use crate::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::global_ctx::GlobalCtx;
+
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use log::{debug, warn};

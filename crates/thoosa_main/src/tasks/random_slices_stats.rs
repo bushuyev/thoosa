@@ -295,12 +295,15 @@ mod tests {
     use thoosa_common::runner::common::cachable::WithDataRef;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_store::MockStoreBuilder;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_random_stats_basic() -> Result<(), ThoError> {
-        GlobalCtx::init_devices(1);
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 1000)));
         let resources = vec![
@@ -337,7 +340,7 @@ mod tests {
         );
 
         let stage = Arc::new(RandomStats::new(Arc::clone(&store), loader, &ws));
-        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
         let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
 
         let output = Arc::clone(&stage)

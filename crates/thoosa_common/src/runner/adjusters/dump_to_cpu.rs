@@ -122,8 +122,8 @@ where
         // #[cfg(tho_debug)]
         // GlobalCtx::global().debug_caches(device_idx).await;
         //
-        #[cfg(any(test, feature = "mock_global_ctx"))]
-        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx)

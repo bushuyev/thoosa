@@ -101,8 +101,8 @@ where
         let device_idx = ctx.device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
-        #[cfg(any(test, feature = "mock_global_ctx"))]
-        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let cache = Self::cache().await;
         let key_for_purger = key.clone();
@@ -110,8 +110,8 @@ where
         ctx.add_purge_gpu_closure(
             Box::new( move || {
 
-                #[cfg(any(test, feature = "mock_global_ctx"))]
-                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                // #[cfg(any(test, feature = "mock_global_ctx"))]
+                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 let key_for_purger = key_for_purger.clone();
                 trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
@@ -148,8 +148,8 @@ where
 
        );
 
-        #[cfg(any(test, feature = "mock_global_ctx"))]
-        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global().do_age();
 
@@ -425,8 +425,8 @@ where
 
         debug!("DevicesWrapCopyMode<O> for CpuOrGpu<O>::wrap: id={id:?} device_ordinal={device_ordinal}");
 
-        #[cfg(any(test, feature = "mock_global_ctx"))]
-        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let num_devices: usize = GlobalCtx::global().device_count();
         let mut o_op = Some(o);
@@ -694,8 +694,8 @@ where
             if wrap.is_all_on_cpu().await {
                 error!("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
 
-                #[cfg(any(test, feature = "mock_global_ctx"))]
-                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                // #[cfg(any(test, feature = "mock_global_ctx"))]
+                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
                 return Ok(());
@@ -727,8 +727,8 @@ where
             if is_all_on_cpu {
                 //may rewrite previous Some, but shouldn't be a problem
 
-                #[cfg(any(test, feature = "mock_global_ctx"))]
-                let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                // #[cfg(any(test, feature = "mock_global_ctx"))]
+                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                 *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
             }

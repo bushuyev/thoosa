@@ -589,6 +589,7 @@ mod tests {
                 .with_list_resources_not_in_group([(RANDOM_AVG_DIST_GROUP, Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
                     resource.clone()
                 }).collect()))])
+                .with_list_random_resources([(None, Ok(resources.iter().map(|r|r.0.clone()).collect::<Vec<_>>()))])
                 .with_save_groups_as_motifs() //TODO check if resource_intervals are in found groups
                 .build());
 

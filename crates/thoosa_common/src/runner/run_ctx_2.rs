@@ -16,10 +16,10 @@ use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::{with_perf_log, ThoError, LOCK_TIMEOUT};
 use tracing::error;
 
+use crate as thoosa_common;
 #[double]
-use crate::runner::global_ctx::GlobalCtx;
-#[cfg(any(test, feature = "mock_global_ctx"))]
-use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+use thoosa_common::runner::global_ctx::GlobalCtx;
+
 use thoosa_shared::mono_key;
 use crate::runner::permits::MAX_PERMITS;
 
@@ -59,8 +59,8 @@ impl WithId for RunCtxWithPermits {
 
 impl RunCtxWithPermits {
     pub fn new(device_idx: usize, _id: &str,) -> Self {
-        #[cfg(any(test, feature = "mock_global_ctx"))]
-        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
         Self::with_cache_area(device_idx, mono_key!(0, _id).into(), GlobalCtx::global().next_cache_area().expect("no more cache areas"))
     }
@@ -168,8 +168,8 @@ impl RunCtx for RunCtxWithPermits {
         debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
 
         let mut branched_ctx= if with_new_cache_area {
-            #[cfg(any(test, feature = "mock_global_ctx"))]
-            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+            // #[cfg(any(test, feature = "mock_global_ctx"))]
+            // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
             let new_cache_area = GlobalCtx::global().next_cache_area().expect("ran out of cache areas");
 
@@ -245,8 +245,8 @@ impl Drop for RunCtxWithPermits {
                         warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtxWithPermits");
                     }
                     Some(m) => {
-                        #[cfg(any(test, feature = "mock_global_ctx"))]
-                        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+                        // #[cfg(any(test, feature = "mock_global_ctx"))]
+                        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
                         if let Err(e) = GlobalCtx::global().run_purge_gpu(m.into_inner(), self.cache_area) {
                             error!("run_purge_gpu failed: {e:?} ");

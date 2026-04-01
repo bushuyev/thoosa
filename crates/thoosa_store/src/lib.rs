@@ -2935,6 +2935,10 @@ impl SqlStore {
 
     pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
+
+        let mut conn = Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE)?;
+        Self::create_tables(&mut conn)?;
+
         let writer = tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE).await?;
         writer.call(init_sqlite_writer).await?;
 
@@ -2945,7 +2949,21 @@ impl SqlStore {
             readers.push(reader);
         }
 
-        Self::create_tables(Connection::open_with_flags(path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE)?, writer, readers)
+
+
+        let readers = if readers.is_empty() {
+            vec![writer.clone()]
+        } else {
+            readers
+        };
+
+        Ok(Box::new(Self {
+            #[cfg(test)]
+            conn: Mutex::new(conn),
+            writer,
+            readers: Arc::new(readers),
+            rr: AtomicUsize::new(0),
+        }))
     }
     // #[cfg(test)]
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
@@ -2962,13 +2980,27 @@ impl SqlStore {
             readers.push(reader);
         }
 
-        Self::create_tables(Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI)?, writer, readers)
+        let mut conn = Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI)?;
+        Self::create_tables(&mut conn)?;
+
+        let readers = if readers.is_empty() {
+            vec![writer.clone()]
+        } else {
+            readers
+        };
+
+        Ok(Box::new(Self {
+            #[cfg(test)]
+            conn: Mutex::new(conn),
+            writer,
+            readers: Arc::new(readers),
+            rr: AtomicUsize::new(0),
+        }))
     }
 
-    //TODO rename channel_id to channel - not a pk
-    fn create_tables(mut conn: Connection, writer: tokio_rusqlite::Connection, readers: Vec<tokio_rusqlite::Connection>) -> Result<Box<dyn Store>, ThoError> {
-        {
-            init_sqlite_writer(&mut conn)?;
+    fn create_tables( conn: &mut Connection) -> Result<(), ThoError> {
+
+            init_sqlite_writer(conn)?;
 
             let t = conn.transaction()?;
 
@@ -3161,21 +3193,8 @@ impl SqlStore {
             )?;
 
             t.execute("commit", ())?;
-        }
 
-        let readers = if readers.is_empty() {
-            vec![writer.clone()]
-        } else {
-            readers
-        };
-
-        Ok(Box::new(Self {
-            #[cfg(test)]
-            conn: Mutex::new(conn),
-            writer,
-            readers: Arc::new(readers),
-            rr: AtomicUsize::new(0),
-        }))
+        Ok(())
     }
 
     fn list_resource_set_resources(set_id: usize, conn: &Connection) -> Result<Vec<Resource>, ThoError> {

@@ -355,6 +355,7 @@ pub mod mock_global_ctx {
     use thoosa_shared::Cause;
     use thoosa_shared::ThoError;
     use async_trait::async_trait;
+    use log::debug;
     use thoosa_shared::traits::CachableIdTr;
     use mockall::predicate::eq;
     use tokio::sync::Semaphore;
@@ -527,9 +528,9 @@ pub mod mock_global_ctx {
             if let Some(real) = self.real {
                 self.mock.expect_register_cache().returning({
                     move |cache| {
-                        block_in_place(|| {
+                        tokio::task::block_in_place(move || {
                             tokio::runtime::Handle::current().block_on(real.register_cache(cache));
-                        })
+                        });
                     }
                 });
             } else {
@@ -654,6 +655,7 @@ pub mod mock_global_ctx {
 
         #[cfg(any(test, feature = "mock_global_ctx"))]
         pub fn install_global_ctx_mock() -> impl Drop {
+            debug!("install_global_ctx_mock");;
             use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
             let ctx = MockGlobalCtx::global_context();
             if unsafe {USE_REAL_CTX} {

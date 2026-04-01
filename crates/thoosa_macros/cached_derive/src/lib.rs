@@ -63,8 +63,8 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
                     .get_or_init(|| async move {
                         use thoosa_shared::traits::Named;
 
-                        #[cfg(any(test, feature = "mock_global_ctx"))]
-                        let _mock_ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+                        // #[cfg(any(test, feature = "mock_global_ctx"))]
+                        // let _mock_ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
                         GlobalCtx::global()
                             .register_cache((

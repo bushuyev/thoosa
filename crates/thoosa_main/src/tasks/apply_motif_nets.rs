@@ -453,8 +453,8 @@ where
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
-        #[cfg(any(test, feature = "mock_global_ctx"))]
-        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await));
@@ -796,6 +796,8 @@ where
         fail_if_size_bigger_than:Option<usize>
     ) -> Self {
 
+        debug!("ApplyMotifNet::new: net_wrapper.id={:?}", net_wrapper.id());
+
         Self {
             id: mono_key!("ApplyMotifNet", "ApplyMotifNet") + net_wrapper.id(),
             net_wrapper,
@@ -863,7 +865,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
         let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
-        debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.size={:?}", input.id(), out.size());
+        debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
 
         Ok(out)
     }
@@ -910,29 +912,31 @@ pub fn apply_motif_net_forward(
 pub fn motif_test_net_(
     device: Device,
     motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>,
-    step: u32,
+    step: u32, kernel: u32,
 ) -> (
     Box<dyn Fn() -> MotifNetParams + Sync + Send>,
     Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
 ) {
+    let id = motif_t.id().clone();
     let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
     (
-        Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, 10)),
+        Box::new(move || MotifNetParams::new(motif_width, 1, 1, step, 32, kernel)),
         Box::new(move || {
-            *dummy_motif_net::<Batch<Slice>, MotifProbability>(motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
+            *dummy_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
         }),
     )
 }
 
 #[cfg(test)]
 ///builds net initialized to detect provided pattern
-pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
+pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:Into<SynKey>>(
+    id: I,
     num_features: u32,
     k: f64,
     device: Device,
     descr: &str,
     pattern:&Tensor,
-    stride: i64,
+    stride: i64
 ) -> Result<Box<ThoModuleWithStore<DI, DO>>, ThoError> {
     assert_eq!(pattern.size().len(), 1, "template must be 1-D");
     let l = pattern.size()[0];
@@ -1009,7 +1013,7 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 
     let module = node.clone().build_tch_module(&vs.root())?;
     Ok(Box::new(ThoModuleWithStore::with_factory(
-        "test_net",
+        id,
         module,
         vs,
         Some(Arc::new( move |path:&nn::Path| {
@@ -1038,7 +1042,7 @@ pub(crate) mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::{PermitsCtx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::builder::SeqBuilder;
     use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
     use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
@@ -1047,6 +1051,7 @@ pub(crate) mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
     use thoosa_common::debug_plot;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_common::tch_test_utils::Interval;
@@ -1108,6 +1113,10 @@ pub(crate) mod tests {
         reset_print_options();
         GlobalCtx::init_devices(2);
 
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
 
@@ -1123,9 +1132,9 @@ pub(crate) mod tests {
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
         let net_id_1_0 = PathBuf::from(format!("1/{}_{}", motif_1_0_id, train_motifs_run_id));
-        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
-        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step);
-        let (params_1_0, module_1_0) = motif_test_net_(Cpu, Arc::clone(&motif_1_0), step);
+        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
+        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step, 100);
+        let (params_1_0, module_1_0) = motif_test_net_(Cpu, Arc::clone(&motif_1_0), step, 100);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
@@ -1176,7 +1185,8 @@ pub(crate) mod tests {
             &ws,
             &store,
             vec![select_motifs_run_id],
-            mock_run_ctx::default(1), Some(0.3),
+            mock_run_ctx::default(1),
+            Some(0.3),
             None,
             slice_step,
             trigger_oom_len
@@ -1187,7 +1197,7 @@ pub(crate) mod tests {
             vec![motif_1_0.t_ref().i((0, ..))],
             Vec::new(),
         ];
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 200, step as usize)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 300, step as usize)?;
 
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}");// resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
@@ -1250,9 +1260,11 @@ pub(crate) mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_mixed_widths_return_real_lengths() -> Result<(), ThoError> {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
-        log::set_max_level(Debug);
+        // log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let find_motifs_run_id: RunId = 1;
         let select_motifs_run_id: RunId = 2;
@@ -1267,8 +1279,8 @@ pub(crate) mod tests {
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
-        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
-        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step);
+        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 50);
+        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step, 50);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, input_len as u32)
@@ -1346,6 +1358,9 @@ pub(crate) mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
@@ -1356,7 +1371,7 @@ pub(crate) mod tests {
         let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
-        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step);
+        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, input_n_0 as u32)
@@ -1461,7 +1476,7 @@ pub(crate) mod tests {
         let test_dir = Path::new("/tmp/test_test_net"); //.join(cdt_for_dir());
 
 
-        let test_net = dummy_motif_net::<AnyDims, AnyDims>(100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
+        let test_net = dummy_motif_net::<AnyDims, AnyDims, &str>("test", 100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let resource: ThoTensor<AnyDims, SimpleId> = resource_a_t.shallow_clone().into();
         let out = test_net.tho_forward(&resource, None, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]

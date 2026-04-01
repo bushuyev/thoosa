@@ -568,7 +568,7 @@ mod tests {
     }
     // //////////////////////////////
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_load_tensor_cuda_to_cuda() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
@@ -585,7 +585,7 @@ mod tests {
         do_test_loaded(1, 1, &loader).await
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_load_tensor_cpu_to_cuda() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
