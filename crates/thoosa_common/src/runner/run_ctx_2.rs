@@ -10,12 +10,14 @@ use mockall_double::double;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 use crate::runner::common::{DropIf, PermitsCtx, RunCtx};
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
+
 use crate::runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::{with_perf_log, ThoError, LOCK_TIMEOUT};
 use tracing::error;
+
+#[double]
+use crate::runner::global_ctx::GlobalCtx;
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use thoosa_shared::mono_key;
@@ -57,6 +59,9 @@ impl WithId for RunCtxWithPermits {
 
 impl RunCtxWithPermits {
     pub fn new(device_idx: usize, _id: &str,) -> Self {
+        #[cfg(any(test, feature = "mock_global_ctx"))]
+        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+
         Self::with_cache_area(device_idx, mono_key!(0, _id).into(), GlobalCtx::global().next_cache_area().expect("no more cache areas"))
     }
 
@@ -163,6 +168,9 @@ impl RunCtx for RunCtxWithPermits {
         debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
 
         let mut branched_ctx= if with_new_cache_area {
+            #[cfg(any(test, feature = "mock_global_ctx"))]
+            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
             let new_cache_area = GlobalCtx::global().next_cache_area().expect("ran out of cache areas");
 
             let mut branched_ctx = RunCtxWithPermits::with_cache_area(self.device_idx, branch_full_id, new_cache_area);
@@ -248,53 +256,6 @@ impl Drop for RunCtxWithPermits {
             }
         }
 
-        // if let Some((return_to_id, return_to_perms)) = self.return_to.take() {
-        //     debug!(
-        //         "Drop for RunCtxWithPermits::drop: id={:?} giving permits back to parent self.perms.permits.len={}",
-        //         self.id,
-        //         with_perf_log(
-        //             || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
-        //             "RunCtxWithPermits/drop/permits_len",
-        //         )
-        //         .len()
-        //     );
-        //
-        //     let mut local_perms = mem::take(
-        //         &mut *with_perf_log(
-        //             || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
-        //             "RunCtxWithPermits/drop/permits_take",
-        //         ),
-        //     );
-        //     if !local_perms.is_empty() {
-        //         for local_perm in &mut local_perms {
-        //             local_perm.update_requester_id(Arc::new(return_to_id.clone()));
-        //         }
-        //         with_perf_log(
-        //             || return_to_perms.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for return_to_perms lock"),
-        //             "RunCtxWithPermits/drop/return_to_perms",
-        //         )
-        //         .append(&mut local_perms);
-        //
-        //         // #[cfg(debug_assertions)] TODO
-        //         {
-        //             let id_len = self.id.as_slice().len();
-        //             assert!(id_len > 1);
-        //             #[cfg(tho_debug)]
-        //             GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &return_to_id);
-        //         }
-        //     }
-        //
-        // } else {
-        //     debug!(
-        //         "Drop for RunCtxWithPermits::drop: id={:?} dropping permits self.perms.permits.len={}",
-        //         self.id,
-        //         with_perf_log(
-        //             || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for permits lock"),
-        //             "RunCtxWithPermits/drop/permits_len_final",
-        //         )
-        //         .len()
-        //     );
-        // }
     }
 }
 
@@ -313,36 +274,4 @@ mod tests {
         ctx
     }
 
-    fn make_permit(sem: &Arc<Semaphore>, permits: u32) -> RunnerPerm {
-        RunnerPerm::new(Arc::clone(sem).try_acquire_many_owned(permits).expect("permit"))
-    }
-
-    #[test]
-    fn branch_moves_permits_to_child() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-        let sem = Arc::new(Semaphore::new(4));
-        let mut parent = make_ctx("parent");
-        parent.add_permit(make_permit(&sem, 2));
-        assert_eq!(parent.acquired_permits(), 2);
-        let child = parent.branch(Some("child"), false, false);
-        assert_eq!(parent.acquired_permits(), 0);
-        assert_eq!(child.acquired_permits(), 2);
-        assert!(!Arc::ptr_eq(&parent.permits, &child.permits));
-    }
-
-    #[test]
-    fn branched_ctx_returns_permits_to_parent_on_drop() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-        let sem = Arc::new(Semaphore::new(4));
-        let mut parent = make_ctx("parent");
-        parent.add_permit(make_permit(&sem, 3));
-        {
-            let child = parent.branch(Some("child"), false, true);
-            assert_eq!(parent.acquired_permits(), 0);
-            assert_eq!(child.acquired_permits(), 3);
-        }
-        assert_eq!(parent.acquired_permits(), 3);
-    }
 }

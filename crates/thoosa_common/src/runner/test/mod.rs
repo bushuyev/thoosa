@@ -611,8 +611,13 @@ mod tests {
 
             let cache_name: &'static str = "LoadedTensorId";
 
+
+
             DUMMY_LOADER_REGISTER
                 .get_or_init(|| async move {
+                    #[cfg(any(test, feature = "mock_global_ctx"))]
+                    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
                     GlobalCtx::global()
                         .register_cache((
                             cache_name,
@@ -706,6 +711,8 @@ mod tests {
 
         fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
+            #[cfg(any(test, feature = "mock_global_ctx"))]
+            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
             let deive_idx = ctx.device_idx();
 

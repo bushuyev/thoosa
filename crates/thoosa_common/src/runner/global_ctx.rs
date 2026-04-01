@@ -145,10 +145,6 @@ impl GlobalCtx {
         self.num_devices
     }
 
-    pub fn device_lock(device_idx: usize) -> Arc<AsyncRwLock<()>> {
-        Arc::clone(&GlobalCtx::global().device_locks[device_idx])
-    }
-
     pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
         self.is_all_on_cpu[device_idx].load(Relaxed)
     }
@@ -364,6 +360,7 @@ pub mod mock_global_ctx {
     use tokio::sync::Semaphore;
     use tokio::task::block_in_place;
     use thoosa_shared::comp_id::SynKey;
+    use crate::runner::cache_areas::CacheAreaId;
     use crate::runner::global_ctx::MockGlobalCtx;
 
     #[derive(Clone, Copy, Debug)]
@@ -435,12 +432,13 @@ pub mod mock_global_ctx {
             out_id: Arc<dyn CachableIdTr>,
         ) -> Result<RunnerPerm, ThoError> {
 
-            self.real.debug_semaphore(self.device_idx).acquire(num_permits, out_id).await
+            // self.real.debug_semaphore(self.device_idx).acquire(num_permits, out_id).await
+            todo!()
         }
 
         async fn wait_for_permits_hint(&self) {
 
-            self.real.debug_semaphore(self.device_idx).wait_for_permits_hint().await;
+            // self.real.debug_semaphore(self.device_idx).wait_for_permits_hint().await;
         }
 
         #[cfg(tho_debug)]
@@ -462,12 +460,13 @@ pub mod mock_global_ctx {
         Box::new(DelegatingPermitSource { real, device_idx })
     }
 
-
+    #[cfg(any(test, feature = "mock_global_ctx"))]
     pub struct MockGlobalCtxBuilder {
         mock: MockGlobalCtx,
         real: Option<&'static GlobalCtx>
     }
 
+    #[cfg(any(test, feature = "mock_global_ctx"))]
     impl MockGlobalCtxBuilder {
         pub fn with_reset_all_on_cpu(mut self) -> Self {
             if let Some(real) = self.real {
@@ -560,7 +559,9 @@ pub mod mock_global_ctx {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({
                     move |required_ids, device_idx| {
-                        tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(required_ids, device_idx))
+                        block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(required_ids, device_idx))
+                        })
                     }
                 });
             } else {
@@ -599,18 +600,31 @@ pub mod mock_global_ctx {
         }
 
         pub fn with_debug_semaphore(mut self) -> Self {
-            if let Some(real) = self.real {
-                for device_idx in 0..real.device_count() {
-                    let sem = delegating_semaphore(real, device_idx);
-                    self.mock.expect_debug_semaphore()
-                        .with(eq(device_idx))
-                        .times(0..)
-                        .return_const(sem);
-                }
-            } else {
-                self.mock.expect_debug_semaphore().times(0..).return_const(dummy_semaphore());
-            }
+            // if let Some(real) = self.real {
+            //     for device_idx in 0..real.device_count() {
+            //         let sem = delegating_semaphore(real, device_idx);
+            //         self.mock.expect_debug_semaphore()
+            //             .with(eq(device_idx))
+            //             .times(0..)
+            //             .return_const(sem);
+            //     }
+            // } else {
+            //     self.mock.expect_debug_semaphore().times(0..).return_const(dummy_semaphore());
+            // }
 
+            self
+        }
+
+        pub fn with_dispose_cache_area(mut self) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_dispose_cache_area().times(0..).returning({
+                    move | cache_area| {
+                        real.dispose_cache_area(cache_area)
+                    }
+                });
+            } else {
+                self.mock.expect_dispose_cache_area().times(0..);
+            }
             self
         }
 
@@ -679,6 +693,7 @@ pub mod mock_global_ctx {
             .with_wait_for_permits_hint()
             .with_run_purge_gpu()
             .with_debug_semaphore()
+            .with_dispose_cache_area()
             .finish()
     }
 

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use async_trait::async_trait;
 use log::{debug, error, info, trace};
+use mockall_double::double;
 use parking_lot::{Mutex, RwLock};
 use tch::{nn, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
@@ -15,7 +16,6 @@ use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tracing::warn;
 use thoosa_named_derive::Named;
-use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::debug_plot;
 use thoosa_common::batches::BatchLengths;
@@ -47,6 +47,12 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, 
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
+#[cfg(any(test, feature = "mock_global_ctx"))]
+use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+
 use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
@@ -446,6 +452,10 @@ where
             };
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
+
+        #[cfg(any(test, feature = "mock_global_ctx"))]
+        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
 
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await));
 

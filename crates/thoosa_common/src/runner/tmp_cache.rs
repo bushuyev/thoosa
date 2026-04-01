@@ -84,6 +84,8 @@ where
             &*(ptr_ref)
         };
 
+        #[cfg(any(test, feature = "mock_global_ctx"))]
+        let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
         GlobalCtx::global().register_cache((name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
         Self {

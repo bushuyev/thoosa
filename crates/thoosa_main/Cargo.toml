@@ -7,7 +7,7 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-thoosa_common = {path = "../thoosa_common" }
+thoosa_common = {path = "../thoosa_common", features = ["mock_global_ctx"] }
 thoosa_motifs = {path = "../thoosa_motifs" }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shared = {path = "../thoosa_shared" }

@@ -106,7 +106,7 @@ impl RunnerPerm {
         self.num_permits
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn new(inner: OwnedSemaphorePermit) -> Self {
         let num_permits = inner.num_permits() as NumPermits;
         Self {

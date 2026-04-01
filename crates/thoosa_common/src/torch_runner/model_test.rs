@@ -464,7 +464,7 @@ mod tests {
 
             let device_idx = ctx.device_idx();
             let cache_area = ctx.cache_area();
-            #[cfg(test)]
+            #[cfg(any(test, feature = "mock_global_ctx"))]
             let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
 
@@ -881,7 +881,7 @@ mod tests {
             .await?;
 
             let final_device_idx = device_idx;
-            #[cfg(test)]
+            #[cfg(any(test, feature = "mock_global_ctx"))]
             let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
 

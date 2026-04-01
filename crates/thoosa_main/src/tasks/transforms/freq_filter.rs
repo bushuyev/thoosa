@@ -2,6 +2,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
+use mockall_double::double;
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cuda;
@@ -12,9 +13,17 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::OutId;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+
+#[cfg(any(test, feature = "mock_global_ctx"))]
+use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+
+
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
+
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{CachableIdTr, WithId};
@@ -314,6 +323,9 @@ where
             let out_id = self.out_id(input.id());
             Arc::new(out_id) as Arc<dyn CachableIdTr>
         };
+
+        #[cfg(any(test, feature = "mock_global_ctx"))]
+        let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let num_devices = GlobalCtx::global().device_count();
         let mut ctx_for_data = ctx.branch(Some("freq_filter_data"), false, false);

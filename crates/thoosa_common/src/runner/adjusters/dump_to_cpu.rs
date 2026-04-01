@@ -8,8 +8,10 @@ use std::sync::Arc;
 use mockall_double::double;
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
 use crate::runner::common::{DropIf, RunCtx};
+
+use crate as thoosa_common;
 #[double]
-use crate::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 use crate::runner::permits::{RunnerPerm, MAX_PERMITS};
@@ -113,14 +115,14 @@ where
             //     }
             // }
         }
-
+        //
         let ids_to_exclude = adjust_context.ids_to_exclude();
         debug!("DumpToCpu::adjust: acquired 100 permits, dumping");
-
-        #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx).await;
-
-        #[cfg(test)]
+        //
+        // #[cfg(tho_debug)]
+        // GlobalCtx::global().debug_caches(device_idx).await;
+        //
+        #[cfg(any(test, feature = "mock_global_ctx"))]
         let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global()
@@ -130,13 +132,14 @@ where
             AdjusterError::<A>::SomethingElse
         })?;
 
-        #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx).await;
+        // #[cfg(tho_debug)]
+        // GlobalCtx::global().debug_caches(device_idx).await;
 
-        *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
-        
+        // *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
 
-        debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+        // debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
         Ok(adjustable.branch(None, false, false))
     }

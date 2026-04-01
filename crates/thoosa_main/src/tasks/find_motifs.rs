@@ -314,7 +314,6 @@ where
                     let run_config_clone = run_config.clone();
                     let step = cross_unfold_clc.as_ref().as_ref().unfold_params.step();
 
-                    //gpt TODO!! relies on run_config.id being set (presave); consider erroring instead of panicking.
                     let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
                     FindMotifsStages::new(
                         run_config,
@@ -346,7 +345,7 @@ where
                             },
                             fixed_config.max_chunk_size as usize,
                             |batch| {
-                                async { batch.to_cpu().await }.boxed() //TODO unwrap
+                                async { batch.to_cpu().await }.boxed()
                             },
                             |receiver| {
                                 let dists_tracker = Arc::clone(receiver);
@@ -425,13 +424,11 @@ where
                 info!("running find motifs on run config {:?}", stage.run_config.id);
 
                 let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.expect("no run_config"))), true, false);
-                let input_arc = Arc::clone(&input);
-                let cross_loader_arc = Arc::clone(&stage.cross_loader);
 
-                cross_loader_arc.run(input_arc, ctx_for_stage)
+                Arc::clone(&stage.cross_loader).run(Arc::clone(&input), ctx_for_stage)
             });
 
-        let _/*corss loader's out is ()*/ = collect_futures_with_progress(
+        let _/*cross loader's out is ()*/ = collect_futures_with_progress(
             futures,
             run_config_stages_len,
             FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT,
