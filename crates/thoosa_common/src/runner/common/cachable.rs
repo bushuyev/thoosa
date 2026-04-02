@@ -692,7 +692,7 @@ where
 
         async move {
             if wrap.is_all_on_cpu().await {
-                error!("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+                
 
                 // #[cfg(any(test, feature = "mock_global_ctx"))]
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();

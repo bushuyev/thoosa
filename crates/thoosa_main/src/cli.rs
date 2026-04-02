@@ -1123,7 +1123,7 @@ where
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((50, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((100, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
