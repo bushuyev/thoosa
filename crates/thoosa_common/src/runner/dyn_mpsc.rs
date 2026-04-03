@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 use std::borrow::BorrowMut;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use tokio::sync::mpsc::error::TrySendError;
 use thoosa_shared::{Cause, ThoError};
 
 enum IsOOM {
@@ -268,13 +269,13 @@ impl DynamicTaskExecutor {
     {
 
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
-
-        debug!("DynamicTaskExecutor::submit: max_other_parallel={max_other_parallel:?} parent={parent:?}");
+        let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+        debug!("DynamicTaskExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         let mut suspend_guard = ParentSuspendGuard::new(parent);
         suspend_guard.maybe_suspend().await?;
 
-        let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+
         let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
 
         let wrapped = async move {
@@ -286,16 +287,24 @@ impl DynamicTaskExecutor {
             is_oom.into()
         };
 
-        if self
+
+       match self
             .tx
             .try_send(Job::new(job_id, max_other_parallel, wrapped))
-            .is_err()
         {
-            let _ = suspend_guard.resume().await;
-            return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
+            Ok(v) => {
+                debug!("DynamicTaskExecutor::submit: submitted job_id={job_id}")
+            }
+            Err(e) => {
+                error!("DynamicTaskExecutor::submit: submit job_id={job_id} failed: e={e:?}");
+                let _ = suspend_guard.resume().await;
+                return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
+            }
         }
 
         let result = result_rx.await?;
+
+        // let result = self.tx.send(Job::new(job_id, max_other_parallel, wrapped)).await;
 
         suspend_guard.resume().await?;
         result
@@ -465,6 +474,7 @@ impl DynamicTaskExecutor {
                 let can_spawn = {
                     let job = &pending[idx];
                     Self::can_activate_now(
+                        job.id,
                         *active_count,
                         global_limit.load(Relaxed) as usize,
                         active_caps,
@@ -542,6 +552,7 @@ impl DynamicTaskExecutor {
     }
 
     fn can_activate_now(
+        job_id: JobId,
         active_count: usize,
         global_limit: usize,
         active_caps: &BTreeMap<usize, usize>,
@@ -553,7 +564,7 @@ impl DynamicTaskExecutor {
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!("DynamicTaskExecutor::can_activate_now: active_count={active_count} next_total={next_total} global_limit={global_limit} min={min} r={r}");
+        debug!("DynamicTaskExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} global_limit={global_limit} min={min} r={r}");
         r
     }
 
@@ -634,7 +645,7 @@ impl DynamicTaskExecutor {
         if job.suspend_depth == 0 {
             if job.active {
                 Self::flush_waiting_resumes(job);
-            } else if Self::can_activate_now(*active_count, global_limit, active_caps, job.cap) {
+            } else if Self::can_activate_now(job_id, *active_count, global_limit, active_caps, job.cap) {
                 job.active = true;
                 Self::add_active(active_caps, active_count, job.cap);
                 Self::flush_waiting_resumes(job);
@@ -645,7 +656,7 @@ impl DynamicTaskExecutor {
         job.suspend_depth -= 1;
 
         if job.suspend_depth == 0
-            && Self::can_activate_now(*active_count, global_limit, active_caps, job.cap)
+            && Self::can_activate_now(job_id, *active_count, global_limit, active_caps, job.cap)
         {
             job.active = true;
             Self::add_active(active_caps, active_count, job.cap);
@@ -687,7 +698,7 @@ impl DynamicTaskExecutor {
                     _ => continue,
                 };
 
-                if Self::can_activate_now(*active_count, global_limit, active_caps, cap) {
+                if Self::can_activate_now(job_id, *active_count, global_limit, active_caps, cap) {
                     let job = jobs.get_mut(&job_id).expect("job must exist");
                     job.active = true;
                     Self::add_active(active_caps, active_count, job.cap);

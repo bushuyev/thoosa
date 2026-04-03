@@ -766,7 +766,7 @@ where
         let stats = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("clc_stats"))),
             ],
             None,
         )

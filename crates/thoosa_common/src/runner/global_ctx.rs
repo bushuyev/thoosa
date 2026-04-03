@@ -129,6 +129,8 @@ impl GlobalCtx {
             .remove(key)
             .is_some()
         );
+
+        info!("GlobalCtx::remove_cache: {} removed ", key);
     }
 
     pub fn global() -> &'static Self {
@@ -216,7 +218,7 @@ impl GlobalCtx {
 
     #[cfg(tho_debug)]
     pub fn debug_semaphore_remove_perm(&self, device_idx:usize, requester_id:Arc<dyn CachableIdTr>, count:u8) {
-        self.semaphores[device_idx].remove_granted_counts(requester_id, count);
+        // self.semaphores[device_idx].remove_granted_counts(requester_id, count);
     }
 
     #[cfg(tho_debug)]
@@ -249,8 +251,9 @@ impl GlobalCtx {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(
         &'a self,
-        required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
+        required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>, //TODO key is used for tmp_cache
         device_idx: usize,
+        descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(device_idx, 0);
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
@@ -262,14 +265,21 @@ impl GlobalCtx {
                 "GlobalCtx/dump_all_to_cpu/read_caches",
             ).await;
 
-            maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
-        };
+            maps.iter()/*.filter(|(type_name, map)| if required_ids.contains_key(*type_name){
+                info!("GlobalCtx::dump_all_to_cpu: skipping {type_name}");
 
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&"dump_all_to_cpu", maps.len(), 1);
-        for (type_name, map) in maps {
+                false
+            } else {
+                true
+            })*/.map(|(type_name, map)| (*type_name, *map)).collect()
+        };
+        // let read_guard = self.caches.read().await;//doesn't
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
+
+        for (type_name, map) in maps.iter() {
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
 
-            map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx).await?;
+            map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx, type_name).await?;
 
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
             collect_eta_record_completion(dump_eta_guard.id());
@@ -283,13 +293,13 @@ impl GlobalCtx {
 
     pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
 
-        //should be ok to read lock - see dump_all_to_cpu
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
             let maps = with_async_perf_log(
-                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock"),
+                async || {
+                    tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock")
+                },
                 "GlobalCtx/purge_cpu/read_caches",
-            )
-                .await;
+            ).await;
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
 
@@ -444,12 +454,12 @@ pub mod mock_global_ctx {
 
         #[cfg(tho_debug)]
         fn move_permits(&self, from: &SynKey, to: &SynKey) {
-            self.real.debug_semaphore(self.device_idx).move_permits(from, to);
+            // self.real.debug_semaphore(self.device_idx).move_permits(from, to);
         }
 
         #[cfg(tho_debug)]
         fn remove_granted_counts(&self, requester_id: Arc<dyn CachableIdTr>, count: u8) {
-            self.real.debug_semaphore(self.device_idx).remove_granted_counts(requester_id, count);
+            // self.real.debug_semaphore(self.device_idx).remove_granted_counts(requester_id, count);
         }
     }
 
@@ -559,9 +569,9 @@ pub mod mock_global_ctx {
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({
-                    move |required_ids, device_idx| {
+                    move |required_ids, device_idx, descr| {
                         block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(required_ids, device_idx))
+                            tokio::runtime::Handle::current().block_on(real.dump_all_to_cpu(required_ids, device_idx, descr))
                         })
                     }
                 });

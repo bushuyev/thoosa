@@ -204,8 +204,8 @@ impl RunCtx for RunCtxWithPermits {
         }
         branched_ctx.device_idx = self.device_idx;
 
-        #[cfg(tho_debug)]
-        GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &branched_ctx.id);
+        // #[cfg(tho_debug)]
+        // GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &branched_ctx.id);
 
 
         branched_ctx

@@ -25,6 +25,7 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
         &self,
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
+        name: &str,
     ) -> Result<(), ThoError>;
 
     // #[cfg(debug_assertions)] TODO
@@ -69,27 +70,29 @@ where
         &self,
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
         device_idx: usize,
+        name: &str,
     ) -> Result<(), ThoError> {
         debug!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
+
+        // let iter_mut = self.iter_mut();
 
         let items: Vec<(
             K,
             Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
-        )> = self
-            .iter()
+        )> = self.iter()
             .filter(|entry| {
-                let keep = ids_to_keep
+                /*let keep = ids_to_keep
                     .map(|set| {
                         let kd: &dyn CachableIdTr = entry.key();
                         !set.contains(kd)
                     })
                     .unwrap_or(true);
-                keep && entry.value().peek().is_some()
+                keep && */entry.value().peek().is_some()
             })
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
 
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", self.type_name()), items.len(), 1);
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
         stream::iter(items)
 
@@ -268,7 +271,7 @@ mod tests {
             reff.value().clone().await?;
         }
 
-        map.purge_gpu(None, 1).await?;
+        map.purge_gpu(None, 1, "test").await?;
 
         assert_eq!(processed.load(Ordering::SeqCst), total);
         // debug!("max_purge={} max_futures={}", max_purge.load(Ordering::SeqCst), max_futures.load(Ordering::SeqCst));
