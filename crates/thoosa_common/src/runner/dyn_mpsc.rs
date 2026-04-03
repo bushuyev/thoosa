@@ -17,6 +17,7 @@ use tracing::{debug, warn};
 use std::borrow::BorrowMut;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use parking_lot::RwLock;
 use tokio::sync::mpsc::error::TrySendError;
 use thoosa_shared::{Cause, ThoError};
 
@@ -235,6 +236,7 @@ pub struct DynamicTaskExecutor {
     limit_tx: watch::Sender<usize>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
     worker: JoinHandle<()>,
+    exclusive_job_id:Arc<RwLock<Option<JobId>>>
 }
 
 impl DynamicTaskExecutor {
@@ -255,6 +257,7 @@ impl DynamicTaskExecutor {
             limit_tx,
             cmd_tx,
             worker,
+            exclusive_job_id: Arc::new(RwLock::new(None))
         }
     }
 
@@ -262,6 +265,7 @@ impl DynamicTaskExecutor {
         &self,
         max_other_parallel: usize,
         fut: F,
+        job_id_to_rerun: Option<JobId>,
     ) -> Result<T, ThoError>
     where
         F: Future<Output = Result<T, ThoError>> + Send + 'static,
@@ -277,12 +281,21 @@ impl DynamicTaskExecutor {
 
 
         let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
-
+        let exclusive_job_id = Arc::clone(&self.exclusive_job_id);
         let wrapped = async move {
-            let value = fut.await;
-            debug!("DynamicTaskExecutor::submit: wrapped value={value:?}");
-            let is_oom = value.as_ref().is_err_and(|e|e.is_oom());
-            let _ = result_tx.send(value);
+            let result = fut.await;
+            let is_oom = result.as_ref().is_err_and(|e|e.is_oom());
+
+            let result = if is_oom && max_other_parallel == 0 {
+                exclusive_job_id.write().replace(job_id);
+                result.map_err(|e| ThoError::new_with_error("todo",Cause::JobError { job_id, inner: Box::new(e.clone()) }))
+            } else {
+                result
+            };
+
+            debug!("DynamicTaskExecutor::submit: wrapped  result={result:?}");
+
+            let _ = result_tx.send(result);
 
             is_oom.into()
         };
@@ -765,6 +778,7 @@ mod tests {
     use super::*;
     use futures_util::{StreamExt, TryStreamExt};
     use std::{sync::Arc, time::Duration};
+    use std::sync::atomic::AtomicU8;
     use rand::prelude::IndexedRandom;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -773,9 +787,10 @@ mod tests {
 
         let x = exec
             .submit(0, async move {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                Ok(123)
-            })
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            Ok(123)
+                        },
+                    None)
             .await?;
 
         assert_eq!(x, 123);
@@ -789,21 +804,22 @@ mod tests {
         let exec = Arc::new(DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap()));
 
         let x = Arc::clone(&exec).submit(0, async move {
-             tokio::spawn(async {
-                futures::stream::iter(0..10).map(|i|{
-                    async move {
-                        debug!("inner {i}");
-                        Ok::<_, ThoError>(i)
-                    }
-                })
-                .buffer_unordered(10)
-                .try_collect::<Vec<_>>()
-                .await?;
+                     tokio::spawn(async {
+                        futures::stream::iter(0..10).map(|i|{
+                            async move {
+                                debug!("inner {i}");
+                                Ok::<_, ThoError>(i)
+                            }
+                        })
+                        .buffer_unordered(10)
+                        .try_collect::<Vec<_>>()
+                        .await?;
 
-                 Ok(())
-             }).await?
+                         Ok(())
+                     }).await?
 
-        }).await?;
+                },
+                                         None).await?;
 
         debug!("x={x:?}");
         // assert_eq!(x, 1);
@@ -817,27 +833,28 @@ mod tests {
 
         let x = Arc::clone(&exec).submit(0, async move {
 
-                futures::stream::iter(0..10).map(|i|{
-                    let exec = Arc::clone(&exec);
+                        futures::stream::iter(0..10).map(|i|{
+                            let exec = Arc::clone(&exec);
 
-                    async move {
-                        DynamicTaskExecutor::spawn(async move {
+                            async move {
+                                DynamicTaskExecutor::spawn(async move {
 
-                            Arc::clone(&exec).submit(0, async move {
-                                debug!("inner {i}");
-                                Ok::<_, ThoError>(i)
-                            }).await
+                                    Arc::clone(&exec).submit(0, async move {
+                                        debug!("inner {i}");
+                                        Ok::<_, ThoError>(i)
+                                    }, None).await
 
-                        }).await?
+                                }).await?
 
-                    }
-                })
-                    .buffer_unordered(10)
-                    .try_collect::<Vec<_>>()
-                    .await
+                            }
+                        })
+                            .buffer_unordered(10)
+                            .try_collect::<Vec<_>>()
+                            .await
 
 
-        }).await?;
+                },
+                                         None).await?;
 
         debug!("x={x:?}");
         // assert_eq!(x, 1);
@@ -849,14 +866,36 @@ mod tests {
     async fn test_returns_error() -> Result<(), ThoError> {
         let exec = DynamicTaskExecutor::new(64, NonZeroUsize::new(4).unwrap());
 
-        let x = exec
-            .submit::<_, ThoError>(0, async move {
+        let x:Result<u32, ThoError> = exec
+            .submit(0, async move {
                 tokio::time::sleep(Duration::from_millis(50)).await;
-                Err(ThoError::new("test"))
-            })
+                Err::<u32, ThoError>(ThoError::new("test"))
+            }, None)
             .await;
 
-        assert!(x.is_err());
+
+        debug!("x={x:?}");
+
+        let Err(e) = x else {
+            panic!("not an error")
+        };
+        assert_eq!("test", e.msg);
+
+
+        let x:Result<u32, ThoError> = exec
+            .submit(0, async move {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                Err::<u32, ThoError>(ThoError::oom())
+            }, None)
+            .await;
+
+        debug!("x={x:?}");
+
+        let Err(e) = x else {
+            panic!("not an error")
+        };
+        assert!(e.is_oom());
+
 
         exec.shutdown().await;
         Ok(())
@@ -883,7 +922,7 @@ mod tests {
                                             .submit(usize::MAX, async move {
                                                 tokio::time::sleep(Duration::from_millis(20)).await;
                                                 Ok(i * j)
-                                            })
+                                            }, None)
                                             .await?;
                                         Ok::<i32, ThoError>(v)
                                     }
@@ -891,7 +930,7 @@ mod tests {
                                 .buffer_unordered(3)
                                 .try_collect::<Vec<i32>>()
                                 .await?)
-                        })
+                        }, None)
                         .await?;
 
                     let sum = values.into_iter().sum::<i32>();
@@ -935,7 +974,7 @@ mod tests {
                                             .submit(max_par_inner, async move {
                                                 tokio::time::sleep(Duration::from_millis(10)).await;
                                                Ok(i * j)
-                                            })
+                                            }, None)
                                             .await?;
                                         Ok::<i32, ThoError>(j)
                                     }
@@ -943,7 +982,7 @@ mod tests {
                                 .buffer_unordered(3)
                                 .try_collect::<Vec<i32>>()
                                 .await)
-                        })
+                        }, None)
                         .await?
                         .into_iter()
                         .flat_map(|x|x.into_iter())
@@ -1005,7 +1044,7 @@ mod tests {
                                         tokio::time::sleep(Duration::from_millis(500)).await;
 
                                         Ok::<_, ThoError>(())
-                                    }).await.expect("1");
+                                    }, None).await.expect("1");
 
                                 }).await.unwrap();
                             }
@@ -1029,7 +1068,7 @@ mod tests {
                                     tokio::time::sleep(Duration::from_millis(500)).await;
 
                                     Ok::<_, ThoError>(())
-                                }).await.expect("1");
+                                }, None).await.expect("1");
 
                                 }).await.unwrap();
                             }
@@ -1043,6 +1082,78 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_exec_0() -> Result<(), ThoError> {
+        let exec = Arc::new(DynamicTaskExecutor::new(100, NonZeroUsize::new(4).unwrap()));
+
+        futures::stream::iter(0..20).for_each_concurrent(10, |i|   {
+            let exec = Arc::clone(&exec);
+            async move {
+                tokio::task::spawn(async move {
+                    let max_other_parallel = if i == 3 {
+                        0
+                    } else {
+                        usize::MAX
+                    };
+
+
+                    loop {
+                        let mut job_id_to_rerun = None::<u64>;
+                        match exec.submit(max_other_parallel, async move {
+                            debug!("starting  i={i}");
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                            if i == 3 {
+                                static ATTEMPTS: AtomicU8 = AtomicU8::new(0);
+
+                                if ATTEMPTS.fetch_add(1, Ordering::Relaxed) < 2 {
+                                    debug!("triggering error i={i} {}", ATTEMPTS.load(Ordering::Relaxed));
+                                    Err(ThoError::oom())
+                                } else {
+                                    debug!("finishing i={i} after err");
+                                    Ok::<_, ThoError>(())
+                                }
+                            } else {
+                                debug!("finishing i={i}");
+
+                                Ok::<_, ThoError>(())
+                            }
+                        }, job_id_to_rerun).await {
+                            Ok(v) => {
+                                debug!("done i={i}");
+                                break
+                            }
+                            Err(e) => {
+                                match &e.what {
+
+                                    Cause::JobError { job_id, inner } => {
+                                        if inner.is_oom() {
+                                            job_id_to_rerun.replace(*job_id);
+                                        } else {
+                                            panic!("unexpected inner={inner:?}")
+                                        }
+                                    }
+                                    _ => {
+                                        panic!("all failed")
+                                    }
+                                }
+                                debug!("err i={i} is_oom={}", e.is_oom());
+
+                            }
+                        };
+                    }
+
+
+
+                }).await.unwrap();
+            }
+
+        }).await;
+
+
+        Ok(())
+    }
+
 
 
 }
