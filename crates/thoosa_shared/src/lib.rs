@@ -352,6 +352,7 @@ pub enum Cause {
     NotFound,
     SubmitErrorClosed,
     SubmitErrorCancelled,
+    JobError{job_id:u64, inner:Box<ThoosaError>}
 }
 
 pub struct ThoError {
@@ -387,7 +388,18 @@ impl ThoError {
     pub fn new_with_error(msg: impl Into<String> + Display, what: Cause) -> Self {
         trace!("ThoosaError::new: msg={}", msg);
         let backtrace = Backtrace::capture();
-        let is_oom = matches!(&what, Cause::OutOfMemory);
+        let is_oom = match &what {
+            Cause::OutOfMemory => {
+                true
+            }
+            Cause::JobError { inner, .. } => {
+                inner.is_oom()
+            }
+            _ => {
+                false
+            }
+        };
+
 
         debug!("msg={msg} {}", backtrace.to_string());
         Self {

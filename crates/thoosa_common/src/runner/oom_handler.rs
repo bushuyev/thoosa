@@ -322,7 +322,7 @@ where
                                 )
                                 .await
                         }
-                })
+                }, None)
                 .await
             },
         )
@@ -358,7 +358,7 @@ where
                     };
 
                     input.consume(device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx)).await
-                }).await
+                }, None).await
             },
         )
         .await
