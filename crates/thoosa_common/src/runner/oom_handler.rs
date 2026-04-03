@@ -525,7 +525,7 @@ where
                 debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={task:?} os_thread_id={}  te={te:?}", os_thread_id());
 
                 match te.what() {
-                    Cause::OutOfMemory => {
+                    Cause::OutOfMemory => {//should be replaced with Cause::JobError with job_id
                         pref_oom_count();
 
                         debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={task:?} os_thread_id={} before adjusters", os_thread_id());
@@ -681,6 +681,7 @@ where
                                         input_select_adjusted.clone(),
                                         device_idx,
                                         run_context.branch(None, false, true), //looses permits on ctx drop
+                                        //pass job_id here
                                     )
                                 });
 
@@ -707,7 +708,7 @@ where
                                         run_context.drop_permits(DropIf::IfNotMax);
 
                                         match te.what() {
-                                            Cause::OutOfMemory | Cause::AdjusterFailed => {
+                                            Cause::OutOfMemory | Cause::AdjusterFailed => {// also should be replaced with JobError
                                                 pref_oom_count();
                                                 debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={task:?} os_thread_id={} adjust_context={contexts:?}", os_thread_id());
 

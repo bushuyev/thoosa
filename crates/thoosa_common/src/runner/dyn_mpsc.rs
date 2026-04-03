@@ -1097,12 +1097,13 @@ mod tests {
                         usize::MAX
                     };
 
-
                     loop {
                         let mut job_id_to_rerun = None::<u64>;
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+
                         match exec.submit(max_other_parallel, async move {
                             debug!("starting  i={i}");
-                            tokio::time::sleep(Duration::from_millis(100)).await;
+
                             if i == 3 {
                                 static ATTEMPTS: AtomicU8 = AtomicU8::new(0);
 
@@ -1110,10 +1111,12 @@ mod tests {
                                     debug!("triggering error i={i} {}", ATTEMPTS.load(Ordering::Relaxed));
                                     Err(ThoError::oom())
                                 } else {
+
                                     debug!("finishing i={i} after err");
                                     Ok::<_, ThoError>(())
                                 }
                             } else {
+
                                 debug!("finishing i={i}");
 
                                 Ok::<_, ThoError>(())
