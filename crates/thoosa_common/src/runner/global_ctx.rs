@@ -222,7 +222,7 @@ impl GlobalCtx {
     }
 
     #[cfg(tho_debug)]
-    pub async fn debug_caches(&self, device_idx:usize) {
+    pub async fn debug_caches(&self, device_idx:usize, descr:&str) {
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
             let maps = with_async_perf_log(
                 async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::debug_caches: timed out waiting for caches read lock"),
@@ -230,10 +230,10 @@ impl GlobalCtx {
             ).await;
             maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
         };
-        debug!("debug_caches: debug_gpu: device_idx={device_idx}");
+        debug!("debug_caches: descr={descr} device_idx={device_idx}");
         let mut total_gpu_mem = 0;
         for (type_name, map) in maps {
-            info!("GlobalCtx::debug_gpu: type_name={type_name}");
+            info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
             match map.debug_gpu(device_idx).await {
                 Ok(v) => {
                     total_gpu_mem+=v;
@@ -244,7 +244,7 @@ impl GlobalCtx {
             }
         }
 
-        info!("GlobalCtx::debug_gpu: device_idx={device_idx} total_gpu_mem={total_gpu_mem}");
+        info!("GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem}");
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
@@ -308,14 +308,14 @@ impl GlobalCtx {
         debug!("GlobalCtx::purge_cpu: purge_until={purge_until} maps.len={}", maps.len());
         if purge_until > 0 {
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(1).await;
+            GlobalCtx::global().debug_caches(1, "before purge_cpu").await;
 
             for (type_name, map) in maps {
                 info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_until).await, type_name);
             }
 
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(1).await;
+            GlobalCtx::global().debug_caches(1, "after purge_cpu").await;
         }
     }
 
