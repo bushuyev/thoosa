@@ -1227,6 +1227,22 @@ where
         P: RunCtx;
 }
 
+/// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
+pub trait ConsumeData {
+    type O: Data + WithId + Send + Sync;
+
+    fn consume<R, F, P>(
+        &self,
+        to_device_idx: usize,
+        permits_ctx: P,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl Future<Output = Result<R, ThoError>> + Send
+    where
+        F: FnOnce(Self::O, P) -> Result<R, ThoError> + Send,
+        P: RunCtx;
+}
+
 impl <O> WithDataRef for DevicesWrap<O>
 where
     O: Data + WithId + Send + Sync,
