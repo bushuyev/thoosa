@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{PermitsCtx, RunCtx};
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
+use crate::runner::common::cachable::{ConsumeData, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::common::{DropIf, OutId};
 use crate as thoosa_common;
@@ -338,7 +338,7 @@ where
         contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoError>
     where
-        <R as Stage>::In<'z>: Clone + Select<S, Output = <R as Stage>::In<'z>> + 'static,
+        <R as Stage>::In<'z>: Clone + ConsumeData<O = <R as Stage>::In<'z>> + Select<S, Output = <R as Stage>::In<'z>> + 'static,
     {
         run_with_runner(
             &self.adjusters,
@@ -350,12 +350,14 @@ where
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.acquired_permits());
 
                 oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+
+
                     let input = match selector {
                         Some(selector) => input.as_ref().subview(selector)?,
                         None => input.as_ref().clone(),
                     };
 
-                    Arc::clone(&task).consume(input, run_ctx)
+                    input.consume(device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx)).await
                 }).await
             },
         )
