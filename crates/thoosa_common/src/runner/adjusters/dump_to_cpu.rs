@@ -118,12 +118,10 @@ where
         //
         let ids_to_exclude = adjust_context.ids_to_exclude();
         debug!("DumpToCpu::adjust: acquired 100 permits, dumping");
-        //
-        // #[cfg(tho_debug)]
-        // GlobalCtx::global().debug_caches(device_idx).await;
-        //
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        #[cfg(tho_debug)]
+        GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu").await;
+
 
         GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx, &self.descr)
@@ -132,8 +130,8 @@ where
             AdjusterError::<A>::SomethingElse
         })?;
 
-        // #[cfg(tho_debug)]
-        // GlobalCtx::global().debug_caches(device_idx).await;
+        #[cfg(tho_debug)]
+        GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu").await;
 
         // *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
 
@@ -146,11 +144,12 @@ where
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
         // DumpToCpu can't reduce work; we just retry acquiring MAX_PERMITS.
-        let retry_count = adjust_context.dump_to_cpu_retry_count_mut();
-        *retry_count += 1;
-
-        debug!("DumpToCpu::degrade: retry_count={retry_count}");
-
-        *retry_count <= 1000 //TODO config
+        // let retry_count = adjust_context.dump_to_cpu_retry_count_mut();
+        // *retry_count += 1;
+        //
+        // debug!("DumpToCpu::degrade: retry_count={retry_count}");
+        //
+        // *retry_count <= 1000 //TODO config
+        false
     }
 }
