@@ -422,7 +422,7 @@ where
         let motif = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("motif_loader"))),
             ],
             None,
         )

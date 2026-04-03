@@ -193,7 +193,7 @@ where
                 let run_ctx = ctx.branch(Some("clc_oom_runner_dumped_to_cpu"), false, false);
                 OOMHandler::new(
                     vec![
-                        Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                        Adjusters::RunContext(Box::new(DumpToCpu::new("n/a"))),
                         Adjusters::RunContext(Box::new(PermitsAdjuster::new(
                             MAX_PERMITS,
                             *PermitStep::FIFTY,

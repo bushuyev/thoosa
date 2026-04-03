@@ -252,7 +252,7 @@ where
                         MAX_PERMITS,
                         *PermitStep::FIFTY,
                     ))),
-                    Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                    Adjusters::RunContext(Box::new(DumpToCpu::new("train_step"))),
                 ],
                 None,
             );
@@ -537,7 +537,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
 
         if self.x.device_idx() == to_device_idx {
-            let stream = CopyCtx::instance(1).acquire_stream().await;
+            let stream = CopyCtx::instance(to_device_idx).acquire_stream().await;
             let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
 
             let r = do_run(self, &permits_ctx);

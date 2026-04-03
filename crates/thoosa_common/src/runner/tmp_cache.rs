@@ -2,13 +2,16 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
+use argmin::solver::quasinewton::SR1;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error};
+use log::{debug, error, info};
 use mockall_double::double;
+use parking_lot::RwLock;
+use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::ThoError;
+use thoosa_shared::{ThoError, LOCK_TIMEOUT};
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
@@ -24,8 +27,9 @@ pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + S
 where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
-    pub name: &'static str,
+    pub name: String,
     cache_area:u64,
+    // map: RwLock<Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>>
     map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
 
 }
@@ -36,6 +40,7 @@ where
 {
     pub fn insert(&self, value: D) {
         let cache_area = self.cache_area;
+        // self.map.try_read_for(LOCK_TIMEOUT).expect("TmpCached::insert").insert(
         self.map.insert(
             value.id().clone(),
 
@@ -44,14 +49,24 @@ where
 
     }
 
+    #[cfg(test)]
     pub fn get(&self, id: &<D as WithId>::ID) -> Option<Arc<DevicesWrap<D>>> {
+        // self.map.try_read_for(LOCK_TIMEOUT).expect("TmpCached::get").get(id).map(|reff| Arc::clone(reff.value()))
         self.map.get(id).map(|reff| Arc::clone(reff.value()))
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
     pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {
+        debug!("TmpCached::take_all: name={}", self.name);
+
         let mut res = vec![];
-        for (key, val) in mem::take(&mut self.map).into_iter() {
+        let map = {
+            // let mut guard = self.map.try_write_for(LOCK_TIMEOUT).expect("TmpCached::take_all");
+            // mem::take(&mut *guard)
+            mem::take(&mut self.map)
+        };
+
+        for (key, val) in map.into_iter() {
 
             let count = Arc::strong_count(&val);
 
@@ -74,7 +89,7 @@ where
 
     pub async fn new(name: &'static str, cache_area: u64) -> Self {
 
-        let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16)).leak();
+        let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
 
         let map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Box::new(Default::default());
 
@@ -86,20 +101,24 @@ where
 
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
-        GlobalCtx::global().register_cache((name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
+        // GlobalCtx::global().register_cache((name.clone().leak()/*TODO*/, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
         Self {
             name,
-            map,
+            // map: RwLock::new(map),
+            map: map,
             cache_area
         }
 
     }
 
-    pub async fn purge_gpu(&self, device_idx:usize) -> Result<(), ThoError>{
-        self.map.purge_gpu(None, device_idx).await
-    }
+    // pub async fn purge_gpu(&self, device_idx:usize) -> Result<(), ThoError>{
+    //     // self.map.write().purge_gpu(None, device_idx).await
+    //     self.map.purge_gpu(None, device_idx).await
+    // }
 }
+
+
 
 ///for TmpCache
 #[async_trait]
@@ -108,45 +127,50 @@ where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
-    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize) -> Result<(), ThoError> {
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
 
-        let keys: Vec<<D as WithId>::ID> = self
+        let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
-            .filter(|entry| {
-                ids_to_keep
-                    .map(|set| {
-                        let key: &dyn CachableIdTr = entry.key();
-                        !set.contains(key)
-                    })
-                    .unwrap_or(true)
-            })
-            .map(|entry| entry.key().clone())
+            // .filter(|entry| {
+            //     ids_to_keep
+            //         .map(|set| {
+            //             let key: &dyn CachableIdTr = entry.key();
+            //             !set.contains(key)
+            //         })
+            //         .unwrap_or(true)
+            // })
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
+        // let guard = self.iter_mut();
 
-        for key in keys {
+        for (key, val) in keys_vals {
             debug!("TmpCached::purge_gpu: key={key:?}");
-            if let Some(value) = self.get(&key) {
-                if let Err(err) = value.dump_to_cpu(device_idx).await {
+            // if let Some(value) = self.get(&key) {
+                if let Err(err) = val.dump_to_cpu(device_idx).await {
                     debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
                 } else {
                     debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
                 }
-            }
+            // }
         }
         Ok(())
     }
 
-    async fn purge_cpu(&self, purge_until: u64) -> usize{
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+       /* let mut purged_count = 0usize;
+
         debug!("TmpCached::purge_cpu: purge_since={purge_until}");
         self.retain(|key, value| {
             let keep = !value.is_on_cpu_before(purge_until);
             if !keep {
+                purged_count+=1;
                 debug!("TmpCached::purge_cpu: key={key:?} removed");
             }
             keep
         });
 
+        purged_count*/
         0
     }
 }
@@ -157,12 +181,12 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     fn drop(&mut self) {
+        info!("TmpCached::drop: {}", self.name);
+        // let name = self.name.clone().leak();//TODO
         // tokio::task::block_in_place(move || {
         //     Handle::current().block_on(async move {
-        //         #[cfg(any(test, feature = "mock_global_ctx"))]
-        //         let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         //
-        //         GlobalCtx::global().remove_cache(self.name).await
+        //         GlobalCtx::global().remove_cache(name).await
         //     });
         // });
 
@@ -279,7 +303,7 @@ mod tests {
         tmp_cache.insert(TestData::new(simple_id!("foo"), 1));
 
 
-        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
+        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
 
 
         let all = tmp_cache.take_all(1).await?;
