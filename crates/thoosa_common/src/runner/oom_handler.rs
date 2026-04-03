@@ -494,6 +494,8 @@ impl ExclusiveJobGuard {
 
     fn update_from_error(&mut self, error: &ThoError) {
         if let Some(job_id) = oom_job_id(error) {
+            debug!("ExclusiveJobGuard::update_from_error: job_id={job_id}");
+
             self.job_id.replace(job_id);
         }
     }
@@ -762,7 +764,7 @@ where
 
             warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed", os_thread_id());
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(device_idx).await;
+            GlobalCtx::global().debug_caches(device_idx, "all failed").await;
 
             Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
         }

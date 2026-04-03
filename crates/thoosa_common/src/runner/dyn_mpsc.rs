@@ -329,6 +329,8 @@ impl DynamicTaskExecutor {
     }
 
     pub fn clear_exclusive_job_id(&self, job_id: u64) {
+        debug!("DynamicTaskExecutor::clear_exclusive_job_id: job_id={job_id}");
+
         let mut exclusive_job_id = self.exclusive_job_id.write();
 
         if exclusive_job_id.as_ref() == Some(&job_id) {
