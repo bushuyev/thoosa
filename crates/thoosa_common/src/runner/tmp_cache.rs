@@ -101,7 +101,7 @@ where
 
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
-        // GlobalCtx::global().register_cache((name.clone().leak()/*TODO*/, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
+        GlobalCtx::global().register_cache((name.clone().leak()/*TODO*/, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
         Self {
             name,
@@ -182,13 +182,13 @@ where
 {
     fn drop(&mut self) {
         info!("TmpCached::drop: {}", self.name);
-        // let name = self.name.clone().leak();//TODO
-        // tokio::task::block_in_place(move || {
-        //     Handle::current().block_on(async move {
-        //
-        //         GlobalCtx::global().remove_cache(name).await
-        //     });
-        // });
+        let name = self.name.clone().leak();//TODO
+        tokio::task::block_in_place(move || {
+            Handle::current().block_on(async move {
+
+                GlobalCtx::global().remove_cache(name).await
+            });
+        });
 
     }
 }
