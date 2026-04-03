@@ -328,6 +328,40 @@ where
         )
         .await
     }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::run"))]
+    pub async fn consume(
+        &self,
+        task: &Arc<R>,
+        input: Arc<R::In<'z>>,
+        run_context: R::Ctx,
+        contexts: Contexts<'a, R, IC, RC, RCC>,
+    ) -> Result<R::Out, ThoError>
+    where
+        <R as Stage>::In<'z>: Clone + Select<S, Output = <R as Stage>::In<'z>> + 'static,
+    {
+        run_with_runner(
+            &self.adjusters,
+            Arc::clone(task),
+            input,
+            run_context,
+            contexts,
+            |task: Arc<R>, input: Arc<R::In<'z>>, selector: Option<S>, device_idx: usize, run_ctx: R::Ctx| async move {
+                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.acquired_permits());
+
+                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+                    let input = match selector {
+                        Some(selector) => input.as_ref().subview(selector)?,
+                        None => input.as_ref().clone(),
+                    };
+
+                    Arc::clone(&task).consume(input, run_ctx)
+                }).await
+            },
+        )
+        .await
+    }
+
 }
 
 #[derive(Debug)]
@@ -458,9 +492,8 @@ where
     S: Adjustable + Debug + Clone + Default + 'static,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
-    W: WithSelectDataRefSend<S>,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
-    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx) -> Fut + Copy,
+    Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx) -> Fut , //+ Copy,
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
         let (device_idx, ctx_id) = {
@@ -711,7 +744,7 @@ where
 
                 collect_eta_record_oom_all_failed();
 
-                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed: input.mem_size={:?} ", os_thread_id(), input.mem_size());
+                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed", os_thread_id());
                 // #[cfg(tho_debug)]
                 // warn!("OOMHandler::run, error: semaphore={:?}",  GlobalCtx::global().debug_semaphore(device_idx));
                 #[cfg(tho_debug)]
