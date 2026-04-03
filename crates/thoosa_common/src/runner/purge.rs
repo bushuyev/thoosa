@@ -81,13 +81,13 @@ where
             Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
         )> = self.iter()
             .filter(|entry| {
-                /*let keep = ids_to_keep
+                let keep = ids_to_keep
                     .map(|set| {
                         let kd: &dyn CachableIdTr = entry.key();
                         !set.contains(kd)
                     })
                     .unwrap_or(true);
-                keep && */entry.value().peek().is_some()
+                keep && entry.value().peek().is_some()
             })
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
@@ -146,11 +146,11 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use dashmap::DashMap;
-    use futures_util::future::{BoxFuture, FutureExt};
+    use futures_util::future::{BoxFuture, FutureExt, ready};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::traits::{DummyCachableId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, DummyCachableId, WithId};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
@@ -279,6 +279,50 @@ mod tests {
         assert!(max_futures.load(Ordering::SeqCst) > 0);
         assert!(max_purge.load(Ordering::SeqCst) <= PURGE_GPU_CONCURRENCY_LIMIT);
         assert!(max_futures.load(Ordering::SeqCst) <= PURGE_GPU_CONCURRENCY_LIMIT);
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn purge_gpu_skips_required_ids() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let keep_key = DummyCachableId::from("keep");
+        let drop_key = DummyCachableId::from("drop");
+        let purge_active = Arc::new(AtomicUsize::new(0));
+        let max_purge = Arc::new(AtomicUsize::new(0));
+        let keep_wrapper = Arc::new(DevicesWrap::wrap(
+            DummyOutput {
+                id: DummyCachableId::from("keep_out"),
+                purge_active: Arc::clone(&purge_active),
+                max_purge: Arc::clone(&max_purge),
+            },
+            0.into(),
+        ));
+        let drop_wrapper = Arc::new(DevicesWrap::wrap(
+            DummyOutput {
+                id: DummyCachableId::from("drop_out"),
+                purge_active,
+                max_purge,
+            },
+            0.into(),
+        ));
+
+        let map: DashMap<
+            DummyCachableId,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DummyOutput>>, ThoError>>>,
+        > = DashMap::new();
+        map.insert(keep_key.clone(), ready(Ok(Arc::clone(&keep_wrapper))).boxed().shared());
+        map.insert(drop_key, ready(Ok(Arc::clone(&drop_wrapper))).boxed().shared());
+
+        for reff in &map {
+            reff.value().clone().await?;
+        }
+
+        let required_ids = HashSet::from([&keep_key as &dyn CachableIdTr]);
+        map.purge_gpu(Some(&required_ids), 1, "test").await?;
+
+        assert!(!keep_wrapper.is_all_on_cpu().await);
+        assert!(drop_wrapper.is_all_on_cpu().await);
         Ok(())
     }
 }

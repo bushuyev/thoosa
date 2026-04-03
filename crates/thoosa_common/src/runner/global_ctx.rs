@@ -257,7 +257,7 @@ impl GlobalCtx {
     ) -> Result<(), ThoError> {
         assert_ne!(device_idx, 0);
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
-
+        let _purge_lock = self.purge_lock().await;
 
         let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
             let maps = with_async_perf_log(
@@ -566,6 +566,27 @@ pub mod mock_global_ctx {
             self
         }
 
+        pub fn with_purge_lock(mut self) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_purge_lock().times(0..).returning({
+                    move || {
+                        tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(real.purge_lock())
+                        })
+                    }
+                });
+            } else {
+                let lock: &'static tokio::sync::Mutex<()> = Box::leak(Box::new(tokio::sync::Mutex::new(())));
+                self.mock.expect_purge_lock().times(0..).returning(move || {
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(lock.lock())
+                    })
+                });
+            }
+
+            self
+        }
+
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({
@@ -697,6 +718,7 @@ pub mod mock_global_ctx {
         builder
             .with_age(params.age)
             .with_dump_all_to_cpu()
+            .with_purge_lock()
             .with_reset_all_on_cpu()
             .with_device_count(params.device_count)
             .with_register_cache()
