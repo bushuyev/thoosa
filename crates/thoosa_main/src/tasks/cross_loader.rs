@@ -16,7 +16,6 @@ use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Range};
-use std::pin::Pin;
 use std::sync::Arc;
 use std::vec;
 use futures_util::FutureExt;
@@ -438,8 +437,9 @@ where
                         let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
 
                         let receiver_arc = Arc::clone(&receiver);
+                        let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false, false);
 
-                        receiver_arc.consume(cross_clc_output, ctx.branch(Some("cross_loader_receiver"), false, false)).await?;
+                        tokio::task::spawn_blocking(move || receiver_arc.consume(cross_clc_output, receiver_ctx)).await??;
 
                     }
                     Err(e) => {
@@ -1124,8 +1124,6 @@ pub(crate) mod mock_cross_loader_receiver {
     use thoosa_common::runner::common::RunCtx;
     use mockall::mock;
     use std::fmt::Debug;
-    use std::future::Future;
-    use std::pin::Pin;
     use std::sync::Arc;
     use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
@@ -1156,9 +1154,9 @@ pub(crate) mod mock_cross_loader_receiver {
         {
             fn consume<'s>(
                 self: Arc<Self>,
-                out: <Self as Stage>::In<'static>,
+                out: <Self as Stage>::In<'s>,
                 ctx: <Self as Stage>::Ctx,
-            ) -> Pin<Box<dyn Future<Output = Result<<Self as Stage>::Out, ThoError>> + Send + 's>>;
+            ) -> Result<<Self as Stage>::Out, ThoError>;
         }
     }
 
@@ -1183,10 +1181,7 @@ pub(crate) mod mock_cross_loader_receiver {
             let receive_fn = Arc::new(f);
             self.mock
                 .expect_consume()
-                .returning(move |out, ctx| {
-                    let receive_fn = Arc::clone(&receive_fn);
-                    Box::pin(async move { receive_fn(out, ctx) })
-                });
+                .returning(move |out, ctx| Arc::clone(&receive_fn)(out, ctx));
             self.consume_configured = true;
             self
         }

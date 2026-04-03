@@ -1,7 +1,6 @@
-use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
-use crate::runner::common::{OutId, RunCtx};
+use crate::runner::common::OutId;
 use crate::runner::common::runnable::{Stage, SyncStage};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
@@ -50,7 +49,7 @@ where
         // out
     }
 
-    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send + 'f {
+    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         Arc::clone(&self.stage).consume(input, ctx)
     }
 }
