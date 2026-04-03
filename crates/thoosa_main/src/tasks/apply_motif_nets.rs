@@ -458,7 +458,7 @@ where
 
 
         let tmp_cache = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
-        let tmp_cache_name = &*tmp_cache.name.clone().leak();;
+        let tmp_cache_name = tmp_cache.registered_name();
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
 
         let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
@@ -555,7 +555,8 @@ where
             motif_nets_applied.len(),
             device_idx,
         ));
-        let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
         let motif_nets_applied = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),

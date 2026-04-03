@@ -28,6 +28,7 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     pub name: String,
+    registered_name: Option<&'static str>,
     cache_area:u64,
     // map: RwLock<Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>>
     map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
@@ -38,6 +39,16 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
+    pub fn registered_name(&self) -> &'static str {
+        self.registered_name.expect("TmpCached::registered_name: cache already unregistered")
+    }
+
+    async fn unregister_cache(&mut self) {
+        if let Some(name) = self.registered_name.take() {
+            GlobalCtx::global().remove_cache(name).await;
+        }
+    }
+
     pub fn insert(&self, value: D) {
         let cache_area = self.cache_area;
         // self.map.try_read_for(LOCK_TIMEOUT).expect("TmpCached::insert").insert(
@@ -58,6 +69,8 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
     pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {
         debug!("TmpCached::take_all: name={}", self.name);
+        let _purge_lock = GlobalCtx::global().purge_lock().await;
+        self.unregister_cache().await;
 
         let mut res = vec![];
         let map = {
@@ -90,6 +103,7 @@ where
     pub async fn new(name: &'static str, cache_area: u64) -> Self {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
+        let registered_name = name.clone().leak();
 
         let map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Box::new(Default::default());
 
@@ -101,10 +115,11 @@ where
 
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
-        GlobalCtx::global().register_cache((name.clone().leak()/*TODO*/, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
+        GlobalCtx::global().register_cache((registered_name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
         Self {
             name,
+            registered_name: Some(registered_name),
             // map: RwLock::new(map),
             map: map,
             cache_area
@@ -129,6 +144,10 @@ where
 {
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
+        if ids_to_keep.is_some() {
+            debug!("TmpCached::purge_gpu: skipping required tmp cache name={name}");
+            return Ok(());
+        }
 
         let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
@@ -182,20 +201,20 @@ where
 {
     fn drop(&mut self) {
         info!("TmpCached::drop: {}", self.name);
-        let name = self.name.clone().leak();//TODO
-        tokio::task::block_in_place(move || {
-            Handle::current().block_on(async move {
-
-                GlobalCtx::global().remove_cache(name).await
+        if let Some(name) = self.registered_name.take() {
+            tokio::task::block_in_place(move || {
+                Handle::current().block_on(async move {
+                    GlobalCtx::global().remove_cache(name).await
+                });
             });
-        });
+        }
 
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::future::Future;
     use std::pin::Pin;
     use thoosa_dummy_data_derive::DummyData;
@@ -205,7 +224,7 @@ mod tests {
     use thoosa_shared::{simple_id, CopyToDevice, ThoError};
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
-    use thoosa_shared::traits::{Data, SimpleId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
     // use crate::common::Data;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::tmp_cache::TmpCached;
@@ -298,13 +317,17 @@ mod tests {
 
 
         let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
+        let foo_id = simple_id!("foo");
 
+        tmp_cache.insert(TestData::new(foo_id.clone(), 1));
 
-        tmp_cache.insert(TestData::new(simple_id!("foo"), 1));
+        let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_ids = HashMap::from([(tmp_cache.registered_name(), &required_tmp_cache_ids)]);
+        GlobalCtx::global().dump_all_to_cpu(&required_ids, 1, "test").await?;
 
-
-        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-
+        let cached = tmp_cache.get(&foo_id).expect("tmp cache entry missing");
+        assert!(!cached.is_all_on_cpu().await);
+        drop(cached);
 
         let all = tmp_cache.take_all(1).await?;
 
