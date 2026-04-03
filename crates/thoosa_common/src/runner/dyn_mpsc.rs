@@ -18,8 +18,7 @@ use std::borrow::BorrowMut;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
-use tokio::sync::mpsc::error::TrySendError;
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::{Cause, ThoError, LOCK_TIMEOUT};
 
 enum IsOOM {
     Yes,
@@ -305,20 +304,25 @@ impl DynamicTaskExecutor {
             is_oom.into()
         };
 
-        match self
-            .tx
-            .try_send(Job::new(job_id, max_other_parallel, wrapped))
-        {
-            Ok(_) => {
+        match tokio::time::timeout(LOCK_TIMEOUT, self.tx.send(Job::new(job_id, max_other_parallel, wrapped))).await {
+            Ok(Ok(())) => {
                 debug!("DynamicTaskExecutor::submit: submitted job_id={job_id}")
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 error!("DynamicTaskExecutor::submit: submit job_id={job_id} failed: e={e:?}");
                 if let Some(job_id) = rerun_job_id {
                     self.clear_exclusive_job_id(job_id);
                 }
                 let _ = suspend_guard.resume().await;
                 return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
+            }
+            Err(e) => {
+                error!("DynamicTaskExecutor::submit: submit job_id={job_id} timed out: e={e:?}");
+                if let Some(job_id) = rerun_job_id {
+                    self.clear_exclusive_job_id(job_id);
+                }
+                let _ = suspend_guard.resume().await;
+                return Err(ThoError::new("Can't submit job: timed out"));
             }
         }
 
