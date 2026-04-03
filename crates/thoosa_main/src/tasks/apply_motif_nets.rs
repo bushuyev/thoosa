@@ -16,7 +16,7 @@ use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
 use tracing::warn;
 use thoosa_named_derive::Named;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::debug_plot;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
@@ -548,46 +548,35 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        let motif_nets_applied = Arc::into_inner(tmp_cache).unwrap().into_inner().take_all(device_idx).await?;
-        // GlobalCtx::global().remove_cache(tmp_cache_name).await;
-        //all is sync until return
-        debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
+        let batch_applied_motif_nets = Arc::new(BatchAppliedMotifNets::<C>::new(self.id.clone()));
+        let batch_input = Arc::new(BatchAppliedMotifNetsInput::new(
+            input.id().clone(),
+            Arc::into_inner(tmp_cache).unwrap().into_inner().take_all(device_idx).await?,
+        ));
+        let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let motif_nets_applied = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("batch_apply_motif_nets"))),
+            ],
+            None,
+        )
+        .consume(
+            &batch_applied_motif_nets,
+            batch_input,
+            ctx.branch(Some("apply_motif_nets_batch"), true, false),
+            Contexts::new(
+                NoopInputContext::<BatchAppliedMotifNets<C>>(None),
+                NoopRunnableContext {},
+                PermitsAndDumpToCpuAdjustableContex::new(
+                    PermitsAdjustContextImpl::new(),
+                    DumpToCpuContextImpl::new(&required_ids),
+                ),
+            ),
+        )
+        .await?;
 
-        let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t.size()[0]).collect::<Vec<_>>();
-        let unique_motif_nets_applied_lens = motif_nets_applied_lens.iter().copied().collect::<HashSet<_>>();
-        let max_match_len = motif_nets_applied_lens.iter().copied().max().unwrap_or(0);
-        let motif_nets_applied = if unique_motif_nets_applied_lens.len() > 1 {
-            debug!("ApplyMotifNets::run: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
-            motif_nets_applied.into_iter().map(|v| {
-                let size = v.t.size();
-                if size[0] == max_match_len {
-                    return Ok(v);
-                }
-                let mut to_size = size.clone();
-                to_size[0] = max_match_len;
-                // let t = pad_to(&v.t, to_size.as_slice(), 0.0)?;
-                let id = v.id().clone();
-                let t = stretch(v, max_match_len as usize, 0)?;//stretch instead of pad to keep it time-aligned in motif nets with different window
-                ThoTensor::new(id.clone(), t)
-            }).collect::<Result<Vec<_>, ThoError>>()?
-        } else {
-            motif_nets_applied
-        };
-
-        trace!("ApplyMotifNets::run: matches_={motif_nets_applied:?}");
-
-        let res_t = Tensor::f_vstack(
-            &motif_nets_applied.into_iter().map(|v| v.t).collect::<Vec<_>>(),
-        )?;
-
-        debug!("ApplyMotifNets::run: res_t.size={:?}", res_t.size());
-
-        let motif_nets_applied = ThoTensor::new(
-            self.out_id(input.id()),
-            res_t, //.f_transpose(0, 1)?,
-        )?;
-
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens), cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied, cache_area.into())))
 
     }
 
@@ -600,6 +589,147 @@ where
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
+    }
+}
+
+#[derive(Debug, Clone)]
+struct BatchAppliedMotifNetsInput {
+    id: SynKey,
+    motif_nets_applied: Vec<Arc<ThoTensor<MotifProbability, SynKey>>>,
+}
+
+impl BatchAppliedMotifNetsInput {
+    fn new(id: SynKey, motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>) -> Self {
+        Self {
+            id,
+            motif_nets_applied: motif_nets_applied.into_iter().map(Arc::new).collect(),
+        }
+    }
+}
+
+impl WithId for BatchAppliedMotifNetsInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for BatchAppliedMotifNetsInput {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.motif_nets_applied.len().into()
+    }
+
+    fn device(&self) -> usize {
+        self.motif_nets_applied.first().map(|v| v.device()).unwrap_or(0)
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.motif_nets_applied.iter().map(|v| v.mem_size()).sum()
+    }
+}
+
+impl Input for BatchAppliedMotifNetsInput {}
+
+impl Select<()> for BatchAppliedMotifNetsInput {
+    type Output = Self;
+
+    fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
+        Ok(self.clone())
+    }
+}
+
+impl Adjustable for BatchAppliedMotifNetsInput {}
+
+#[derive(Debug, Named)]
+struct BatchAppliedMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    pd: PhantomData<C>,
+}
+
+impl<C> BatchAppliedMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new(id: SynKey) -> Self {
+        Self {
+            id,
+            pd: PhantomData,
+        }
+    }
+}
+
+impl<C> Adjustable for BatchAppliedMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+}
+
+impl<C> OutId for BatchAppliedMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl<C> Stage for BatchAppliedMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = BatchAppliedMotifNetsInput;
+    type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
+}
+
+impl<C> SyncStage for BatchAppliedMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="BatchAppliedMotifNets::consume"))]
+    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?}", input.motif_nets_applied.len(), input.id());
+
+        let input_id = input.id().clone();
+        let output_id = self.out_id(&input_id);
+        let mut motif_nets_applied = input.motif_nets_applied;
+        motif_nets_applied.sort_unstable_by_key(|v| v.id().clone());
+        let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t_ref().size()[0]).collect::<Vec<_>>();
+        let unique_motif_nets_applied_lens = motif_nets_applied_lens.iter().copied().collect::<HashSet<_>>();
+        let max_match_len = motif_nets_applied_lens.iter().copied().max().unwrap_or(0);
+        let motif_nets_applied = if unique_motif_nets_applied_lens.len() > 1 {
+            debug!("BatchAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
+            motif_nets_applied.into_iter().map(|v| {
+                let size = v.t_ref().size();
+                if size[0] == max_match_len {
+                    return Ok(v);
+                }
+                let id = v.id().clone();
+                let t = stretch(v.t_ref(), max_match_len as usize, 0)?;//stretch instead of pad to keep it time-aligned in motif nets with different window
+                Ok(Arc::new(ThoTensor::new(id, t)?))
+            }).collect::<Result<Vec<_>, ThoError>>()?
+        } else {
+            motif_nets_applied
+        };
+
+        trace!("BatchAppliedMotifNets::consume: matches_={motif_nets_applied:?}");
+
+        let res_t = Tensor::f_vstack(
+            &motif_nets_applied.iter().map(|v| v.t_ref().shallow_clone()).collect::<Vec<_>>(),
+        )?;
+
+        debug!("BatchAppliedMotifNets::consume: res_t.size={:?}", res_t.size());
+
+        let motif_nets_applied = ThoTensor::new(output_id, res_t)?;
+
+        Ok(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens))
     }
 }
 
