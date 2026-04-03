@@ -111,6 +111,7 @@ enum ManagerCmd {
         job_id: JobId,
         reply: oneshot::Sender<()>,
     },
+    Recheck,
 }
 
 #[derive(Debug)]
@@ -236,20 +237,21 @@ pub struct DynamicTaskExecutor {
     limit_tx: watch::Sender<usize>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
     worker: JoinHandle<()>,
-    exclusive_job_id:Arc<RwLock<Option<JobId>>>
+    exclusive_job_id: Arc<RwLock<Option<JobId>>>,
 }
 
 impl DynamicTaskExecutor {
     pub fn new(queue_capacity: usize, initial_limit: NonZeroUsize) -> Self {
-
         let (tx, rx) = mpsc::channel(queue_capacity);
         let (limit_tx, limit_rx) = watch::channel(initial_limit.get());
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
 
         let cmd_tx_for_tasks = cmd_tx.clone();
+        let exclusive_job_id = Arc::new(RwLock::new(None));
+        let exclusive_job_id_for_manager = Arc::clone(&exclusive_job_id);
 
         let worker = tokio::spawn(async move {
-            Self::run_manager(rx, limit_rx, cmd_rx, cmd_tx_for_tasks).await;
+            Self::run_manager(rx, limit_rx, cmd_rx, cmd_tx_for_tasks, exclusive_job_id_for_manager).await;
         });
 
         Self {
@@ -257,7 +259,7 @@ impl DynamicTaskExecutor {
             limit_tx,
             cmd_tx,
             worker,
-            exclusive_job_id: Arc::new(RwLock::new(None))
+            exclusive_job_id,
         }
     }
 
@@ -271,25 +273,28 @@ impl DynamicTaskExecutor {
         F: Future<Output = Result<T, ThoError>> + Send + 'static,
         T: Send + Debug + 'static,
     {
-
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
-        let job_id = NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed);
+        let job_id = job_id_to_rerun.unwrap_or_else(|| NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed));
         debug!("DynamicTaskExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         let mut suspend_guard = ParentSuspendGuard::new(parent);
         suspend_guard.maybe_suspend().await?;
 
-
         let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
         let exclusive_job_id = Arc::clone(&self.exclusive_job_id);
+        let rerun_job_id = job_id_to_rerun;
         let wrapped = async move {
             let result = fut.await;
-            let is_oom = result.as_ref().is_err_and(|e|e.is_oom());
+            let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
+            let mut exclusive_job_id = exclusive_job_id.write();
 
             let result = if is_oom && max_other_parallel == 0 {
-                exclusive_job_id.write().replace(job_id);
-                result.map_err(|e| ThoError::new_with_error("todo",Cause::JobError { job_id, inner: Box::new(e.clone()) }))
+                exclusive_job_id.replace(job_id);
+                result.map_err(|e| ThoError::new_with_error("todo", Cause::JobError { job_id, inner: Box::new(e.clone()) }))
             } else {
+                if rerun_job_id == Some(job_id) && exclusive_job_id.as_ref() == Some(&job_id) {
+                    exclusive_job_id.take();
+                }
                 result
             };
 
@@ -300,16 +305,18 @@ impl DynamicTaskExecutor {
             is_oom.into()
         };
 
-
-       match self
+        match self
             .tx
             .try_send(Job::new(job_id, max_other_parallel, wrapped))
         {
-            Ok(v) => {
+            Ok(_) => {
                 debug!("DynamicTaskExecutor::submit: submitted job_id={job_id}")
             }
             Err(e) => {
                 error!("DynamicTaskExecutor::submit: submit job_id={job_id} failed: e={e:?}");
+                if let Some(job_id) = rerun_job_id {
+                    self.clear_exclusive_job_id(job_id);
+                }
                 let _ = suspend_guard.resume().await;
                 return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
             }
@@ -317,10 +324,17 @@ impl DynamicTaskExecutor {
 
         let result = result_rx.await?;
 
-        // let result = self.tx.send(Job::new(job_id, max_other_parallel, wrapped)).await;
-
         suspend_guard.resume().await?;
         result
+    }
+
+    pub fn clear_exclusive_job_id(&self, job_id: u64) {
+        let mut exclusive_job_id = self.exclusive_job_id.write();
+
+        if exclusive_job_id.as_ref() == Some(&job_id) {
+            exclusive_job_id.take();
+            let _ = self.cmd_tx.send(ManagerCmd::Recheck);
+        }
     }
 
     pub fn set_max_parallelism(
@@ -344,6 +358,7 @@ impl DynamicTaskExecutor {
         mut limit_rx: watch::Receiver<usize>,
         mut cmd_rx: mpsc::UnboundedReceiver<ManagerCmd>,
         cmd_tx_for_tasks: mpsc::UnboundedSender<ManagerCmd>,
+        exclusive_job_id: Arc<RwLock<Option<JobId>>>,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -369,11 +384,13 @@ impl DynamicTaskExecutor {
                 &mut active_count,
             );
 
+            let current_exclusive_job_id = *exclusive_job_id.read();
             Self::try_resume_waiters(
                 &mut jobs,
                 &mut active_caps,
                 &mut active_count,
                 global_limit.load(Relaxed) as usize,
+                current_exclusive_job_id,
             );
 
             Self::try_spawn_ready_jobs(
@@ -385,6 +402,7 @@ impl DynamicTaskExecutor {
                 Arc::clone(&global_limit),
                 &done_tx,
                 &cmd_tx_for_tasks,
+                current_exclusive_job_id,
             );
 
             if input_closed && pending.is_empty() && jobs.is_empty() {
@@ -429,10 +447,12 @@ impl DynamicTaskExecutor {
                                         &mut active_caps,
                                         &mut active_count,
                                         global_limit.load(Relaxed) as usize,
+                                        *exclusive_job_id.read(),
                                         job_id,
                                         reply,
                                     );
                                 }
+                                ManagerCmd::Recheck => {}
                             }
                         }
                         None => {
@@ -476,6 +496,7 @@ impl DynamicTaskExecutor {
         global_limit: Arc<AtomicU64>,
         done_tx: &mpsc::UnboundedSender<JobId>,
         cmd_tx_for_tasks: &mpsc::UnboundedSender<ManagerCmd>,
+        exclusive_job_id: Option<JobId>,
     ) {
         debug!("DynamicTaskExecutor::try_spawn_ready_jobs: pending={pending:?}");
 
@@ -492,6 +513,7 @@ impl DynamicTaskExecutor {
                         global_limit.load(Relaxed) as usize,
                         active_caps,
                         job.total_parallel_cap(),
+                        exclusive_job_id,
                     )
                 };
 
@@ -570,7 +592,13 @@ impl DynamicTaskExecutor {
         global_limit: usize,
         active_caps: &BTreeMap<usize, usize>,
         new_cap: usize,
+        exclusive_job_id: Option<JobId>,
     ) -> bool {
+        if exclusive_job_id.is_some_and(|exclusive_job_id| exclusive_job_id != job_id) {
+            debug!("DynamicTaskExecutor::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
+            return false;
+        }
+
         let next_total = active_count.saturating_add(1);
         let current_group_cap = Self::current_group_cap(global_limit, active_caps);
 
@@ -643,6 +671,7 @@ impl DynamicTaskExecutor {
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
         global_limit: usize,
+        exclusive_job_id: Option<JobId>,
         job_id: JobId,
         reply: oneshot::Sender<()>,
     ) {
@@ -658,7 +687,7 @@ impl DynamicTaskExecutor {
         if job.suspend_depth == 0 {
             if job.active {
                 Self::flush_waiting_resumes(job);
-            } else if Self::can_activate_now(job_id, *active_count, global_limit, active_caps, job.cap) {
+            } else if Self::can_activate_now(job_id, *active_count, global_limit, active_caps, job.cap, exclusive_job_id) {
                 job.active = true;
                 Self::add_active(active_caps, active_count, job.cap);
                 Self::flush_waiting_resumes(job);
@@ -669,7 +698,7 @@ impl DynamicTaskExecutor {
         job.suspend_depth -= 1;
 
         if job.suspend_depth == 0
-            && Self::can_activate_now(job_id, *active_count, global_limit, active_caps, job.cap)
+            && Self::can_activate_now(job_id, *active_count, global_limit, active_caps, job.cap, exclusive_job_id)
         {
             job.active = true;
             Self::add_active(active_caps, active_count, job.cap);
@@ -682,6 +711,7 @@ impl DynamicTaskExecutor {
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
         global_limit: usize,
+        exclusive_job_id: Option<JobId>,
     ) {
         loop {
             let waiting_ids: Vec<JobId> = jobs
@@ -711,7 +741,7 @@ impl DynamicTaskExecutor {
                     _ => continue,
                 };
 
-                if Self::can_activate_now(job_id, *active_count, global_limit, active_caps, cap) {
+                if Self::can_activate_now(job_id, *active_count, global_limit, active_caps, cap, exclusive_job_id) {
                     let job = jobs.get_mut(&job_id).expect("job must exist");
                     job.active = true;
                     Self::add_active(active_caps, active_count, job.cap);
@@ -777,6 +807,7 @@ impl DynamicTaskExecutor {
 mod tests {
     use super::*;
     use futures_util::{StreamExt, TryStreamExt};
+    use parking_lot::Mutex;
     use std::{sync::Arc, time::Duration};
     use std::sync::atomic::AtomicU8;
     use rand::prelude::IndexedRandom;
@@ -1086,9 +1117,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_exec_0() -> Result<(), ThoError> {
         let exec = Arc::new(DynamicTaskExecutor::new(100, NonZeroUsize::new(4).unwrap()));
+        let starts = Arc::new(Mutex::new(Vec::new()));
 
-        futures::stream::iter(0..20).for_each_concurrent(10, |i|   {
+        futures::stream::iter(0..20).for_each_concurrent(10, |i| {
             let exec = Arc::clone(&exec);
+            let starts = Arc::clone(&starts);
             async move {
                 tokio::task::spawn(async move {
                     let max_other_parallel = if i == 3 {
@@ -1096,39 +1129,39 @@ mod tests {
                     } else {
                         usize::MAX
                     };
+                    let mut job_id_to_rerun = None::<u64>;
 
                     loop {
-                        let mut job_id_to_rerun = None::<u64>;
                         tokio::time::sleep(Duration::from_millis(100)).await;
 
-                        match exec.submit(max_other_parallel, async move {
-                            debug!("starting  i={i}");
+                        match exec.submit(max_other_parallel, {
+                            let starts = Arc::clone(&starts);
+                            async move {
+                                debug!("starting  i={i}");
+                                starts.lock().push(i);
 
-                            if i == 3 {
-                                static ATTEMPTS: AtomicU8 = AtomicU8::new(0);
+                                if i == 3 {
+                                    static ATTEMPTS: AtomicU8 = AtomicU8::new(0);
 
-                                if ATTEMPTS.fetch_add(1, Ordering::Relaxed) < 2 {
-                                    debug!("triggering error i={i} {}", ATTEMPTS.load(Ordering::Relaxed));
-                                    Err(ThoError::oom())
+                                    if ATTEMPTS.fetch_add(1, Ordering::Relaxed) < 2 {
+                                        debug!("triggering error i={i} {}", ATTEMPTS.load(Ordering::Relaxed));
+                                        Err(ThoError::oom())
+                                    } else {
+                                        debug!("finishing i={i} after err");
+                                        Ok::<_, ThoError>(())
+                                    }
                                 } else {
-
-                                    debug!("finishing i={i} after err");
+                                    debug!("finishing i={i}");
                                     Ok::<_, ThoError>(())
                                 }
-                            } else {
-
-                                debug!("finishing i={i}");
-
-                                Ok::<_, ThoError>(())
                             }
                         }, job_id_to_rerun).await {
-                            Ok(v) => {
+                            Ok(_) => {
                                 debug!("done i={i}");
-                                break
+                                break;
                             }
                             Err(e) => {
                                 match &e.what {
-
                                     Cause::JobError { job_id, inner } => {
                                         if inner.is_oom() {
                                             job_id_to_rerun.replace(*job_id);
@@ -1141,19 +1174,19 @@ mod tests {
                                     }
                                 }
                                 debug!("err i={i} is_oom={}", e.is_oom());
-
                             }
                         };
                     }
-
-
-
                 }).await.unwrap();
             }
-
         }).await;
 
+        let starts = starts.lock().clone();
+        let first_three = starts.iter().position(|i| *i == 3).expect("job 3 must run");
+        assert_eq!(&starts[first_three..first_three + 3], &[3, 3, 3]);
 
+        let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
+        exec.shutdown().await;
         Ok(())
     }
 
