@@ -1590,7 +1590,7 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsTracker::consume"))]
-    async fn consume<'a>(
+    fn consume<'a>(
         self: Arc<Self>,
         input: Self::In<'a>,
         _ctx: Self::Ctx,
@@ -1614,58 +1614,55 @@ where
         let channel_trackers = self.channel_trackers.clone();
 
         debug!("DistsTracker::consume: channel_trackers.len={}", channel_trackers.len());
-        tokio::task::spawn_blocking(move || {
-            use rayon::prelude::*;
-            rayon_pool().install(|| {
-                debug!("DistsTracker::consume: in rayon pool");
+        use rayon::prelude::*;
+        rayon_pool().install(|| {
+            debug!("DistsTracker::consume: in rayon pool");
 
-                let mut match_indices = clc_result.into_indices_iter()?;
-                let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
+            let mut match_indices = clc_result.into_indices_iter()?;
+            let mut matches_by_channel = vec![Vec::<SlicesMatch>::new(); self.channel_trackers.len()];
 
-                debug!("DistsTracker::consume: input.id={input_id:?}  match_indices={match_indices:?}");
+            debug!("DistsTracker::consume: input.id={input_id:?}  match_indices={match_indices:?}");
 
-                match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
+            match_indices.par_bridge().for_each(|(channel, i_0, i_1, dist) | {
 
-                    let channel = channel as usize;
-                    let i_0 = i_0 as usize;
-                    let i_1 = i_1 as usize;
+                let channel = channel as usize;
+                let i_0 = i_0 as usize;
+                let i_1 = i_1 as usize;
 
-                    assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
-                    assert!(i_0 < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
-                    assert!(i_1 < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
+                assert!(channel < matches_by_channel.len(), "DistsTracker::consume: channel index out of bounds {channel}");
+                assert!(i_0 < slices_0.len(), "DistsTracker::consume: mask index out of bounds (batch 0)");
+                assert!(i_1 < slices_1.len(), "DistsTracker::consume: mask index out of bounds (batch 1)");
 
-                    let slice_0 = slices_0[i_0];
-                    let slice_1 = slices_1[i_1];
+                let slice_0 = slices_0[i_0];
+                let slice_1 = slices_1[i_1];
 
-                    trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
+                trace!("DistsTracker::consume: channel={channel:?} i_0={i_0} i_1={i_1} slice_0={slice_0:?}  slice_1={slice_1:?} dist={dist}");
 
-                    if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
-                        trace!("DistsTracker::consume, track: input.id={input_id:?} slice_0={slice_0:?} slice_1={slice_1:?}", );
+                if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
+                    trace!("DistsTracker::consume, track: input.id={input_id:?} slice_0={slice_0:?} slice_1={slice_1:?}", );
 
-                        thoosa_shared::with_perf_log(
-                            || channel_trackers[channel].try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                            "DistsTracker/consume/write_tracker",
-                        )
-                        .track(slice_0, slice_1, dist as f32);
-                    }
-                });
+                    thoosa_shared::with_perf_log(
+                        || channel_trackers[channel].try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                        "DistsTracker/consume/write_tracker",
+                    )
+                    .track(slice_0, slice_1, dist as f32);
+                }
+            });
 
-                channel_trackers
-                    .into_par_iter()
-                    .zip(matches_by_channel.into_par_iter())
-                    .try_for_each(|(mt, matches)| {
-                        let mut guard = thoosa_shared::with_perf_log(
-                            || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                            "DistsTracker/consume/write_tracker",
-                        );
-                        guard.dump();
-                        Ok::<(), ThoError>(())
-                    })?;
+            channel_trackers
+                .into_par_iter()
+                .zip(matches_by_channel.into_par_iter())
+                .try_for_each(|(mt, matches)| {
+                    let mut guard = thoosa_shared::with_perf_log(
+                        || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                        "DistsTracker/consume/write_tracker",
+                    );
+                    guard.dump();
+                    Ok::<(), ThoError>(())
+                })?;
 
-                Ok::<_, ThoError>(())
-            })
-        })
-        .await??;
+            Ok::<_, ThoError>(())
+        })?;
 
         Ok(())
     }

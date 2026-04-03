@@ -49,7 +49,7 @@ pub trait SyncStage: Stage + Debug {
         self: Arc<Self>,
         _input: Self::In<'f>,
         _ctx: Self::Ctx,
-    ) -> impl Future<Output = Result<Self::Out, ThoError>> + Send + 'f {
-        async { unimplemented!() }
+    ) -> Result<Self::Out, ThoError> {
+        unimplemented!()
     }
 }
