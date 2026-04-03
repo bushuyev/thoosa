@@ -232,7 +232,7 @@ pub async fn copy_d2h_from_ptr(
 
                     let stream = buf_stream.1.clone();
 
-                    tokio::task::spawn_blocking(move || {
+                    tokio::task::spawn( async move {
                         let _guard = ThoStreamGuard::new(stream.as_ref()).map_err(|te|te.what().clone())?;
                         let raw = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                             buf_ptr as *mut c_void,
@@ -390,7 +390,7 @@ pub async fn copy_h2d_from_ptr(
                     // 1. tokio::task::spawn_blocking(move || {copy   CPU-tensor  →  pinned host buffer   (memcpy)
                     //----------------------------------------------------------
                     debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?}", os_thread_id());
-                    tokio::task::spawn_blocking(move || {
+                    tokio::task::spawn( async move {
                         std::ptr::copy_nonoverlapping(
                             src_off_ptr as *const u8,
                             buf_ptr as *mut u8,

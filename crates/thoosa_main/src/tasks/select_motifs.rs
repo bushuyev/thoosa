@@ -1198,7 +1198,7 @@ where
             } = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
-                    Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                    Adjusters::RunContext(Box::new(DumpToCpu::new("clc_resources_motifs_dist"))),
                     Adjusters::Input(Box::new(SelectMotifsAdjuster::new(find_motifs_run_config.window as i64))),
                 ],
                 None,
@@ -2141,7 +2141,7 @@ pub mod tests {
         GlobalCtx::init_devices(2);
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-        
+
         let find_motifs_run_id: RunId = 31;
         let select_motifs_run_id: RunId = 32;
         let resources_group = "constraint_metrics_group";

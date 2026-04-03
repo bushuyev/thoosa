@@ -1128,7 +1128,7 @@ mod tests {
         required_ids.insert("LoadedTensorId", &loaded_tensors_ids);
         required_ids.insert("MulTaskOutputId", &multed_tensors_ids);
 
-        _global_ctx.dump_all_to_cpu(&required_ids, 1).await?;
+        _global_ctx.dump_all_to_cpu(&required_ids, 1, "test").await?;
 
         for i in 0..10 {
             let cached_loaded = <TestTensorLoader as Cached>::cache()
@@ -1282,7 +1282,7 @@ mod tests {
 
             //ThoTensor is sync so &ThoTensor is Send =
             async {
-                GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1).await?;
+                GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
                 //[WARN] should be logged - can't drop self.id=simple_id!("test"), locked
                 Ok::<_, ThoError>(())
             }.await?;

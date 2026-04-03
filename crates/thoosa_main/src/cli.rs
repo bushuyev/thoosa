@@ -374,8 +374,8 @@ where
                             metrics.global_queue_depth(),
                             metrics.blocking_queue_depth(),
                         );
-                        info!("semaphore_0={:?}", GlobalCtx::global().debug_semaphore(0));
-                        info!("semaphore_1={:?}", GlobalCtx::global().debug_semaphore(1));
+                        // info!("semaphore_0={:?}", GlobalCtx::global().debug_semaphore(0));
+                        // info!("semaphore_1={:?}", GlobalCtx::global().debug_semaphore(1));
                     }
 
                     for w in 0..workers {
@@ -832,8 +832,8 @@ async fn run_all(
             //     run_plot_slices(&ws, &store, &loader, &PlotSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
             // }
 
-            #[cfg(tho_debug)]
-            debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+            // #[cfg(tho_debug)]
+            // debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
             //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
             //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
 
@@ -920,8 +920,8 @@ async fn run_all(
         }
     }
 
-    #[cfg(tho_debug)]
-    debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+    // #[cfg(tho_debug)]
+    // debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
     info!("find and select motifs  done: select_motifs_run_ids={select_motifs_run_ids:?}");
     // return Ok(());
@@ -953,8 +953,8 @@ async fn run_all(
     info!("train motif nets done: train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
     ///////////////////
-    #[cfg(tho_debug)]
-    debug!("starting train label nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
+    // #[cfg(tho_debug)]
+    // debug!("starting train label nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
 
     //gpt Pre-create context and shared handles for label-net stage construction.
     let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true, false);

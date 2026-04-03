@@ -247,11 +247,15 @@ where
 }
 
 #[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("async_lock", descr)))]
+#[inline]
 pub async fn with_async_perf_log<F, R>(f:F, descr:&str) -> R
 where
     F:AsyncFnOnce()->R {
+    trace!("with_async_perf_log: descr={descr}");
+    let r = f().await;
+    trace!("with_async_perf_log: descr={descr} done");
 
-    f().await
+    r
 }
 
 pub async fn collect_futures_with_progress<T, F>(

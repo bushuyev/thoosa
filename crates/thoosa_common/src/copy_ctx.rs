@@ -109,6 +109,7 @@ impl CopyCtx {
         }).get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}"))
     }
 
+    //TODO these are 'exec' streams, not for copy
     pub async fn acquire_stream(&self) -> Guard<ThoCudaStream> {
         self.stream_pool.acquire().await
     }

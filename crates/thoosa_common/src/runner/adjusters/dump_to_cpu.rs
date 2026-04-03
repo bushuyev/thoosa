@@ -21,6 +21,7 @@ pub struct DumpToCpu<A>
 where
     A: Adjustable + RunCtx,
 {
+    descr:String,
     pd: PhantomData<A>,
 }
 
@@ -28,9 +29,10 @@ impl<A> DumpToCpu<A>
 where
     A: Adjustable + RunCtx,
 {
-    pub fn new() -> Self {
+    pub fn new(decr: &str) -> Self {
         DumpToCpu {
             pd: Default::default(),
+            descr: decr.to_string()
         }
     }
 }
@@ -48,12 +50,10 @@ pub struct DumpToCpuContextImpl<'a> {
 }
 
 impl<'a> DumpToCpuContextImpl<'a> {
-    pub fn new(
-        ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>,
-    ) -> Self {
+    pub fn new(ids_to_exclude: &'a HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>) -> Self {
         Self {
             ids_to_exclude,
-            dump_to_cpu_retry_count: 0,
+            dump_to_cpu_retry_count: 0
         }
     }
 }
@@ -126,7 +126,7 @@ where
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
         GlobalCtx::global()
-            .dump_all_to_cpu(ids_to_exclude, device_idx)
+            .dump_all_to_cpu(ids_to_exclude, device_idx, &self.descr)
             .await.map_err(|e|{
             warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {e:?}");
             AdjusterError::<A>::SomethingElse

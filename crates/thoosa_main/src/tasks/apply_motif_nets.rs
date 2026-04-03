@@ -457,7 +457,9 @@ where
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
-        let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await));
+        let tmp_cache = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
+        let tmp_cache_name = &*tmp_cache.name.clone().leak();;
+        let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
 
         let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
         let futures = apply_motif_nets
@@ -487,13 +489,18 @@ where
 
                 let out_id_arc = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
                 let tmp_cache = Arc::clone(&tmp_cache);
+
                 async move {
-                    let map = HashMap::new();
+                    let set = HashSet::<&dyn CachableIdTr>::new();
+
+                    let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> =HashMap::from([
+                        (tmp_cache_name, &set)
+                    ]);
 
                     let r = OOMHandler::new(
                         vec![
                             Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
-                            Adjusters::RunContext(Box::new(DumpToCpu::new())),
+                            Adjusters::RunContext(Box::new(DumpToCpu::new("apply_moitf_net"))),
                             Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),
                                 [-1, overlap_len].into(),
@@ -516,7 +523,7 @@ where
                                 NoopRunnableContext {},
                                 PermitsAndDumpToCpuAdjustableContex::new(
                                     PermitsAdjustContextImpl::new(),
-                                    DumpToCpuContextImpl::new(&map),
+                                    DumpToCpuContextImpl::new(&required_ids),
                                 ),
                             ),
                         ).await;
@@ -542,6 +549,7 @@ where
         .collect::<Vec<_>>();
 
         let motif_nets_applied = Arc::into_inner(tmp_cache).unwrap().into_inner().take_all(device_idx).await?;
+        // GlobalCtx::global().remove_cache(tmp_cache_name).await;
         //all is sync until return
         debug!("ApplyMotifNets::run: motif_nets_applied.len={} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len());
 
