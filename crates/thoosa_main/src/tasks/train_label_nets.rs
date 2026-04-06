@@ -705,7 +705,7 @@ mod tests {
     use std::time::Duration;
     use futures_util::StreamExt;
     use futures::FutureExt;
-    use log::{debug, info, set_max_level, LevelFilter};
+    use log::{debug, info, log_enabled, set_max_level, Level, LevelFilter};
     use log::LevelFilter::{Debug, Info, Trace};
     use mockall::predicate::always;
     use parking_lot::RwLock;
@@ -946,21 +946,21 @@ mod tests {
             CacheArea::default()
         ));
 
-        // let ctx = MockRunCtx::purge_gpu_caches_context();
-        // ctx.expect().with(always()).times(0..).returning( |_| Box::pin(async { Ok(()) }));
 
         let mut run_ctx = mock_run_ctx::default(1);
 
         let out = train_label_nets.run(input, mock_run_ctx::default(1)).await?;
 
-        info!("test_train_label_net_3x3: PERF={PERF:?}");
-        info!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
+        debug!("test_train_label_net_3x3: PERF={PERF:?}");
+        debug!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
 
 
         let ctx_for_data = run_ctx.branch(Some("train_label_nets_assert"), false, false);
         with_data!(ctx_for_data, out; |_ctx, out:&TrainLabelNetsOutput|{
-             for r in &out.results {
-                info!("label={} loss={}", r.label, r.loss);
+            if log_enabled!(Level::Debug) {
+                for r in &out.results {
+                    debug!("label={} loss={}", r.label, r.loss);
+                }
             }
 
             debug!("test_train_label_net_3x3: 0. out={out:?}");

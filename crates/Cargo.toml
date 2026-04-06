@@ -90,12 +90,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
+file-rotate = "0.8"
 console-subscriber = "0.5"
 uuid = { version = "1.10", features = ["v4", "fast-rng"] }
 statrs = "0"
 proc-macro2 = {version = "1.0.103"}
 time="0"
 libc = "0.2.175"
+
 [profile.test]
 opt-level = 0
 [profile.dev]

@@ -255,7 +255,6 @@ impl Drop for RunCtxWithPermits {
                 }
             }
         }
-
     }
 }
 
@@ -268,10 +267,6 @@ mod tests {
     use tokio::sync::Semaphore;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
-    fn make_ctx(name: &str) -> RunCtxWithPermits {
-        let mut ctx = RunCtxWithPermits::with_cache_area(0, name.into(), 1);
-        ctx.purge_gpu_closures = None; // avoid GlobalCtx::global() in Drop
-        ctx
-    }
+    //TODO
 
 }

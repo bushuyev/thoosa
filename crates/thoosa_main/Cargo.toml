@@ -58,6 +58,7 @@ thoosa_dummy_data_derive.workspace = true
 async-trait.workspace = true
 rand_distr.workspace = true
 tracing.workspace = true
+file-rotate.workspace = true
 console-subscriber.workspace = true
 mockall_double.workspace = true
 [dev-dependencies]

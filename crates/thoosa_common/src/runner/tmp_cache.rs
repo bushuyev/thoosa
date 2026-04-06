@@ -113,8 +113,7 @@ where
             &*(ptr_ref)
         };
 
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+       
         GlobalCtx::global().register_cache((registered_name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
         Self {
@@ -200,7 +199,7 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     fn drop(&mut self) {
-        info!("TmpCached::drop: {}", self.name);
+        debug!("TmpCached::drop: {}", self.name);
         if let Some(name) = self.registered_name.take() {
             tokio::task::block_in_place(move || {
                 Handle::current().block_on(async move {
