@@ -113,12 +113,8 @@ mod tests {
     fn new_file_input_cache(
         value: impl Into<FileInput>,
         device_idx: usize,
-        cache_area: u64,
     ) -> Arc<DevicesWrap<FileInput>> {
-        Arc::new(DevicesWrap::wrap(
-            value.into(),
-            cache_area.into(),
-        ))
+        Arc::new(DevicesWrap::wrap(value.into()))
     }
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -300,13 +296,9 @@ mod tests {
             let id = self.out_id(WithId::id(input.as_ref()));
 
             let device_idx = ctx.device_idx();
-            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                ThoTensor::new(id, x)?,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, x)?)))
         }
     }
 
@@ -447,14 +439,13 @@ mod tests {
                 Vec::with_capacity(self.batch_size);
 
             let loader_device_idx = ctx.device_idx();
-            let loader_cache_area = ctx.cache_area();
 
             for &fi in &chosen {
                 let (f, lbl) = files[fi];
                 let feat = Arc::clone(&self.loader)
                     .run_cached(
-                        new_file_input_cache(f, loader_device_idx, loader_cache_area),
-                        ctx.branch(Some(&format!("batch_builder_loader_{fi}")), false, false),
+                        new_file_input_cache(f, loader_device_idx),
+                        ctx.branch(Some(&format!("batch_builder_loader_{fi}")), false),
                     )
                     .await?;
                 feats.push(feat);
@@ -462,7 +453,6 @@ mod tests {
             }
 
             let device_idx = ctx.device_idx();
-            let cache_area = ctx.cache_area();
             // #[cfg(any(test, feature = "mock_global_ctx"))]
             // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
@@ -470,7 +460,7 @@ mod tests {
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
 
-            let ctx_for_data = ctx.branch(Some("batch_builder_data"), false, false);
+            let ctx_for_data = ctx.branch(Some("batch_builder_data"), false);
             let output = with_data!(ctx_for_data, [feats];|_ctx, data:&[&ThoTensor<ABData, SimpleId>]|{
 
                 let ax_id = simple_id!(format!("ax_{}", input.id()));
@@ -511,10 +501,7 @@ mod tests {
 
 
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                output,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(output)))
         }
     }
 
@@ -702,7 +689,6 @@ mod tests {
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let device_idx = ctx.device_idx();
-            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
@@ -713,10 +699,7 @@ mod tests {
                 })
                 .await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                output,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(output)))
         }
     }
 
@@ -770,12 +753,8 @@ mod tests {
     fn new_file_list_input_cache(
         input: FileListInput,
         device_idx: usize,
-        cache_area: u64,
     ) -> Arc<DevicesWrap<FileListInput>> {
-        Arc::new(DevicesWrap::wrap(
-            input,
-            cache_area.into(),
-        ))
+        Arc::new(DevicesWrap::wrap(input))
     }
 
     #[derive(Debug, cached_derive::Cached, Named)]
@@ -816,14 +795,11 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let (device_idx, cache_area) = (
-                ctx.device_idx(),
-                ctx.cache_area(),
-            );
+            let device_idx = ctx.device_idx();
 
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
-                .run_cached(Arc::clone(&input), ctx.branch(Some("join_and_classify_batch"), false, false))
+                .run_cached(Arc::clone(&input), ctx.branch(Some("join_and_classify_batch"), false))
                 .await?;
 
 
@@ -883,10 +859,7 @@ mod tests {
             // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                result,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(result)))
             // todo!()
         }
     }
@@ -921,18 +894,16 @@ mod tests {
         let files = vec![("file_0", 1.0), ("file_1", 0.0)];
         registry().insert("files_0_1".to_string(), files.clone());
         let input = FileListInput::new(files, simple_id!("files_0_1"));
-        let (device_idx, cache_area) = {
-            (ctx.device_idx(), ctx.cache_area())
-        };
-        let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
+
+        let input_cache = new_file_list_input_cache(input, ctx.device_idx());
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch(Some("join_and_classify_cpu"), false, false))
+            .run_cached(input_cache, ctx.branch(Some("join_and_classify_cpu"), false))
             .await?;
 
         debug!("acc={acc:?}");
 
         acc.with_data_ref(0,
-      ctx.branch(Some("join_and_classify_cpu_data"), false, false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(Some("join_and_classify_cpu_data"), false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                   debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
                   // Dim impls are to define domain-specific operations on tensors
@@ -951,7 +922,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
         let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-        let ctx = Arc::new(RwLock::new(RunCtxImpl::new(0, "test")));
+        let mut ctx = RunCtxImpl::new(0, "test");
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -977,16 +948,13 @@ mod tests {
         ];
         registry().insert("files_0_1_2_3".to_string(), files.clone());
         let input = FileListInput::new(files, simple_id!("files_0_1_2_3"));
-        let (device_idx, cache_area) = {
-            let guard = ctx.read();
-            (guard.device_idx(), guard.cache_area())
-        };
-        let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
+
+        let input_cache = new_file_list_input_cache(input, ctx.device_idx());
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.write().branch(Some("join_and_classify_cpu_many"), false, false))
+            .run_cached(input_cache, ctx.branch(Some("join_and_classify_cpu_many"), false))
             .await?;
 
-        let ctx_for_data = ctx.write().branch(Some("join_and_classify_cpu_many_data"), false, false);
+        let ctx_for_data = ctx.branch(Some("join_and_classify_cpu_many_data"), false);
         acc.with_data_ref(1,
                           ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);
@@ -1039,19 +1007,17 @@ mod tests {
         .collect();
         registry().insert("files_oom_permits".to_string(), files.clone());
         let input = FileListInput::new(files, simple_id!("files_oom_permits"));
-        let (device_idx, cache_area) = {
-            (ctx.device_idx(), ctx.cache_area())
-        };
-        let input_cache = new_file_list_input_cache(input, device_idx, cache_area);
+
+        let input_cache = new_file_list_input_cache(input, ctx.device_idx());
 
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch(Some("join_and_classify_oom"), false, false))
+            .run_cached(input_cache, ctx.branch(Some("join_and_classify_oom"), false))
             .await?;
 
         // ctx.add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
-                          ctx.branch(Some("join_and_classify_oom_data"), false, false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(Some("join_and_classify_oom_data"), false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
               debug!("acc={}", acc.t_ref());
 
               let v = ClsOut::accuracy(acc);

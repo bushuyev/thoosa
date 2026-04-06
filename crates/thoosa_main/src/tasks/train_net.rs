@@ -242,7 +242,7 @@ where
 
         Box::pin(async move {
 
-            let batch = (self.batch)(ctx.branch(Some("train_batch"), false, false), &run_config).await?;
+            let batch = (self.batch)(ctx.branch(Some("train_batch"), false), &run_config).await?;
             debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.as_ref().device(), epochs);
 
             let oom_handler = OOMHandler::new(
@@ -268,7 +268,7 @@ where
 
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
-                let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false, false));
+                let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
                 let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
@@ -280,7 +280,7 @@ where
                     oom_handler.run(
                         &train_step_stream,
                         Arc::clone(&input),
-                        ctx.branch(Some("train_step"), false, false),
+                        ctx.branch(Some("train_step"), false),
                         Contexts::new(
                             NoopInputContext(None),
                             NoopRunnableContext {},
@@ -303,7 +303,7 @@ where
 
                     debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?}",maybe_cuda_mem(&device));
 
-                    let mut batches = batch.valid_batch_stream(ctx.branch(Some("valid_batch"), false, false));
+                    let mut batches = batch.valid_batch_stream(ctx.branch(Some("valid_batch"), false));
                     debug!("TrainNet::run_inner, valid: descr={descr}  1. cuda_mem={:?}",maybe_cuda_mem(&device));
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
@@ -426,7 +426,7 @@ where
                     let self_arc = Arc::clone(&self_for_train);
 
                     self_arc.run_inner(
-                        ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false, false),
+                        ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false),
                         device_idx_for_train,
                         vs,
                         run_config,
@@ -441,7 +441,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss), CacheArea::default())))
+            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss))))
         }
     }
 }
@@ -563,9 +563,6 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
         }
     }
 
-    fn cache_area(&self) -> &CacheArea {
-        &self.cache_area
-    }
 }
 
 impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
@@ -940,7 +937,7 @@ mod tests {
 
         let output = train_net
             .run(
-                Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("test", "test")])), CacheArea::default())),
+                Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("test", "test")])))),
                 ctx,
             )
             .await?;

@@ -81,8 +81,8 @@ impl GlobalCtx {
         &self.executors[device-1]
     }
 
-    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) ->Result<(), ThoError>{
-        self.purger.run_purge_gpu(closures, cache_area)
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
+        self.purger.run_purge_gpu(closures)
     }
 
     ///num_devices: number of devices - CPU + GPU count
@@ -198,15 +198,11 @@ impl GlobalCtx {
                 "GlobalCtx/dump_all_to_cpu/read_caches",
             ).await;
 
-            maps.iter()/*.filter(|(type_name, map)| if required_ids.contains_key(*type_name){
-                info!("GlobalCtx::dump_all_to_cpu: skipping {type_name}");
-
-                false
-            } else {
-                true
-            })*/.map(|(type_name, map)| (*type_name, *map)).collect()
+            maps
+                .iter()
+                .map(|(type_name, map)| (*type_name, *map)).collect()
         };
-        // let read_guard = self.caches.read().await;//doesn't
+        
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
         for (type_name, map) in maps.iter() {
@@ -472,12 +468,12 @@ pub mod mock_global_ctx {
         pub fn with_run_purge_gpu(mut self) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_run_purge_gpu().times(0..).returning({
-                    move |closures, cache_area| {
-                        real.run_purge_gpu(closures, cache_area)
+                    move |closures| {
+                        real.run_purge_gpu(closures)
                     }
                 });
             } else {
-                self.mock.expect_run_purge_gpu().times(0..).returning(|_closures, _cache_area| Ok(()));
+                self.mock.expect_run_purge_gpu().times(0..).returning(|_closures| Ok(()));
             }
 
             self

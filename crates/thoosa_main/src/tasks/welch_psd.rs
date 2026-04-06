@@ -300,11 +300,10 @@ where
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
-        let cache_area = ctx.cache_area();
         let input_id = input.id().clone();
 
         let (resources_config, nperseg, noverlap) = with_data!(
-            ctx.branch(Some("welch_psd_input"), false, false),
+            ctx.branch(Some("welch_psd_input"), false),
             input;
             |_ctx, input: &FrequenciesStatsInput<RC>| {
                 Ok::<_, ThoError>((
@@ -342,17 +341,17 @@ where
 
             let loaded = Arc::clone(&self.loader)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap(resource.clone(), CacheArea::default())),
-                    ctx.branch(Some(&format!("welch_psd_load_resource_{}", resource.id())), false, false),
+                    Arc::new(DevicesWrap::wrap(resource.clone())),
+                    ctx.branch(Some(&format!("welch_psd_load_resource_{}", resource.id())), false),
                 )
                 .await?;
 
             let welch_input = loaded
-                .with_data_ref(0, ctx.branch(Some("welch_psd_wrap_input"), false, false), None, |loaded: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+                .with_data_ref(0, ctx.branch(Some("welch_psd_wrap_input"), false), None, |loaded: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 })
                 .await?;
-            let welch_input = Arc::new(DevicesWrap::wrap(welch_input, cache_area.into()));
+            let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 
             let welch_input_size = welch_input.size().clone();
             let out_id = welch_stage.out_id(welch_input.id());
@@ -367,7 +366,7 @@ where
             .run(
                 &welch_stage,
                 Arc::clone(&welch_input),
-                ctx.branch(Some(&format!("welch_psd_resource_{}", resource.id())), false, false),
+                ctx.branch(Some(&format!("welch_psd_resource_{}", resource.id())), false),
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         welch_input_size,
@@ -402,7 +401,7 @@ where
         let psd_mean = psd_sum.f_div_scalar(processed_resources as f64)?;
         let out = ThoTensor::new(self.out_id(&input_id), psd_mean)?;
 
-        Ok(Arc::new(DevicesWrap::wrap(out, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(out)))
     }
 }
 

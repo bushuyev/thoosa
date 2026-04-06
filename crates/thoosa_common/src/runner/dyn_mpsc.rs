@@ -567,7 +567,7 @@ impl DynamicTaskExecutor {
                                 },
                             ).await {
                             IsOOM::Yes => {
-                                if global_limit.load(Relaxed) > 2 {//TODO config
+                                if global_limit.load(Relaxed) > 6 {//TODO config
                                     global_limit.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }

@@ -27,9 +27,7 @@ pub trait MaxParallelCtx: Named + Debug + Send + Sync {
 pub trait RunCtx: MaxParallelCtx + WithId {//TODO remove PermitsCtx from RunCtx
     fn device_idx(&self) -> usize;
 
-    fn cache_area(&self) -> u64;
-
-    fn branch(&mut self, new_name: Option<&str>, with_new_cache_area: bool, give_permits_back_to_parent: bool) -> Self
+    fn branch(&mut self, new_name: Option<&str>, with_new_cache_area: bool) -> Self
     where
         Self: Sized;
 
@@ -73,8 +71,7 @@ pub mod mock_run_ctx {
 
         impl RunCtx for RunCtx {
             fn device_idx(&self) -> usize;
-            fn cache_area(&self) -> u64;
-            fn branch<'a>(&mut self, new_name:Option<&'a str>, with_new_cache_area:bool, give_permits_back_to_parent:bool)-> Self;
+            fn branch<'a>(&mut self, new_name:Option<&'a str>, with_new_cache_area:bool)-> Self;
             fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
         }
     }
@@ -96,12 +93,6 @@ pub mod mock_run_ctx {
             self.mock.expect_device_idx().return_const(device_idx);
             self
         }
-
-        pub fn with_cache_area(mut self, out: u64) -> Self {
-            self.mock.expect_cache_area().return_const(out);
-            self
-        }
-
 
         pub fn with_max_other_parallel(mut self, out: crate::runner::adjusters::max_parallel::MaxParallel) -> Self {
             self.mock.expect_max_other_parallel().times(0..).return_const(out);
@@ -126,7 +117,7 @@ pub mod mock_run_ctx {
         pub fn with_branch(mut self, depth: u32) -> Self {
             self.mock.expect_branch()
                 // .with(always(), always())
-                .returning(move |_name:Option<&str>, _with_new_cache_area:bool, _give_permits_back_to_parent:bool| {
+                .returning(move |_name:Option<&str>, _with_new_cache_area:bool| {
 
                     debug!("with_branch: depth={depth}");
 
@@ -135,8 +126,7 @@ pub mod mock_run_ctx {
                         .with_device_idx(self.device_idx.unwrap_or(0))
                         .with_max_other_parallel(MAX_PARALLEL)
                         .with_set_max_other_parallel()
-                        .with_add_purge_gpu_closure()
-                        .with_cache_area(0);
+                        .with_add_purge_gpu_closure();
 
                     if depth == 0 {
                         builder.finish()
@@ -168,7 +158,6 @@ pub mod mock_run_ctx {
             .with_max_other_parallel(100)
             .with_max_other_parallel(1)
             .with_set_max_other_parallel()
-            .with_cache_area(0)
             .with_branch(1024)
             .with_max_other_parallel(1)
             .with_add_purge_gpu_closure()

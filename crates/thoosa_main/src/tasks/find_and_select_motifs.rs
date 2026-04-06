@@ -232,15 +232,9 @@ impl FindAndSelectMotifsStage {
         device_idx: usize,
         mut ctx: C
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
-        let find_input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?,
-            CacheArea::default(),
-        ));
+        let find_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?));
 
-        let select_input = Arc::new(DevicesWrap::wrap(
-            SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?),
-            CacheArea::default(),
-        ));
+        let select_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?)));
 
         let find_run_id = Self::save_run_config_with_input(
             store,
@@ -264,16 +258,16 @@ impl FindAndSelectMotifsStage {
                 vec![run_config.find_motifs_run_config.clone()],
                 fixed_find_motifs_config,
                 ThoDevice::from(device_idx),
-                ctx.branch(Some("find_and_select_init_find"), true, false),
+                ctx.branch(Some("find_and_select_init_find"), true),
             ).await?,
         );
         find_stage
-            .run(find_input, ctx.branch(Some("find_and_select_run_find"), true, false))
+            .run(find_input, ctx.branch(Some("find_and_select_run_find"), true))
             .await?;
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
@@ -295,7 +289,7 @@ impl FindAndSelectMotifsStage {
         );
 
         let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = Arc::clone(&select_stage)
-            .run(select_input, ctx.branch(Some("select_stage_output"), true, false))
+            .run(select_input, ctx.branch(Some("select_stage_output"), true))
             .await?;
 
         let mut select_savable:SelectMotifsSavableResult = Arc::into_inner(select_stage_output)
@@ -312,7 +306,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false, false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
 
         Ok(FindAndSelectEvalMetrics { score_sum, constraint_metrics })
     }
@@ -345,7 +339,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let grid_runs = self.run_configs.grid_to_vals_and_opt_params();
         let opt_max_evals = self.opt_config.opt_max_evals;
         let opt_num_init = self.opt_config.opt_num_init;
-        let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true, false);
+        let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true);
         let device_idx = ctx.device_idx();
         let grid_runs_len = grid_runs.len();
         info!("FindAndSelectMotifsStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
@@ -366,7 +360,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
                 let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
                 let max_chunk_size = self.max_chunk_size;
-                let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false, false);
+                let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false);
                 async move {
 
                     let mut opt = AsyncCTPEOptimizer::new(
@@ -392,7 +386,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                                     fixed_find_motifs_config,
                                     max_chunk_size,
                                     device_idx,
-                                    find_and_select_run_find_ctx.branch(Some(format!("{grid_idx}_in_opt").as_str()), false, false)
+                                    find_and_select_run_find_ctx.branch(Some(format!("{grid_idx}_in_opt").as_str()), false)
                                 )
                             })
                             .unwrap_or_else(|e| {
@@ -448,9 +442,6 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
 
 
-        Ok(Arc::new(DevicesWrap::wrap(
-            FindAndSelectMotifsResult::new(best_configs),
-            CacheArea::default(),
-        )))
+        Ok(Arc::new(DevicesWrap::wrap(FindAndSelectMotifsResult::new(best_configs))))
     }
 }
