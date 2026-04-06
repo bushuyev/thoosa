@@ -314,7 +314,6 @@ where
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         let device_idx = ctx.device_idx();
-        let cache_area = ctx.cache_area();
         let out_key = {
             let out_id = self.out_id(input.id());
             Arc::new(out_id) as Arc<dyn CachableIdTr>
@@ -324,7 +323,7 @@ where
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let num_devices = GlobalCtx::global().device_count();
-        let mut ctx_for_data = ctx.branch(Some("freq_filter_data"), false, false);
+        let mut ctx_for_data = ctx.branch(Some("freq_filter_data"), false);
 
         let filtered = input
             .with_data_ref(
@@ -339,7 +338,7 @@ where
 
         debug!("FreqFilter::run: filtered={filtered:?} done");
 
-        Ok(Arc::new(DevicesWrap::wrap(filtered, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(filtered)))
     }
 }
 
@@ -459,8 +458,8 @@ mod tests {
 
         let size = [20, 12800];
         let r = Arc::new(bf).run(
-            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?, CacheArea::default())),
-            ctx.branch(Some("freq_filter_test"), false, false)
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)),
+            ctx.branch(Some("freq_filter_test"), false)
         ).await?;
 
         let find_motifs_run_config = FindMotifsRunConfig::new_with_running_mean(None, 10, 100, Some(filter_configs), None);
@@ -468,7 +467,7 @@ mod tests {
         let adjuster = find_motifs_run_config.input_len_adjuster();
 
 
-        with_data!(ctx.branch(Some("freq_filter_test"), false, false), r; |ctx, r|{
+        with_data!(ctx.branch(Some("freq_filter_test"), false), r; |ctx, r|{
             debug!("filter r={r:?}");
             Ok::<_, ThoError>(())
         })?;

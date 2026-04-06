@@ -259,7 +259,7 @@ mod tests {
                 purge_active: purge_active.clone(),
                 max_purge: max_purge.clone(),
             };
-            let wrapper = Arc::new(DevicesWrap::wrap(out, 0.into()));
+            let wrapper = Arc::new(DevicesWrap::wrap(out));
             let active_c = futures_active.clone();
             let max_c = max_futures.clone();
             let processed_c = processed.clone();
@@ -312,22 +312,16 @@ mod tests {
         let drop_key = DummyCachableId::from("drop");
         let purge_active = Arc::new(AtomicUsize::new(0));
         let max_purge = Arc::new(AtomicUsize::new(0));
-        let keep_wrapper = Arc::new(DevicesWrap::wrap(
-            DummyOutput {
-                id: DummyCachableId::from("keep_out"),
-                purge_active: Arc::clone(&purge_active),
-                max_purge: Arc::clone(&max_purge),
-            },
-            0.into(),
-        ));
-        let drop_wrapper = Arc::new(DevicesWrap::wrap(
-            DummyOutput {
-                id: DummyCachableId::from("drop_out"),
-                purge_active,
-                max_purge,
-            },
-            0.into(),
-        ));
+        let keep_wrapper = Arc::new(DevicesWrap::wrap(DummyOutput {
+            id: DummyCachableId::from("keep_out"),
+            purge_active: Arc::clone(&purge_active),
+            max_purge: Arc::clone(&max_purge),
+        }));
+        let drop_wrapper = Arc::new(DevicesWrap::wrap(DummyOutput {
+            id: DummyCachableId::from("drop_out"),
+            purge_active,
+            max_purge,
+        }));
 
         let map: DashMap<
             DummyCachableId,

@@ -29,7 +29,6 @@ use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 pub struct RunCtxImpl {
     id: SynKey,
     device_idx: usize,
-    cache_area: u64,
 
     max_other_parallel: MaxParallel,
 
@@ -41,7 +40,6 @@ impl Debug for RunCtxImpl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunCtxWithPermits")
             .field("device_idx", &self.device_idx)
-            .field("cache_area", &self.cache_area)
             .finish()
     }
 }
@@ -61,16 +59,11 @@ impl RunCtxImpl {
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        Self::with_cache_area(device_idx, mono_key!(0, _id).into(), GlobalCtx::global().next_cache_area().expect("no more cache areas"))
+        Self::with_cache_area(device_idx, mono_key!(0, _id).into())
     }
 
-    #[cfg(test)]
-    pub fn with_cache_area_(device_idx: usize, id: SynKey, cache_area: u64) -> Self {
-        RunCtxImpl::with_cache_area(device_idx, id, cache_area)
-    }
 
-    fn with_cache_area(device_idx: usize, id: SynKey, cache_area: u64) -> Self {
-        assert_ne!(cache_area, 0);
+    fn with_cache_area(device_idx: usize, id: SynKey) -> Self {
 
 
         debug!("RunCtxWithPermits::with_cache_area: device_idx={device_idx} branch_name={id:?}");
@@ -78,7 +71,6 @@ impl RunCtxImpl {
         Self {
             id,
             device_idx,
-            cache_area,
             purge_gpu_closures: Some(Arc::new(Mutex::new(vec![]))),
             max_other_parallel: MaxParallel::MAX,
             branches: AtomicU32::new(0)
@@ -104,15 +96,10 @@ impl RunCtx for RunCtxImpl {
         self.device_idx
     }
 
-    fn cache_area(&self) -> u64 {
-        self.cache_area
-    }
-
     fn branch(
         &mut self,
         new_name: Option<&str>,
-        with_new_cache_area: bool,
-        give_permits_back_to_parent: bool//for OOM handler to pass max_parallel between DumpToCpu(needs MAX_PERMITS) and further cycles
+        with_new_cache_area: bool
     ) -> Self {
 
         let branches = self.branches.fetch_add(1, Ordering::SeqCst);
@@ -129,21 +116,16 @@ impl RunCtx for RunCtxImpl {
 
         let mut branched_ctx= if with_new_cache_area {
 
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id);
 
+            debug!("RunCtxWithPermits::branch: branch_name={:?}", branched_ctx.id);
 
-            let new_cache_area = GlobalCtx::global().next_cache_area().expect("ran out of cache areas");
-
-            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id, new_cache_area);
-
-            debug!("RunCtxWithPermits::branch: branch_name={:?}  new_cache_area={new_cache_area}", branched_ctx.id);
-
-            branched_ctx.cache_area = new_cache_area;
             branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//Arc::strong_count == 1 causes it to purge gpu caches on Drop
 
             branched_ctx
 
         } else {
-            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id, self.cache_area);
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id);
 
             branched_ctx.purge_gpu_closures = self.purge_gpu_closures.as_ref().map(|v| Arc::clone(v));
 
@@ -204,7 +186,7 @@ impl Drop for RunCtxImpl {
                         // #[cfg(any(test, feature = "mock_global_ctx"))]
                         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-                        if let Err(e) = GlobalCtx::global().run_purge_gpu(m.into_inner(), self.cache_area) {
+                        if let Err(e) = GlobalCtx::global().run_purge_gpu(m.into_inner()) {
                             error!("run_purge_gpu failed: {e:?} ");
                         }
                     }

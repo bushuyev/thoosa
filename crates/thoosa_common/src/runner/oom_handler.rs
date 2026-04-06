@@ -423,16 +423,15 @@ where
                 let input_id = input.id();
                 debug!("AsyncOOMHandler::run: input_id={input_id:?} run_ctx={run_ctx:?} run_ctx.id={:?}", run_ctx.id());
 
-                let cache_area = input.cache_area();
 
                 let prepared_input = if let Some(selector) = selector {
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} selector={selector:?}");
 
                     let selected = input
-                        .with_selected_data(device_idx, run_ctx.branch(Some("oom_handler_data"), false, false), selector.clone(), |data, _ctx| Ok(data))
+                        .with_selected_data(device_idx, run_ctx.branch(Some("oom_handler_data"), false), selector.clone(), |data, _ctx| Ok(data))
                         .await?;
 
-                    Arc::new(DevicesWrap::wrap(selected, cache_area.clone()))
+                    Arc::new(DevicesWrap::wrap(selected))
                 } else {
                     debug!("AsyncOOMHandler::run: input_id={input_id:?} no selector");
                     
@@ -553,7 +552,7 @@ where
     let mut input_select_adjusted: Option<S> = None;
 
     match panic_to_err_async!({
-        runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false, false), None)
+        runner(Arc::clone(&task), Arc::clone(&input), None, device_idx, run_context.branch(Some("oom_handler_run_initial"), false), None)
     }) {
         Err(te) => {
             exclusive_job.update_from_error(&te);
@@ -700,7 +699,7 @@ where
                                 Arc::clone(&input),
                                 input_select_adjusted.clone(),
                                 device_idx,
-                                run_context.branch(None, false, true),
+                                run_context.branch(None, false),
                                 exclusive_job.job_id(),
                             )
                         });
@@ -1168,7 +1167,7 @@ mod tests {
                 .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
 
             match next {
-                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o, input.cache_areas().clone()))),
+                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o))),
                 Err(e) => Err(e),
             }
         }
@@ -1254,7 +1253,7 @@ mod tests {
         let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(100), 0.into())),
+                Arc::new(DevicesWrap::wrap(TestInput::new(100))),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1298,7 +1297,7 @@ mod tests {
         let out: TestOutput = oom_handler
             .run(
                 &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into())),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1))),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1338,7 +1337,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into())),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1))),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1379,7 +1378,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &Arc::new(task),
-                Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into())),
+                Arc::new(DevicesWrap::wrap(TestInput::new(1))),
                 ctx_mock,
                 Contexts::new(
                     super::mock_input_context::build()
@@ -1449,7 +1448,7 @@ mod tests {
         let out = oom_handler
             .run(
                 &async_task,
-                Arc::new(DevicesWrap::wrap(TestInput::new(2), 0.into())),
+                Arc::new(DevicesWrap::wrap(TestInput::new(2))),
                 ctx_mock,
                 Contexts::new(
                     AsyncInputCtx { outputs: vec![] },
@@ -1481,7 +1480,7 @@ mod tests {
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
 
         let init_task1_arc = Arc::new(init_task1);
-        let input_arc = Arc::new(DevicesWrap::wrap(TestInput::new(1), 0.into()));
+        let input_arc = Arc::new(DevicesWrap::wrap(TestInput::new(1)));
 
         let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
             .with_id(0)

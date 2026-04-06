@@ -308,10 +308,6 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
 
         })
     }
-
-    fn cache_area(&self) -> &CacheArea {
-        self.stacked_motifs.cache_areas()
-    }
 }
 
 #[derive(Debug, Clone, Default)]

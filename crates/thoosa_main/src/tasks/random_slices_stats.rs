@@ -135,11 +135,10 @@ where
         debug!("RandomStats::run: input={input:?}");
 
         let device_idx = ctx.device_idx();
-        let cache_area = ctx.cache_area();
         let input_id = input.id().clone();
 
         let (max_slices, find_motifs_run_id, metrics, aggr) = with_data!(
-            ctx.branch(Some("random_stats_input"), false, false),
+            ctx.branch(Some("random_stats_input"), false),
             input;
             |_ctx, input: &RandomStatsInput| {
                 Ok::<(u32, RunId, Metrics, Aggr), ThoError>((input.max_slices, input.find_motifs_run_id, input.metrics, input.aggr))
@@ -152,20 +151,17 @@ where
             return Err(ThoError::new(format!("RandomStats: max_slices must be >= 2, got {max_slices}")));
         }
 
-        let motif_stats_input = Arc::new(DevicesWrap::wrap(
-            MotifStatsInput::from_random(max_slices, find_motifs_run_id, vec![metrics], aggr),
-            cache_area.into(),
-        ));
+        let motif_stats_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(max_slices, find_motifs_run_id, vec![metrics], aggr)));
 
         let motif_stats: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&self.motif_stats)
             .run(
                 motif_stats_input,
-                ctx.branch(Some("random_stats_motif_stats"), false, false),
+                ctx.branch(Some("random_stats_motif_stats"), false),
             )
             .await?;
 
         let dists = with_data!(
-            ctx.branch(Some("random_stats_with_data"), false, false),
+            ctx.branch(Some("random_stats_with_data"), false),
             motif_stats;
             |_ctx, motif_stats: &MotifStatsOutput| {
                 motif_stats.channels_motifs_dists(metrics)
@@ -174,10 +170,7 @@ where
 
         let stats_t = dists.t_ref().f_to_device(ThoDevice::from(device_idx).into())?;
 
-        Ok(Arc::new(DevicesWrap::wrap(
-            ThoTensor::new(&input_id + &SynKey::new(["random_stats".into()]), stats_t)?,
-            cache_area.into(),
-        )))
+        Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(&input_id + &SynKey::new(["random_stats".into()]), stats_t)?)))
     }
 }
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
@@ -341,7 +334,7 @@ mod tests {
 
         let stage = Arc::new(RandomStats::new(Arc::clone(&store), loader, &ws));
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
-        let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0)), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0))));
 
         let output = Arc::clone(&stage)
             .run(
@@ -350,7 +343,7 @@ mod tests {
                     || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                     "RandomStats/test/write_ctx",
                 )
-                .branch(Some("random_stats"), false, false),
+                .branch(Some("random_stats"), false),
             )
             .await?;
 
@@ -358,7 +351,7 @@ mod tests {
             || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
             "RandomStats/test/write_ctx",
         )
-        .branch(Some("random_stats_data"), false, false);
+        .branch(Some("random_stats_data"), false);
         let size = output
             .with_data_ref(0, ctx_for_data, None, |t: &ThoTensor<ChannelsMotifsDists, SynKey>, _ctx| {
                 debug!("t=\n{}", t.as_ref());
