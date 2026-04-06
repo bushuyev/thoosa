@@ -22,13 +22,12 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, ThoError};
 use thoosa_store::Store;
@@ -765,7 +764,7 @@ where
         let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
         let stats = OOMHandler::new(
             vec![
-                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("clc_stats"))),
             ],
             None,
@@ -777,7 +776,7 @@ where
             Contexts::new(
                 NoopInputContext(None),
                 NoopRunnableContext {},
-                PermitsAndDumpToCpuAdjustableContex::new(PermitsAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
             ),
         )
         .await?;

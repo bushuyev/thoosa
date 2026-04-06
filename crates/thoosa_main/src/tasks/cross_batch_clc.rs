@@ -1,12 +1,12 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::dists_tracker::DistsMask;
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
 use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, PermitsCtx, RunCtx};
+use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -533,7 +533,7 @@ mod tests {
     use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::find_motifs::{MasksCtx, MeanDistsCtx};
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::common::runnable::{Stage, SyncStage};
     use log::debug;
@@ -558,8 +558,8 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
         GlobalCtx::init_devices(2);
-        let cross_batch_fn: Box<dyn CrossBatchFn<DistsMask, MasksCtx, RunCtxWithPermits>> = Box::new(
-            |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, ctx: &MasksCtx, _: &RunCtxWithPermits| {
+        let cross_batch_fn: Box<dyn CrossBatchFn<DistsMask, MasksCtx, RunCtxImpl>> = Box::new(
+            |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, ctx: &MasksCtx, _: &RunCtxImpl| {
                 debug!("t_0=\n{t_0}");
                 debug!("t_1=\n{t_1}");
                 debug!("input={input:?}");
@@ -632,7 +632,7 @@ mod tests {
             chunk_1_resources.as_slice(),
             "test".into()
         );
-        let ctx = RunCtxWithPermits::new(1, "test");
+        let ctx = RunCtxImpl::new(1, "test");
         let out = cross_batch_clc.do_run(
             &input,
             &ctx,

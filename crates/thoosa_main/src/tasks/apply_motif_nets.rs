@@ -41,7 +41,7 @@ use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -53,7 +53,6 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
-use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
@@ -499,7 +498,7 @@ where
 
                     let r = OOMHandler::new(
                         vec![
-                            Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::TWENTY))),
+                            Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
                             Adjusters::RunContext(Box::new(DumpToCpu::new("apply_moitf_net"))),
                             Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),
@@ -521,8 +520,8 @@ where
                                     slice_step as i64,
                                 )?,
                                 NoopRunnableContext {},
-                                PermitsAndDumpToCpuAdjustableContex::new(
-                                    PermitsAdjustContextImpl::new(),
+                                MaxParallelAndDumpToCpuAdjustableContex::new(
+                                    MaxParallelAdjustContextImpl::new(),
                                     DumpToCpuContextImpl::new(&required_ids),
                                 ),
                             ),
@@ -559,7 +558,7 @@ where
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
         let motif_nets_applied = OOMHandler::new(
             vec![
-                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("batch_apply_motif_nets"))),
             ],
             None,
@@ -571,8 +570,8 @@ where
             Contexts::new(
                 NoopInputContext::<BatchAppliedMotifNets<C>>(None),
                 NoopRunnableContext {},
-                PermitsAndDumpToCpuAdjustableContex::new(
-                    PermitsAdjustContextImpl::new(),
+                MaxParallelAndDumpToCpuAdjustableContex::new(
+                    MaxParallelAdjustContextImpl::new(),
                     DumpToCpuContextImpl::new(&required_ids),
                 ),
             ),
@@ -1244,7 +1243,7 @@ pub(crate) mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::{PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::builder::SeqBuilder;

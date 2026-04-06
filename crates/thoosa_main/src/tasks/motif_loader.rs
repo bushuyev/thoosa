@@ -31,7 +31,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, ChannelsMotifsSlices};
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use rand::distr::{Alphanumeric, SampleString};
@@ -39,7 +39,6 @@ use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -51,7 +50,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE};
 
@@ -421,7 +420,7 @@ where
         let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> = HashMap::new();
         let motif = OOMHandler::new(
             vec![
-                Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("motif_loader"))),
             ],
             None,
@@ -433,7 +432,7 @@ where
             Contexts::new(
                 NoopInputContext(None),
                 NoopRunnableContext {},
-                PermitsAndDumpToCpuAdjustableContex::new(PermitsAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
             ),
         )
         .await?;
@@ -790,7 +789,7 @@ pub mod mock_motif_loader {
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::{MockRunCtx, OutId, RunCtx};
     use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -897,7 +896,7 @@ mod tests {
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
@@ -910,7 +909,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_store::MockStoreBuilder;
     use crate::tasks::motif_loader::{MotifLoader, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

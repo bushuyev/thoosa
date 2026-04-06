@@ -31,7 +31,7 @@ use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -362,7 +362,7 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::transforms::smoothing::{median, moving_average};
     use crate::tasks::transforms::freq_filter::FreqFilter;
     use thoosa_common::runner::common::RunCtx;
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = FreqFilter::<RunCtxWithPermits>::new(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], &ws, 0)?;
+        let freq_filter = FreqFilter::<RunCtxImpl>::new(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], &ws, 0)?;
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
@@ -433,7 +433,7 @@ mod tests {
     #[test]
     fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = FreqFilter::<RunCtxWithPermits>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], &ws, 0)?;
+        let freq_filter = FreqFilter::<RunCtxImpl>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], &ws, 0)?;
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
@@ -455,7 +455,7 @@ mod tests {
 
         let bf = FreqFilter::new(&filter_configs, &ws, 0)?;
 
-        let mut ctx = RunCtxWithPermits::new(1, "test");
+        let mut ctx = RunCtxImpl::new(1, "test");
 
         let size = [20, 12800];
         let r = Arc::new(bf).run(

@@ -146,8 +146,8 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
             let __device_idx = __with_data_ctx.device_idx();
             let r = async {
                 #(#prelude)*
-                // #permits
-                // if async is paused somewhere in load_steps the task(s) polling current future won't be able to get 100 permits and hang (batch<- train loop)
+                // #max_parallel
+                // if async is paused somewhere in load_steps the task(s) polling current future won't be able to get 100 max_parallel and hang (batch<- train loop)
                 #(#load_steps)*
 
                 #invoke_closure
