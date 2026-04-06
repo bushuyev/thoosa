@@ -12,21 +12,19 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, WithId};
 use tokio::task::JoinSet;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use crate::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use crate::runner::permits::{NumPermits, PermitStep, MAX_PERMITS};
-
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
 
 #[derive(Debug)]
 pub enum FailUntil {
     MemLimit(u64),
-    MinPermits(NumPermits),
+    NaxParallel(MaxParallel),
     DumpedToCpu,
     Never,
 }
@@ -116,10 +114,10 @@ where
         let out_id = runnable.out_id(input.id()); //.clone();
 
         match self.config {
-            OOMRunnerConfig::Permits { max, step } => {
+            OOMRunnerConfig::MaxParallel { max, step } => {
                 let run_ctx = ctx.branch(Some("clc_oom_runner_permits"), false, false);
                 OOMHandler::new(
-                    vec![Adjusters::RunContext(Box::new(PermitsAdjuster::new(
+                    vec![Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
                         max,
                         step,
                     )))],
@@ -132,7 +130,7 @@ where
                     Contexts::new(
                         NoopInputContext(None),
                         NoopRunnableContext {},
-                        PermitsAdjustContextImpl::new(),
+                        MaxParallelAdjustContextImpl::new(),
                     ),
                 )
                 .await
@@ -160,16 +158,16 @@ where
                 )
                 .await
             },
-            OOMRunnerConfig::PermitsAndSplits {
+            OOMRunnerConfig::MaxParallelAndSplits {
                 max: _max,
                 step: _step,
             } => {
                 let run_ctx = ctx.branch(Some("clc_oom_runner_permits_splits"), false, false);
                 OOMHandler::new(
                     vec![
-                        Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                            MAX_PERMITS,
-                            *PermitStep::TWENTY,
+                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                            MAX_PARALLEL,
+                            *MaxParallelStep::TWENTY,
                         ))),
                         Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                             min_split_len,
@@ -184,7 +182,7 @@ where
                     Contexts::new(
                         SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
                         NoopRunnableContext {},
-                        PermitsAdjustContextImpl::new(),
+                        MaxParallelAdjustContextImpl::new(),
                     ),
                 )
                 .await
@@ -194,9 +192,9 @@ where
                 OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(DumpToCpu::new("n/a"))),
-                        Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                            MAX_PERMITS,
-                            *PermitStep::FIFTY,
+                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                            MAX_PARALLEL,
+                            *MaxParallelStep::FIFTY,
                         ))),
                         Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
                             min_split_len,
@@ -211,8 +209,8 @@ where
                     Contexts::new(
                         SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
                         NoopRunnableContext {},
-                        PermitsAndDumpToCpuAdjustableContex::new(
-                            PermitsAdjustContextImpl::new(),
+                        MaxParallelAndDumpToCpuAdjustableContex::new(
+                            MaxParallelAdjustContextImpl::new(),
                             DumpToCpuContextImpl::new(required_ids),
                         ),
                     ),
@@ -226,10 +224,10 @@ where
 //just for tests, normally task has single config
 #[derive(Debug)]
 pub enum OOMRunnerConfig {
-    Permits { max: NumPermits, step: NumPermits },
+    MaxParallel { max: MaxParallel, step: MaxParallel },
     DumpedToCpu,
     Splits,
-    PermitsAndSplits { max: NumPermits, step: NumPermits },
+    MaxParallelAndSplits { max: MaxParallel, step: MaxParallel },
 }
 
 pub async fn run_mul_task_invocations<R, F, CF>(
@@ -338,7 +336,7 @@ pub mod fixtures {
     use crate::runner::common::{OutId, RunCtx};
     use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::common::runnable::{AsyncStage, Stage};
-    use crate::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use thoosa_shared::traits::Adjustable;
     use crate as thoosa_common;
@@ -497,7 +495,7 @@ pub mod fixtures {
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
         type Out = DLoadedTensor;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -550,19 +548,19 @@ mod tests {
     use thoosa_shared::traits::{Data, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
-    use crate::runner::common::{OutId, PermitsCtx, RunCtx};
+    use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::MockGlobalCtx;
-    use crate::runner::permits::{PermitStep, MAX_PERMITS};
     use crate::runner::purge::FuturesRunnerMapPurger;
-    use crate::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
     use thoosa_shared::traits::Adjustable;
     #[double]
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate as thoosa_common;
+    use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
     use crate::runner::cache_areas::CacheArea;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
@@ -652,7 +650,7 @@ mod tests {
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
         type Out = DLoadedTensor;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     impl AsyncStage for DummyLoader {
@@ -704,7 +702,7 @@ mod tests {
     impl Stage for DMulTask {
         type In<'a> = DLoadedTensor;
         type Out = DMulTaskOutput;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     impl SyncStage for DMulTask {
@@ -723,11 +721,11 @@ mod tests {
                         return Err(Cause::OutOfMemory.into());
                     }
                 }
-                FailUntil::MinPermits(min_permits) => {
-                    let acquired_permits = ctx.acquired_permits();
-                    debug!("MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}");
+                FailUntil::NaxParallel(max_other_parallel_threshold) => {
+                    let max_other_parallel = ctx.max_other_parallel();
+                    debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
 
-                    if acquired_permits < min_permits {
+                    if max_other_parallel > max_other_parallel_threshold {
                         return Err(Cause::OutOfMemory.into());
                     }
                 }
@@ -895,7 +893,7 @@ mod tests {
     impl Stage for DLoadAndMulTask {
         type In<'a> = DLoaderInput;
         type Out = DMulTaskOutput;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -939,7 +937,7 @@ mod tests {
 
         let loader = Arc::new(DummyLoader::new(3));
 
-        let mut ctx_device_0 = RunCtxWithPermits::new(device_idx, "noname");
+        let mut ctx_device_0 = RunCtxImpl::new(device_idx, "noname");
         let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false, false);
         let ctx_device_0_1 = ctx_device_0.branch(Some("test_load_dummy_0_1"), false, false);
 
@@ -973,7 +971,7 @@ mod tests {
 
         assert_eq!(loader.run_count.load(Relaxed), 1);
         // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-        let mut ctx_device_1 = RunCtxWithPermits::new(1, "noname");
+        let mut ctx_device_1 = RunCtxImpl::new(1, "noname");
         let ctx_device_1_0 = ctx_device_1.branch(Some("test_load_dummy_1_0"), false, false);
         let ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false, false);
 
@@ -1016,7 +1014,7 @@ mod tests {
 
         let loader = Arc::new(DummyLoader::new(3));
 
-        let mut ctx_device_0 = RunCtxWithPermits::new(device_idx, "noname");
+        let mut ctx_device_0 = RunCtxImpl::new(device_idx, "noname");
         let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false, false);
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
@@ -1074,14 +1072,14 @@ mod tests {
             FailUntil::Never,
             100,
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits {
-                    max: MAX_PERMITS,
+                OOMRunnerConfig::MaxParallel {
+                    max: MAX_PARALLEL,
                     step: 10,
                 },
                 Box::new(|id| DMulTaskOutputBuilder::new(id)),
             ),
         ));
-        let mut ctx_device_0 = RunCtxWithPermits::new(1, "noname");
+        let mut ctx_device_0 = RunCtxImpl::new(1, "noname");
         let ctx_device_0_run = ctx_device_0.branch(Some("test_load_and_mul_no_oom_run"), false, false);
         let ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false, false);
 
@@ -1124,7 +1122,7 @@ mod tests {
     }
 
     //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_min_permits_dummy() -> Result<(), ThoError> {
+    async fn test_load_and_mul_oom_till_max_parallel_dummy() -> Result<(), ThoError> {
         let _global_ctx = GlobalCtx::init_devices(3);
 
         let device_idx = 1;
@@ -1133,10 +1131,10 @@ mod tests {
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
             DLoadAndMulTaskId("load_and_mul_id"),
             MUL_K,
-            FailUntil::MinPermits(20),
+            FailUntil::NaxParallel(20),
             100,
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits { max: 20, step: 10 },
+                OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
                 Box::new(|id| DMulTaskOutputBuilder::new(id)),
             ),
         ));
@@ -1145,7 +1143,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |device_idx, _cache_area, name| RunCtxWithPermits::new(device_idx, name),
+            |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
                 mul_check(MUL_K, res, out);
             },
@@ -1155,9 +1153,11 @@ mod tests {
         Ok(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_load_and_mul_oom_compete_for_permits_dummy() -> Result<(), ThoError> {
-        let _global_ctx = GlobalCtx::init_devices(2);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn test_load_and_mul_oom_compete_for_max_parallel_dummy() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
 
@@ -1165,12 +1165,12 @@ mod tests {
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
             DLoadAndMulTaskId("load_and_mul_id"),
             MUL_K,
-            FailUntil::MinPermits(MAX_PERMITS),
+            FailUntil::NaxParallel(MAX_PARALLEL),
             100,
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits {
-                    max: MAX_PERMITS,
-                    step: *PermitStep::TEN,
+                OOMRunnerConfig::MaxParallel {
+                    max: MAX_PARALLEL,
+                    step: *MaxParallelStep::TEN,
                 },
                 Box::new(|id| DMulTaskOutputBuilder::new(id)),
             ),
@@ -1180,7 +1180,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |device_idx, _cache_area, name| RunCtxWithPermits::new(device_idx, name),
+            |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
                 mul_check(MUL_K, res, out);
             },
@@ -1190,9 +1190,11 @@ mod tests {
         Ok::<_, ThoError>(())
     }
 
-    //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoError> {
-        let _global_ctx = GlobalCtx::init_devices(2);
+        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let device_idx = 1;
 
@@ -1218,7 +1220,7 @@ mod tests {
                 "resource_5",
             ], //,
             device_idx,
-            |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
+            |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, res, out);
             },
@@ -1251,7 +1253,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |device_idx, _cache_area, name| RunCtxWithPermits::new(device_idx, name),
+            |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
                 mul_check(MUL_K, res, out);
             },
@@ -1280,7 +1282,7 @@ mod tests {
         let cache_area_0 = crate::runner::global_ctx::GlobalCtx::global().next_cache_area()?;
         debug!("cache_area_0={:064b}", cache_area_0);
 
-        let mut ctx_0 = RunCtxWithPermits::with_cache_area_(device_idx, "ctx_0".into(), cache_area_0);
+        let mut ctx_0 = RunCtxImpl::with_cache_area_(device_idx, "ctx_0".into(), cache_area_0);
         let resource_0_for_ctx_0 = Arc::clone(&loader)
             .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_0.into())), ctx_0.branch(Some("test_cache_areas_0"), false, false))
             .await?;
@@ -1288,7 +1290,7 @@ mod tests {
         let cache_area_1 = crate::runner::global_ctx::GlobalCtx::global().next_cache_area()?;
         debug!("cache_area_1={:064b}", cache_area_1);
 
-        let mut ctx_1 = RunCtxWithPermits::with_cache_area_(device_idx, "ctx_1".into(), cache_area_1);
+        let mut ctx_1 = RunCtxImpl::with_cache_area_(device_idx, "ctx_1".into(), cache_area_1);
         let resource_0_for_ctx_1 = Arc::clone(&loader)
             .run_cached(Arc::new(DevicesWrap::wrap(resource_1_arc.clone(), cache_area_1.into())), ctx_1.branch(Some("test_cache_areas_1"), false, false))
             .await?;

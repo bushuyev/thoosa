@@ -59,11 +59,10 @@ mod tests {
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
-    use crate::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::runner::run_ctx_2::RunCtxImpl;
     use thoosa_named_derive::Named;
-    use crate::runner::permits::{NumPermits, PermitStep, RunnerPerm, MAX_PERMITS};
     use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use crate::runner::test::FailUntil::MinPermits;
+    use crate::runner::test::FailUntil::NaxParallel;
     use crate::runner::test_utils::parse_numeric_part;
     use crate::cuda_utils::cuda_mem;
     use crate::dims::{AnyDims, Dims};
@@ -76,6 +75,7 @@ mod tests {
     use futures_util::StreamExt;
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
+    use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[ctor::ctor]
@@ -199,7 +199,7 @@ mod tests {
     impl Stage for TestTensorLoader {
         type In<'a> = LoaderInput;
         type Out = ThoTensor<LoadedTensor, SynKey>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -347,7 +347,7 @@ mod tests {
     impl Stage for ClcTask {
         type In<'a> = ThoTensor<LoadedTensor, SynKey>;
         type Out = ThoTensor<ClcTaskOutput, SynKey>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     impl SyncStage for ClcTask {
@@ -377,16 +377,11 @@ mod tests {
                             return Err(Cause::OutOfMemory.into());
                         }
                     }
-                    FailUntil::MinPermits(min_permits) => {
-                        let acquired_permits = ctx.acquired_permits();
-                        debug!(
-                            "MulTask::do_run: ctx={ctx:?} acquired_permits={acquired_permits} min_permits={min_permits}"
-                        );
+                    FailUntil::NaxParallel(max_other_parallel_threshold) => {
+                        let max_other_parallel = ctx.max_other_parallel();
+                        debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
 
-                        if acquired_permits < *min_permits {
-                            debug!(
-                                "MulTask::do_run: MyError::OutOfMemory on MinPermits min_permits={min_permits}"
-                            );
+                        if max_other_parallel > *max_other_parallel_threshold {
                             return Err(Cause::OutOfMemory.into());
                         }
                     }
@@ -463,7 +458,7 @@ mod tests {
     impl Stage for LoadAndClcTask {
         type In<'a> = LoaderInput;
         type Out = ThoTensor<ClcTaskOutput, SynKey>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -607,7 +602,7 @@ mod tests {
         load_to_device: usize,
         loader: &Arc<TestTensorLoader>,
     ) -> Result<(), ThoError> {
-        let ctx_device_0 = Arc::new(RwLock::new(RunCtxWithPermits::new(
+        let ctx_device_0 = Arc::new(RwLock::new(RunCtxImpl::new(
             loader_ctx_device,
             "device_1_ctx",
         )));
@@ -693,7 +688,7 @@ mod tests {
             vec![],
             size.into(),
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits { max: 20, step: 10 },
+                OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
                 Box::new(move |id| {
                     SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
@@ -713,7 +708,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
+            |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -760,7 +755,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_min_permits_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_mul_oom_till_min_max_parallel_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -777,10 +772,10 @@ mod tests {
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
-            vec![FailUntil::MinPermits(20)],
+            vec![FailUntil::NaxParallel(20)],
             size.into(),
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits { max: 20, step: 10 },
+                OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
                 Box::new(move |id| {
                     SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
                         id,
@@ -800,7 +795,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
+            |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -810,7 +805,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_compete_for_permits_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_mul_oom_compete_for_max_parallel_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -828,12 +823,12 @@ mod tests {
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
-            vec![FailUntil::MinPermits(MAX_PERMITS)],
+            vec![FailUntil::NaxParallel(MAX_PARALLEL)],
             size.into(),
             ClcOOMRunner::new(
-                OOMRunnerConfig::Permits {
-                    max: MAX_PERMITS,
-                    step: *PermitStep::TEN,
+                OOMRunnerConfig::MaxParallel {
+                    max: MAX_PARALLEL,
+                    step: *MaxParallelStep::TEN,
                 },
                 Box::new(move |id| {
                     SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
@@ -854,7 +849,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
+            |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -912,7 +907,7 @@ mod tests {
                 "resource_5",
             ], //,
             device_idx,
-            |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
+            |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -922,7 +917,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_permits_and_splits_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_mul_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -939,12 +934,12 @@ mod tests {
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
-            vec![FailUntil::MinPermits(MAX_PERMITS), FailUntil::MemLimit(12)],
+            vec![FailUntil::NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
             size.into(),
             ClcOOMRunner::new(
-                OOMRunnerConfig::PermitsAndSplits {
-                    max: MAX_PERMITS,
-                    step: *PermitStep::TEN,
+                OOMRunnerConfig::MaxParallelAndSplits {
+                    max: MAX_PARALLEL,
+                    step: *MaxParallelStep::TEN,
                 },
                 Box::new(move |id| {
                     SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
@@ -968,7 +963,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .as_slice(), //&["resource_1", "resource_2", "resource_3"],
             device_idx,
-            |_device_idx, _cache_area, _name| RunCtxWithPermits::new(1, "noname"),
+            |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -997,7 +992,7 @@ mod tests {
         let load_and_mut = Arc::new(LoadAndClcTask::new(
             LoadAndClcTaskId("load_and_mul_id"),
             MUL_K,
-            vec![MinPermits(MAX_PERMITS), FailUntil::DumpedToCpu],
+            vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
             size.into(),
             ClcOOMRunner::new(
                 OOMRunnerConfig::DumpedToCpu {},
@@ -1023,7 +1018,7 @@ mod tests {
                 .collect::<Vec<_>>()
                 .as_slice(), //&["resource_1","resource_2",  "resource_3"], //,
             device_idx,
-            |_device_idx, _cache_area, name| RunCtxWithPermits::new(1, name),
+            |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
             },
@@ -1066,7 +1061,7 @@ mod tests {
             false,
         ));
 
-        let ctx_device = Arc::new(RwLock::new(RunCtxWithPermits::new(1, "test")));
+        let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
 
         for res in (0..10).map(|i| &*format!("resource_{i}").leak()) {
             let (device_idx, cache_area) = {
@@ -1220,7 +1215,7 @@ mod tests {
             true,
         ));
 
-        let ctx_device = Arc::new(RwLock::new(RunCtxWithPermits::new(1, "test")));
+        let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
 
         let (device_idx, cache_area) = {
             let guard = ctx_device.read();
@@ -1316,7 +1311,7 @@ mod tests {
             Arc<std::sync::atomic::AtomicUsize>,
             Arc<tokio::sync::Notify>,
         ) {
-            let full_access_to_gpu = Arc::new(tokio::sync::RwLock::new(()));//emulates Arbiter - write lock - 100 permits, read lock 1 permit
+            let full_access_to_gpu = Arc::new(tokio::sync::RwLock::new(()));//emulates Arbiter - write lock - 100 max_parallel, read lock 1 permit
             let full_access_to_gpu_for_batch = Arc::clone(&full_access_to_gpu);
             let started = Arc::new(std::sync::atomic::AtomicUsize::new(0));
             let started_for_batch = Arc::clone(&started);
@@ -1329,7 +1324,7 @@ mod tests {
                 let resume = Arc::clone(&resume_for_batch);
 
                 async move {
-                    let guard = full_access_to_gpu_for_batch.read().await;//1 permit saved into ctx if there are no permits yet at crates/thoosa_macros/thoosa_with_data/src/lib.rs:127
+                    let guard = full_access_to_gpu_for_batch.read().await;//1 permit saved into ctx if there are no max_parallel yet at crates/thoosa_macros/thoosa_with_data/src/lib.rs:127
                     started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let data = load_(i).await;
 
@@ -1390,7 +1385,7 @@ mod tests {
 
         let got_all_gpu = tokio::time::timeout(Duration::from_millis(100), async move {
             let _guard = full_access_to_gpu.write().await;
-            debug!("got all gpu after pending futures released their permits");
+            debug!("got all gpu after pending futures released their max_parallel");
         }).await;
         assert!(got_all_gpu.is_ok(), "writer should succeed once unpolled futures stop holding permits");
 

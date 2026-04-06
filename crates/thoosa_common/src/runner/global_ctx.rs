@@ -1,7 +1,4 @@
 use std::backtrace::Backtrace;
-use crate::runner::permits::{NumPermits, MAX_PERMITS};
-use crate::runner::permits::runner_queue::Arbiter;
-use crate::runner::permits::{PermitSource, RunnerPerm};
 use crate::runner::purge::FuturesRunnerMapPurger;
 use log::{debug, error, info};
 #[allow(unused_imports)]
@@ -19,6 +16,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use crate::runner::adjusters::max_parallel::{MaxParallel, MAX_PARALLEL};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 
 #[derive(Debug)]
@@ -130,7 +128,7 @@ impl GlobalCtx {
             .is_some()
         );
 
-        info!("GlobalCtx::remove_cache: {} removed ", key);
+        debug!("GlobalCtx::remove_cache: {} removed ", key);
     }
 
     pub fn global() -> &'static Self {
@@ -155,71 +153,6 @@ impl GlobalCtx {
         self.is_all_on_cpu[device_idx].store(false, Relaxed);
     }
 
-    pub async fn acquire_many(
-        &self,
-        device_idx: usize,
-        num_permits: NumPermits,
-        requester_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoError> {
-        debug!("GlobalCtx::acquire_many: num_permits={num_permits} requester_id={requester_id:?} asking for many permits, \nbacktrace={}", Backtrace::capture());
-        assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
-
-        // self.semaphores[device_idx].acquire(num_permits, requester_id).await
-        todo!()
-    }
-
-
-    pub async fn acquire_one(
-        &self,
-        device_idx: usize,
-        requester_id: Arc<dyn CachableIdTr>,
-    ) -> Result<RunnerPerm, ThoError> {
-
-        // assert!(!requester_id.as_any().is::<()>(), "Got () requester_id backtrace={}", Backtrace::capture());
-        //
-        // let mut num_tries = 0;
-        //
-        // debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for one permit, \nbacktrace={}", backtrace_head_lines(8));
-        //
-        // //can't handle OutOfPermits in with_data! and similar calls - acquire_one is needed to ensure no other thread acquired 100 permits and can drop all to cpu.
-        // loop {
-        //     debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} asking for single permit, {num_tries} attempt");
-        //
-        //     match self.semaphores[device_idx].acquire(1, Arc::clone(&requester_id)).await {
-        //         Ok(permit) => {
-        //             debug!("GlobalCtx::acquire_one: requester_id={requester_id:?} got single permit on {num_tries} attempt");
-        //             return Ok(permit);
-        //         }
-        //         Err(e) => {
-        //             match e.what {
-        //                 Cause::OutOfPermits => {
-        //                     num_tries+=1;
-        //                     if num_tries > 1000 {//TODO config
-        //                         return Err(ThoError::new("Can't get single permit"));
-        //                     }
-        //                     self.semaphores[device_idx].wait_for_permits_hint().await;
-        //                 }
-        //
-        //                 e => {
-        //                     return Err(ThoError::new(format!("Can't get single permit, got {e:?}")));
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
-        todo!()
-    }
-
-    #[cfg(any(test, tho_debug))]
-    pub fn debug_semaphore(&self, device_idx:usize) -> &Box<dyn PermitSource>{
-        // &self.semaphores[device_idx]
-        todo!()
-    }
-
-    #[cfg(tho_debug)]
-    pub fn debug_semaphore_remove_perm(&self, device_idx:usize, requester_id:Arc<dyn CachableIdTr>, count:u8) {
-        // self.semaphores[device_idx].remove_granted_counts(requester_id, count);
-    }
 
     #[cfg(tho_debug)]
     pub async fn debug_caches(&self, device_idx:usize, descr:&str) {
@@ -361,7 +294,6 @@ impl GlobalCtx {
 pub mod mock_global_ctx {
     use std::sync::Arc;
     use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::permits::{NumPermits, PermitSource, RunnerPerm};
     use thoosa_shared::Cause;
     use thoosa_shared::ThoError;
     use async_trait::async_trait;
@@ -371,6 +303,7 @@ pub mod mock_global_ctx {
     use tokio::sync::Semaphore;
     use tokio::task::block_in_place;
     use thoosa_shared::comp_id::SynKey;
+    use crate::runner::adjusters::max_parallel::MaxParallel;
     use crate::runner::cache_areas::CacheAreaId;
     use crate::runner::global_ctx::MockGlobalCtx;
 
@@ -402,74 +335,7 @@ pub mod mock_global_ctx {
         }
     }
 
-    fn make_permit(num_permits: NumPermits) -> RunnerPerm {
-        let sem = Arc::new(Semaphore::new(num_permits as usize));
-        RunnerPerm::new(Arc::clone(&sem).try_acquire_many_owned(u32::from(num_permits)).expect("permit"))
-    }
 
-    #[derive(Debug)]
-    struct DummyPermitSource;
-
-    #[async_trait]
-    impl PermitSource for DummyPermitSource {
-        async fn acquire(
-            &self,
-            num_permits: NumPermits,
-            _out_id: Arc<dyn CachableIdTr>,
-        ) -> Result<RunnerPerm, ThoError> {
-            Ok(make_permit(num_permits))
-        }
-
-        async fn wait_for_permits_hint(&self) {}
-
-        #[cfg(tho_debug)]
-        fn move_permits(&self, _from: &SynKey, _to: &SynKey) {}
-
-        #[cfg(tho_debug)]
-        fn remove_granted_counts(&self, requester_id: Arc<dyn CachableIdTr>, count: u8) {}
-    }
-
-    #[derive(Debug)]
-    struct DelegatingPermitSource {
-        real: &'static GlobalCtx,
-        device_idx: usize,
-    }
-
-    #[async_trait]
-    impl PermitSource for DelegatingPermitSource {
-        async fn acquire(
-            &self,
-            num_permits: NumPermits,
-            out_id: Arc<dyn CachableIdTr>,
-        ) -> Result<RunnerPerm, ThoError> {
-
-            // self.real.debug_semaphore(self.device_idx).acquire(num_permits, out_id).await
-            todo!()
-        }
-
-        async fn wait_for_permits_hint(&self) {
-
-            // self.real.debug_semaphore(self.device_idx).wait_for_permits_hint().await;
-        }
-
-        #[cfg(tho_debug)]
-        fn move_permits(&self, from: &SynKey, to: &SynKey) {
-            // self.real.debug_semaphore(self.device_idx).move_permits(from, to);
-        }
-
-        #[cfg(tho_debug)]
-        fn remove_granted_counts(&self, requester_id: Arc<dyn CachableIdTr>, count: u8) {
-            // self.real.debug_semaphore(self.device_idx).remove_granted_counts(requester_id, count);
-        }
-    }
-
-    fn dummy_semaphore() -> Box<dyn PermitSource> {
-        Box::new(DummyPermitSource)
-    }
-
-    pub fn delegating_semaphore(real: &'static GlobalCtx, device_idx: usize) -> Box<dyn PermitSource> {
-        Box::new(DelegatingPermitSource { real, device_idx })
-    }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
     pub struct MockGlobalCtxBuilder {
@@ -603,20 +469,6 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_wait_for_permits_hint(mut self) -> Self {
-            // if let Some(real) = self.real {
-            //     let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning({
-            //         move |device_idx| {
-            //             // tokio::runtime::Handle::current().block_on(real.wait_for_permits_hint(device_idx));
-            //         }
-            //     });
-            // } else {
-            //     let _ = self.mock.expect_wait_for_permits_hint().times(0..).returning(|_device_idx| {});
-            // }
-
-            self
-        }
-
         pub fn with_run_purge_gpu(mut self) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_run_purge_gpu().times(0..).returning({
@@ -631,21 +483,6 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_debug_semaphore(mut self) -> Self {
-            // if let Some(real) = self.real {
-            //     for device_idx in 0..real.device_count() {
-            //         let sem = delegating_semaphore(real, device_idx);
-            //         self.mock.expect_debug_semaphore()
-            //             .with(eq(device_idx))
-            //             .times(0..)
-            //             .return_const(sem);
-            //     }
-            // } else {
-            //     self.mock.expect_debug_semaphore().times(0..).return_const(dummy_semaphore());
-            // }
-
-            self
-        }
 
         pub fn with_dispose_cache_area(mut self) -> Self {
             if let Some(real) = self.real {
@@ -686,7 +523,7 @@ pub mod mock_global_ctx {
 
         #[cfg(any(test, feature = "mock_global_ctx"))]
         pub fn install_global_ctx_mock() -> impl Drop {
-            debug!("install_global_ctx_mock");;
+            debug!("install_global_ctx_mock");
             use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
             let ctx = MockGlobalCtx::global_context();
             if unsafe {USE_REAL_CTX} {
@@ -724,9 +561,7 @@ pub mod mock_global_ctx {
             .with_register_cache()
             .with_remove_cache()
             .with_next_cache_area(params.next_cache_areas)
-            .with_wait_for_permits_hint()
             .with_run_purge_gpu()
-            .with_debug_semaphore()
             .with_dispose_cache_area()
             .finish()
     }

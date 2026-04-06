@@ -18,7 +18,7 @@ use thoosa_shared::traits::WithId;
 use thoosa_named_derive::Named;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_with_data::with_data;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
@@ -219,7 +219,7 @@ pub(crate) mod mock_tensor_loader {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;

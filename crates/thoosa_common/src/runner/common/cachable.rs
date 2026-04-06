@@ -464,7 +464,7 @@ where
     where
         Self: Sized
     {
-        //purge shouldn't happen here since it requires MAX permits and it this is being executed other runs can't have MAX permits,
+        //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
         //TODO add GlobalCtx::purge_lock just in case?
         debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_device_idx}",wrap.id);
         trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);

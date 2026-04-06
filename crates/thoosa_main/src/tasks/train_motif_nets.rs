@@ -486,7 +486,7 @@ mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::{PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
