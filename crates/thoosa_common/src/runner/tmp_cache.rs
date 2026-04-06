@@ -113,7 +113,7 @@ where
             &*(ptr_ref)
         };
 
-       
+
         GlobalCtx::global().register_cache((registered_name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
 
         Self {
@@ -150,17 +150,11 @@ where
 
         let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
-            // .filter(|entry| {
-            //     ids_to_keep
-            //         .map(|set| {
-            //             let key: &dyn CachableIdTr = entry.key();
-            //             !set.contains(key)
-            //         })
-            //         .unwrap_or(true)
-            // })
+            .filter(|entry| {
+                crate::runner::purge::check_ids_to_keep(ids_to_keep, entry)
+            })
             .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
             .collect();
-        // let guard = self.iter_mut();
 
         for (key, val) in keys_vals {
             debug!("TmpCached::purge_gpu: key={key:?}");
