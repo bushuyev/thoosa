@@ -196,7 +196,7 @@ where
                 let loader = Arc::clone(&loader);
                 let random_stats_arc = Arc::clone(&random_stats);
                 let run_id = run_config.id.expect("should be pre saved");
-                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_id}")), false, false);
+                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_id}")), false);
 
                 async move {
                     debug!("FindMotifsStage::new: run_config={run_config:?}");
@@ -217,7 +217,7 @@ where
                             }
                         }
                         SlicesFilter::Precalculate(v) => {
-                            let dists: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>> = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)), CacheArea::default())), ctx.branch(Some("cxt for avg_dists_arc"), true, false)).await?;
+                            let dists: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>> = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
                             let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
 
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);
@@ -423,7 +423,7 @@ where
             .map(|stage|{
                 info!("running find motifs on run config {:?}", stage.run_config.id);
 
-                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.expect("no run_config"))), true, false);
+                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.expect("no run_config"))), true);
 
                 Arc::clone(&stage.cross_loader).run(Arc::clone(&input), ctx_for_stage)
             });
@@ -439,7 +439,7 @@ where
 
 
         //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
-        Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new(), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new())))
     }
 }
 
@@ -612,15 +612,15 @@ mod tests {
             ],
             FixedFindMotifsConfig::new(30000, false),
             ThoDevice::from(1),
-            ctx.branch(Some("init"), false, false)
+            ctx.branch(Some("init"), false)
         ).await.expect("FindMotifsStage::new failed in test"));
 
 
         let result = stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))), CacheArea::default())), ctx.branch(Some("run"), false, false),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))))), ctx.branch(Some("run"), false),
         ).await?;
 
-        with_data!(ctx.branch(Some("check"), false, false), result; |ctx, result:&FindMotifsSavableResult|{
+        with_data!(ctx.branch(Some("check"), false), result; |ctx, result:&FindMotifsSavableResult|{
             debug!("result={result:?}");
             Ok::<_, ThoError>(())
         })?;

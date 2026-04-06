@@ -97,7 +97,6 @@ where
         Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
         let key = self.out_id(WithId::id(input.as_ref()));
-        let cache_area  = ctx.cache_area();
         let device_idx = ctx.device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
@@ -132,10 +131,10 @@ where
 
                     if let Some(data) = maybe_data {
 
-                        data.remove_cache_area(cache_area);
+                        // data.remove_cache_area(cache_area);
 
-                        debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} Arc::strong_count={:?}", data.cache_area, Arc::strong_count(&data));
-                        if data.cache_area.assigned_count() == 0 {
+                        debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} Arc::strong_count={:?}", Arc::strong_count(&data));
+                        if Arc::strong_count(&data) == 1 {
                             data.dump_to_cpu(device_idx).await?;
 
                             debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
@@ -148,8 +147,8 @@ where
 
        );
 
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+
 
         GlobalCtx::global().do_age();
 
@@ -163,9 +162,9 @@ where
                     .map(|res| {
                         if let Ok(data) = &res {
                             #[cfg(any(debug_assertions, tho_debug))]
-                            debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?} cache_area={cache_area:064b}");
+                            debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?}");
 
-                            data.add_cache_area(cache_area);
+                            // data.add_cache_area(cache_area);
                         }
                         res
                     })
@@ -181,8 +180,8 @@ where
 
                 fut.await.map(|v| {
                     #[cfg(any(debug_assertions, tho_debug))]
-                    debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}  cache_area={cache_area:064b}");
-                    v.add_cache_area(cache_area);
+                    debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}");
+                    // v.add_cache_area(cache_area);
                     v
                 })
             }
@@ -196,7 +195,7 @@ pub trait DevicesWrapCopyMode<O>: CopyMode + Debug + Send + Sync
 where
     O: Data + WithId + Send + Sync,
 {
-    fn wrap<'f>(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized;
+    fn wrap<'f>(o:O) -> DevicesWrap<O> where Self:Sized;
 
     async fn load_from_any_device_(
         wrap:&DevicesWrap<O>,
@@ -262,7 +261,7 @@ where
     O:Data<M=Self> + WithId + Send + Sync
 {
  
-    fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
+    fn wrap(o:O) -> DevicesWrap<O> where Self:Sized {
         let size = o.size();
         let mem_size = o.mem_size();
         assert_eq!(o.device(), 0);
@@ -271,7 +270,6 @@ where
             id: o.id().clone(),
             cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
             inflights: Box::new([]),
-            cache_area,
             size,
             on_cpu_since: Default::default(),
             mem_size,
@@ -416,7 +414,7 @@ where
     O:Data<M=Self> + CopyToDevice + WithId + Send + Sync
 {
 
-    fn wrap(o:O, cache_area: CacheArea) -> DevicesWrap<O> where Self:Sized {
+    fn wrap(o:O) -> DevicesWrap<O> where Self:Sized {
 
         let id = o.id().clone();
         let size = o.size();
@@ -452,7 +450,6 @@ where
             id,
             cached_data: device_futures,
             inflights,
-            cache_area,
             size,
             on_cpu_since: Default::default(),
             mem_size,
@@ -792,10 +789,9 @@ where
 
     cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
-    cache_area: CacheArea,
     size: O::Metrics,
     mem_size: u64,
-    //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was in the cpu
+    //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was on the cpu
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
     pd: PhantomData<O>,
 }
@@ -881,22 +877,10 @@ where
     O: Data + WithId + Send + Sync,
     O::M: DevicesWrapCopyMode<O>,
 {
-    pub fn wrap(o: O, cache_area: CacheArea) -> Self {
-        O::M::wrap(o, cache_area)
+    pub fn wrap(o: O) -> Self {
+        O::M::wrap(o)
     }
 
-    // #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="add_cache_area"))]
-    pub fn add_cache_area(&self, ca: CacheAreaId)  {
-        self.cache_area.add_cache_area(ca);
-    }
-
-    pub fn remove_cache_area(&self, ca: CacheAreaId)  {
-        self.cache_area.remove_cache_area(ca);
-    }
-
-    pub fn cache_areas(&self) -> &CacheArea {
-        &self.cache_area
-    }
 
     pub fn size(&self) -> &O::Metrics {
         O::M::size(self)
@@ -1173,7 +1157,6 @@ pub trait WithDataRef: WithId + Debug {
         0
     }
 
-    fn cache_area(&self) -> &CacheArea;
 }
 
 pub trait WithSelectDataRef<S>: WithDataRef
@@ -1267,11 +1250,6 @@ where
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
         self.size.clone()
     }
-
-    fn cache_area(&self) -> &CacheArea {
-        &self.cache_area
-    }
-
 }
 
 impl<O> WithDataRefSend for DevicesWrap<O>
@@ -1357,7 +1335,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let data = MockDataWithId::whatever();
-        let tested = super::DevicesWrap::wrap(data, CacheArea::default());
+        let tested = super::DevicesWrap::wrap(data);
         assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 1").await.is_none());
 
         let ctx_for_data = mock_run_ctx::default(1);
@@ -1387,15 +1365,15 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), CacheArea::default()));
-        let wrap_b = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "d"), CacheArea::default()));
+        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
+        let wrap_b = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "d")));
         let wrap_vec = vec![
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"), CacheArea::default())),
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"), CacheArea::default())),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "b"))),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "c"))),
         ];
         let wrap_vec_second = vec![
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"), CacheArea::default())),
-            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"), CacheArea::default())),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "e"))),
+            Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"))),
         ];
 
 
@@ -1424,7 +1402,7 @@ mod tests {
             )) as &'static global_ctx::MockGlobalCtx
         });
 
-        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a"), 0.into()));
+        let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
 
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, wrap_a;

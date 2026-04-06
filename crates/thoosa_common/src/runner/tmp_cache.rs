@@ -29,7 +29,6 @@ where
 {
     pub name: String,
     registered_name: Option<&'static str>,
-    cache_area:u64,
     // map: RwLock<Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>>
     map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
 
@@ -50,13 +49,8 @@ where
     }
 
     pub fn insert(&self, value: D) {
-        let cache_area = self.cache_area;
-        // self.map.try_read_for(LOCK_TIMEOUT).expect("TmpCached::insert").insert(
-        self.map.insert(
-            value.id().clone(),
 
-            Arc::new(DevicesWrap::wrap(value, cache_area.into()))
-        );
+        self.map.insert(value.id().clone(), Arc::new(DevicesWrap::wrap(value)));
 
     }
 
@@ -100,7 +94,7 @@ where
     }
 
 
-    pub async fn new(name: &'static str, cache_area: u64) -> Self {
+    pub async fn new(name: &'static str) -> Self {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
         let registered_name = name.clone().leak();
@@ -121,7 +115,6 @@ where
             registered_name: Some(registered_name),
             // map: RwLock::new(map),
             map: map,
-            cache_area
         }
 
     }
@@ -309,7 +302,7 @@ mod tests {
         }
 
 
-        let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp", GlobalCtx::global().next_cache_area().expect("next_cache_area failed")).await;
+        let tmp_cache:TmpCached<TestData> = TmpCached::new("tmp").await;
         let foo_id = simple_id!("foo");
 
         tmp_cache.insert(TestData::new(foo_id.clone(), 1));

@@ -112,7 +112,7 @@ where
         // let _ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
         // debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
-        Ok(adjustable.branch(None, false, false))
+        Ok(adjustable.branch(None, false))
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {

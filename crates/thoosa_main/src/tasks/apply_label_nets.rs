@@ -57,9 +57,7 @@ where
     where
         R: RunCtx + Adjustable + 'static,
     {
-        let (device_idx, cache_area) = {
-            (stage_ctx.device_idx(), stage_ctx.cache_area())
-        };
+        let device_idx =stage_ctx.device_idx();
 
         //gpt Resolve motif-net inputs by looking up train_motif_nets_run_ids used to produce the label nets.
         let train_motif_nets_run_ids = {
@@ -145,7 +143,7 @@ where
         let apply_label_nets = label_nets
             .into_iter()
             .map(|(label, run_id, _params, net)| {
-                Arc::new(ApplyLabelNet::new(label, run_id, net, cache_area))
+                Arc::new(ApplyLabelNet::new(label, run_id, net))
             })
             .collect::<Vec<_>>();
 
@@ -196,7 +194,6 @@ where
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("ApplyLabelNets::run: input={input:?}");
-        let cache_area = ctx.cache_area();
         let input_id = input.id().clone();
 
         #[cfg(debug_assertions)]
@@ -204,7 +201,7 @@ where
 
         //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
         let motif_probs = Arc::clone(&self.apply_motif_nets)
-            .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false, false))
+            .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false))
             .await?;
 
         let label_nets = self.apply_label_nets.clone();
@@ -216,7 +213,7 @@ where
             .into_iter()
             .map(|apply_label_net| {
                 let motif_probs = Arc::clone(&motif_probs);
-                let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_label_net.label, apply_label_net.run_id)), false, false);
+                let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_label_net.label, apply_label_net.run_id)), false);
 
                 async move {
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below.
@@ -253,7 +250,7 @@ where
         #[cfg(debug_assertions)]
         debug!("ApplyLabelNets::run: done, input={input_debug:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(tensor, cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(tensor)))
     }
 }
 
@@ -286,13 +283,12 @@ where
         label: String,
         run_id: RunId,
         net: ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
-        cache_area: u64,
     ) -> Self {
         Self {
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
             run_id,
-            net_wrapper: Arc::new(DevicesWrap::wrap(net, cache_area.into())),
+            net_wrapper: Arc::new(DevicesWrap::wrap(net)),
             pd: PhantomData,
         }
     }
@@ -349,7 +345,7 @@ where
 
                 debug!("ApplyLabelNet::run: done, input={input:?}");
 
-                Ok(Arc::new(DevicesWrap::wrap(out, ctx.cache_area().into())))
+                Ok(Arc::new(DevicesWrap::wrap(out)))
             })
         }
     }
@@ -561,9 +557,9 @@ mod tests {
         )?;
 
         let mut run_ctx = mock_run_ctx::default(0);
-        let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input, CacheArea::default())), run_ctx.branch(Some("apply_label_nets_run".into()), false, false)).await?;
+        let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input)), run_ctx.branch(Some("apply_label_nets_run".into()), false)).await?;
 
-        with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false, false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
+        with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
             assert_eq!(out.t_ref().size(), vec![3, 1]);
             let vals = to_vec_f32(out.t_ref());
             let motif_sum = (1.0f32 / (1.0f32 + (-1.0f32).exp())) + (1.0f32 / (1.0f32 + (-2.0f32).exp()));

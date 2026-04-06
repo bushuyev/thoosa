@@ -72,12 +72,11 @@ where
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        with_data!(ctx.branch(Some("raw_tensor_loader_input"), false, false), input; |ctx:C, resource: &Resource| {
+        with_data!(ctx.branch(Some("raw_tensor_loader_input"), false), input; |ctx:C, resource: &Resource| {
             let tensor = (self.loader_fn)(resource, &self.device)?;
 
             Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(
-                tensor,
-                ctx.cache_area().into(),
+                tensor
             )))
         })
     }
@@ -191,7 +190,7 @@ pub(crate) mod mock_tensor_loader {
                 let id = SynKey::new([mono_key!(k.file_stem(), format!("file_stem={}", k.file_stem()))]);
                 let tensor = ThoTensor::new(id, v)
                     .expect("ThoTensor::new failed in MockTensorLoaderBuilder");
-                (k, Arc::new(DevicesWrap::wrap(tensor, CacheArea::default())))
+                (k, Arc::new(DevicesWrap::wrap(tensor)))
             }).collect());
 
             self.mock.expect_run_cached().returning(move |input, ctx|{
@@ -258,13 +257,13 @@ mod tests {
     //
     //     let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(0, "test_load")));
     //
-    //     let load_ctx = ctx.write().branch(Some("tensor_loader_load"), false, false);
+    //     let load_ctx = ctx.write().branch(Some("tensor_loader_load"), false);
     //     let loaded = loader
     //         .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), CacheArea::default())), load_ctx)
     //         .await
     //         ?;
     //
-    //     let mut data_ctx = ctx.write().branch(Some("tensor_loader_data"), false, false);
+    //     let mut data_ctx = ctx.write().branch(Some("tensor_loader_data"), false);
     //     let result = loaded
     //         .with_data_ref(0,
     //         &mut data_ctx, None, |v: &ThoTensor<ChannelsData2, SynKey>, _ctx| {

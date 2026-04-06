@@ -212,7 +212,6 @@ mod tests {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
             let device_idx = ctx.device_idx();
-            let cache_area = ctx.cache_area();
 
             let num_devices = GlobalCtx::global().device_count();
 
@@ -226,10 +225,7 @@ mod tests {
                 ),
             )?;
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                tensor,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(tensor)))
         }
 
     }
@@ -421,7 +417,6 @@ mod tests {
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let device_idx = ctx.device_idx();
-            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
@@ -432,10 +427,7 @@ mod tests {
                 })
                 .await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                output,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(output)))
         }
 
     }
@@ -468,7 +460,7 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let ctx_for_loader = ctx.branch(Some("load_and_clc_loader"), false, false);
+            let ctx_for_loader = ctx.branch(Some("load_and_clc_loader"), false);
             let loaded = Arc::clone(&self.loader)
                 .run_cached(Arc::clone(&input), ctx_for_loader)
                 .await?;
@@ -497,17 +489,13 @@ mod tests {
 
             let result = self
                 .clc_oom_runner
-                .run(&self.clc_task, loaded, ctx.branch(Some("load_and_clc_clc"), false, false), &required_ids)
+                .run(&self.clc_task, loaded, ctx.branch(Some("load_and_clc_clc"), false), &required_ids)
                 .await?;
 
             let device_idx = ctx.device_idx();
-            let cache_area = ctx.cache_area();
             let num_devices = GlobalCtx::global().device_count();
 
-            Ok(Arc::new(DevicesWrap::wrap(
-                result,
-                cache_area.into(),
-            )))
+            Ok(Arc::new(DevicesWrap::wrap(result)))
         }
     }
 
@@ -602,30 +590,24 @@ mod tests {
         load_to_device: usize,
         loader: &Arc<TestTensorLoader>,
     ) -> Result<(), ThoError> {
-        let ctx_device_0 = Arc::new(RwLock::new(RunCtxImpl::new(
+        let mut ctx_device_0 = RunCtxImpl::new(
             loader_ctx_device,
             "device_1_ctx",
-        )));
+        );
 
         // ctx_device_0.write().add_permit(GlobalCtx::global().acquire_many(loader_ctx_device, 1, Arc::new(simple_id!("zzz"))).await?);
 
-        let (ctx_device_idx, cache_area) = {
-            let guard = ctx_device_0.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+
 
         let loaded_tensor_0_0 = Arc::clone(&loader).run_cached(
-            Arc::new(DevicesWrap::wrap(
-                "resource_1".into(),
-                cache_area.into(),
-            )),
-            ctx_device_0.write().branch(Some("test_loaded_tensor_0_0"), false, false),
+            Arc::new(DevicesWrap::wrap("resource_1".into())),
+            ctx_device_0.branch(Some("test_loaded_tensor_0_0"), false),
         ).await?;
 
         debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
         let tensor_data_0_0 = loaded_tensor_0_0
-            .with_data_ref(load_to_device, ctx_device_0.write().branch(Some("test_loaded_tensor_0_0_data"), false, false), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
+            .with_data_ref(load_to_device, ctx_device_0.branch(Some("test_loaded_tensor_0_0_data"), false), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
                     debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
                     assert!(
@@ -645,17 +627,14 @@ mod tests {
 
         let _loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::clone(&Arc::new(DevicesWrap::wrap(
-                    "resource_1".into(),
-                    cache_area.into(),
-                ))),
-                ctx_device_0.write().branch(Some("test_loaded_tensor_0_1"), false, false),
+                Arc::clone(&Arc::new(DevicesWrap::wrap("resource_1".into()))),
+                ctx_device_0.branch(Some("test_loaded_tensor_0_1"), false),
             )
             .await?;
 
         loaded_tensor_0_0
             .with_data_ref(load_to_device,
-                           ctx_device_0.write().branch(Some("test_loaded_tensor_0_0_data_second"), false, false), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
+                           ctx_device_0.branch(Some("test_loaded_tensor_0_0_data_second"), false), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
                     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                     assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
@@ -1064,17 +1043,11 @@ mod tests {
         let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
 
         for res in (0..10).map(|i| &*format!("resource_{i}").leak()) {
-            let (device_idx, cache_area) = {
-                let guard = ctx_device.read();
-                (guard.device_idx(), guard.cache_area())
-            };
+
             Arc::clone(&load_and_mut)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap(
-                        res.into(),
-                        cache_area.into(),
-                    )),
-                    ctx_device.write().branch(Some(&format!("test_load_and_clc_{res}")), false, false),
+                    Arc::new(DevicesWrap::wrap(res.into())),
+                    ctx_device.write().branch(Some(&format!("test_load_and_clc_{res}")), false),
                 )
                 .await?;
         }
@@ -1217,18 +1190,12 @@ mod tests {
 
         let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
 
-        let (device_idx, cache_area) = {
-            let guard = ctx_device.read();
-            (guard.device_idx(), guard.cache_area())
-        };
+
 
         let multed = Arc::clone(&load_and_mut)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(
-                    "resource_1".into(),
-                    cache_area.into(),
-                )),
-                ctx_device.write().branch(Some("test_load_and_clc_single_run"), false, false),
+                Arc::new(DevicesWrap::wrap("resource_1".into())),
+                ctx_device.write().branch(Some("test_load_and_clc_single_run"), false),
             )
             .await?;
 
@@ -1236,7 +1203,7 @@ mod tests {
 
         multed
             .with_data_ref(1,
-                           ctx_device.write().branch(Some("test_load_and_clc_single_data"), false, false), None, |r: &ThoTensor<ClcTaskOutput, SynKey>, _ctx| {
+                           ctx_device.write().branch(Some("test_load_and_clc_single_data"), false), None, |r: &ThoTensor<ClcTaskOutput, SynKey>, _ctx| {
                     mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                         lin_for_size(k, size, t.kind(), &t.device())
                             .sum_dim_intlist(1, false, t.kind())
@@ -1262,7 +1229,7 @@ mod tests {
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         
-        let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test", 0).await;
+        let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test").await;
 
 
         tokio::spawn(async move {

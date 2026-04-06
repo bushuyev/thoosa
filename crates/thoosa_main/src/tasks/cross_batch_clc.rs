@@ -33,7 +33,6 @@ pub struct CrossInput<'a, R: AsRef<Resource>> {
     tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
-    cache_area: CacheArea,
 }
 
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
@@ -60,7 +59,6 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
             tensors,
             resources_0: b_0,
             resources_1: b_1,
-            cache_area: CacheArea::default(),
         }
     }
 
@@ -140,9 +138,7 @@ where
         do_run(self, &permits_ctx)
     }
 
-    fn cache_area(&self) -> &CacheArea {
-        &self.cache_area
-    }
+
 }
 
 impl<'a, R> WithSelectDataRef<CrossInputBatch1Selector> for CrossInput<'a, R>

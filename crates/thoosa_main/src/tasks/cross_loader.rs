@@ -320,7 +320,7 @@ where
         let output_merge_mode = self.output_merge_mode;
 
         let resources_config = input
-            .with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false, false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
+            .with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
                 Ok(input.resources_config.clone())
             })
             .await?;
@@ -348,7 +348,7 @@ where
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
             let t_0 = Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_0"), false, false))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(Some("cross_loader_t_0"), false))
                 .await?;
 
             t_0_batch_len += t_0.size().dim_1();
@@ -372,7 +372,7 @@ where
                 .skip(skip_0_i)//skipping lower triangle
             {
                 let t_1 = Arc::clone(&self.configured_loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone(), CacheArea::default())), ctx.branch(Some("cross_loader_t_1"), false, false))
+                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(Some("cross_loader_t_1"), false))
                     .await?;
 
                 t_1_batch_len += t_1.size().dim_1();
@@ -420,10 +420,10 @@ where
                     ],
                     None,
                 ).run(
-                        &cross_unfold_clc,
-                        Arc::new(input),
-                        ctx.branch("batch_clc_ctx".into(), false, false),
-                        Contexts::new(
+                    &cross_unfold_clc,
+                    Arc::new(input),
+                    ctx.branch("batch_clc_ctx".into(), false),
+                    Contexts::new(
                             CrossSplitterContext::new(t_1_batch_resources_cloned.len() as i64, batch_1_slice_lengths),
                             NoopRunnableContext {},
                             MaxParallelAndDumpToCpuAdjustableContex::new(
@@ -436,7 +436,7 @@ where
                         let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
 
                         let receiver_arc = Arc::clone(&receiver);
-                        let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false, false);
+                        let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false);
 
                         tokio::task::spawn_blocking(move || receiver_arc.consume(cross_clc_output, receiver_ctx)).await??;
 
@@ -465,7 +465,7 @@ where
 
         (self.on_all_done)(&receiver).await?;
 
-        Ok(Arc::new(DevicesWrap::wrap((), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(())))
     }
 }
 
@@ -822,9 +822,9 @@ impl RangeOrSlice {
                 let channels = batch[*i].size().dim_0();
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
                 vec![
-                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(Some("cross_loader_range_or_slice_select"), false, false), selector, |data, run_ctx|{
-                        Ok(data)
-                    }).await?, CacheArea::default()))
+                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(Some("cross_loader_range_or_slice_select"), false), selector, |data, run_ctx|{
+                                            Ok(data)
+                                        }).await?))
                 ]
             }
             RangeOrSlice::Full => {
@@ -879,9 +879,6 @@ impl WithDataRef for CrossInputSelectorWrap
         })
     }
 
-    fn cache_area(&self) -> &CacheArea {
-        &self.cache_area
-    }
 }
 
 
@@ -901,8 +898,8 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
         debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
 
-        let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(Some("cross_loader_batch_0_select"), false, false)).await?;
-        let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false, false)).await?;
+        let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(Some("cross_loader_batch_0_select"), false)).await?;
+        let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false)).await?;
 
         //TODO move to RangeOrSlice::select
         let resources_0 = match &selector.batch_0_selector {
@@ -1368,7 +1365,7 @@ mod tests {
             let i = i as i64;
             Tensor::arange_start(i*1000, (i+1)*1000, FLOAT_CPU).view((1, -1))
         }).collect::<Vec<_>>();
-        let batch_0 = (0..batch_0_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[i as usize].shallow_clone())?, ca.clone())))).collect::<Result<Vec<_>, ThoError>>()?;
+        let batch_0 = (0..batch_0_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[i as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
 
         let resources_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Arc::new(Resource::new(i, 1, format!("aaa_{}", i), 100))).collect::<Vec<_>>();
         let batch_1_tensors = (batch_0_len..batch_0_len +batch_1_len).map(|i| {
@@ -1376,7 +1373,7 @@ mod tests {
             Tensor::arange_start(i*1000, (i+1)*1000, FLOAT_CPU).view((1, -1))
         }).collect::<Vec<_>>();
 
-        let batch_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[(i -batch_0_len)as usize].shallow_clone())?, ca.clone())))).collect::<Result<Vec<_>, ThoError>>()?;
+        let batch_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[(i -batch_0_len)as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
 
 
         let input = CrossInputSelectorWrap::new(
@@ -1392,7 +1389,7 @@ mod tests {
         let mut selector = CrossInputSelector::default();
 
         let mut run_ctx = RunCtxImpl::new(1, "test");
-        let r = input.with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_full"), false, false), selector.clone(), None, |data, ctx|{
+        let r = input.with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_full"), false), selector.clone(), None, |data, ctx|{
             assert_eq!(data.tensors().len(), 4);
 
             assert!(batch_0_tensors[0].allclose(&data.tensors()[0].t.to_device(Cpu), 0.02, 0.02, false));
@@ -1422,16 +1419,10 @@ mod tests {
         let batch_1_tensors = vec![Tensor::arange_start(0, 8, FLOAT_CPU).view((1, -1))];
 
         let batch_0 = vec![
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?,
-                ca.clone(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
         ];
         let batch_1 = vec![
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?,
-                ca.clone(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
         ];
 
         let input = CrossInputSelectorWrap::new(
@@ -1458,7 +1449,7 @@ mod tests {
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_0"), false, false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_0"), false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
             })
@@ -1474,7 +1465,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_1"), false, false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_1"), false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
             })
@@ -1503,20 +1494,11 @@ mod tests {
         ];
 
         let batch_0 = vec![
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?,
-                ca.clone(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
         ];
         let batch_1 = vec![
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?,
-                ca.clone(),
-            )),
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[1].shallow_clone())?,
-                ca.clone(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[1].shallow_clone())?)),
         ];
 
         let input = CrossInputSelectorWrap::new(
@@ -1544,7 +1526,7 @@ mod tests {
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_0"), false, false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_0"), false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
@@ -1561,7 +1543,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_1"), false, false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_1"), false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
@@ -1578,7 +1560,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_2"), false, false), selector, None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_2"), false), selector, None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
@@ -1738,14 +1720,10 @@ mod tests {
             0,
         ));
 
-        let cache_area = ctx.cache_area();
-        let input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys))),
-            cache_area.into(),
-        ));
+        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys)))));
 
         let output:Arc<DevicesWrap<()>> = cross_loader
-            .run(input, ctx.branch(Some("cross_loader_run"), false, false))
+            .run(input, ctx.branch(Some("cross_loader_run"), false))
             .await?;
 
         assert_eq!(output.id(), &());
@@ -1915,17 +1893,13 @@ mod tests {
             0,
         ));
 
-        let cache_area = ctx.cache_area();
-        let input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
-                "resource_a".to_string(),
-                "resource_b".to_string(),
-            ]))),
-            cache_area.into(),
-        ));
+        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+            "resource_a".to_string(),
+            "resource_b".to_string(),
+        ])))));
 
         let _ = cross_loader
-            .run(input, ctx.branch(Some("cross_loader_run"), false, false))
+            .run(input, ctx.branch(Some("cross_loader_run"), false))
             .await?;
 
         yield_now().await;
@@ -2079,15 +2053,11 @@ mod tests {
             1,
         ));
 
-        let cache_area = ctx.cache_area();
-        let input = Arc::new(DevicesWrap::wrap(
-            ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
-                "resource_a".to_string(),
-            ]))),
-            cache_area.into(),
-        ));
+        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+            "resource_a".to_string(),
+        ])))));
 
-        let _ = cross_loader.run(input, ctx.branch(Some("cross_loader_run"), false, false)).await?;
+        let _ = cross_loader.run(input, ctx.branch(Some("cross_loader_run"), false)).await?;
 
         let observed = observations.lock().expect("observations.lock").clone();
         assert!(oom_triggered.load(Ordering::SeqCst));

@@ -708,9 +708,8 @@ where
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
-        let cache_area = input.cache_areas().clone();
         let input_id = input.id().clone();
-        let (source, metrics, aggr) = with_data!(ctx.branch(Some("motif_stats_input"), false, false), input; |_ctx, input: &MotifStatsInput| {
+        let (source, metrics, aggr) = with_data!(ctx.branch(Some("motif_stats_input"), false), input; |_ctx, input: &MotifStatsInput| {
             Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), input.aggr()))
         })?;
 
@@ -718,12 +717,12 @@ where
             MotifStatsSource::Motif(motif_loader_input) => {
                 let motif = Arc::clone(&self.motif_loader)
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(motif_loader_input, cache_area.clone())),
-                        ctx.branch(Some("motif_stats_motif_loader"), false, false),
+                        Arc::new(DevicesWrap::wrap(motif_loader_input)),
+                        ctx.branch(Some("motif_stats_motif_loader"), false),
                     )
                     .await?;
 
-                with_data!(ctx.branch(Some("motif_stats_motif_to_channels"), false, false), motif; |_ctx, motif: &thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
+                with_data!(ctx.branch(Some("motif_stats_motif_to_channels"), false), motif; |_ctx, motif: &thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
                     let motif_2d = motif.data().t_ref().shallow_clone();
                     let channels_3d = motif_2d.f_unsqueeze(0)?;
                     Ok::<_, ThoError>(Arc::new(ThoTensor::new(motif.data().id().clone(), channels_3d)?))
@@ -749,7 +748,7 @@ where
                     slices,
                     Arc::clone(&self.store),
                     Arc::clone(&self.loader),
-                    ctx.branch(Some("motif_stats_random_load_slices"), false, false),
+                    ctx.branch(Some("motif_stats_random_load_slices"), false),
                     &self.ws,
                     "motif_stats_random",
                 )
@@ -760,7 +759,7 @@ where
             MotifStatsSource::ChannelsMotifsSlices(t) => t,
         };
 
-        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsCalcInput::new(input_id.clone(), channels_motifs_slices, metrics, aggr), cache_area.clone()));
+        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsCalcInput::new(input_id.clone(), channels_motifs_slices, metrics, aggr)));
         let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
         let stats = OOMHandler::new(
             vec![
@@ -772,7 +771,7 @@ where
         .run(
             &self.clc_stats,
             clc_input,
-            ctx.branch(Some("motif_stats_sync"), false, false),
+            ctx.branch(Some("motif_stats_sync"), false),
             Contexts::new(
                 NoopInputContext(None),
                 NoopRunnableContext {},
@@ -783,7 +782,7 @@ where
 
         debug!("MotifStats::run: done input_id={input_id:?} stats.id={:?}", stats.id());
 
-        Ok(Arc::new(DevicesWrap::wrap(stats, cache_area)))
+        Ok(Arc::new(DevicesWrap::wrap(stats)))
     }
 }
 

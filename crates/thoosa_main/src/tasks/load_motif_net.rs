@@ -118,7 +118,7 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let (device_idx, cache_area) = (ctx.device_idx(), ctx.cache_area());
+        let device_idx = ctx.device_idx();
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
         let ws_guard = thoosa_shared::with_perf_log(
@@ -129,7 +129,7 @@ where
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
 
-        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(motif_id, channel, params)), cache_area.into())))
+        Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(module, MotifNetMeta::new(motif_id, channel, params)))))
     }
 }
 

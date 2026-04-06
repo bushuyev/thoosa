@@ -172,9 +172,9 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let (device_idx, cache_area) = (ctx.device_idx(), ctx.cache_area());
+        let device_idx = ctx.device_idx();
 
-        let (motifs_by, opt_config) = with_data!(ctx.branch(Some("train_motif_nets_input"), false, false), input; |_ctx, input: &TrainMotifNetInput| {
+        let (motifs_by, opt_config) = with_data!(ctx.branch(Some("train_motif_nets_input"), false), input; |_ctx, input: &TrainMotifNetInput| {
             Ok::<(MotifsBy, Arc<OptConfig>), ThoError>((input.motifs_by.clone(), input.opt_config.clone()))
         })?;
 
@@ -225,7 +225,7 @@ where
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
-            let mut ctx = ctx.branch(Some(&format!("train_motif_nets_task_{}", motif_id_rate.0)), true, false);
+            let mut ctx = ctx.branch(Some(&format!("train_motif_nets_task_{}", motif_id_rate.0)), true);
             let opt_config = Arc::clone(&opt_config);
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
             let store = Arc::clone(&self.store);
@@ -233,12 +233,12 @@ where
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = motif_loader.run(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_id])), CacheArea::default())),
-                    ctx.branch(Some("train_motif_nets_motif_loader"), false, false),
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_id])))),
+                    ctx.branch(Some("train_motif_nets_motif_loader"), false),
                 ).await?;
 
 
-                let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false, false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                     Ok::<_, ThoError>((Arc::new(motif.data().clone())/*TODO clone*/, motif.extra().window))
                 })?;
 
@@ -249,7 +249,7 @@ where
                         let motif = Arc::clone(&motif);
                         let random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
                         async move {
-                            MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, cache_area, ctx, epoch_size).await
+                            MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
                         }.boxed()
                     },
                     move |rc:&TrainMotifsNetsRunConfig, vs: &VarStore| {
@@ -284,8 +284,8 @@ where
                 ));
 
                 let result = Arc::into_inner(train_net.run(
-                    Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), CacheArea::default())),
-                    ctx.branch(Some("train_motif_net"), false, false)
+                    Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
+                    ctx.branch(Some("train_motif_net"), false)
                 ).await?).unwrap().take_data(0).await?;
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", result.min_loss);
@@ -317,7 +317,7 @@ where
         //gpt TODO!! collect_futures_with_progress drops errors; results.len() may be smaller than the number of selected motifs.
 
 
-        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results), CacheArea::default())))
+        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results))))
     }
 
 }
@@ -350,13 +350,12 @@ where
         random_slices_loader: Arc<RandomSlicesLoader<L, C>>,
         batch_size: i64,
         _device_idx: usize,
-        cache_area: u64,
         mut ctx: C,
         epoch_size: u32,
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
 
-        let ctx_for_split = ctx.branch(Some("motifs_batch_split"), false, false);
+        let ctx_for_split = ctx.branch(Some("motifs_batch_split"), false);
         with_data!(ctx_for_split, motif; |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
             let motif_meta = motif.extra().clone();
 
@@ -381,8 +380,8 @@ where
 
             Ok::<_, ThoError>(Self {
                 motif_id: motif.id().clone(),
-                train_motifs: Arc::new(DevicesWrap::wrap(train_motifs, cache_area.into())),
-                valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs, cache_area.into())),
+                train_motifs: Arc::new(DevicesWrap::wrap(train_motifs)),
+                valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs)),
                 random_slices_loader,
                 random_slices: Mutex::new(CurrentRandomSlices::default()),
                 random_slices_limit: num_motif_slices as u32,
@@ -394,10 +393,10 @@ where
     }
 
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
-        let random_slices = self.current_random_slices(ctx.branch(Some("motifs_batch_random_slices"), false, false)).await?;
+        let random_slices = self.current_random_slices(ctx.branch(Some("motifs_batch_random_slices"), false)).await?;
         let num_slices = (self.batch_size / 2) as i64;
 
-        with_data!(ctx.branch(Some("motifs_batch_make"), false, false), motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
+        with_data!(ctx.branch(Some("motifs_batch_make"), false), motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
             debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
 
             let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
@@ -431,11 +430,8 @@ where
 
         let random_slices = Arc::clone(&self.random_slices_loader)
             .run(
-                Arc::new(DevicesWrap::wrap(
-                    SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit),
-                    CacheArea::default(),
-                )),
-                ctx.branch(Some("motifs_batch_random_slices_loader"), false, false),
+                Arc::new(DevicesWrap::wrap(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit))),
+                ctx.branch(Some("motifs_batch_random_slices_loader"), false),
             )
             .await?;
 
@@ -591,10 +587,10 @@ mod tests {
             10
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10))), CacheArea::default()));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10)))));
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false, false);
+        let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false);
         let r:Arc<DevicesWrap<TrainMotifsNetsResult>> = train_motif_net.run(input, run_ctx_branch).await?;
 
         fn run_test_net(params:&MotifNetParams, vs:&VarStore)->Result<(), ThoError>{
@@ -616,7 +612,7 @@ mod tests {
             Ok(())
         }
 
-        with_data!(run_ctx.branch(Some("train_motif_nets_assert"), false, false), r; |_ctx, r:&TrainMotifsNetsResult|{
+        with_data!(run_ctx.branch(Some("train_motif_nets_assert"), false), r; |_ctx, r:&TrainMotifsNetsResult|{
 
             debug!("test_num_layers_opt: result={r:?}");
 

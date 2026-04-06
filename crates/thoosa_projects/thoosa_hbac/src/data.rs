@@ -1250,14 +1250,11 @@ mod tests {
         let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100)), 10));
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
-        let input = Arc::new(DevicesWrap::wrap(
-            TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10))),
-            CacheArea::default(),
-        ));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10)))));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
-            .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false, false))
+            .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false))
             .await?;
         let result = result.load_from_any_device_(1).await?;
 
@@ -1282,24 +1279,18 @@ mod tests {
         ).await?);
 
         let out = Arc::clone(&apply_motif_nets).run(
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::new(
-                    SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]),
-                    raw_loaded_for_apply.shallow_clone(),
-                )?,
-                CacheArea::default(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(
+                SynKey::new([mono_key!("raw_loaded_0", "raw_loaded_0")]),
+                raw_loaded_for_apply.shallow_clone(),
+            )?)),
             mock_run_ctx::default(1),
         ).await?;
 
         let out = apply_motif_nets.run(
-            Arc::new(DevicesWrap::wrap(
-                ThoTensor::new(
-                    SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]),
-                    raw_loaded_for_apply,
-                )?,
-                CacheArea::default(),
-            )),
+            Arc::new(DevicesWrap::wrap(ThoTensor::new(
+                SynKey::new([mono_key!("raw_loaded_1", "raw_loaded_1")]),
+                raw_loaded_for_apply,
+            )?)),
             mock_run_ctx::default(1),
         ).await?;
         let out = out.load_from_any_device_(1).await?;

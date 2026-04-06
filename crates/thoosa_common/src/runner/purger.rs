@@ -15,7 +15,6 @@ use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
 pub enum PurgeCmd {
     Gpu {
-        cache_area: u64,
         closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>
     },
 }
@@ -36,50 +35,25 @@ impl Purger {
         let rx_arc = Arc::new(RwLock::new(rx));
         let rx_arc_self = Arc::clone(&rx_arc);
         let worker = tokio::spawn(async move {
-            // cache is owned here
             loop {
 
                 match rx_arc.write().await.recv().await {
-                    Some(PurgeCmd::Gpu { closures, cache_area }) => {
-                        debug!("Purger::new, loop, got cmd: closures.len={}, cache_area={cache_area:064b} ", closures.len());
+                    Some(PurgeCmd::Gpu { closures }) => {
+                        debug!("Purger::new, loop, got cmd: closures.len={}", closures.len());
 
-                        // match panic_to_err_async!({
                             for purge_cl in &closures {
 
                                 match panic_to_err_async!(
                                     purge_cl()
                                 ) {
                                     Ok(_) => {
-                                        trace!("Purger::new, loop: done purging ")
+                                        trace!("Purger::new, loop: done purging")
                                     }
                                     Err(e) => {
                                         error!("Purger::new, loop:  purge failed: {e:?}")
                                     }
                                 }
                             }
-
-                        // #[cfg(any(test, feature = "mock_global_ctx"))]
-                        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-
-                        match panic_to_err!(Ok::<_, ThoError>(GlobalCtx::global().dispose_cache_area(cache_area))){
-                                Ok(_) => {
-                                    trace!("Purger::new, loop: done dispose_cache_area ")
-                                }
-                                Err(e) => {
-                                    error!("Purger::new, loop: dispose_cache_area failed: {e:?}")
-                                }
-                            };
-
-                            // Ok::<_, ThoError>(())
-                        // }){
-                        //     Ok(_) => {
-                        //         trace!("Purger::new, loop, panic_to_err_async: done purging ")
-                        //     }
-                        //     Err(e) => {
-                        //         error!("Purger::new, loop, panic_to_err_async:  purge failed: {e:?}")
-                        //     }
-                        // };
                     }
                     None => {
                         debug!("Purger::new, loop, break");
@@ -97,10 +71,10 @@ impl Purger {
         }
     }
 
-    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>, cache_area: u64) -> Result<(), ThoError>{
+    pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) -> Result<(), ThoError>{
         debug!("Purger::run_purge_gpu: closures.len={}", closures.len());
 
-        match self.tx.send(PurgeCmd::Gpu {cache_area, closures}) {
+        match self.tx.send(PurgeCmd::Gpu { closures}) {
             Ok(_) => {
                 Ok(())
             }

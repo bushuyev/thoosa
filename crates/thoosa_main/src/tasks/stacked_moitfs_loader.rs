@@ -194,14 +194,13 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.device_idx();
-        let cache_area = ctx.cache_area();
 
         let num_channels = thoosa_shared::with_perf_log(
             || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
             "StackedMotifsLoader/run/read_ws",
         )
         .channels();
-        let find_motifs_run_config = with_data!(ctx.branch(Some("stacked_motifs_input"), false, false), input; |_ctx, input: &StackedMotifsInput|{
+        let find_motifs_run_config = with_data!(ctx.branch(Some("stacked_motifs_input"), false), input; |_ctx, input: &StackedMotifsInput|{
             Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
         })?;
 
@@ -223,15 +222,14 @@ where
             .into_iter()
             .map( |motif_id| {
                 let motif_loader_clone = Arc::clone(&self.motif_loader);
-                let cache_area = cache_area.clone();
 
-                let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false, false);
+                let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false);
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone(), cache_area.into()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
 
                     match motif_loader_clone.run_cached(
-                        motif_id_wrap, ctx.branch(Some("stacked_motifs_loader_motif"), false, false)
+                        motif_id_wrap, ctx.branch(Some("stacked_motifs_loader_motif"), false)
                     ).await {
                         Ok(motif) => {
                             debug!("StackedMotifsLoader::run: find_motifs_run_id={:?} motif={motif:?}", find_motifs_run_config_id);
@@ -257,7 +255,7 @@ where
         .flatten()
         .collect::<Vec<_>>();
 
-        with_data!(ctx.branch(Some("stacked_motifs_loaded"), false, false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>]|{
+        with_data!(ctx.branch(Some("stacked_motifs_loaded"), false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>]|{
 
             let channels_motifs = data.iter().fold(
 
@@ -348,7 +346,7 @@ where
                     motifs,
                     (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])
                 ),
-            ), cache_area.into())))
+            ))))
 
         })
 
