@@ -326,7 +326,7 @@ impl DynamicTaskExecutor {
             }
         }
 
-        let result = result_rx.await?;
+        let result = result_rx.await?;//TODO if wrapped panics this fails with "channel closed"
 
         suspend_guard.resume().await?;
         result

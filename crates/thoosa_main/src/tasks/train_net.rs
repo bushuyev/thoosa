@@ -781,7 +781,7 @@ mod tests {
     use futures::stream::{self, BoxStream};
     use parking_lot::RwLock;
     use tch::nn::{AdamW, LinearConfig, OptimizerConfig, VarStore};
-    use tch::kind::FLOAT_CPU;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Tensor;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::common::MockRunCtx;
@@ -826,8 +826,8 @@ mod tests {
     }
 
     fn make_batch() -> (ThoBatch<DummyX>, ThoBatch<DummyY>) {
-        let x = Tensor::zeros([1, 1, 1], FLOAT_CPU);
-        let y = Tensor::zeros([1, 1, 1], FLOAT_CPU);
+        let x = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
+        let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
         (x.into(), y.into())
     }
 
@@ -922,7 +922,7 @@ mod tests {
                 .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream())
                 .finish(),
         );
-        let mut ctx = mock_run_ctx::default(0);
+        let mut ctx = mock_run_ctx::default(1);
 
         let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _>> = Arc::new(
             TrainNet::new(
@@ -948,7 +948,7 @@ mod tests {
             .await?;
         let _ = Arc::into_inner(output)
             .expect("train_net output still shared")
-            .take_data(0)
+            .take_data(1)
             .await?;
 
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
