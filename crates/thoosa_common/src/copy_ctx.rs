@@ -90,7 +90,7 @@ impl CopyCtx {
     pub fn instance<D:Into<ThoDevice>>(device: D) -> &'static CopyCtx {
         let device:ThoDevice = device.into();
 
-        assert_ne!(device, ThoDevice::from(Cpu));
+        assert_ne!(device, ThoDevice::from(Cpu), "CopyCtx expects cuda device");
         static INSTANCE: OnceLock<Vec<CopyCtx>> = OnceLock::new();
 
         let gpu_device_ordinal = device.gpu_ordinal();
