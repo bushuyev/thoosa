@@ -217,7 +217,11 @@ async fn collect_stream_with_progress<T, S>(
                     }
                     Err(e) => {
                         *err += 1;
-                        warn!("{descr}: {e:?}");
+                        if e.is_oom {
+                            trace!("{descr}: {e:?}");
+                        } else {
+                            warn!("{descr}: {e:?}");
+                        }
                     }
                 }
             }

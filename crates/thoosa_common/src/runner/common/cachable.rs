@@ -126,7 +126,7 @@ where
                             .and_then(|peeked| peeked.as_ref().ok())
                             .map(Arc::clone)
                     } else {
-                        warn!("Cachable::purge_gpu_cache_area: 5 key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
+                        warn!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
                         None
                     };
 
@@ -134,7 +134,7 @@ where
 
                         data.remove_cache_area(cache_area);
 
-                        debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} ", data.cache_area);
+                        debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} data.cache_area={:?} Arc::strong_count={:?}", data.cache_area, Arc::strong_count(&data));
                         if data.cache_area.assigned_count() == 0 {
                             data.dump_to_cpu(device_idx).await?;
 
@@ -153,7 +153,7 @@ where
 
         GlobalCtx::global().do_age();
 
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, tho_debug))]
         let debug_key = key.clone();
         match cache.entry(key) {
             Entry::Occupied(slot) => {
@@ -162,7 +162,7 @@ where
                 shared
                     .map(|res| {
                         if let Ok(data) = &res {
-                            #[cfg(debug_assertions)]
+                            #[cfg(any(debug_assertions, tho_debug))]
                             debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?} cache_area={cache_area:064b}");
 
                             data.add_cache_area(cache_area);
@@ -180,7 +180,7 @@ where
                 slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
 
                 fut.await.map(|v| {
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(debug_assertions, tho_debug))]
                     debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}  cache_area={cache_area:064b}");
                     v.add_cache_area(cache_area);
                     v
@@ -718,20 +718,22 @@ where
             } else {
                 // If it's locked, assume it's the current task's input. DumpToCpu only runs with
                 // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
-                warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data)
+                warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data) //if it was dumped to cpu from DumpAllToCpu and then purged
             }
 
             let is_all_on_cpu = wrap.is_all_on_cpu().await;
+            let age = GlobalCtx::global().cache_age();
             if is_all_on_cpu {
                 //may rewrite previous Some, but shouldn't be a problem
 
                 // #[cfg(any(test, feature = "mock_global_ctx"))]
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-                *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
+
+                *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(age);
             }
 
-            debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}",wrap.id);
+            debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}",wrap.id);
 
             Ok(())
         }
@@ -745,10 +747,10 @@ where
     }
 
     fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
-        let on_cpu_since = timed_parking_rw_read(&wrap.on_cpu_since, "CpuOrGpu::is_on_cpu_since on_cpu_since.read");
+        let on_cpu_since = timed_parking_rw_read(&wrap.on_cpu_since, "CpuOrGpu::is_on_cpu_before on_cpu_since.read");
         let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age ).unwrap_or(false);
 
-        debug!("DataCacheWrapper::is_on_cpu_since: self.id={:?} self.on_cpu_since={:?} r={r} cache_age={threshold_age}",wrap.id, wrap.on_cpu_since);
+        debug!("DataCacheWrapper::is_on_cpu_before: self.id={:?} self.on_cpu_since={:?} r={r} threshold_age={threshold_age}",wrap.id, wrap.on_cpu_since);
 
         r
     }

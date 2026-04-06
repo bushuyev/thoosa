@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, ByAvgEucDist, ByAvgEucDistRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethod, ComparisonMethodRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelector, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -291,16 +291,10 @@ where
     )?));
 
     let cdt_for_dir = cdt_for_dir();
-    let logfile = match File::create(
-        ws.read()
-            .log_path()
-            .join(format!("thoosa_{}.log", cdt_for_dir).to_owned()),
-    ) {
-        Ok(file) => file,
-        Err(_err) => {
-            panic!("Can't create logfile in {:?}", cli.ws_path);
-        }
-    };
+    let log_filename = ws.read()
+        .log_path()
+        .join(format!("thoosa_{}.log", cdt_for_dir).to_owned());
+
 
     let perf_path = if cli.write_perf_log_file {
         Some(
@@ -318,7 +312,7 @@ where
         cli.term_logger_extra_fields,
         cli.write_logger_level,
         cli.write_logger_extra_fields,
-        logfile,
+        log_filename,
         "info",
         perf_path,
     )?;
@@ -383,7 +377,7 @@ where
                             let park = metrics.worker_park_count(w);
                             let busy = metrics.worker_total_busy_duration(w);
 
-                            info!(
+                            debug!(
                                 "  w{w}: poll+{} park+{} busy+{:?}",
                                 poll - prev_poll[w],
                                 park - prev_park[w],
@@ -1123,7 +1117,7 @@ where
         id: None,
         step: RangeOrValue::Value(10),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 501 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 1001 }, step: Some((100, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
@@ -1147,10 +1141,19 @@ where
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
+
 fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
     SelectMotifsRunConfigRangeOrValue {
         id: None,
-        extend_config: None,
+        // extend_config: None,
+        extend_config: Some(ExtendMotifsConfigRangeOrValue{
+            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue { _path_pd: Default::default() }),
+            slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                // q: RangeOrValue::Value(0.05),
+                q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+                // q: RangeOrValue::Range { range: 0.0..0.05, step: Some((0.05, 2)) },
+            }),
+        }),
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
                 criterion: NormThicknessRunConfigRangeOrValue {
@@ -1167,18 +1170,19 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
-            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
-                criterion: PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1. / 64.),
-                    lag_min: RangeOrValue::Value(1. / 32.),
-                    lag_max: RangeOrValue::Value(0.5),
-                    struct0: RangeOrValue::Value(0.2),
-                    peak_good: RangeOrValue::Value(0.25),
-                    peak_bad: RangeOrValue::Value(0.65),
-                    eps: RangeOrValue::Value(1e-8),
-                },
-                min: RangeOrValue::Value(0.80),
-            }),
+            periodicity_acf_01: None,
+            // periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
+            //     criterion: PeriodicityAcfRunConfigRangeOrValue {
+            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
+            //         lag_min: RangeOrValue::Value(1. / 32.),
+            //         lag_max: RangeOrValue::Value(0.5),
+            //         struct0: RangeOrValue::Value(0.2),
+            //         peak_good: RangeOrValue::Value(0.25),
+            //         peak_bad: RangeOrValue::Value(0.65),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     },
+            //     min: RangeOrValue::Value(0.80),
+            // }),
         },
         avg_threshold: RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
@@ -1303,7 +1307,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
         },
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
+        find_and_select_motifs_opt_config: OptConfig::new(50, 10),
     };
 
     /////////////////////train_motifs
@@ -3071,7 +3075,7 @@ mod cli_tests {
             }
         };
 
-        info!("\n{}", format_perf_map(&PERF));
+        debug!("\n{}", format_perf_map(&PERF));
 
         global_ctx.shutdown().await;
 
