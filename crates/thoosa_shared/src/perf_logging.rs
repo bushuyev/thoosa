@@ -1,7 +1,7 @@
 use std::cmp::max;
 use std::fmt::Debug;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::LazyLock;
@@ -22,6 +22,13 @@ use tracing_subscriber::{
 use tracing_subscriber::layer::Context;
 use tracing_subscriber::registry::LookupSpan;
 use crate::ThoError;
+use file_rotate::{
+    compression::Compression,
+    suffix::AppendCount,
+    ContentLimit,
+    FileRotate,
+};
+use tracing_appender::non_blocking;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
@@ -226,13 +233,41 @@ fn init_perf_writer(
     }
 }
 
+fn make_file_layer<P:AsRef<Path>>(
+    log_path: P,
+    file_level: LevelFilter,
+) -> (
+    impl tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+    tracing_appender::non_blocking::WorkerGuard,
+) {
+    // let log_path = log_dir.into().join("app.log");
+
+    // Keep current app.log + 10 rotated files: app.log.1 .. app.log.10
+    let rotating = FileRotate::new(
+        log_path,
+        AppendCount::new(10),
+        ContentLimit::BytesSurpassed(100 * 1024 * 1024), // 100 MiB
+        Compression::None,
+        None,
+    );
+
+    let (writer, guard) = non_blocking(rotating);
+
+    let layer = fmt::layer()
+        .with_ansi(false)
+        .with_writer(writer)
+        .with_filter(EnvFilter::new(level_filter_string(file_level)));
+
+    (layer, guard)
+}
+
 /// Initialize tracing logging for stdout, log file, and perf output.
 pub fn init_tracing(
     term_level: LevelFilter,
     term_extra_fields: bool,
     file_level: LevelFilter,
     file_extra_fields: bool,
-    log_file: File,
+    log_file: PathBuf,
     perf_filter: &str,
     perf_file: Option<PathBuf>,
 ) -> Result<TracingGuards, ThoError> {
@@ -241,7 +276,6 @@ pub fn init_tracing(
     let _ = set_perf_log_level(perf_filter)?;
 
     // Local timestamp like: `2025-12-15 08:35:30`
-    // (requires tracing-subscriber chrono support for ChronoLocal)
     let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
 
     let stdout_layer = fmt::layer()
@@ -250,7 +284,15 @@ pub fn init_tracing(
         .event_format(SimplelogLikeEvent::new(timer.clone(), true, term_extra_fields))
         .with_filter(EnvFilter::new(level_filter_string(term_level)));
 
-    let (log_writer, log_guard) = tracing_appender::non_blocking(log_file);
+    let rotating = FileRotate::new(
+        log_file,
+        AppendCount::new(2),
+        ContentLimit::BytesSurpassed(1024 * 1024 * 1024), // 1 GiB
+        Compression::None,
+        None,
+    );
+
+    let (log_writer, log_guard) = tracing_appender::non_blocking(rotating);
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(log_writer)
@@ -265,7 +307,7 @@ pub fn init_tracing(
         .event_format(SimplelogLikeEvent::new(timer, false, false))
         .with_filter(FilterFn::new(perf_output_filter));
 
-    let console_layer = console_subscriber::spawn(); // :contentReference[oaicite:2]{index=2}
+    let console_layer = console_subscriber::spawn();
 
     let subscriber = registry()
         .with(console_layer)

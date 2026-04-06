@@ -1008,6 +1008,56 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_purge_cpu() -> Result<(), ThoError> {
+
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let device_idx = 0;
+
+        let loader = Arc::new(DummyLoader::new(3));
+
+        let mut ctx_device_0 = RunCtxWithPermits::new(device_idx, "noname");
+        let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false, false);
+
+        let loaded_tensor_0_0 = Arc::clone(&loader)
+            .run_cached(
+                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                    id: DLoaderInputId("resource_1"),
+                }, 0.into())),
+                ctx_device_0_0,
+            )
+            .await?;
+
+        {
+            let loaded_tensor_on_device_1 = loaded_tensor_0_0.load_from_any_device_(1).await?;
+            debug!("loaded_tensor_on_device_1={loaded_tensor_on_device_1:?}");
+        }
+
+        debug!("loaded_tensor_0_0={loaded_tensor_0_0:?} is_all_on_cpu={}", loaded_tensor_0_0.is_all_on_cpu().await);
+
+        assert!(!loaded_tensor_0_0.is_all_on_cpu().await);
+
+        DummyLoader::cache().await.purge_gpu(Some(&HashSet::new()), 1, "test").await?;
+
+        assert!(loaded_tensor_0_0.is_all_on_cpu().await);
+
+        assert_eq!(1, DummyLoader::cache().await.len());
+        let purged = DummyLoader::cache().await.purge_cpu(0).await;
+
+        assert_eq!(0, purged);
+        assert_eq!(1, DummyLoader::cache().await.len());
+
+        drop(loaded_tensor_0_0);
+
+        let purged = DummyLoader::cache().await.purge_cpu(0).await;
+
+        assert_eq!(1, purged);
+        assert_eq!(0, DummyLoader::cache().await.len());
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_mul_no_oom_dummy() -> Result<(), ThoError> {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);

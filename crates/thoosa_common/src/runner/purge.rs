@@ -52,7 +52,11 @@ where
         self.retain(|k, v| {
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
             if v.peek()
-                .and_then(|v| v.as_ref().map(|r| r.is_on_cpu_before(purge_until)).ok())
+                .and_then(|v| v.as_ref().map(|r| {
+                    let strong_count = Arc::strong_count(r);
+                    debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?} strong_count={}", Arc::strong_count(r));
+                    r.is_on_cpu_before(purge_until) && strong_count == 1
+                }).ok())
                 .unwrap_or(false)
             {
                 purged_count+=1;
@@ -81,13 +85,15 @@ where
             Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
         )> = self.iter()
             .filter(|entry| {
-                let keep = ids_to_keep
-                    .map(|set| {
-                        let kd: &dyn CachableIdTr = entry.key();
-                        !set.contains(kd)
-                    })
-                    .unwrap_or(true);
-                keep && entry.value().peek().is_some()
+                // let keep = ids_to_keep
+                //     .map(|set| {
+                //         let kd: &dyn CachableIdTr = entry.key();
+                //         !set.contains(kd)
+                //     })
+                //     .unwrap_or(true);
+                // keep &&
+                //entry.value().peek().is_some() &&
+                 entry.value().peek().as_ref().map(|v|v.is_ok()).unwrap_or(false)
             })
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
@@ -105,7 +111,13 @@ where
                             debug!("purge_gpu ok: key={key:?}");
                         }
                     }
-                    Err(e) => warn!("purge_gpu: Err key={key:?} err={e:?}"),
+                    Err(e) => {
+                        if e.is_oom() {
+                            debug!("purge_gpu: Err key={key:?} err={e:?}")
+                        } else {
+                            warn!("purge_gpu: Err key={key:?} err={e:?}")
+                        }
+                    },
                 }
                 collect_eta_record_completion(dump_eta_guard_id);
             })
