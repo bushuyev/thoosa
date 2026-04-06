@@ -29,7 +29,7 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
         name: &str,
     ) -> Result<(), ThoError>;
 
-    // #[cfg(debug_assertions)] TODO
+    #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(
         &self,
         _device_idx: usize,
@@ -39,6 +39,7 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
 
     async fn purge_cpu(&self, purge_until: u64) -> usize;
 }
+
 pub fn check_ids_to_keep<K, V>(ids_to_keep:Option<&HashSet<&dyn CachableIdTr>>, entry:&RefMulti<K, V>)->bool
 where
     K:Eq + Hash + CachableIdTr
@@ -53,7 +54,6 @@ where
         })
         .unwrap_or(true)
 }
-
 
 #[async_trait]
 impl<K, O> FuturesRunnerMapPurger

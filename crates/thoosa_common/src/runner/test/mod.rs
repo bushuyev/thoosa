@@ -1298,6 +1298,7 @@ mod tests {
         assert!(Arc::ptr_eq(&resource_0_for_ctx_0, &resource_0_for_ctx_1));
         assert!(resource_0_for_ctx_1.cache_areas().contains(cache_area_0));
         assert!(resource_0_for_ctx_1.cache_areas().contains(cache_area_1));
+        drop(resource_0_for_ctx_0);
 
         drop(ctx_0);
         tokio::time::sleep(Duration::from_millis(50)).await;
@@ -1313,7 +1314,7 @@ mod tests {
         assert!(!resource_0_for_ctx_1.cache_areas().contains(cache_area_1));
 
         assert_eq!(resource_0_for_ctx_1.cache_areas(), &CacheArea::default());
-
+        drop(resource_0_for_ctx_1);
         assert_eq!(loader_cache.len(), 1);
 
         crate::runner::global_ctx::GlobalCtx::global().purge_cpu(0).await;
