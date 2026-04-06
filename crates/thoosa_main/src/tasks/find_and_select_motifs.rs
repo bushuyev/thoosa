@@ -24,7 +24,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::RunCtx;
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -164,7 +164,7 @@ impl SavableResult for FindAndSelectMotifsResult {
 pub struct FindAndSelectMotifsStage {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
-    loader: Arc<RawTensorLoader<RunCtxWithPermits>>,
+    loader: Arc<RawTensorLoader<RunCtxImpl>>,
     run_configs: Arc<
         OptRunConfigs<
             Vec<NamedVal<FindAndSelectMotifsRunConfigFields>>,
@@ -180,7 +180,7 @@ pub struct FindAndSelectMotifsStage {
 
 impl FindAndSelectMotifsStage {
     pub fn new(
-        loader: Arc<RawTensorLoader<RunCtxWithPermits>>,
+        loader: Arc<RawTensorLoader<RunCtxImpl>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         run_configs: OptRunConfigs<
@@ -319,7 +319,7 @@ impl FindAndSelectMotifsStage {
 }
 
 impl Stage for FindAndSelectMotifsStage {
-    type Ctx = RunCtxWithPermits;
+    type Ctx = RunCtxImpl;
     type In<'a> = FindAndSelectMotifsInput;
     type Out = FindAndSelectMotifsResult;
 }

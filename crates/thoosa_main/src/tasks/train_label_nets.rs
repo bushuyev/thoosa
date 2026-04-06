@@ -27,7 +27,7 @@ use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream, preload_one};
+use thoosa_common::batches::{prefetch_next_batch_stream, preload_one, AsyncDataBatch, BatchLengths};
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
@@ -43,11 +43,11 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use rand::rng;
 use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
-use thoosa_common::runner::permits::{RunnerPerm, MAX_PERMITS};
+use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::stages_seq::ABStage;
@@ -306,16 +306,10 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
-        let cache_area = ctx.cache_area();
-
         let train_label_nets_run_configs = Arc::clone(&self.run_configs);
-        let cache_area = cache_area.clone();
-        let channels = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels() as i64,
-            "TrainLabelNets::run/ws_read_channels",
-        );
 
-        debug!("TrainLabelNets::run: channels={channels} num_nets={}", self.num_nets);
+
+        debug!("TrainLabelNets::run: num_nets={}", self.num_nets);
 
         async move {
             //gpt Split resources into train/valid sets per label for binary label-vs-rest training.
@@ -461,7 +455,7 @@ where
                     ));
 
                     let result = train_net.run(
-                        Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), cache_area.into())),
+                        Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])), ctx_for_task.cache_area().into())),
                         ctx_for_task
                     ).await?;
 
@@ -492,7 +486,7 @@ where
                 "train labels",
             ).await;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), results), cache_area.into())))
+            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), results), ctx.cache_area().into())))
         }
     }
 }
@@ -718,7 +712,7 @@ mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::PermitsCtx;
+    use thoosa_common::runner::common::MaxParallelCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_common::runner::global_ctx::GlobalCtx;

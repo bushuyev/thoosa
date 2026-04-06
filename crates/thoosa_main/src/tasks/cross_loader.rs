@@ -2,7 +2,7 @@ use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputB
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
@@ -28,14 +28,13 @@ use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::{simple_id, CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::mono_key;
@@ -411,9 +410,9 @@ where
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                 match OOMHandler::new(
                     vec![
-                        Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                            MAX_PERMITS,
-                            *PermitStep::FIFTY,
+                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                            MAX_PARALLEL,
+                            *MaxParallelStep::FIFTY,
                         ))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new("cross_unfold_clc"))),
                         Adjusters::Input(Box::new(CrossLoaderAdjuster::new())),
@@ -427,8 +426,8 @@ where
                         Contexts::new(
                             CrossSplitterContext::new(t_1_batch_resources_cloned.len() as i64, batch_1_slice_lengths),
                             NoopRunnableContext {},
-                            PermitsAndDumpToCpuAdjustableContex::new(
-                                PermitsAdjustContextImpl::new(),
+                            MaxParallelAndDumpToCpuAdjustableContex::new(
+                                MaxParallelAdjustContextImpl::new(),
                                 DumpToCpuContextImpl::new(&required_ids),
                             ),
                         ),
@@ -1219,7 +1218,7 @@ mod tests {
         CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
     };
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::RawTensorLoader;
     use crate::tasks::slices_iter::SlicesIter;
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
@@ -1392,7 +1391,7 @@ mod tests {
 
         let mut selector = CrossInputSelector::default();
 
-        let mut run_ctx = RunCtxWithPermits::new(1, "test");
+        let mut run_ctx = RunCtxImpl::new(1, "test");
         let r = input.with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_full"), false, false), selector.clone(), None, |data, ctx|{
             assert_eq!(data.tensors().len(), 4);
 
@@ -1413,7 +1412,7 @@ mod tests {
     async fn test_cross_loader_adjuster_degrades_to_slice() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
-        type AdjusterStage = mock_cross_loader_clc::MockCrossLoaderClc<TestBatchOutput, RunCtxWithPermits>;
+        type AdjusterStage = mock_cross_loader_clc::MockCrossLoaderClc<TestBatchOutput, RunCtxImpl>;
 
         let ca = CacheArea::new(1);
         let resources_0 = vec![Arc::new(Resource::new(0, 1, "r0", 4))];
@@ -1457,7 +1456,7 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 4));
 
-        let mut run_ctx = RunCtxWithPermits::new(1, "test_adjuster_slice");
+        let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_0"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
@@ -1488,7 +1487,7 @@ mod tests {
     async fn test_cross_loader_adjuster_slice_advances_resources() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
 
-        type AdjusterStage = mock_cross_loader_clc::MockCrossLoaderClc<TestBatchOutput, RunCtxWithPermits>;
+        type AdjusterStage = mock_cross_loader_clc::MockCrossLoaderClc<TestBatchOutput, RunCtxImpl>;
 
         let ca = CacheArea::new(1);
         let resources_0 = vec![Arc::new(Resource::new(0, 1, "r0", 4))];
@@ -1543,7 +1542,7 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 3));
 
-        let mut run_ctx = RunCtxWithPermits::new(1, "test_adjuster_slice_resources");
+        let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
         input
             .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_0"), false, false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
@@ -1635,7 +1634,7 @@ mod tests {
             .collect();
 
 
-        let mut ctx = RunCtxWithPermits::new(1, "test_cross_clc");
+        let mut ctx = RunCtxImpl::new(1, "test_cross_clc");
 
         let resource_stats = resource_keys
             .iter()
@@ -1661,7 +1660,7 @@ mod tests {
         let oom_triggered = Arc::new(AtomicBool::new(false));
         let oom_triggered_cloned = Arc::clone(&oom_triggered);
 
-        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
                 let i = resources_to_move
                     .iter()
@@ -1682,8 +1681,8 @@ mod tests {
         ));
 
 
-        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxWithPermits>> = Box::new(
-            move |t_0: Tensor, t_1: Tensor, _input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxWithPermits| {
+        let batch_clc_fn: Box<dyn CrossBatchFn<DistsMask, (), RunCtxImpl>> = Box::new(
+            move |t_0: Tensor, t_1: Tensor, _input: &CrossInput<Arc<Resource>>, _ctx: &(), _: &RunCtxImpl| {
 
                 if let Some(limit) = oom_limit {
                     let batch_1_len = t_1.size()[1];
@@ -1721,7 +1720,7 @@ mod tests {
                 let fixed_config = fixed_config.clone();
                 move |_resources: &[Arc<Resource>]| {
                     // Integration-style test to exercise CrossLoader + DistsTracker end-to-end.
-                    Arc::new(DistsTracker::<RunCtxWithPermits>::new(
+                    Arc::new(DistsTracker::<RunCtxImpl>::new(
                         &ws,
                         &store,
                         &run_config,

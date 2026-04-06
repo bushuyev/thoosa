@@ -340,7 +340,6 @@ impl Display for TensorIdSliceIdx {
 #[derive(Debug, Clone)]
 pub enum Cause {
     OutOfMemory,
-    OutOfPermits,
     AdjusterFailed,
     UnsupportedDegradeLevel,
     ExpectedValue,

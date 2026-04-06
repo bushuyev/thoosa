@@ -1,14 +1,13 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use async_trait::async_trait;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, PermitsCtx, RunCtx};
+use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use thoosa_shared::{mono_key, now_ms};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace, warn};
@@ -31,7 +30,7 @@ use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{opt_train, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult, CommonTrainingRunConfig};
+use thoosa_common::train_nets::{opt_train, CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -248,9 +247,9 @@ where
 
             let oom_handler = OOMHandler::new(
                 vec![
-                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                        MAX_PERMITS,
-                        *PermitStep::FIFTY,
+                    Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                        MAX_PARALLEL,
+                        *MaxParallelStep::FIFTY,
                     ))),
                     Adjusters::RunContext(Box::new(DumpToCpu::new("train_step"))),
                 ],
@@ -285,8 +284,8 @@ where
                         Contexts::new(
                             NoopInputContext(None),
                             NoopRunnableContext {},
-                            PermitsAndDumpToCpuAdjustableContex::new(
-                                PermitsAdjustContextImpl::new(),
+                            MaxParallelAndDumpToCpuAdjustableContex::new(
+                                MaxParallelAdjustContextImpl::new(),
                                 DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
                             ),
                         ),
@@ -775,13 +774,12 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
+    use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use futures_util::StreamExt;
     use futures::stream::{self, BoxStream};
-    use parking_lot::RwLock;
     use tch::nn::{AdamW, LinearConfig, OptimizerConfig, VarStore};
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::kind::FLOAT_CUDA;
     use tch::Tensor;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::common::MockRunCtx;
@@ -790,7 +788,7 @@ mod tests {
     use thoosa_common::dims::{Batch, Dims, ThoBatch};
     use thoosa_common::my_tch::{my_linear, ThoModule};
     #[allow(unused_imports)]
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, OptimizersRangeOrValue, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue};
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -799,7 +797,7 @@ mod tests {
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
-    use thoosa_common::train_nets::{AdamWRangeOrValue, Optimizers};
+    use thoosa_common::train_nets::AdamWRangeOrValue;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
 

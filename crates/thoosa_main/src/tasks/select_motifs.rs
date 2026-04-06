@@ -18,7 +18,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::OwnedRwLockWriteGuard;
 use tokio::task::{JoinHandle, JoinSet};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster, PermitsAndDumpToCpuAdjustableContex};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -51,7 +51,6 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_common::runner::permits::{PermitStep, MAX_PERMITS};
 use crate::cli::Commands::SelectMotifs;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
@@ -61,7 +60,7 @@ use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
 use crate::tasks::find_motifs::config_to_stage;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -1197,7 +1196,7 @@ where
                 ..
             } = OOMHandler::new(
                 vec![
-                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(MAX_PERMITS, *PermitStep::FIFTY))),
+                    Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                     Adjusters::RunContext(Box::new(DumpToCpu::new("clc_resources_motifs_dist"))),
                     Adjusters::Input(Box::new(SelectMotifsAdjuster::new(find_motifs_run_config.window as i64))),
                 ],
@@ -1219,7 +1218,7 @@ where
                         .await,
                     ),
                     NoopRunnableContext {},
-                    PermitsAndDumpToCpuAdjustableContex::new(PermitsAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+                    MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
                 ),
             )
             .await?;
@@ -1601,7 +1600,7 @@ pub mod tests {
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
-    use thoosa_common::runner::permits::MAX_PERMITS;
+    use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
     use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceConstraint, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioConstraint, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, Simple};
@@ -1632,7 +1631,7 @@ pub mod tests {
     use crate::tasks::motif_loader::mock_motif_loader::MockMotifLoader;
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::tasks::slices_stats::{Aggr, Metrics};
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use crate::tasks::select_motifs::{fold_dists, fold_mask, SelectMotifsInput, SelectMotifsSavableResultBuilder, SelectMotifsStage};
     use crate::tasks::slices_iter::SlicesIter;

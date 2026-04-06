@@ -9,9 +9,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use mockall_double::double;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use crate::runner::common::{DropIf, PermitsCtx, RunCtx};
+use crate::runner::common::{DropIf, MaxParallelCtx, RunCtx};
 
-use crate::runner::permits::{NumPermits, RunnerPerm};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::{with_perf_log, ThoError, LOCK_TIMEOUT};
 use tracing::error;
@@ -21,24 +20,24 @@ use crate as thoosa_common;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use thoosa_shared::mono_key;
-use crate::runner::permits::MAX_PERMITS;
+use crate::runner::adjusters::max_parallel::MaxParallel;
+use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 
 
-///was supposed to be execution-long context, now used mostly to keep permits so to avoid parallel async calls 'sharing' same permit, which may lead to deadlock, should never be passed as &mut to an async function - use RunCtx::branch instead.
+///was supposed to be execution-long context, now used mostly to keep max_parallel so to avoid parallel async calls 'sharing' same permit, which may lead to deadlock, should never be passed as &mut to an async function - use RunCtx::branch instead.
 #[derive(Named)]
-pub struct RunCtxWithPermits {
+pub struct RunCtxImpl {
     id: SynKey,
     device_idx: usize,
     cache_area: u64,
 
-    permits: Arc<Mutex<Vec<RunnerPerm>>>,
-    return_to: Option<(SynKey, Arc<Mutex<Vec<RunnerPerm>>>)>,
+    max_other_parallel: MaxParallel,
 
     purge_gpu_closures:Option<Arc<Mutex<Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>>>>,
     branches:AtomicU32//for unique branch ids, never decreased
 }
 
-impl Debug for RunCtxWithPermits {
+impl Debug for RunCtxImpl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunCtxWithPermits")
             .field("device_idx", &self.device_idx)
@@ -47,9 +46,9 @@ impl Debug for RunCtxWithPermits {
     }
 }
 
-impl Adjustable for RunCtxWithPermits {}
+impl Adjustable for RunCtxImpl {}
 
-impl WithId for RunCtxWithPermits {
+impl WithId for RunCtxImpl {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -57,7 +56,7 @@ impl WithId for RunCtxWithPermits {
     }
 }
 
-impl RunCtxWithPermits {
+impl RunCtxImpl {
     pub fn new(device_idx: usize, _id: &str,) -> Self {
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
@@ -67,7 +66,7 @@ impl RunCtxWithPermits {
 
     #[cfg(test)]
     pub fn with_cache_area_(device_idx: usize, id: SynKey, cache_area: u64) -> Self {
-        RunCtxWithPermits::with_cache_area(device_idx, id, cache_area)
+        RunCtxImpl::with_cache_area(device_idx, id, cache_area)
     }
 
     fn with_cache_area(device_idx: usize, id: SynKey, cache_area: u64) -> Self {
@@ -81,65 +80,26 @@ impl RunCtxWithPermits {
             device_idx,
             cache_area,
             purge_gpu_closures: Some(Arc::new(Mutex::new(vec![]))),
-            permits: Arc::new(Mutex::new(Vec::new())),
-            return_to: None,
+            max_other_parallel: MaxParallel::MAX,
             branches: AtomicU32::new(0)
         }
     }
-
-
-    pub fn set_return_to(&mut self, return_to: (SynKey, Arc<Mutex<Vec<RunnerPerm>>>)) {
-        self.return_to = Some(return_to);
-    }
-
 }
 
-impl PermitsCtx for RunCtxWithPermits {
+impl MaxParallelCtx for RunCtxImpl {
 
-    fn add_permit(&mut self, permit: RunnerPerm) {
-        with_perf_log(
-            || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_permit: timed out waiting for permits lock"),
-            "RunCtxWithPermits/add_permit/permits",
-        )
-        .push(permit);
+    fn set_max_other_parallel(&mut self, permit: MaxParallel) {
+        self.max_other_parallel = permit
     }
 
-    fn drop_permits(&mut self, drop_if: DropIf) {
-        let mut permits = with_perf_log(
-            || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop_permits: timed out waiting for permits lock"),
-            "RunCtxWithPermits/drop_permits/permits",
-        );
-        let acquired_permits: NumPermits = permits.iter().map(|p| p.num_permits()).sum();
-        debug!("RunCtxWithPermits: permits={permits:?} ctx.id={:?}",self.id);
-        debug!("RunCtxWithPermits: acquired_permits={acquired_permits} ctx.id={:?} drop_if={drop_if:?}",self.id);
 
-        match drop_if {
-            DropIf::Always => {
-                debug!("RunCtxWithPermits: ctx.id={:?} dropping permits", self.id);
-                permits.clear();
-            }
-            DropIf::IfNotMax => {
-                if acquired_permits < MAX_PERMITS {
-                    debug!("RunCtxWithPermits: ctx.id={:?} dropping permits", self.id);
-                    permits.clear();
-                }
-            }
-        }
-    }
-
-    fn acquired_permits(&self) -> NumPermits {
-        with_perf_log(
-            || self.permits.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::acquired_permits: timed out waiting for permits lock"),
-            "RunCtxWithPermits/acquired_permits/permits",
-        )
-        .iter()
-        .map(|p| p.num_permits())
-        .sum()
+    fn max_other_parallel(&self) -> MaxParallel {
+        self.max_other_parallel
     }
 }
 
 #[async_trait]
-impl RunCtx for RunCtxWithPermits {
+impl RunCtx for RunCtxImpl {
     fn device_idx(&self) -> usize {
         self.device_idx
     }
@@ -152,7 +112,7 @@ impl RunCtx for RunCtxWithPermits {
         &mut self,
         new_name: Option<&str>,
         with_new_cache_area: bool,
-        give_permits_back_to_parent: bool//for OOM handler to pass permits between DumpToCpu(needs MAX_PERMITS) and further cycles
+        give_permits_back_to_parent: bool//for OOM handler to pass max_parallel between DumpToCpu(needs MAX_PERMITS) and further cycles
     ) -> Self {
 
         let branches = self.branches.fetch_add(1, Ordering::SeqCst);
@@ -168,12 +128,12 @@ impl RunCtx for RunCtxWithPermits {
         debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
 
         let mut branched_ctx= if with_new_cache_area {
-            // #[cfg(any(test, feature = "mock_global_ctx"))]
-            // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+
 
             let new_cache_area = GlobalCtx::global().next_cache_area().expect("ran out of cache areas");
 
-            let mut branched_ctx = RunCtxWithPermits::with_cache_area(self.device_idx, branch_full_id, new_cache_area);
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id, new_cache_area);
 
             debug!("RunCtxWithPermits::branch: branch_name={:?}  new_cache_area={new_cache_area}", branched_ctx.id);
 
@@ -183,7 +143,7 @@ impl RunCtx for RunCtxWithPermits {
             branched_ctx
 
         } else {
-            let mut branched_ctx = RunCtxWithPermits::with_cache_area(self.device_idx, branch_full_id, self.cache_area);
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id, self.cache_area);
 
             branched_ctx.purge_gpu_closures = self.purge_gpu_closures.as_ref().map(|v| Arc::clone(v));
 
@@ -191,17 +151,13 @@ impl RunCtx for RunCtxWithPermits {
         };
 
 
-        let parent_permits = self.permits.clone(); //mem::replace(&mut self.permits, Arc::new(Mutex::new(Vec::new())));
+        let parent_permits = self.max_other_parallel.clone(); //mem::replace(&mut self.max_parallel, Arc::new(Mutex::new(Vec::new())));
 
         debug!("RunCtxWithPermits::branch: parent_permits={parent_permits:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
 
-        branched_ctx.permits = parent_permits;
+        branched_ctx.max_other_parallel = parent_permits;
 
-        if give_permits_back_to_parent {
-            debug!("RunCtxWithPermits::branch: set_return_to={:?}  from={}", self.id, branched_ctx.id);
 
-            branched_ctx.set_return_to((self.id.clone(), Arc::clone(&self.permits)));
-        }
         branched_ctx.device_idx = self.device_idx;
 
         // #[cfg(tho_debug)]
@@ -223,7 +179,7 @@ impl RunCtx for RunCtxWithPermits {
 
 }
 
-impl Drop for RunCtxWithPermits {
+impl Drop for RunCtxImpl {
     fn drop(&mut self) {
 
         if let Some(purge_gpu_closures) = self.purge_gpu_closures.take() {
@@ -256,17 +212,4 @@ impl Drop for RunCtxWithPermits {
             }
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::RunCtxWithPermits;
-    use crate::runner::common::{PermitsCtx, RunCtx};
-    use crate::runner::permits::RunnerPerm;
-    use std::sync::Arc;
-    use tokio::sync::Semaphore;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-
-    //TODO
-
 }

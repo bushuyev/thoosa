@@ -12,10 +12,8 @@ use crate::runner::common::{DropIf, RunCtx};
 use crate as thoosa_common;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-
+use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
-use crate::runner::permits::{RunnerPerm, MAX_PERMITS};
-
 #[derive(Debug)]
 pub struct DumpToCpu<A>
 where
@@ -85,39 +83,14 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
 
 
-        let (device_idx, acquired_permits)  = {
-            (adjustable.device_idx(), adjustable.acquired_permits())
-        };
+        let (device_idx)  = adjustable.device_idx();
 
-        debug!("DumpToCpu::adjust: adjustable={adjustable:?} acquired_permits={acquired_permits}");
+        debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
-        if adjustable.acquired_permits() < MAX_PERMITS {
-            // DumpToCpu is special: only dump when we hold MAX_PERMITS to avoid
-            // dumping tensors still in use by other tasks.
-            let requested_permits = MAX_PERMITS - adjustable.acquired_permits();
+        adjustable.set_max_other_parallel(0);
 
-            adjustable.add_permit(RunnerPerm::dummy(requested_permits));
-
-            // match super::acquire_many_waiting_once(
-            //     adjustable.device_idx(),
-            //     requested_permits,
-            //     Arc::new(adjustable.id().clone()) as Arc<dyn CachableIdTr>,
-            // ).await {
-            //     Ok(permits) => {
-            //         debug!("DumpToCpu::adjust: acquired {permits:?} adjustable.id={:?}", adjustable.id());
-            //         adjustable.add_permit(permits);
-            //     }
-            //     Err(e) => {
-            //         debug!("DumpToCpu::adjust: can't acquire {requested_permits} permits, adjustable.id={:?} retry_count={} got {e:?}  ", adjustable.id(), adjust_context.dump_to_cpu_retry_count_mut());
-            //         adjustable.drop_permits(DropIf::Always);
-            //
-            //         return Err(AdjusterError::AdjustFailed(adjustable));
-            //     }
-            // }
-        }
-        //
         let ids_to_exclude = adjust_context.ids_to_exclude();
-        debug!("DumpToCpu::adjust: acquired 100 permits, dumping");
+        debug!("DumpToCpu::adjust: acquired 100 max_parallel, dumping");
 
         #[cfg(tho_debug)]
         GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu").await;

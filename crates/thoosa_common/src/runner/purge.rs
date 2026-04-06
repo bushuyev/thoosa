@@ -135,6 +135,7 @@ where
         Ok(())
     }
 
+    #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
             .iter()

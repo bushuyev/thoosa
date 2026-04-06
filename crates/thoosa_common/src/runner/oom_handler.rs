@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
-use crate::runner::common::{PermitsCtx, RunCtx};
+use crate::runner::common::{MaxParallelCtx, RunCtx};
 use crate::runner::common::cachable::{ConsumeData, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::common::{DropIf, OutId};
@@ -20,7 +20,7 @@ use std::sync::Arc;
 use thoosa_shared::{os_thread_id, panic_to_err_async, CopyToDevice};
 use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{Cause, ThoError};
-use crate::runner::permits::MAX_PERMITS;
+use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -295,9 +295,9 @@ where
             run_context,
             contexts,
             |task, input, selector, device_idx, run_ctx, job_id_to_rerun| async move {
-                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.acquired_permits());
+                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+                oom_executor(device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     if let Some(selector) = selector {
                         input
                             .with_selected_data_ref_send(
@@ -343,9 +343,9 @@ where
             run_context,
             contexts,
             |task: Arc<R>, input: Arc<R::In<'z>>, selector: Option<S>, device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
-                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.acquired_permits());
+                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                oom_executor(device_idx).submit((MAX_PERMITS - run_ctx.acquired_permits()).into(), async move {
+                oom_executor(device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     let input = match selector {
                         Some(selector) => input.as_ref().subview(selector)?,
                         None => input.as_ref().clone(),
@@ -542,7 +542,7 @@ where
 
     let out_key = format!("stage_id={task:?} input_id={:?}", input.id());
 
-    debug!("OOMHandler::run: 1. ctx_id={ctx_id:?} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.acquired_permits());
+    debug!("OOMHandler::run: 1. ctx_id={ctx_id:?} task={task:?} os_thread_id={} acquired_permits={:?}", os_thread_id(), run_context.max_other_parallel());
 
     let mut i = 0;
 
@@ -692,7 +692,7 @@ where
                             return Err(te);
                         }
 
-                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}", os_thread_id(), run_context.acquired_permits());
+                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={task:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}", os_thread_id(), run_context.max_other_parallel());
 
                         let run_result = panic_to_err_async!({
                             runner(
@@ -715,7 +715,6 @@ where
 
                                 if all_done {
                                     collect_eta_record_oom_success();
-                                    run_context.drop_permits(DropIf::Always);
 
                                     debug!("done in {i} steps");
                                     return contexts.input.build_final_output().await;
@@ -725,7 +724,6 @@ where
                                 exclusive_job.update_from_error(&te);
                                 debug!("OOMHandler::run, error: err te={te:?}");
 
-                                run_context.drop_permits(DropIf::IfNotMax);
 
                                 if is_retryable_oom(&te) {
                                     pref_oom_count();
@@ -1240,9 +1238,8 @@ mod tests {
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(4)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
         let oom_handler = OOMHandler::new(
@@ -1294,9 +1291,8 @@ mod tests {
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(4)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
         let out: TestOutput = oom_handler
@@ -1335,9 +1331,8 @@ mod tests {
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(4)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
         let out = oom_handler
@@ -1377,9 +1372,8 @@ mod tests {
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(1)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
         let out = oom_handler
@@ -1448,9 +1442,8 @@ mod tests {
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(4)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
         let out = oom_handler
@@ -1493,16 +1486,14 @@ mod tests {
         let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(4)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
         let ctx_mock_2 = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
-            .with_acquired_permits(1)
+            .with_max_other_parallel(1)
             .with_branch(4)
-            .with_drop_permits(vec![DropIf::IfNotMax])
             .finish();
 
         let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);

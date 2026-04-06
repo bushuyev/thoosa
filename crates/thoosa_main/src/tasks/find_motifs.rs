@@ -4,7 +4,7 @@ use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -473,9 +473,9 @@ mod tests {
     use crate::cli::{import_resources, run_grid};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs::FindMotifsStage;
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, MaxParallelCtx, RunCtx};
     use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::runnable::{AsyncStage, Stage};

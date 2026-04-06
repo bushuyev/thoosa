@@ -13,15 +13,13 @@ mod tests {
 
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use crate::runner::common::{OutId, PermitsCtx, RunCtx};
+    use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
     use crate as thoosa_common;
     #[double]
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use crate::runner::oom_handler::{
         Adjusters, Contexts, NoopRunnableContext, OOMHandler,
     };
-    use crate::runner::permits::{PermitStep, MAX_PERMITS};
-
     use crate::tho_tensor::ThoTensor;
     use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select};
     use thoosa_named_derive::Named;
@@ -38,14 +36,15 @@ mod tests {
     use thoosa_shared::traits::{CachableIdTr, Metrics, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::copy_mode::CpuOnly;
-    use crate::runner::adjusters::permits::{PermitsAdjustContextImpl, PermitsAdjuster};
+    use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MAX_PARALLEL};
     use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::runner::test_utils::parse_numeric_part;
     use thoosa_with_data::with_data;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use crate::runner::run_ctx_2::RunCtxWithPermits;
+    use crate::runner::run_ctx_2::RunCtxImpl;
 
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::test::FailUntil;
 
     #[ctor::ctor]
     fn init() {
@@ -284,7 +283,7 @@ mod tests {
     impl Stage for ABLoader {
         type In<'a> = FileInput;
         type Out = ThoTensor<ABData, SimpleId>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -391,7 +390,7 @@ mod tests {
     impl Stage for BatchBuilder {
         type In<'a> = FileListInput;
         type Out = ThoTensor<ABData, SimpleId>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -621,7 +620,7 @@ mod tests {
     impl Stage for Classifier {
         type In<'a> = ThoTensor<ABData, SimpleId>;
         type Out = ThoTensor<ClsOut, SimpleId>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     impl SyncStage for Classifier {
@@ -642,7 +641,7 @@ mod tests {
                             debug!("t.size()={:?}", t.size());
                         // Simulate OOM conditions based on batch size t.size()[0]
                         for fail_until in fails {
-                            use crate::runner::test::FailUntil::{DumpedToCpu, MemLimit, MinPermits, Never};
+                            use crate::runner::test::FailUntil::{DumpedToCpu, MemLimit, NaxParallel, Never};
                             match fail_until {
                                 MemLimit(m) => {
                                     if t.size()[0] > *m as i64 {
@@ -650,13 +649,12 @@ mod tests {
                                         return Err(Cause::OutOfMemory.into());
                                     }
                                 }
-                                MinPermits(min_permits) => {
-                                    let acquired_permits = ctx.acquired_permits();
-                                    if acquired_permits < *min_permits {
-                                        debug!("Err(MyError::OutOfMemory) MinPermits: acquired_permits={acquired_permits} ctx.id={:?}", ctx.id());
+                                FailUntil::NaxParallel(max_other_parallel_threshold) => {
+                                    let max_other_parallel = ctx.max_other_parallel();
+                                    debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
+
+                                    if max_other_parallel > *max_other_parallel_threshold {
                                         return Err(Cause::OutOfMemory.into());
-                                    } else {
-                                        debug!("Err(MyError::OutOfMemory) MinPermits: ok, acquired_permits={acquired_permits}");
                                     }
                                 }
                                 DumpedToCpu => {
@@ -808,7 +806,7 @@ mod tests {
     impl Stage for JoinAndClassifyTask {
         type In<'a> = FileListInput;
         type Out = ThoTensor<ClsOut, SimpleId>;
-        type Ctx = RunCtxWithPermits;
+        type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
@@ -833,7 +831,7 @@ mod tests {
             let out_id = self.clf.out_id(batched.id());
             let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
-            // Acquire permits as needed using OOMHandler with Permits and Splits adjusters
+            // Acquire max_parallel as needed using OOMHandler with Permits and Splits adjusters
             let size = *batched.size();
             let min_split_len = ABMetrics {
                 dim_0: 32,
@@ -849,9 +847,9 @@ mod tests {
             let parmits_key = Arc::new(ctx.id().clone());
             let result = OOMHandler::new(
                 vec![
-                    Adjusters::RunContext(Box::new(PermitsAdjuster::new(
-                        MAX_PERMITS,
-                        *PermitStep::TEN,
+                    Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                        MAX_PARALLEL,
+                        *MaxParallelStep::TEN,
                     ))),
                     Adjusters::Input(Box::new(
                         SplitsAdjuster::<ABRange, ABMetrics>::new(min_split_len),
@@ -875,7 +873,7 @@ mod tests {
                         )?,
                     ),
                     NoopRunnableContext {},
-                    PermitsAdjustContextImpl::new(),
+                    MaxParallelAdjustContextImpl::new(),
                 ),
             )
             .await?;
@@ -902,7 +900,7 @@ mod tests {
         }
         let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let mut ctx = RunCtxWithPermits::new(1, "test");
+        let mut ctx = RunCtxImpl::new(1, "test");
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -953,7 +951,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
         let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-        let ctx = Arc::new(RwLock::new(RunCtxWithPermits::new(0, "test")));
+        let ctx = Arc::new(RwLock::new(RunCtxImpl::new(0, "test")));
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
@@ -1001,14 +999,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_classifier_oom_permits_escalates() -> Result<(), ThoError> {
+    async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cpu.so").expect("no libtorch_cpu.so");
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
         let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-        let mut ctx = RunCtxWithPermits::new(1, "test");
+        let mut ctx = RunCtxImpl::new(1, "test");
 
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
@@ -1019,7 +1017,7 @@ mod tests {
             50,
             0.1,
             vec![
-                crate::runner::test::FailUntil::MinPermits(MAX_PERMITS),
+                crate::runner::test::FailUntil::NaxParallel(MAX_PARALLEL),
                 crate::runner::test::FailUntil::MemLimit(128),
             ],
         ));

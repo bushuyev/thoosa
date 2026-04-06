@@ -6,7 +6,7 @@ use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
 use async_trait::async_trait;
@@ -403,7 +403,7 @@ where
     });
 
 
-    let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+    let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
         move |key, _| {
             ThoTensor::new(
                 SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
@@ -417,7 +417,7 @@ where
         ThoDevice::from(Device::Cpu),//it's always cpu
     ));
 
-    let mut root_ctx = RunCtxWithPermits::new(1, "root_ctx");
+    let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
     match &cli.command {
         Some(ImportResources(import_resources_params)) => {
@@ -511,7 +511,7 @@ where
                 true,
                 |run_configs| async {
 
-                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
+                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                         &ws,
                         &store,
                         loader,
@@ -548,7 +548,7 @@ where
                 &store,
                 async |run_configs| {
 
-                    Ok(Arc::new(TrainMotifNets::<_, RunCtxWithPermits>::new(
+                    Ok(Arc::new(TrainMotifNets::<_, RunCtxImpl>::new(
                         loader,
                         &ws,
                         &store,
@@ -738,8 +738,8 @@ where
 async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    loader: &Arc<RawTensorLoader<RunCtxWithPermits>>,
-    mut root_ctx: RunCtxWithPermits,
+    loader: &Arc<RawTensorLoader<RunCtxImpl>>,
+    mut root_ctx: RunCtxImpl,
     run_all_args: &RunAllArgs,
     all_config:AllConfigs
 ) -> Result<(), ThoError> {
@@ -842,7 +842,7 @@ async fn run_all(
                     &store,
                     true,
                     async |run_configs| {
-                        Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxWithPermits>, MotifLoader<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>, RunCtxWithPermits>::new(
+                        Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                             &ws,
                             &store,
                             Arc::clone(&loader),
@@ -933,7 +933,7 @@ async fn run_all(
         &ws,
         &store,
         async |run_configs| {
-            Ok(Arc::new(TrainMotifNets::<_, RunCtxWithPermits>::new(
+            Ok(Arc::new(TrainMotifNets::<_, RunCtxImpl>::new(
                 Arc::clone(&loader),
                 &ws,
                 &store,
@@ -1920,7 +1920,7 @@ where
                 if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
-                MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
+                MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 32 == 0 {
@@ -1990,7 +1990,7 @@ where
                 if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
-                MotifLoader::<RawTensorLoader<RunCtxWithPermits>, RunCtxWithPermits>::cache().await.clear();
+                MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 32 == 0 {
@@ -2586,13 +2586,13 @@ mod cli_tests {
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, PermitsCtx, RunCtx};
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, MaxParallelCtx, RunCtx};
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::run_ctx_2::RunCtxWithPermits;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
@@ -3028,7 +3028,7 @@ mod cli_tests {
 
         let resources = store.list_resources_by_ids(&imported_ids).await?;
 
-        let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+        let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
             move |key, _| {
                 let tensor = Tensor::load(tensors_path.join(format!("{}.pt", key.file_stem())))?;
                 debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
@@ -3037,7 +3037,7 @@ mod cli_tests {
             ThoDevice::from(Device::Cpu),
         ));
 
-        let mut ctx = RunCtxWithPermits::new(1, "test_run_all");
+        let mut ctx = RunCtxImpl::new(1, "test_run_all");
         // ctx.add_permit(global_ctx.acquire_many(0, 1, Arc::new(SynKey::new([mono_key!("test", "test")]))).await?);
 
 

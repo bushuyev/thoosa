@@ -289,7 +289,7 @@ impl DynamicTaskExecutor {
 
             let result = if is_oom && max_other_parallel == 0 {
                 exclusive_job_id.replace(job_id);
-                result.map_err(|e| ThoError::new_with_error("todo", Cause::JobError { job_id, inner: Box::new(e.clone()) }))
+                result.map_err(|e| ThoError::new_with_error(e.msg.clone(), Cause::JobError { job_id, inner: Box::new(e.clone()) }))
             } else {
                 if rerun_job_id == Some(job_id) && exclusive_job_id.as_ref() == Some(&job_id) {
                     exclusive_job_id.take();
