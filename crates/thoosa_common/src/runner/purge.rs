@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
+use dashmap::mapref::multiple::RefMulti;
 use mockall::Any;
 use thoosa_shared::CopyToDevice;
 use thoosa_shared::ThoError;
@@ -38,6 +39,21 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
 
     async fn purge_cpu(&self, purge_until: u64) -> usize;
 }
+pub fn check_ids_to_keep<K, V>(ids_to_keep:Option<&HashSet<&dyn CachableIdTr>>, entry:&RefMulti<K, V>)->bool
+where
+    K:Eq + Hash + CachableIdTr
+{
+    ids_to_keep
+        .map(|set| {
+            if set.is_empty() {
+                return true;
+            }
+            let kd: &dyn CachableIdTr = entry.key();
+            !set.contains(kd)
+        })
+        .unwrap_or(true)
+}
+
 
 #[async_trait]
 impl<K, O> FuturesRunnerMapPurger
@@ -78,22 +94,15 @@ where
     ) -> Result<(), ThoError> {
         debug!("FuturesRunnerMapPurger::purge_gpu: ids_to_keep={ids_to_keep:?}");
 
-        // let iter_mut = self.iter_mut();
 
         let items: Vec<(
             K,
             Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
         )> = self.iter()
             .filter(|entry| {
-                // let keep = ids_to_keep
-                //     .map(|set| {
-                //         let kd: &dyn CachableIdTr = entry.key();
-                //         !set.contains(kd)
-                //     })
-                //     .unwrap_or(true);
-                // keep &&
-                //entry.value().peek().is_some() &&
-                 entry.value().peek().as_ref().map(|v|v.is_ok()).unwrap_or(false)
+                check_ids_to_keep(ids_to_keep, entry)
+                && entry.value().peek().is_some()
+                && entry.value().peek().as_ref().map(|v|v.is_ok()).unwrap_or(false)
             })
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();
