@@ -28,7 +28,6 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
-use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{opt_train, CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigResult};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
@@ -229,8 +228,6 @@ where
             x_f,
             self.loss_fn,
         ));
-        let train_step_stream = Arc::new(StreamStage::new(Arc::clone(&train_step)));
-
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
@@ -278,7 +275,7 @@ where
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
 
                     oom_handler.run(
-                        &train_step_stream,
+                        &train_step,
                         Arc::clone(&input),
                         ctx.branch(Some("train_step"), false),
                         Contexts::new(
