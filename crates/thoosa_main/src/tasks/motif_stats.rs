@@ -12,7 +12,6 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifCriterion, MotifCriterionConstraint, SelectMotifsRunConfig};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_trapezoid_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01_frac};
 use thoosa_named_derive::Named;
@@ -604,7 +603,7 @@ where
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pub motif_loader: Arc<ML>,
-    clc_stats: Arc<StreamStage<MotifStatsSyncStage<C>>>,
+    clc_stats: Arc<MotifStatsSyncStage<C>>,
     _ctx: PhantomData<C>,
 }
 
@@ -637,7 +636,7 @@ where
             loader,
             ws,
             motif_loader,
-            clc_stats: Arc::new(StreamStage::new(Arc::new(MotifStatsSyncStage::default()))),
+            clc_stats: Arc::new(MotifStatsSyncStage::default()),
             _ctx: PhantomData,
         }
     }
@@ -669,7 +668,7 @@ where
             loader,
             ws,
             motif_loader,
-            clc_stats: Arc::new(StreamStage::new(Arc::new(MotifStatsSyncStage::with_criteria(criteria_constraints, min_slices, max_slices, select_motifs_run_id)))),
+            clc_stats: Arc::new(MotifStatsSyncStage::with_criteria(criteria_constraints, min_slices, max_slices, select_motifs_run_id)),
             _ctx: PhantomData,
         }
     }

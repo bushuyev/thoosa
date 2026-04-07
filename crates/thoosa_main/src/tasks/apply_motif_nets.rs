@@ -22,7 +22,6 @@ use thoosa_common::debug_plot;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
-use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
@@ -71,7 +70,7 @@ where
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
     pd:PhantomData<C>,
-    apply_motif_nets: Vec<Arc<StreamStage<ApplyMotifNet<C>>>>,
+    apply_motif_nets: Vec<Arc<ApplyMotifNet<C>>>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
 }
@@ -199,23 +198,6 @@ where
 
     async fn build_final_output(self) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
         ThoTensor::new(self.output_id, self.output)
-    }
-}
-
-impl<'a, C> InputContext<'a, StreamStage<ApplyMotifNet<C>>> for ApplyMotifNetSplitsContext
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
-        <Self as InputContext<'a, ApplyMotifNet<C>>>::add_partial_output(self, partial).await
-    }
-
-    fn all_done(&self) -> bool {
-        <Self as InputContext<'a, ApplyMotifNet<C>>>::all_done(self)
-    }
-
-    async fn build_final_output(self) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
-        <Self as InputContext<'a, ApplyMotifNet<C>>>::build_final_output(self).await
     }
 }
 
@@ -391,7 +373,7 @@ where
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|(motif_id, net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(StreamStage::new(Arc::new(ApplyMotifNet::new(
+                .map(|(motif_id, net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(ApplyMotifNet::new(
                     motif_id,
                     net,
                     motif_width,
@@ -400,7 +382,7 @@ where
                     slice_step,//TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
                     fail_if_size_bigger_than
-                ))))).collect(),
+                ))).collect(),
             slice_step,
             motif_width
         })
@@ -1033,7 +1015,7 @@ where
     C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.motif_id + input_id
+        &self.motif_id + input_id//it's assumed that there can be only one net for a motif
     }
 }
 
@@ -1324,7 +1306,7 @@ pub(crate) mod tests {
         let train_motifs_run_id:RunId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
         let motif_0_1_id = 1; //channel 0 motif 1
-        let motif_1_0_id = 0; //channel 1 motif 0
+        let motif_1_0_id = 2; //channel 1 motif 0
 
         let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
         let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
