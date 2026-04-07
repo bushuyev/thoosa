@@ -27,7 +27,6 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, MaxSlices, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
-use thoosa_common::stream_stage::StreamStage;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
@@ -58,8 +57,8 @@ use crate::tasks::random_slices_stats::{RandomStats, RandomStatsInput};
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
 pub type CrossUnfoldMaskFn<C> = Box<dyn CrossBatchFn<DistsMask, MasksCtx, C> + 'static>;
-type CrossUnfoldMaskStage<C> = StreamStage<CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>>;
-type DistsTrackerStage<C> = StreamStage<DistsTracker<C>>;
+type CrossUnfoldMaskStage<C> = CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>;
+type DistsTrackerStage<C> = DistsTracker<C>;
 
 
 //TODO remove - use cross_loader directly?
@@ -238,7 +237,7 @@ where
                     };
                     let radius = run_config.step() as u64 * 2;
 
-                    let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(StreamStage::new(Arc::new(CrossUnfoldClc::new(
+                    let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
                         Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
                             let device_idx = ctx.device_idx();
                             let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
@@ -308,11 +307,11 @@ where
                         }),
                         masks_ctx,
                         UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
-                    ))));
+                    ));
 
                     let configured_loader = config_to_stage(&loader, &run_config, ws)?;
                     let run_config_clone = run_config.clone();
-                    let step = cross_unfold_clc.as_ref().as_ref().unfold_params.step();
+                    let step = cross_unfold_clc.as_ref().unfold_params.step();
 
                     let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
                     FindMotifsStages::new(
@@ -329,7 +328,7 @@ where
                                 let fixed_config = fixed_config.clone();
                                 move |resources: &[Arc<Resource>]| {
                                     debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
-                                    Arc::new(StreamStage::new(Arc::new(DistsTracker::<C>::new(
+                                    Arc::new(DistsTracker::<C>::new(
                                         &ws,
                                         &store,
                                         &run_config,
@@ -340,7 +339,7 @@ where
                                                 MaxSlices::Abs(max_slices_ab) => max_slices_ab.count
                                             }
                                         }),
-                                    ))))
+                                    ))
                                 }
                             },
                             fixed_config.max_chunk_size as usize,
