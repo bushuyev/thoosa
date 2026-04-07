@@ -1076,15 +1076,45 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
 }
 
 
-fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F>(median_window: F) -> FindMotifsRunConfigRangeOrValue<P>
+fn dyn_step<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &P) -> RangeOrValue<u32> {
+    match named_vals.iter().find(|field| field.path() == window_path) {
+        None => RangeOrValue::Value(10),
+        Some(value) => {
+            let window = value.val().to_i64(0) as u32;
+            // info!("Window: window={window}");
+
+            if window <= 10 {
+                RangeOrValue::Value(5)
+            } else if window <= 500 {
+                RangeOrValue::Value(10)
+            } else {
+                RangeOrValue::Value(20)
+            }
+        }
+    }
+}
+
+fn dyn_step_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>]) -> RangeOrValue<u32> {
+    dyn_step(
+        named_vals,
+        &FindAndSelectMotifsRunConfigFields::FindMotifsRunConfig(FindMotifsRunConfigFields::Window),
+    )
+}
+
+
+
+fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F, F1>(median_window: F, dyn_step:F1) -> FindMotifsRunConfigRangeOrValue<P>
 where
     F: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
+    F1: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
 {
+
     FindMotifsRunConfigRangeOrValue {
         id: None,
         step: RangeOrValue::Value(10),
+        // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 1001 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 1011 }, step: Some((100, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
@@ -1126,7 +1156,7 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 criterion: NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
                 },
-                min: RangeOrValue::Value(0.75),
+                min: RangeOrValue::Value(0.8),
             }),
             inlier_ratioRunConfig: None,
             coherenceRunConfig: None,
@@ -1180,18 +1210,19 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
-            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
-                criterion: PeriodicityAcfRunConfigRangeOrValue {
-                    struct_lag_max: RangeOrValue::Value(1. / 64.),
-                    lag_min: RangeOrValue::Value(1. / 32.),
-                    lag_max: RangeOrValue::Value(0.5),
-                    struct0: RangeOrValue::Value(0.2),
-                    peak_good: RangeOrValue::Value(0.25),
-                    peak_bad: RangeOrValue::Value(0.65),
-                    eps: RangeOrValue::Value(1e-8),
-                },
-                min: RangeOrValue::Value(0.80),
-            }),
+            periodicity_acf_01: None,
+            // periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
+            //     criterion: PeriodicityAcfRunConfigRangeOrValue {
+            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
+            //         lag_min: RangeOrValue::Value(1. / 32.),
+            //         lag_max: RangeOrValue::Value(0.5),
+            //         struct0: RangeOrValue::Value(0.2),
+            //         peak_good: RangeOrValue::Value(0.25),
+            //         peak_bad: RangeOrValue::Value(0.65),
+            //         eps: RangeOrValue::Value(1e-8),
+            //     },
+            //     min: RangeOrValue::Value(0.80),
+            // }),
         },
         avg_threshold: RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
@@ -1270,7 +1301,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_and_select =  FindAndSelect::WithOpt {
         find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
             id: None,
-            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _>(median_window_from_find_and_select),
+            find_motifs_run_config: run_all_find_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields, _, _>(median_window_from_find_and_select, dyn_step_find_and_select),
             select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
         },
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
@@ -1387,7 +1418,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
-        train_motifs_opt_config: Arc::new(OptConfig::new(50, 3)),
+        train_motifs_opt_config: Arc::new(OptConfig::new(50, 10)),
         train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
         train_final_opt_config: Arc::new(OptConfig::new(30, 10))
     }
@@ -1957,7 +1988,7 @@ where
                 if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
-                MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
+                //MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 32 == 0 {
