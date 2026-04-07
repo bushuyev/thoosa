@@ -21,6 +21,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
+use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::val::Val;
 use thoosa_shared::ThoError;
 use thoosa_store::{RunConfigEntry, RunConfigFilter, RunMotifEntry, SqlStore, Store};
@@ -1382,6 +1383,14 @@ impl App {
             }
             None => {
                 lines.push("last update: <none>".to_string());
+            }
+        }
+        match self.progress_state.device_stats {
+            Some(device_stats) => {
+                lines.extend(format_progress_device_stats(device_stats));
+            }
+            None => {
+                lines.push("gpu stats: <unavailable>".to_string());
             }
         }
         lines.push(String::new());
@@ -3133,6 +3142,37 @@ fn run_config_type_supports_inline_motif_rows(run_config_type: &str) -> bool {
     matches!(run_config_type, "find_motifs" | "FindMotifsRunConfig")
 }
 
+fn format_progress_device_stats(device_stats: ThoDeviceStats) -> Vec<String> {
+    vec![
+        format!("gpu allocated: {}", format_progress_bytes(device_stats.allocated)),
+        format!("gpu active: {}", format_progress_bytes(device_stats.active)),
+        format!("gpu reserved: {}", format_progress_bytes(device_stats.reserved)),
+        format!("gpu requested: {}", format_progress_bytes(device_stats.requested)),
+        format!("gpu non-releasable: {}", format_progress_bytes(device_stats.non_releasable)),
+        format!("gpu reusable cached: {}", format_progress_bytes(device_stats.reusable_cached())),
+        format!("gpu pending free: {}", format_progress_bytes(device_stats.pending_free())),
+        format!("gpu rounding overhead: {}", format_progress_bytes(device_stats.rounding_overhead())),
+    ]
+}
+
+fn format_progress_bytes(bytes: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+
+    let sign = if bytes < 0 { "-" } else { "" };
+    let mut value = bytes.unsigned_abs() as f64;
+    let mut unit_idx = 0usize;
+    while value >= 1024.0 && unit_idx + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit_idx += 1;
+    }
+
+    if unit_idx == 0 {
+        format!("{sign}{} {}", value as u64, UNITS[unit_idx])
+    } else {
+        format!("{sign}{value:.1} {}", UNITS[unit_idx])
+    }
+}
+
 fn format_progress_uptime(started_at_unix_ms: u64) -> String {
     if started_at_unix_ms == 0 {
         return "<unknown>".to_string();
@@ -4230,6 +4270,32 @@ mod tests {
         assert_eq!(app.main_list_offset, 8);
     }
 
+    #[test]
+    fn test_progress_lines_include_device_stats() {
+        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.progress_state = CollectEtaProgressState {
+            invocations: vec![],
+            started_at_unix_ms: 123,
+            oom_all_failed: 2,
+            oom_success: 1,
+            device_stats: Some(ThoDeviceStats {
+                allocated: 2048,
+                active: 3072,
+                reserved: 4096,
+                requested: 1536,
+                non_releasable: 512,
+            }),
+        };
+
+        let lines = app.progress_lines();
+
+        assert!(lines.iter().any(|line| line == "gpu allocated: 2.0 KiB"));
+        assert!(lines.iter().any(|line| line == "gpu reusable cached: 1.0 KiB"));
+        assert!(lines.iter().any(|line| line == "gpu pending free: 1.0 KiB"));
+        assert!(lines.iter().any(|line| line == "gpu rounding overhead: 512 B"));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_progress_client_receives_snapshot() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         static NEXT_TEST_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
@@ -4249,6 +4315,13 @@ mod tests {
                 started_at_unix_ms: 123,
                 oom_all_failed: 2,
                 oom_success: 0,
+                device_stats: Some(ThoDeviceStats {
+                    allocated: 1024,
+                    active: 2048,
+                    reserved: 4096,
+                    requested: 512,
+                    non_releasable: 256,
+                }),
             };
             let mut writer = &stream;
             let mut bytes = serde_json::to_vec(&snapshot)?;
@@ -4284,6 +4357,13 @@ mod tests {
                 started_at_unix_ms: 123,
                 oom_all_failed: 2,
                 oom_success: 0,
+                device_stats: Some(ThoDeviceStats {
+                    allocated: 1024,
+                    active: 2048,
+                    reserved: 4096,
+                    requested: 512,
+                    non_releasable: 256,
+                }),
             })
         );
 

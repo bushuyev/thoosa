@@ -177,7 +177,7 @@ impl GlobalCtx {
             }
         }
 
-        info!("GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem}");
+        info!("GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}", thoosa_shims::device_stats::get_device_stats((device_idx-1) as i32));
     }
 
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
@@ -202,7 +202,7 @@ impl GlobalCtx {
                 .iter()
                 .map(|(type_name, map)| (*type_name, *map)).collect()
         };
-        
+
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
         for (type_name, map) in maps.iter() {

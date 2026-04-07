@@ -59,6 +59,7 @@ pub mod perf_logging;
 pub mod copy_mode;
 pub mod comp_id;
 pub mod collect_futures_eta;
+pub mod device_stats;
 pub mod math;
 
 struct GroupSlicesBuilder<T> {
