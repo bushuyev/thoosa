@@ -13,7 +13,7 @@ torch-sys.workspace = true
 
 cmake = "0.1"
 log.workspace = true
-
+ctor.workspace = true
 
 [build-dependencies]
 cmake = "0.1"

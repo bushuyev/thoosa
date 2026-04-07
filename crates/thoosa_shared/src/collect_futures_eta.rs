@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+use crate::device_stats::ThoDeviceStats;
 use crate::{with_perf_log, LOCK_TIMEOUT};
 
 pub(crate) const COLLECT_ETA_LOG_INTERVAL: Duration = Duration::from_secs(10);
@@ -110,6 +111,7 @@ struct CollectEtaState {
     historical_completed: u64,
     oom_all_failed: u64,
     oom_success: u64,
+    device_stats: Option<ThoDeviceStats>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,6 +120,8 @@ pub struct CollectEtaProgressState {
     pub started_at_unix_ms: u64,
     pub oom_all_failed: u64,
     pub oom_success: u64,
+    #[serde(default)]
+    pub device_stats: Option<ThoDeviceStats>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,6 +162,7 @@ impl CollectEtaTracker {
             started_at_unix_ms,
             oom_all_failed: 0,
             oom_success: 0,
+            device_stats: None,
         });
         Self {
             next_id: AtomicU64::new(1),
@@ -262,6 +267,19 @@ impl CollectEtaTracker {
     }
 
 
+    fn set_device_stats(&self, device_stats: Option<ThoDeviceStats>) {
+        let progress_state = {
+            let mut state = self.state_guard();
+            if state.device_stats == device_stats {
+                return;
+            }
+            state.device_stats = device_stats;
+            self.build_snapshot(&state, Instant::now()).progress_state
+        };
+        let _ = self.progress_tx.send_replace(progress_state);
+    }
+
+
     fn build_snapshot(&self, state: &CollectEtaState, now: Instant) -> CollectEtaSnapshot {
         let mut snapshot = CollectEtaSnapshot {
             active_collectors: state.invocations.len(),
@@ -270,6 +288,7 @@ impl CollectEtaTracker {
                 started_at_unix_ms: self.started_at_unix_ms,
                 oom_all_failed: state.oom_all_failed,
                 oom_success: state.oom_success,
+                device_stats: state.device_stats,
             },
             ..Default::default()
         };
@@ -391,6 +410,10 @@ pub fn collect_eta_record_oom_success() {
     COLLECT_ETA_TRACKER.record_oom_success();
 }
 
+pub fn collect_eta_set_device_stats(device_stats: Option<ThoDeviceStats>) {
+    COLLECT_ETA_TRACKER.set_device_stats(device_stats);
+}
+
 pub(crate) fn collect_eta_maybe_log(force: bool) {
     let _ = COLLECT_ETA_TRACKER.maybe_log(force);
 }
@@ -442,6 +465,7 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{CollectEtaProgressInvocation, CollectEtaTracker, COLLECT_ETA_LOG_INTERVAL};
+    use crate::device_stats::ThoDeviceStats;
     use std::time::{Duration, Instant};
 
     #[test]
@@ -571,6 +595,25 @@ mod tests {
                 completed: 2,
             }]
         );
+    }
+
+    #[test]
+    fn test_progress_state_tracks_device_stats() {
+        let tracker = CollectEtaTracker::new();
+        let rx = tracker.subscribe_progress();
+        let device_stats = ThoDeviceStats {
+            allocated: 1,
+            active: 2,
+            reserved: 3,
+            requested: 4,
+            non_releasable: 5,
+        };
+
+        assert_eq!(rx.borrow().device_stats, None);
+
+        tracker.set_device_stats(Some(device_stats));
+
+        assert_eq!(rx.borrow().device_stats, Some(device_stats));
     }
 
     #[test]

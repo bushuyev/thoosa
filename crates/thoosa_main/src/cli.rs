@@ -368,8 +368,6 @@ where
                             metrics.global_queue_depth(),
                             metrics.blocking_queue_depth(),
                         );
-                        // info!("semaphore_0={:?}", GlobalCtx::global().debug_semaphore(0));
-                        // info!("semaphore_1={:?}", GlobalCtx::global().debug_semaphore(1));
                     }
 
                     for w in 0..workers {

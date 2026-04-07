@@ -1,26 +1,12 @@
 // stream.cpp
 
+#include "errors.h"
+
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cuda.h>
 
-#include <exception>
-#include <string>
-
 namespace {
-
-thread_local std::string tho_last_error;
-
-void tho_set_last_error_msg(const char* where, const char* msg) {
-  tho_last_error.clear();
-  tho_last_error += where ? where : "<unknown>";
-  tho_last_error += ": ";
-  tho_last_error += msg ? msg : "<null>";
-}
-
-void tho_set_last_error_ex(const char* where, const std::exception& e) {
-  tho_set_last_error_msg(where, e.what());
-}
 
 // Opaque holder for the real PyTorch RAII guard.
 struct ThoCudaStreamGuard {
@@ -31,10 +17,6 @@ struct ThoCudaStreamGuard {
 } // namespace
 
 extern "C" {
-
-const char* tho_get_last_error_message() {
-  return tho_last_error.c_str();
-}
 
 void* tho_get_current_stream(int device) {
   try {
