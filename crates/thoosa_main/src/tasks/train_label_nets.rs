@@ -559,7 +559,8 @@ where
         assert_eq!(resources_1_valid.len(), resources_0_valid.len());//valid
 
         //TODO replacement?
-        let half_batch_size = batch_size / 2;
+        let half_batch_size = (batch_size / 2).max(1);
+
         assert!(half_batch_size <= resources_1_train.len() as u32);
         assert!(half_batch_size <= resources_1_valid.len() as u32);
         assert!(half_batch_size <= resources_0_train.len() as u32);

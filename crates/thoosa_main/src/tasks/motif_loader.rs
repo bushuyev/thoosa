@@ -492,7 +492,7 @@ where
 }
 
 
-// #[async_trait]
+
 impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
@@ -508,7 +508,7 @@ where
     where
             for<'a> Self::In<'a>: Send + Sync,
     {
-        let t_0 = Instant::now();
+
         let (motif_id, limit) = with_data!(ctx.branch(Some("random_slices_input"), false), input; |_ctx, input: &SlicesLoaderInput| {
             Ok::<(DataId, u32), ThoError>((input.motif_id.clone(), input.limit))
         })?;
@@ -530,12 +530,12 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize)).await?;
 
 
-        let (window, motif) = load_motif_slices(motif_id.into(), None, find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
+        let (window, mut motif) = load_motif_slices(motif_id.into(), None, find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
 
-        // debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?;
+        #[cfg(tho_debug_plots)]
+        debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?;
 
-
-        let arc = Arc::new(DevicesWrap::wrap(motif));
+        let arc = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("random", "random") + motif.id(), motif.t)?));
 
         Ok(arc)
     }
@@ -593,9 +593,13 @@ fn build_motif_slices_from_loaded_resources(
     for resource in loaded_resources {
         let size = resource.raw_tensor.t_ref().size();
         for &slice in &resource.slices {
-            let in_range = channel + 1 <= size[0] && (slice + window) as i64 <= size[1];
-            if !in_range {
+
+            if !channel + 1 <= size[0] {
+                warn!("build_motif_slices_from_loaded_resources: motif_id={motif_id} channel is out of range channel={channel} size[0]={} for resource_id={} in find_motifs_run_id={find_motifs_run_id} in {descr}", size[0], resource.resource_id);
+
+            } else if (slice + window) as i64 <= size[1]{
                 warn!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={} in find_motifs_run_id={find_motifs_run_id} in {descr}", resource.resource_id);
+
             } else {
                 debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?} resource_id={} descr={descr}", resource.resource_id);
                 motif_t.t.f_get(slice_i)?.f_copy_(&resource.raw_tensor.t.f_i((channel, slice as i64..(slice + window) as i64))?)?;
@@ -603,15 +607,17 @@ fn build_motif_slices_from_loaded_resources(
             }
         }
     }
-
-    let motif_id = select_motifs_run_id
+    /*
+       select_motifs_run_id should not be used if SelectMotifsRunConfig doesn't contain extend_config
+       let motif_id = select_motifs_run_id
         .map(|run_ids| {
             run_ids.iter().fold(mono_key!(motif_t.id().0, "motif").into(), |acc: SynKey, run_id| {
                 &acc + mono_key!(*run_id, "select_motifs_run_id")
             })
         })
-        .unwrap_or_else(|| mono_key!(motif_t.id().0, "motif").into());
-    ThoTensor::new(motif_id, motif_t.t.f_i((0..slice_i, ..))?)
+     */
+    //TODO motif can contain either only slices found ruing initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
+    ThoTensor::new(mono_key!(*motif_id, descr).into(), motif_t.t.f_i((0..slice_i, ..))?) //f_i - if there were skipped slices. TODO error if it's emtpy?
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices"))]
