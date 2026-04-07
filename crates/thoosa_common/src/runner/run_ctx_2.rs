@@ -133,7 +133,7 @@ impl RunCtx for RunCtxImpl {
         };
 
 
-        let parent_permits = self.max_other_parallel.clone(); //mem::replace(&mut self.max_parallel, Arc::new(Mutex::new(Vec::new())));
+        let parent_permits = self.max_other_parallel.clone();
 
         debug!("RunCtxWithPermits::branch: parent_permits={parent_permits:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
 
@@ -141,9 +141,6 @@ impl RunCtx for RunCtxImpl {
 
 
         branched_ctx.device_idx = self.device_idx;
-
-        // #[cfg(tho_debug)]
-        // GlobalCtx::global().debug_semaphore(self.device_idx).move_permits(&self.id, &branched_ctx.id);
 
 
         branched_ctx
