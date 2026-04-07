@@ -5,7 +5,10 @@ use interprocess::local_socket::{
 use log::{debug, warn};
 use std::io;
 use std::time::Duration;
-use thoosa_shared::collect_futures_eta::{collect_eta_subscribe_progress, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
+use thoosa_shared::collect_futures_eta::{collect_eta_set_device_stats, collect_eta_subscribe_progress, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
+use thoosa_shared::device_stats::ThoDeviceStats;
+use thoosa_shims::device_stats::get_device_stats;
+use torch_sys::cuda::atc_cuda_device_count;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -16,11 +19,14 @@ pub(crate) struct CollectEtaProgressSocketServer {
     name: Name<'static>,
     shutdown_tx: watch::Sender<bool>,
     task: Option<JoinHandle<()>>,
+    stats_task: Option<JoinHandle<()>>,
 }
 
 impl CollectEtaProgressSocketServer {
     pub(crate) fn start_default() -> io::Result<Self> {
-        Self::start_with_socket_id(COLLECT_ETA_PROGRESS_SOCKET_ID, collect_eta_subscribe_progress())
+        let mut server = Self::start_with_socket_id(COLLECT_ETA_PROGRESS_SOCKET_ID, collect_eta_subscribe_progress())?;
+        server.stats_task = Some(server.spawn_device_stats_task());
+        Ok(server)
     }
 
     fn start_with_socket_id(
@@ -84,6 +90,24 @@ impl CollectEtaProgressSocketServer {
             name,
             shutdown_tx,
             task: Some(task),
+            stats_task: None,
+        })
+    }
+
+    fn spawn_device_stats_task(&self) -> JoinHandle<()> {
+        let mut shutdown_rx = self.shutdown_tx.subscribe();
+        tokio::spawn(async move {
+            loop {
+                collect_eta_set_device_stats(read_device_stats_snapshot());
+                tokio::select! {
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_err() || *shutdown_rx.borrow() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(Duration::from_secs(1)) => {}
+                }
+            }
         })
     }
 
@@ -97,6 +121,9 @@ impl CollectEtaProgressSocketServer {
         if let Some(task) = self.task.take() {
             let _ = task.await;
         }
+        if let Some(stats_task) = self.stats_task.take() {
+            let _ = stats_task.await;
+        }
     }
 }
 
@@ -106,7 +133,32 @@ impl Drop for CollectEtaProgressSocketServer {
         if let Some(task) = self.task.take() {
             task.abort();
         }
+        if let Some(stats_task) = self.stats_task.take() {
+            stats_task.abort();
+        }
     }
+}
+
+fn read_device_stats_snapshot() -> Option<ThoDeviceStats> {
+    let device_count = unsafe { atc_cuda_device_count() };
+    if device_count < 1 {
+        return None;
+    }
+
+    let mut total = ThoDeviceStats::default();
+    for device in 0..device_count {
+        match get_device_stats(device) {
+            Ok(device_stats) => {
+                total = total.saturating_add(device_stats);
+            }
+            Err(err) => {
+                debug!("failed to read device stats for device={device}: {}", err.msg);
+                return None;
+            }
+        }
+    }
+
+    Some(total)
 }
 
 fn socket_names(socket_id: &str) -> io::Result<Vec<Name<'static>>> {
@@ -196,6 +248,7 @@ mod tests {
             started_at_unix_ms: 111,
             oom_all_failed: 1,
             oom_success: 0,
+            device_stats: None,
         })?;
 
         let second = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("second line");
@@ -227,6 +280,7 @@ mod tests {
             started_at_unix_ms: 222,
             oom_all_failed: 2,
             oom_success: 0,
+            device_stats: None,
         })?;
 
         let third = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("third line");

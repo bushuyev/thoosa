@@ -53,6 +53,8 @@ fn main() {
     println!("cargo:rerun-if-changed=src-cpp/memcpy.cpp");
     println!("cargo:rerun-if-changed=src-cpp/context.cpp");
     println!("cargo:rerun-if-changed=src-cpp/device_stats.cpp");
+    println!("cargo:rerun-if-changed=src-cpp/errors.cpp");
+    println!("cargo:rerun-if-changed=src-cpp/errors.h");
 
 }
 

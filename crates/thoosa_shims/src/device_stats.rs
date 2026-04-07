@@ -1,48 +1,59 @@
+use std::ffi::{c_char, CStr};
 use std::os::raw::c_int;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ThoDeviceStats {
-    pub allocated: i64,
-    pub active: i64,
-    pub reserved: i64,
-    pub requested: i64,
-    pub non_releasable: i64,
-}
+use thoosa_shared::{device_stats::ThoDeviceStats, ThoError};
 
 unsafe extern "C" {
-    fn tho_get_device_stats(device: c_int) -> ThoDeviceStats;
+    fn tho_get_device_stats(device: c_int, stats_out: *mut ThoDeviceStats) -> c_int;
+    fn tho_get_last_error_message() -> *const c_char;
 }
 
-pub fn get_device_stats(device: i32) -> ThoDeviceStats {
-    unsafe { tho_get_device_stats(device as c_int) }
+fn last_cpp_error(prefix: &str) -> String {
+    let msg = unsafe {
+        let p = tho_get_last_error_message();
+        if p.is_null() {
+            "<no message>".to_string()
+        } else {
+            CStr::from_ptr(p).to_string_lossy().into_owned()
+        }
+    };
+    format!("{prefix}: {msg}")
 }
 
-impl ThoDeviceStats {
-    pub fn reusable_cached(self) -> i64 {
-        self.reserved.saturating_sub(self.active)
-    }
-
-    pub fn pending_free(self) -> i64 {
-        self.active.saturating_sub(self.allocated)
-    }
-
-    pub fn rounding_overhead(self) -> i64 {
-        self.allocated.saturating_sub(self.requested)
+pub fn get_device_stats(device: i32) -> Result<ThoDeviceStats, ThoError> {
+    let mut stats = ThoDeviceStats::default();
+    let ok = unsafe { tho_get_device_stats(device as c_int, &mut stats) };
+    if ok == 0 {
+        Err(ThoError::new(last_cpp_error("tho_get_device_stats failed")))
+    } else {
+        Ok(stats)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::device_stats::get_device_stats;
+    use log::debug;
+    use thoosa_shared::test_utils::init_test_logging;
+    use torch_sys::cuda::atc_cuda_device_count;
+
+    #[ctor::ctor]
+    fn init() {
+        init_test_logging();
+    }
 
     #[test]
     fn test_get_device_stats(){
-        let s = get_device_stats(0);
+        let device_count = unsafe { atc_cuda_device_count() };
+        if device_count < 1 {
+            debug!("Skipping test_get_device_stats: no CUDA devices visible to torch");
+            return;
+        }
 
-        println!("{s:#?}");
-        println!("reusable_cached = {}", s.reusable_cached());
-        println!("pending_free    = {}", s.pending_free());
-        println!("rounding_overhead = {}", s.rounding_overhead());
+        let s = get_device_stats(0).unwrap_or_else(|err| panic!("test_get_device_stats failed: {}", err.msg));
+
+        debug!("{s:#?}");
+        debug!("reusable_cached = {}", s.reusable_cached());
+        debug!("pending_free    = {}", s.pending_free());
+        debug!("rounding_overhead = {}", s.rounding_overhead());
     }
 }

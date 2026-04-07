@@ -5131,6 +5131,7 @@ name = "thoosa_shims"
 version = "0.1.0"
 dependencies = [
  "cmake",
+ "ctor 0.2.9",
  "log",
  "thoosa_shared",
  "torch-sys",

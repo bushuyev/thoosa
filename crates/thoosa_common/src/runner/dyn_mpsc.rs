@@ -80,7 +80,14 @@ impl Job {
     }
 
     async fn run(self) -> IsOOM {
-        self.fut.await
+        let job_id = self.id;
+        debug!("DynamicTaskExecutor, Job::run: running job {self:?} ");
+
+        let r = self.fut.await;
+
+        debug!("DynamicTaskExecutor, Job::run: done job {job_id:?} ");
+
+        r
     }
 }
 
