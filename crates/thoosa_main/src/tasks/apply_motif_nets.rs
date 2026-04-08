@@ -440,7 +440,7 @@ where
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
-        let tmp_cache = TmpCached::new("tmp").await;
+        let tmp_cache = TmpCached::new("tmp_apply_motif_nets").await;
         let tmp_cache_name = tmp_cache.registered_name();
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
 

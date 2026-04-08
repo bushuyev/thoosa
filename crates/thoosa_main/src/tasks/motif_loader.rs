@@ -159,12 +159,63 @@ pub struct MotifMeta {
     pub window:u32
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
+struct LoadedMotifResourceId {
+    resource_id: ResourceId,
+}
+
+impl LoadedMotifResourceId {
+    fn new(resource_id: ResourceId) -> Self {
+        Self { resource_id }
+    }
+}
+
 #[derive(Debug)]
 struct LoadedMotifResource {
+    id: LoadedMotifResourceId,
     resource_id: ResourceId,
     slices: Vec<u32>,
     raw_tensor: ThoTensor<ChannelsData2, SynKey>,
 }
+
+impl WithId for LoadedMotifResource {
+    type ID = LoadedMotifResourceId;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for LoadedMotifResource {
+    type Metrics = <ThoTensor<ChannelsData2, SynKey> as Data>::Metrics;
+    type M = CpuOrGpu<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        <ThoTensor<ChannelsData2, SynKey> as Data>::size(&self.raw_tensor)
+    }
+
+    fn device(&self) -> usize {
+        self.raw_tensor.device()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.raw_tensor.mem_size()
+    }
+}
+
+#[async_trait]
+impl thoosa_shared::CopyToDevice for LoadedMotifResource {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+        Ok(Self {
+            id: self.id.clone(),
+            resource_id: self.resource_id,
+            slices: self.slices.clone(),
+            raw_tensor: self.raw_tensor.copy_to_device(dst_device).await?,
+        })
+    }
+}
+
+impl Output for LoadedMotifResource {}
 
 #[derive(Debug)]
 struct SyncMotifLoaderInput {
@@ -227,6 +278,7 @@ impl Select<()> for SyncMotifLoaderInput {
         let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
         for resource in &self.loaded_resources {
             loaded_resources.push(LoadedMotifResource {
+                id: resource.id.clone(),
                 resource_id: resource.resource_id,
                 slices: resource.slices.clone(),
                 raw_tensor: ThoTensor::new(resource.raw_tensor.id().clone(), resource.raw_tensor.t_ref().shallow_clone())?,
@@ -251,6 +303,7 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
         let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
         for resource in &self.loaded_resources {
             loaded_resources.push(LoadedMotifResource {
+                id: resource.id.clone(),
                 resource_id: resource.resource_id,
                 slices: resource.slices.clone(),
                 raw_tensor: resource.raw_tensor.copy_to_device(dst_device).await?,
@@ -401,6 +454,7 @@ where
             "motif loader",
         )
         .await?;
+        let loaded_resources = loaded_resources.take_all(ctx.device_idx()).await?;
 
         let sync_input = Arc::new(DevicesWrap::wrap(SyncMotifLoaderInput::new(
             input_id.clone(),
@@ -548,12 +602,13 @@ async fn load_motif_resource_tensors<L, C>(
     configurable_loader: Arc<LoaderStageChoice<L, C>>,
     mut ctx: C,
     descr: &str,
-) -> Result<Vec<LoadedMotifResource>, ThoError>
+) -> Result<TmpCached<LoadedMotifResource>, ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
-    let mut loaded_resources = Vec::with_capacity(resource_ids_slices.len());
+    let loaded_resources = TmpCached::new("tmp_loaded_motif_resources").await;
+    let mut loaded_resources_count = 0usize;
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} slices={slices:?} descr={descr}");
 
@@ -565,9 +620,15 @@ where
         let raw_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
             ThoTensor::new(raw_tt.id().clone(), raw_tt.t_ref().shallow_clone())
         })?;
-        loaded_resources.push(LoadedMotifResource { resource_id, slices, raw_tensor });
+        loaded_resources.insert(LoadedMotifResource {
+            id: LoadedMotifResourceId::new(resource_id),
+            resource_id,
+            slices,
+            raw_tensor,
+        });
+        loaded_resources_count += 1;
     }
-    debug!("load_motif_resource_tensors: motif_id={motif_id} find_motifs_run_id={find_motifs_run_id} loaded_resources={} descr={descr}", loaded_resources.len());
+    debug!("load_motif_resource_tensors: motif_id={motif_id} find_motifs_run_id={find_motifs_run_id} loaded_resources={loaded_resources_count} descr={descr}");
     Ok(loaded_resources)
 }
 
@@ -615,7 +676,7 @@ fn build_motif_from_loaded_resources(
             })
         })
      */
-    //TODO motif can contain either only slices found ruing initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
+    //TODO motif can contain either only slices found during initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
     ThoTensor::new(mono_key!(*motif_id, descr).into(), motif_t.t.f_i((0..slice_i, ..))?) //f_i - if there were skipped slices. TODO error if it's emtpy?
 }
 
@@ -667,6 +728,7 @@ where
         descr,
     )
     .await?;
+    let loaded_resources = loaded_resources.take_all(device_idx).await?;
 
     let window = find_motifs_run_config.window;
 
