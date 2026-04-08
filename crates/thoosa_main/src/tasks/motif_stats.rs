@@ -8,6 +8,7 @@ use cached_derive::Cached;
 use log::{debug, warn};
 use parking_lot::RwLock;
 use tch::Tensor;
+use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifCriterion, MotifCriterionConstraint, SelectMotifsRunConfig};
@@ -18,25 +19,26 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-use thoosa_shared::resource::Resource;
+use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_shared::run_configs::RunId;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, WithId};
-use thoosa_shared::{mono_key, CopyToDevice, ThoError};
+use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-
+use tracing::error;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_motif_slices_, MotifLoaderInput, MotifMeta};
-use crate::tasks::random_slices_stats::random_non_overlapping_slices;
 use crate::tasks::slices_stats::{metric_scalar_for_motif, Aggr, Metrics};
 use crate::tasks::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
+
+pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
 
 const DEFAULT_Q_LO: f64 = 0.05;
 const DEFAULT_Q_HI: f64 = 0.95;
@@ -335,7 +337,7 @@ impl MotifStatsOutput {
         self.criteria_evaluation.as_ref()
     }
 
-    fn metric_values(&self, metric: Metrics) -> Option<&ThoTensor<ChannelsMotifsDists, SynKey>> {
+    pub(crate) fn metric_values(&self, metric: Metrics) -> Option<&ThoTensor<ChannelsMotifsDists, SynKey>> {
         self.values.iter().find_map(|(cur, values)| if *cur == metric { Some(values) } else { None })
     }
 
@@ -791,3 +793,229 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
 {}
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
+pub fn random_non_overlapping_slices(
+    resources: &[Resource],
+    number_of_slices: u32,
+    slice_width: u32,
+    input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync>,
+) -> Result<(Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError> {
+
+    debug!("random_non_overlapping_slices: resources={resources:?} number_of_slices={number_of_slices:?} slice_width={slice_width:?}");
+
+    assert_ne!(number_of_slices, 0, "number_of_slices is 0");
+    assert_ne!(slice_width, 0, "slice_width is 0");
+
+    #[derive(Clone)]
+    struct ResState {
+        res: Resource,
+        starts: Vec<u32>, // available slice starts (aligned, non-overlapping by construction)
+        picked: usize,
+    }
+
+    let mut rng:StdRng = rand::make_rng();
+
+    let mut states: Vec<ResState> = resources
+        .iter()
+        .filter_map(|r| {
+            let resource_len = input_len_adjuster(r.length());
+
+            if resource_len < slice_width {
+                return None;
+            }
+            let bins = resource_len / slice_width; // number of non-overlapping aligned slices
+            if bins == 0 {
+                return None;
+            }
+            let mut starts: Vec<u32> = (0..bins).map(|i| i * slice_width).collect();
+            starts.shuffle(&mut rng);
+            Some(ResState {
+                res: r.clone(),
+                starts,
+                picked: 0,
+            })
+        })
+        .collect();
+
+    if states.is_empty() {
+
+        return Err(ThoError::new(format!("random_non_overlapping_slices: no suitable resource for {number_of_slices} of {slice_width} width")));
+    }
+
+    let available_total: usize = states.iter().map(|s| s.starts.len()).sum();
+    if available_total < number_of_slices as usize {
+        error!("random_non_overlapping_slices: no suitable resource for {number_of_slices} of {slice_width} width, slice_width={slice_width} resources={resources:?}");
+        return Err(ThoError::new(format!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices")));
+        // warn!("random_non_overlapping_slices: not enough resources ({available_total}) available for {number_of_slices} random slices");
+    }
+
+    let mut chosen: Vec<TensorIdSliceIdx> = Vec::with_capacity(number_of_slices as usize);
+    let mut used_resources: HashMap<ResourceId, Resource> = HashMap::new();
+
+    while chosen.len() < number_of_slices as usize {
+        // Find the minimum picked-count among resources that still have available slices.
+        let mut min_picked: Option<usize> = None;
+        for s in &states {
+            if s.starts.is_empty() {
+                continue;
+            }
+            min_picked = Some(match min_picked {
+                None => s.picked,
+                Some(m) => m.min(s.picked),
+            });
+        }
+
+
+        let min_p = min_picked.expect("no slices");
+
+        // Candidates = those with min_picked and remaining starts.
+        let mut candidates: Vec<usize> = Vec::new();
+        for (i, s) in states.iter().enumerate() {
+            if !s.starts.is_empty() && s.picked == min_p {
+                candidates.push(i);
+            }
+        }
+
+        let pick_i = *candidates.choose(&mut rng).expect("cant choose slices");
+
+        let s = &mut states[pick_i];
+        let start = s.starts.pop().expect("no more slices");
+        s.picked += 1;
+
+        chosen.push(TensorIdSliceIdx(s.res.id(), start));
+        used_resources.entry(s.res.id()).or_insert(s.res.clone());
+    }
+
+    Ok((chosen, used_resources))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tasks::tensor_loader::mock_tensor_loader;
+    use parking_lot::RwLock;
+    use std::sync::Arc;
+    use tch::kind::FLOAT_CPU;
+    use thoosa_common::ws::mock_ws_simp;
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::cachable::WithDataRef;
+    use thoosa_common::runner::common::mock_run_ctx;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_store::MockStoreBuilder;
+    use crate::tasks::motif_loader::MotifLoader;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_random_stats_basic() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 1000)));
+        let resources = vec![
+            Resource::new(1, 1, "resource_a", 10),
+            Resource::new(2, 1, "resource_b", 10),
+            Resource::new(3, 1, "resource_c", 10),
+            Resource::new(4, 1, "resource_d", 10),
+        ];
+
+        let run_id = 42;
+        let motif_width = 6;
+        let store = Arc::new(
+            MockStoreBuilder::new()
+                .with_list_random_resources([(None, Ok(resources.clone()))])
+                .with_list_run_config_values(
+                    run_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, motif_width, None, None)
+                        .to_properties_iter(None)
+                        .collect()),
+                )
+                .build(),
+        );
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_out_id()
+                .with_run_cached([
+                    (resources[0].clone(), Tensor::full(30, 0., FLOAT_CPU).view((3, -1))),
+                    (resources[1].clone(), Tensor::full(30, 1., FLOAT_CPU).view((3, -1))),
+                    (resources[2].clone(), Tensor::full(30, 2., FLOAT_CPU).view((3, -1))),
+                    (resources[3].clone(), Tensor::full(30, 3., FLOAT_CPU).view((3, -1))),
+                ])
+                .finish(),
+        );
+
+        // let stage = Arc::new(RandomStats::new(Arc::clone(&store), loader, &ws));
+        let stage = Arc::new(MotifStats::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            Arc::clone(&ws),
+            Arc::new(MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), &ws)),
+        ));
+
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
+        // let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0))));
+        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_id, vec![Metrics::EucDist], Aggr::Mean(1.0))));
+
+        let output = Arc::clone(&stage)
+            .run(
+                input,
+                thoosa_shared::with_perf_log(
+                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                    "RandomStats/test/write_ctx",
+                )
+                    .branch(Some("random_stats"), false),
+            )
+            .await?;
+
+        let mut ctx_for_data = thoosa_shared::with_perf_log(
+            || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "RandomStats/test/write_ctx",
+        )
+            .branch(Some("random_stats_data"), false);
+        let size = output
+            .with_data_ref(0, ctx_for_data, None, |stats: &MotifStatsOutput, _ctx| {
+                let t = stats.metric_values(Metrics::EucDist).expect("no dists");
+                debug!("t=\n{}", t.as_ref());
+                assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
+
+                Ok::<_, ThoError>(t.t_ref().size())
+            })
+            .await?;
+
+        assert_eq!(size, vec![3, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_random_non_overlapping_slices_uses_adjusted_length() -> Result<(), ThoError> {
+        let resources = vec![
+            Resource::new(1, 1, "resource_a", 10),
+            Resource::new(2, 1, "resource_b", 10),
+        ];
+        let motif_width = 10;
+        let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|len| len);
+
+        let (slices, resources_map) = random_non_overlapping_slices(&resources, 2, motif_width, input_len_adjuster)?;
+        assert_eq!(slices.len(), 2);
+        assert_eq!(resources_map.len(), 2);
+        assert!(slices.iter().all(|slice| slice.1 == 0));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_random_non_overlapping_slices_filters_resources_by_adjusted_length() {
+        let resources = vec![Resource::new(1, 1, "resource_a", 10)];
+        let motif_width = 10;
+        let input_len_adjuster: Arc<dyn Fn(u32) -> u32 + Send + Sync> = Arc::new(|len| len - 1);
+
+        let err = random_non_overlapping_slices(&resources, 2, motif_width, input_len_adjuster).expect_err("expected adjusted-length filtering error");
+
+        assert!(format!("{err:?}").contains("no suitable resource for 2 of 10 width"));
+    }
+}
