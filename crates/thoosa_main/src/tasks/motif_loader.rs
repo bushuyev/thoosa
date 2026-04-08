@@ -318,7 +318,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let motif = build_motif_slices_from_loaded_resources(
+        let motif = build_motif_from_loaded_resources(
             input.motif_id.clone(),
             input.select_motifs_run_id.as_ref(),
             input.find_motifs_run_id,
@@ -571,7 +571,7 @@ where
     Ok(loaded_resources)
 }
 
-fn build_motif_slices_from_loaded_resources(
+fn build_motif_from_loaded_resources(
     motif_id: DataId,
     select_motifs_run_id: Option<&Vec<RunId>>,
     find_motifs_run_id: u32,
@@ -652,7 +652,7 @@ where
 
     assert!(!resource_ids_slices.is_empty());
 
-    let window = find_motifs_run_config.window;
+
 
     debug!("load_motif_slices: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx}");
 
@@ -667,7 +667,10 @@ where
         descr,
     )
     .await?;
-    let motif = build_motif_slices_from_loaded_resources(
+
+    let window = find_motifs_run_config.window;
+
+    let motif = build_motif_from_loaded_resources(
         motif_id,
         select_motifs_run_id.as_ref(),
         find_motifs_run_id,

@@ -240,7 +240,8 @@ impl GlobalCtx {
             GlobalCtx::global().debug_caches(1, "before purge_cpu").await;
 
             for (type_name, map) in maps {
-                info!("GlobalCtx::purge_cpu: purged {} from {}", map.purge_cpu(purge_until).await, type_name);
+                let purged = map.purge_cpu(purge_until).await;
+                debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
             }
 
             #[cfg(tho_debug)]

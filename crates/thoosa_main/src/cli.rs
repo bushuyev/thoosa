@@ -1083,10 +1083,10 @@ fn dyn_step<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &
 
             if window <= 10 {
                 RangeOrValue::Value(5)
-            } else if window <= 500 {
-                RangeOrValue::Value(10)
+            // } else if window <= 500 {
+            //     RangeOrValue::Value(10)
             } else {
-                RangeOrValue::Value(20)
+                RangeOrValue::Value(10)
             }
         }
     }
@@ -1112,7 +1112,7 @@ where
         step: RangeOrValue::Value(10),
         // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 10, end: 1011 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((100, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
@@ -1133,6 +1133,12 @@ where
                 q: RangeOrValue::Range { range: 0.0..0.05, step: None },
             }),
         }),
+        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+        //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+        //         q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+        //     }),
+        //     slices: RangeOrValue::Value(1000),
+        // }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
@@ -1303,7 +1309,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
         },
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(50, 10),
+        find_and_select_motifs_opt_config: OptConfig::new(10, 3),
     };
 
     /////////////////////train_motifs
@@ -1321,7 +1327,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
+                amsgrad: RangeOrValue::Value(true),
             })),
         },
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
@@ -1364,7 +1370,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
+                amsgrad: RangeOrValue::Value(true),
             })),
         },
 
@@ -1387,7 +1393,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
-            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.1 }, step: None },
+            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
         })
 
     };
@@ -1404,7 +1410,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 beta1: RangeOrValue::Value(0.9),
                 beta2: RangeOrValue::Value(0.999),
                 wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(false),
+                amsgrad: RangeOrValue::Value(true),
             })),
         },
         net: FinalNetArgsRangeOrValue {
