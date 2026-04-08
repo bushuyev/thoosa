@@ -2,8 +2,8 @@ use log::debug;
 use polars::datatypes::DataType;
 use polars::frame::DataFrame;
 use polars::prelude::{
-    BooleanChunked, Expr, IntoLazy, JoinArgs, JoinType, LazyCsvReader, LazyFileListReader,
-    LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions, col, concat_list, lit,
+    col, concat_list, lit, BooleanChunked, Expr, IntoLazy, JoinArgs,
+    JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions,
 };
 use rand::{Rng, RngExt};
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ use tch::{Device, Kind, Tensor};
 
 use thoosa_common::dims::{Batch, ChannelsData};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_main::data::{AllTrainSplitter, Set, Splitter, parquet_to_tensor_by_path};
+use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 
@@ -786,7 +786,7 @@ impl EEGs {
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
-    use super::{ByPatientIdSplitter, EEG, parquet_to_tensor};
+    use super::{parquet_to_tensor, ByPatientIdSplitter, EEG};
     use crate::data::EEGs;
     use std::collections::HashMap;
     use log::LevelFilter::Trace;
@@ -795,7 +795,7 @@ mod tests {
     use plotters::count;
     use plotters::prelude::{BLACK, RED};
     use polars::prelude::{
-        LazyCsvReader, LazyFileListReader, NamedFrom, Series, col, concat_list, lit, when,
+        col, concat_list, lit, when, LazyCsvReader, LazyFileListReader, NamedFrom, Series,
     };
     use std::fs::OpenOptions;
     use std::io::Write;
@@ -810,16 +810,16 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::transforms::filters::{NotchBandFilterParams, SavGolFilterParams, Padding};
+    use thoosa_common::transforms::filters::{NotchBandFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
-    use thoosa_common::ws::{FsWorkspace, mock_ws_simp};
+    use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
-    use thoosa_main::cli::{Cli, import_resources};
-    use thoosa_main::{random_non_overlapping_slices, ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+    use thoosa_main::cli::{import_resources, Cli};
+    use thoosa_main::{ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_dist_d2_and_mask;
-    use thoosa_motifs::find::{SelectMotifsParams};
+    use thoosa_motifs::find::SelectMotifsParams;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -831,10 +831,11 @@ mod tests {
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::common::{MockRunCtx, RunCtx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_main::random_non_overlapping_slices;
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::TensorIdSliceIdx;
-    use thoosa_shared::{ThoError, cdt_for_dir};
+    use thoosa_shared::{cdt_for_dir, ThoError};
     use thoosa_store::{MockStoreBuilder, SqlStore};
     use thoosa_shared::mono_key;
 

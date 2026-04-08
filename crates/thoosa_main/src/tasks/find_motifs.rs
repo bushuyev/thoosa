@@ -40,7 +40,7 @@ use thoosa_common::cuda_utils::{pack_bits_bool, with_pooled_cuda_stream};
 use thoosa_common::dims::MotifSlices;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use crate::tasks::motif_loader::MotifMeta;
+use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
@@ -52,7 +52,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunId;
 use thoosa_with_data::with_data;
 use crate::buffer_limits::{CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
-use crate::tasks::random_slices_stats::{RandomStats, RandomStatsInput};
+use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
@@ -183,7 +183,12 @@ where
         
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
 
-        let random_stats = Arc::new(RandomStats::new(Arc::clone(&store), Arc::clone(&loader), &ws));
+        let random_stats = Arc::new(MotifStats::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            Arc::clone(ws),
+            Arc::new(MotifLoader::new(Arc::clone(&store), Arc::clone(&loader), ws)),
+        ));
 
 
         //gpt Build per-run-config loaders in parallel; each run_config becomes its own CrossLoader pipeline.
@@ -216,12 +221,13 @@ where
                             }
                         }
                         SlicesFilter::Precalculate(v) => {
-                            let dists: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>> = random_stats_arc.run(Arc::new(DevicesWrap::wrap(RandomStatsInput::new(v.slices, run_id, Metrics::EucDist, to_stats_aggr(v.aggr)))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
-                            let dists = with_data!(ctx, dists; |ctx, t:&ThoTensor<ChannelsMotifsDists, SynKey>|{
+                            let motif_stats = random_stats_arc.run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![Metrics::EucDist], to_stats_aggr(v.aggr)))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
 
-                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: dists=\n{}", t.t);
+                            let dists = with_data!(ctx, motif_stats; |ctx, t:&MotifStatsOutput|{//ThoTensor<ChannelsMotifsDists, SynKey>
+                                    let metric_val = t.metric_values(Metrics::EucDist).expect("no dists");
+                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t);
 
-                                    ThoTensor::new(t.id().clone(), t.t.f_view((-1, 1, 1))?)
+                                    ThoTensor::new(t.id().clone(), metric_val.t.f_view((-1, 1, 1))?)
                                 })?;
                             MasksCtx::PrecalculatedDist { dists }
                         }
@@ -515,7 +521,7 @@ mod tests {
     use thoosa_with_data::with_data;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use thoosa_common::dims::MotifSlices;
-    use crate::tasks::random_slices_stats::RANDOM_AVG_DIST_GROUP;
+    use crate::tasks::motif_stats::RANDOM_STATS_GROUP;
     use crate::tasks::select_motifs::SelectMotifsStage;
 
     #[ctor::ctor]
@@ -585,7 +591,7 @@ mod tests {
                     }).collect())),
                 ])
                 //for max dist
-                .with_list_resources_not_in_group([(RANDOM_AVG_DIST_GROUP, Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
+                .with_list_resources_not_in_group([(RANDOM_STATS_GROUP, Ok(resources.iter().map(|(resource, _resource_t, _resource_intervals)| {
                     resource.clone()
                 }).collect()))])
                 .with_list_random_resources([(None, Ok(resources.iter().map(|r|r.0.clone()).collect::<Vec<_>>()))])
