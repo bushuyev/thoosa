@@ -19,6 +19,7 @@ use tracing_subscriber::{
 };
 use time_series_generator::{generate_sine_wave, generate_triangle_wave};
 use rand::RngExt;
+use thoosa_shared::perf_logging::set_panic_hook;
 
 fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
     if filter == LevelFilter::Off {
@@ -44,6 +45,7 @@ fn level_filter_allows(filter: LevelFilter, level: &Level) -> bool {
 
 //TODO per mod filtering like in EnvFilter::new("warn,my_crate::some_mod=trace")
 pub fn init_test_logging() {
+    set_panic_hook();
 
     if LOG_INIT.swap(true, Ordering::Relaxed) {
         return;
@@ -124,29 +126,6 @@ pub fn maybe_init_perf_tracing_stdout(perf_filter: &str) -> bool {
     true
 }
 
-
-pub fn set_panic_hook() {
-    let default_hook = std::panic::take_hook();
-
-    std::panic::set_hook(Box::new(move |info| {
-        debug!("Panic info: {:?}", info);
-
-        if let Some(s) = info.payload().downcast_ref::<&str>() {
-            log::error!("panic payload: {s}");
-        } else if let Some(s) = info.payload().downcast_ref::<String>() {
-            log::error!("panic payload: {s}");
-        }
-
-
-        let backtrace = std::backtrace::Backtrace::force_capture();
-        for frame in backtrace.frames() {
-            debug!("{:?}\n", frame);
-        }
-        log::logger().flush(); // make sure async loggers flush
-
-        default_hook(info);
-    }));
-}
 
 pub fn are_close<T>(a: &[T], b: &[T], p: T) -> bool
 where

@@ -1,6 +1,6 @@
 #![allow(unexpected_cfgs)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{format, Debug, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
@@ -15,7 +15,7 @@ use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::debug_plot;
@@ -24,7 +24,7 @@ use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
-use thoosa_shared::traits::{CachableIdTr, Data, DataId, Select, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DataId, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -37,7 +37,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -218,7 +218,7 @@ impl thoosa_shared::CopyToDevice for LoadedMotifResource {
 impl Output for LoadedMotifResource {}
 
 #[derive(Debug)]
-struct SyncMotifLoaderInput {
+struct SyncMotifLoaderLoadedInput {
     id: SynKey,
     motif_id: DataId,
     select_motifs_run_id: Option<Vec<RunId>>,
@@ -229,7 +229,7 @@ struct SyncMotifLoaderInput {
     descr: &'static str,
 }
 
-impl SyncMotifLoaderInput {
+impl SyncMotifLoaderLoadedInput {
     fn new(
         id: SynKey,
         motif_id: DataId,
@@ -244,9 +244,9 @@ impl SyncMotifLoaderInput {
     }
 }
 
-impl Input for SyncMotifLoaderInput {}
+impl Input for SyncMotifLoaderLoadedInput {}
 
-impl WithId for SyncMotifLoaderInput {
+impl WithId for SyncMotifLoaderLoadedInput {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -254,7 +254,7 @@ impl WithId for SyncMotifLoaderInput {
     }
 }
 
-impl Data for SyncMotifLoaderInput {
+impl Data for SyncMotifLoaderLoadedInput {
     type Metrics = MonoMetrics<0, 1>;
     type M = CpuOrGpu<Self>;
 
@@ -271,34 +271,8 @@ impl Data for SyncMotifLoaderInput {
     }
 }
 
-impl Select<()> for SyncMotifLoaderInput {
-    type Output = SyncMotifLoaderInput;
-
-    fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
-        let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
-        for resource in &self.loaded_resources {
-            loaded_resources.push(LoadedMotifResource {
-                id: resource.id.clone(),
-                resource_id: resource.resource_id,
-                slices: resource.slices.clone(),
-                raw_tensor: ThoTensor::new(resource.raw_tensor.id().clone(), resource.raw_tensor.t_ref().shallow_clone())?,
-            });
-        }
-        Ok(Self {
-            id: self.id.clone(),
-            motif_id: self.motif_id.clone(),
-            select_motifs_run_id: self.select_motifs_run_id.clone(),
-            find_motifs_run_id: self.find_motifs_run_id,
-            channel: self.channel,
-            window: self.window,
-            loaded_resources,
-            descr: self.descr,
-        })
-    }
-}
-
 #[async_trait]
-impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
+impl thoosa_shared::CopyToDevice for SyncMotifLoaderLoadedInput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
         for resource in &self.loaded_resources {
@@ -321,6 +295,97 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
         })
     }
 }
+
+#[derive(Debug)]
+struct SyncMotifLoaderInput {
+    id: SynKey,
+    motif_id: DataId,
+    select_motifs_run_id: Option<Vec<RunId>>,
+    find_motifs_run_id: RunId,
+    channel: i64,
+    window: u32,
+    loaded_resources: TmpCached<LoadedMotifResource>,
+    descr: &'static str,
+}
+
+impl SyncMotifLoaderInput {
+    fn new(
+        id: SynKey,
+        motif_id: DataId,
+        select_motifs_run_id: Option<Vec<RunId>>,
+        find_motifs_run_id: RunId,
+        channel: i64,
+        window: u32,
+        loaded_resources: TmpCached<LoadedMotifResource>,
+        descr: &'static str,
+    ) -> Self {
+        Self { id, motif_id, select_motifs_run_id, find_motifs_run_id, channel, window, loaded_resources, descr }
+    }
+}
+
+impl WithId for SyncMotifLoaderInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl ConsumeData for SyncMotifLoaderInput {
+    type O = SyncMotifLoaderLoadedInput;
+
+    fn consume<R, F, P>(
+        self,
+        to_device_idx: usize,
+        ctx: P,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
+    where
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
+        P: RunCtx,
+    {
+        async move {
+            do_run(
+                SyncMotifLoaderLoadedInput::new(
+                    self.id,
+                    self.motif_id,
+                    self.select_motifs_run_id,
+                    self.find_motifs_run_id,
+                    self.channel,
+                    self.window,
+                    self.loaded_resources
+                        .take_all(to_device_idx)
+                        .await
+                        .expect("SyncMotifLoaderInput::consume: failed to take loaded_resources"),
+                    self.descr,
+                ),
+                ctx,
+            )
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifLoaderLoadedInput::burp"))]
+    fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
+        async move {
+            let loaded_resources = TmpCached::new("tmp_loaded_motif_resources").await;
+            for resource in o.loaded_resources {
+                loaded_resources.insert(resource);
+            }
+            SyncMotifLoaderInput::new(
+                o.id,
+                o.motif_id,
+                o.select_motifs_run_id,
+                o.find_motifs_run_id,
+                o.channel,
+                o.window,
+                loaded_resources,
+                o.descr,
+            )
+        }
+    }
+}
+
 
 #[derive(Debug, Named)]
 struct SyncMotifLoader<C>
@@ -361,7 +426,7 @@ impl<C> Stage for SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    type In<'a> = SyncMotifLoaderInput;
+    type In<'a> = SyncMotifLoaderLoadedInput;
     type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
     type Ctx = C;
 }
@@ -370,8 +435,8 @@ impl<C> SyncStage for SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let motif = build_motif_from_loaded_resources(
+    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
+        let motif = match build_motif_from_loaded_resources(
             input.motif_id.clone(),
             input.select_motifs_run_id.as_ref(),
             input.find_motifs_run_id,
@@ -380,8 +445,11 @@ where
             &input.loaded_resources,
             ctx.device_idx(),
             input.descr,
-        )?;
-        Ok(DataWithExtra::new(
+        ) {
+            Ok(motif) => motif,
+            Err(error) => return ConsumeResult::Failed { input, error },
+        };
+        ConsumeResult::Ok(DataWithExtra::new(
             motif,
             MotifMeta {
                 channel: input.channel,
@@ -454,9 +522,9 @@ where
             "motif loader",
         )
         .await?;
-        let loaded_resources = loaded_resources.take_all(ctx.device_idx()).await?;
+        let loaded_resources_name = loaded_resources.registered_name();
 
-        let sync_input = Arc::new(DevicesWrap::wrap(SyncMotifLoaderInput::new(
+        let sync_input = SyncMotifLoaderInput::new(
             input_id.clone(),
             motif_id_value,
             select_motifs_run_id_for_key,
@@ -465,19 +533,21 @@ where
             window,
             loaded_resources,
             "motif loader",
-        )));
-        let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> = HashMap::new();
-        let motif = OOMHandler::new(
+        );
+        let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
+        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("motif_loader"))),
             ],
             None,
-        )
-        .run(
+        );
+        let motif = oom_handler
+        .consume(
             &self.sync_motif_loader,
             sync_input,
-            ctx.branch(Some("motif_loader_sync"), false),
+            ctx.branch(Some("motif_loader_sync"), true),
             Contexts::new(
                 NoopInputContext(None),
                 NoopRunnableContext {},
@@ -494,21 +564,22 @@ where
 pub struct RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
+    sync_motif_loader: Arc<SyncMotifLoader<C>>,
     pd: PhantomData<C>,
 }
 
 impl <L,C> RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
-        Self { store, loader, pd: PhantomData::default(), ws:Arc::clone(&ws) }
+        Self { store, loader, ws:Arc::clone(&ws), sync_motif_loader: Arc::new(SyncMotifLoader::new()), pd: PhantomData::default() }
     }
 }
 
@@ -536,7 +607,7 @@ impl Input for SlicesLoaderInput {}
 impl<L, C> Stage for RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type In<'a> = SlicesLoaderInput;
     type Out = ThoTensor<MotifSlices, SynKey>;
@@ -549,7 +620,7 @@ where
 impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RandomSlicesLoader::run"))]
@@ -583,12 +654,63 @@ where
         let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize)).await?;
 
 
-        let (window, mut motif) = load_motif_slices(motif_id.into(), None, find_motifs_run_id, channel, resources_map, slices, Arc::clone(&self.store), Arc::clone(&self.loader), ctx, &self.ws, "random loader").await?;
+        let motif_id_value = motif_id.clone();
+        let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
+            acc.entry(slice.0).or_insert_with(Vec::new).push(slice.1);
+            acc
+        });
+        assert!(!resource_ids_slices.is_empty());
+
+        debug!("RandomSlicesLoader::run: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={}", ctx.device_idx());
+
+        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
+        let loaded_resources = load_motif_resource_tensors(
+            motif_id_value.clone(),
+            find_motifs_run_id,
+            resources_map,
+            resource_ids_slices,
+            configurable_loader,
+            ctx.branch(Some("random_loader_load_resource_tensors"), false),
+            "random loader",
+        )
+        .await?;
+        let loaded_resources_name = loaded_resources.registered_name();
+        let sync_input = SyncMotifLoaderInput::new(
+            mono_key!(*motif_id_value, "random_slices_loader_input").into(),
+            motif_id_value,
+            None,
+            find_motifs_run_id,
+            channel,
+            find_motifs_run_config.window,
+            loaded_resources,
+            "random loader",
+        );
+        let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
+        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("random_slices_loader"))),
+            ],
+            None,
+        );
+        let motif = oom_handler
+        .consume(
+            &self.sync_motif_loader,
+            sync_input,
+            ctx.branch(Some("random_slices_loader_sync"), true),
+            Contexts::new(
+                NoopInputContext(None),
+                NoopRunnableContext {},
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+            ),
+        )
+        .await?;
 
         #[cfg(tho_debug_plots)]
-        debug_plot!(&motif.as_ref(), "random_motif_{motif_id}")?;
+        debug_plot!(motif.data().as_ref(), "random_motif_{motif_id}")?;
 
-        let arc = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("random", "random") + motif.id(), motif.t)?));
+        let arc = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("random", "random") + motif.id(), motif.data().t_ref().shallow_clone())?));
 
         Ok(arc)
     }
@@ -678,71 +800,6 @@ fn build_motif_from_loaded_resources(
      */
     //TODO motif can contain either only slices found during initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
     ThoTensor::new(mono_key!(*motif_id, descr).into(), motif_t.t.f_i((0..slice_i, ..))?) //f_i - if there were skipped slices. TODO error if it's emtpy?
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices"))]
-pub(crate) async fn load_motif_slices<L, C>(
-    motif_id: DataId,
-    select_motifs_run_id: Option<Vec<RunId>>,
-    find_motifs_run_id: u32,
-    channel: i64,
-    resources_map: HashMap<ResourceId, Resource>,
-    slices: Vec<TensorIdSliceIdx>,
-    store: Arc<Box<dyn Store>>,
-    loader: Arc<L>,
-    mut ctx: C,
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    descr: &str
-) -> Result<(u32, ThoTensor<MotifSlices, SynKey>), ThoError>
-where
-    C: 'static + RunCtx,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
-{
-    let device_idx = ctx.device_idx();
-    debug!("load_motif_slices: motif_id={motif_id} slices={slices:?} descr={descr}");
-
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-        find_motifs_run_id,
-        &store.list_run_config_values(find_motifs_run_id).await?,
-    )?;
-
-    let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
-        acc.entry(slice.0).or_insert_with(Vec::new).push(slice.1);
-        acc
-    });
-
-    assert!(!resource_ids_slices.is_empty());
-
-
-
-    debug!("load_motif_slices: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx}");
-
-    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
-    let loaded_resources = load_motif_resource_tensors(
-        motif_id.clone(),
-        find_motifs_run_id,
-        resources_map,
-        resource_ids_slices,
-        configurable_loader,
-        ctx.branch(Some("load_motif_resource_tensors"), false),
-        descr,
-    )
-    .await?;
-    let loaded_resources = loaded_resources.take_all(device_idx).await?;
-
-    let window = find_motifs_run_config.window;
-
-    let motif = build_motif_from_loaded_resources(
-        motif_id,
-        select_motifs_run_id.as_ref(),
-        find_motifs_run_id,
-        channel,
-        window,
-        &loaded_resources,
-        device_idx,
-        descr,
-    )?;
-    Ok((window, motif))
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices_"))]
@@ -840,18 +897,18 @@ fn cat_slices(motif_id: &DataId, tensors: Vec<Tensor>) -> Result<ThoTensor<Motif
 
 #[cfg(test)]
 pub mod mock_motif_loader {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use async_trait::async_trait;
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::sync::Arc;
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::{MockRunCtx, OutId, RunCtx};
-    use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::DataId;
     use thoosa_shared::traits::WithId;
@@ -945,14 +1002,14 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use log::LevelFilter::Trace;
     use log::{set_max_level, trace};
     use parking_lot::RwLock;
     use tch::Tensor;
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};

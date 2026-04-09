@@ -1,13 +1,16 @@
+use std::backtrace::Backtrace;
 use std::cmp::max;
 use std::fmt::Debug;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::panic;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
-use log::LevelFilter;
+use log::{debug, LevelFilter, Log};
 use tracing::{error, Level};
 use tracing_log::LogTracer;
 use tracing_subscriber::{
@@ -636,4 +639,78 @@ mod tests {
         assert!(perf_file.exists());
         let _ = std::fs::remove_file(perf_file);
     }
+}
+
+///for tests
+pub fn set_panic_hook() {
+    let default_hook = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        debug!("Panic info: {:?}", info);
+
+        if let Some(s) = info.payload().downcast_ref::<&str>() {
+            log::error!("panic payload: {s}");
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            log::error!("panic payload: {s}");
+        }
+
+
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        for frame in backtrace.frames() {
+            debug!("{:?}\n", frame);
+        }
+        log::logger().flush(); // make sure async loggers flush
+
+        default_hook(info);
+    }));
+}
+
+
+pub fn install_panic_hook(crash_file: PathBuf) {
+    let prev = panic::take_hook();
+
+    panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let thread_name = thread.name().unwrap_or("<unnamed>");
+
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<non-string panic payload>");
+
+        let backtrace = Backtrace::force_capture();
+
+        // Goes through tracing, so it can appear in your normal file/stdout layers.
+        tracing::error!(
+            target: "panic",
+            thread = %thread_name,
+            location = %location,
+            payload = %payload,
+            backtrace = %backtrace,
+            "panic"
+        );
+
+        // Synchronous crash log, so it still has a chance to survive abort paths.
+        if let Ok(mut f) = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_file)
+        {
+            let _ = writeln!(
+                f,
+                "\n=== PANIC ===\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\nbacktrace:\n{backtrace}\n"
+            );
+            let _ = f.flush();
+        }
+
+        // Keep the normal stderr panic output too.
+        prev(info);
+    }));
 }

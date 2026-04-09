@@ -95,9 +95,4 @@ gdb -p 572915 -batch   -ex "set pagination off"   -ex "set height 0"   -ex "set 
 
 
 
-now
-Arc::into_inner(tmp_cache).unwrap().into_inner().take_all(device_idx).await?,
-should be moved into closure executed in OOMHandler::consume so that nobody could call dump_to_cpu when we're being executed (add this as comment).
-Add a trait ConsumeData (or make up a better name) with single 'consume' method similar in its purpose to WithDataRef (crates/thoosa_common/src/runner/common/cachable.rs:1150) and implement it for BatchAppliedMotifNetsInput. Then move  tmp_cache into  BatchAppliedMotifNetsInput's field and call tmp_cache.take_all in <impl ConsumeData for BatchAppliedMotifNetsInput>::consume which is invoked from   in OOMHandler::consume at crates/thoosa_common/src/runner/oom_handler.rs:353.
-
-check first if you see any problems with this approach, if no - go ahead.
+oom consume in RandomSlicesLoader and MotifLoader codex resume 019d6d99-87f3-7381-a0f2-04a35c1cd499

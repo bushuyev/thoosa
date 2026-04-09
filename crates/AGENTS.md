@@ -48,6 +48,7 @@ Notes:
 - Frameworks: `cargo test` with `#[test]` and `#[tokio::test]` (multi-thread where needed).
 - Location: unit tests inline in `src/*` modules;
 - A struct being tested should receive its mocked dependencies which are configured through their Mock[StructName]Builder (placed next to StructName in a #[cfg(test)] mock_[struct_name] module. If a struct can't be hidden behind a trait (although it should not be a problem to hide a Stage struct behind Stage trait) it can be injected with mock_double.
+- mockall mocks should never be replaced with custom 'dummy' objects
 - Naming: `mod tests { ... }`, test fns `snake_case` describing behavior.
 
 ## Misc info

@@ -327,7 +327,7 @@ where
 pub struct MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     motif_id: SynKey,
     batch_size: u32,
@@ -343,7 +343,7 @@ where
 impl<L, C> MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx,
+    C: RunCtx + Adjustable,
 {
     pub async fn new(
         motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
@@ -445,7 +445,7 @@ where
 impl<L, C> AsyncDataBatch<Slice, MotifProbability, C> for MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx,
+    C: RunCtx + Adjustable,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
         futures_util::stream::once(self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train", ctx))
