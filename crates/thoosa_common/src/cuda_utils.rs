@@ -415,7 +415,7 @@ pub async fn copy_h2d_from_ptr(
                         drop(buf_stream); // return buffer/stream to pool
                         debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?} done", os_thread_id());
 
-                    }).await.unwrap();
+                    }).await.unwrap();//TODO handle CUDA_ERROR_OUT_OF_MEMORY
 
                     // wait for GPU work to finish before recycling buffer
                 }

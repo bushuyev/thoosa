@@ -441,21 +441,11 @@ where
         }
     }
 
-    pub fn with_criteria(criteria_constraints: Vec<MotifCriterionConstraint>, min_slices: i64, max_slices: i64, select_motifs_run_id: Option<RunId>) -> Self {
+    pub fn with_criteria(criteria_constraints: Vec<MotifCriterionConstraint>, min_slices: i64, max_slices: i64, select_motifs_run_id: RunId) -> Self {
         assert!(min_slices <= max_slices, "MotifStatsSyncStage::with_criteria: min_slices={min_slices} must be <= max_slices={max_slices}");
-        let id = match select_motifs_run_id {
-            Some(select_motifs_run_id) => SynKey::new([
-                mono_key!(MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage"),
-                mono_key!("criteria", "mode"),
-                mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
-            ]),
-            None => SynKey::new([
-                mono_key!(MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage"),
-                mono_key!("criteria", "mode"),
-            ]),
-        };
+
         Self {
-            id,
+            id: mono_key!(MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage") + &mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
             q_lo: DEFAULT_Q_LO,
             q_hi: DEFAULT_Q_HI,
             scale_q: DEFAULT_SCALE_Q,
@@ -648,24 +638,14 @@ where
         loader: Arc<L>,
         ws: Arc<RwLock<Box<dyn Workspace>>>,
         motif_loader: Arc<ML>,
-        select_motifs_run_id: Option<RunId>,
+        select_motifs_run_id: RunId,
         criteria_constraints: Vec<MotifCriterionConstraint>,
         min_slices: i64,
         max_slices: i64,
     ) -> Self {
-        let id = match select_motifs_run_id {
-            Some(select_motifs_run_id) => SynKey::new([
-                mono_key!(MOTIF_STATS, "MotifStats"),
-                mono_key!("criteria", "mode"),
-                mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
-            ]),
-            None => SynKey::new([
-                mono_key!(MOTIF_STATS, "MotifStats"),
-                mono_key!("criteria", "mode"),
-            ]),
-        };
+
         Self {
-            id,
+            id: mono_key!(MOTIF_STATS, "MotifStats") + &mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
             store,
             loader,
             ws,

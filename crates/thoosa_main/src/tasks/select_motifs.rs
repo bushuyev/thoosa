@@ -1392,7 +1392,7 @@ where
             Arc::clone(&self.loader),
             Arc::clone(&self.ws),
             Arc::clone(&self.clc_dist.motif_loader),
-            Some(select_motifs_run_id),
+            select_motifs_run_id,
             criteria_constraints.clone(),
             min_slices,
             max_slices,
@@ -1793,10 +1793,6 @@ pub mod tests {
         let result = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(0)).await?;
 
         Ok(())
-    }
-
-    fn build_mocks(){
-
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

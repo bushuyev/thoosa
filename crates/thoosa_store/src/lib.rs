@@ -1919,6 +1919,7 @@ impl Store for SqlStore {
     }
 
     ///gpt generated, returns slices from same resources and same channel as target motif but not belonging to the motif
+    ///if not enough slices in same resources - opts to random resources
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SqlStore::list_random_slices_out_of_motif"))]
     async fn list_random_slices_out_of_motif(
         &self,
