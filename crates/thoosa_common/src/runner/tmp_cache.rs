@@ -6,7 +6,7 @@ use argmin::solver::quasinewton::SR1;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use mockall_double::double;
 use parking_lot::RwLock;
 use tokio::runtime::Handle;
@@ -56,14 +56,12 @@ where
 
     #[cfg(test)]
     pub fn get(&self, id: &<D as WithId>::ID) -> Option<Arc<DevicesWrap<D>>> {
-        // self.map.try_read_for(LOCK_TIMEOUT).expect("TmpCached::get").get(id).map(|reff| Arc::clone(reff.value()))
         self.map.get(id).map(|reff| Arc::clone(reff.value()))
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
-    pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {
+    pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all: name={}", self.name);
-        let _purge_lock = GlobalCtx::global().purge_lock().await;
         self.unregister_cache().await;
 
         let mut res = vec![];
@@ -92,7 +90,7 @@ where
     }
 
 
-    pub async fn new(name: &'static str) -> Self {
+    pub async fn new(name: &str) -> Self {
 
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
         let registered_name = name.clone().leak();
@@ -180,8 +178,11 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     fn drop(&mut self) {
-        debug!("TmpCached::drop: {}", self.name);
+
+
         if let Some(name) = self.registered_name.take() {
+            warn!("TmpCached::drop: {}", self.name);//i.e. take_all was not called
+
             tokio::task::block_in_place(move || {
                 Handle::current().block_on(async move {
                     GlobalCtx::global().remove_cache(name).await

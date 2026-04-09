@@ -93,7 +93,7 @@ where
         debug!("DumpToCpu::adjust: acquired 100 max_parallel, dumping");
 
         #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu").await;
+        GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu", None).await;
 
 
         GlobalCtx::global()
@@ -104,25 +104,14 @@ where
         })?;
 
         #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu").await;
+        GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu", None).await;
 
-        // *adjust_context.dump_to_cpu_retry_count_mut() = 10001;//TODO to force false from degrade and proceed to next adjuster
-
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
-        // debug!("DumpToCpu::adjust done: is_all_on_cpu={}",GlobalCtx::global().is_all_on_cpu(device_idx));
 
         Ok(adjustable.branch(None, false))
     }
 
     fn degrade(&self, adjust_context: &mut C) -> bool {
-        // DumpToCpu can't reduce work; we just retry acquiring MAX_PERMITS.
-        // let retry_count = adjust_context.dump_to_cpu_retry_count_mut();
-        // *retry_count += 1;
-        //
-        // debug!("DumpToCpu::degrade: retry_count={retry_count}");
-        //
-        // *retry_count <= 1000 //TODO config
+
         false
     }
 }
