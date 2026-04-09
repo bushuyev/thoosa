@@ -109,30 +109,20 @@ where
         ctx.add_purge_gpu_closure(
             Box::new( move || {
 
-                // #[cfg(any(test, feature = "mock_global_ctx"))]
-                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
                 let key_for_purger = key_for_purger.clone();
                 trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
 
                 async move {
-
-                    let maybe_data = if let Some(value) = Self::cache().await.get(&key_for_purger) {
-                        let shared_fut = value.value().clone();
-                        trace!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
-                        shared_fut
-                            .peek()  //to avoid locking on itself
-                            .and_then(|peeked| peeked.as_ref().ok())
-                            .map(Arc::clone)
-                    } else {
-                        warn!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //warning
-                        None
+                    let Some(shared_fut) = Self::cache().await.get(&key_for_purger) else {
+                        warn!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
+                        return Ok(());
                     };
 
-                    if let Some(data) = maybe_data {
-
-                        // data.remove_cache_area(cache_area);
-
+                    trace!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+                    if let Some(data) = shared_fut
+                        .peek()  //to avoid locking on itself
+                        .and_then(|peeked| peeked.as_ref().ok())
+                        .map(Arc::clone) {
                         debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} Arc::strong_count={:?}", Arc::strong_count(&data));
                         if Arc::strong_count(&data) == 1 {
                             data.dump_to_cpu(device_idx).await?;
