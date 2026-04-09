@@ -308,7 +308,7 @@ where
 
     install_panic_hook(ws.read()
         .log_path()
-        .join(format!("panic_{}.log", cdt_for_dir).to_owned()));
+        .join(format!("thoosa_panic_{}.log", cdt_for_dir).to_owned()));
 
 
     let _logging_guards = init_tracing(

@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{backtrace_head_lines, with_async_perf_log, with_perf_log, Cause, ThoError, LOCK_TIMEOUT};
-use tokio::sync::RwLock as AsyncRwLock;
+use tokio::sync::{RwLock as AsyncRwLock, RwLockReadGuard};
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
@@ -24,14 +24,13 @@ pub struct GlobalCtx {
     // semaphores: Vec<Box<dyn PermitSource>>,
     executors: Vec<DynamicTaskExecutor>,
     num_devices: usize,
-    device_locks: Vec<Arc<AsyncRwLock<()>>>,
+
     caches: tokio::sync::RwLock<HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>,
     is_all_on_cpu: Vec<AtomicBool>,
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_time: AtomicU64, //for tracking CPU-only lifetime
-    purge_lock: tokio::sync::Mutex<()>,
     purger: Purger,
-    shutting_down:AtomicBool//TODO not needed if tokios shutdown_background in project main
+    shutting_down:AtomicBool//TODO not needed if tokio's shutdown_background in project main
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -45,22 +44,9 @@ impl GlobalCtx {
         assert!(num_devices > 0);//TODO test if it works without GPU
 
 
-        // let semaphores = (0..num_devices)
-        //     // .map(|_| Box::new(RunnerSemaphore::new(100)) as Box<dyn PermitSource>) //TODO config
-        //     .map(|device_idx| Box::new(Arbiter::new(MAX_PERMITS, device_idx)) as Box<dyn PermitSource>)
-        //     .collect();
-        // debug!("GlobalCtx::new: semaphores={semaphores:?}");
-
 
         Self {
-            // semaphores: vec![],
-
             num_devices,
-
-            device_locks: (0..num_devices)
-                .map(|_| Arc::new(AsyncRwLock::new(())))
-                .collect(),
-
             executors: (1..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(16).unwrap()))
                 .collect(),
 
@@ -71,7 +57,6 @@ impl GlobalCtx {
             caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(1000)), //100 * 64 cache areas
 
             cache_time: Default::default(),
-            purge_lock: tokio::sync::Mutex::new(()),
             purger: Purger::new(),
             shutting_down: false.into()
         }
@@ -96,15 +81,9 @@ impl GlobalCtx {
         Self::global()
     }
 
-    pub async fn purge_lock<'a>(&'a self) -> tokio::sync::MutexGuard<'a, ()> {
-        with_async_perf_log(
-            async || tokio::time::timeout(LOCK_TIMEOUT, self.purge_lock.lock()).await.expect("GlobalCtx::purge_lock: timed out waiting for purge lock"),
-            "GlobalCtx/purge_lock",
-        )
-        .await
-    }
-
     pub async fn register_cache(&self, cache: (&'static str, &'static dyn FuturesRunnerMapPurger)) {
+        debug!("GlobalCtx::register_cache: cache={}", cache.0);
+
         assert!(
             with_async_perf_log(
                 async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect("GlobalCtx::register_cache: timed out waiting for caches write lock"),
@@ -114,9 +93,12 @@ impl GlobalCtx {
             .insert(cache.0, cache.1)
             .is_none()
         );
+
+        debug!("GlobalCtx::register_cache: cache={} lock acquired/released, done", cache.0);
     }
 
     pub async fn remove_cache(&self, key:&'static str) {
+        debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
             with_async_perf_log(
@@ -128,7 +110,7 @@ impl GlobalCtx {
             .is_some()
         );
 
-        debug!("GlobalCtx::remove_cache: {} removed ", key);
+        debug!("GlobalCtx::remove_cache: {} lock acquired/released, removed ", key);
     }
 
     pub fn global() -> &'static Self {
@@ -155,31 +137,47 @@ impl GlobalCtx {
 
 
     #[cfg(tho_debug)]
-    pub async fn debug_caches(&self, device_idx:usize, descr:&str) {
-        let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
-            let maps = with_async_perf_log(
-                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::debug_caches: timed out waiting for caches read lock"),
-                "GlobalCtx/debug_caches/read_caches",
-            ).await;
-            maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
+    pub async fn debug_caches<'a>(
+        &self,
+        device_idx: usize,
+        descr: &str,
+        maps_guard: Option<&'a RwLockReadGuard<'a, HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>>,
+    ) {
+        debug!("GlobalCtx::debug_caches: descr={descr:?}");
+
+        let local_guard;
+        let maps = match maps_guard {
+            Some(g) => g,
+            None => {
+                local_guard = with_async_perf_log(
+                    async || {
+                        tokio::time::timeout(LOCK_TIMEOUT, self.caches.read())
+                            .await
+                            .expect("GlobalCtx::debug_caches: timed out waiting for caches read lock")
+                    },
+                    "GlobalCtx/debug_caches/read_caches",
+                )
+                    .await;
+                &local_guard
+            }
         };
-        debug!("debug_caches: descr={descr} device_idx={device_idx}");
+
+        debug!("debug_caches: descr={descr} lock acquired device_idx={device_idx}");
+
         let mut total_gpu_mem = 0;
-        for (type_name, map) in maps {
+        for (type_name, map) in maps.iter() {
             info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
             match map.debug_gpu(device_idx).await {
-                Ok(v) => {
-                    total_gpu_mem+=v;
-                }
-                Err(e) => {
-                    error!("GlobalCtx::debug_gpu: failed with {e:?}");
-                }
+                Ok(v) => total_gpu_mem += v,
+                Err(e) => error!("GlobalCtx::debug_gpu: failed with {e:?}"),
             }
         }
 
-        info!("GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}", thoosa_shims::device_stats::get_device_stats((device_idx-1) as i32));
+        info!(
+        "GlobalCtx::debug_gpu: descr={descr} lock acquired/released device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
+        thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
+    );
     }
-
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(
@@ -189,19 +187,13 @@ impl GlobalCtx {
         descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(device_idx, 0);
-        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?}");
-        let _purge_lock = self.purge_lock().await;
+        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} descr={descr}");
+        let maps = with_async_perf_log(//needs to be held while iterating over the maps so that purge_gpu is not invoked on dropped item if the (TmpCached) map was removed
+            async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock"),
+            "GlobalCtx/dump_all_to_cpu/read_caches",
+        ).await;
 
-        let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
-            let maps = with_async_perf_log(
-                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock"),
-                "GlobalCtx/dump_all_to_cpu/read_caches",
-            ).await;
-
-            maps
-                .iter()
-                .map(|(type_name, map)| (*type_name, *map)).collect()
-        };
+        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} lock acquired  required_ids={required_ids:?}  descr={descr}");
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
@@ -210,43 +202,49 @@ impl GlobalCtx {
 
             map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx, type_name).await?;
 
-            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} done");
+            debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
         self.is_all_on_cpu[device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} done");
+        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} lock acquired/released required_ids={required_ids:?}  descr={descr} done");
 
         Ok(())
     }
 
     pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
+        debug!("GlobalCtx::purge_cpu: retain_last={retain_last}");
 
-        let maps: Vec<(&'static str, &'static dyn FuturesRunnerMapPurger)> = {
+
+        let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
+
+        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} lock acquired");
+        if purge_until > 0 {
+
+
+            //needs to be held while iterating over the maps so that purge_cpu is not invoked on dropped item if the (TmpCached) map was removed
             let maps = with_async_perf_log(
                 async || {
                     tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock")
                 },
                 "GlobalCtx/purge_cpu/read_caches",
             ).await;
-            maps.iter().map(|(type_name, map)| (*type_name, *map)).collect()
-        };
 
-        let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
-
-        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} maps.len={}", maps.len());
-        if purge_until > 0 {
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(1, "before purge_cpu").await;
+            GlobalCtx::global().debug_caches(1, "before purge_cpu", Some(&maps)).await;
 
-            for (type_name, map) in maps {
+            for (type_name, map) in maps.iter() {
                 let purged = map.purge_cpu(purge_until).await;
                 debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
             }
 
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(1, "after purge_cpu").await;
+            GlobalCtx::global().debug_caches(1, "after purge_cpu", Some(&maps)).await;
         }
+
+
+
+        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} lock acquired/released done");
     }
 
 
@@ -429,27 +427,6 @@ pub mod mock_global_ctx {
             self
         }
 
-        pub fn with_purge_lock(mut self) -> Self {
-            if let Some(real) = self.real {
-                self.mock.expect_purge_lock().times(0..).returning({
-                    move || {
-                        tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(real.purge_lock())
-                        })
-                    }
-                });
-            } else {
-                let lock: &'static tokio::sync::Mutex<()> = Box::leak(Box::new(tokio::sync::Mutex::new(())));
-                self.mock.expect_purge_lock().times(0..).returning(move || {
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(lock.lock())
-                    })
-                });
-            }
-
-            self
-        }
-
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({
@@ -552,7 +529,6 @@ pub mod mock_global_ctx {
         builder
             .with_age(params.age)
             .with_dump_all_to_cpu()
-            .with_purge_lock()
             .with_reset_all_on_cpu()
             .with_device_count(params.device_count)
             .with_register_cache()

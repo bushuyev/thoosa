@@ -368,7 +368,7 @@ impl ConsumeData for SyncMotifLoaderInput {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifLoaderLoadedInput::burp"))]
     fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
         async move {
-            let loaded_resources = TmpCached::new("tmp_loaded_motif_resources").await;
+            let loaded_resources = TmpCached::new(&format!("tmp_loaded_motif_resources_burp_{}", o.id)).await;
             for resource in o.loaded_resources {
                 loaded_resources.insert(resource);
             }
@@ -729,7 +729,7 @@ where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
-    let loaded_resources = TmpCached::new("tmp_loaded_motif_resources").await;
+    let loaded_resources = TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}")).await;
     let mut loaded_resources_count = 0usize;
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} slices={slices:?} descr={descr}");

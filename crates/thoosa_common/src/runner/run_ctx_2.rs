@@ -180,11 +180,12 @@ impl Drop for RunCtxImpl {
                         warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtxWithPermits");
                     }
                     Some(m) => {
-                        // #[cfg(any(test, feature = "mock_global_ctx"))]
-                        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-                        if let Err(e) = GlobalCtx::global().run_purge_gpu(m.into_inner()) {
-                            error!("run_purge_gpu failed: {e:?} ");
+                        let inner = m.into_inner();
+                        if !inner.is_empty() {
+                            if let Err(e) = GlobalCtx::global().run_purge_gpu(inner) {
+                                error!("run_purge_gpu failed: {e:?} ");
+                            }
                         }
                     }
                 }
