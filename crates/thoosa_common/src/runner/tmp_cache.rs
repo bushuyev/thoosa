@@ -68,8 +68,6 @@ where
 
         let mut res = vec![];
         let map = {
-            // let mut guard = self.map.try_write_for(LOCK_TIMEOUT).expect("TmpCached::take_all");
-            // mem::take(&mut *guard)
             mem::take(&mut self.map)
         };
 
@@ -113,16 +111,12 @@ where
         Self {
             name,
             registered_name: Some(registered_name),
-            // map: RwLock::new(map),
-            map: map,
+
+            map,
         }
 
     }
 
-    // pub async fn purge_gpu(&self, device_idx:usize) -> Result<(), ThoError>{
-    //     // self.map.write().purge_gpu(None, device_idx).await
-    //     self.map.purge_gpu(None, device_idx).await
-    // }
 }
 
 

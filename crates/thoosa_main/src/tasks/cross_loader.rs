@@ -438,7 +438,11 @@ where
                         let receiver_arc = Arc::clone(&receiver);
                         let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false);
 
-                        tokio::task::spawn_blocking(move || receiver_arc.consume(cross_clc_output, receiver_ctx)).await??;
+                        tokio::task::spawn_blocking(move || {
+                            receiver_arc.consume(cross_clc_output, receiver_ctx);//TODO ConsumeResult
+
+                            Ok::<_, ThoError>(())
+                        }).await??;
 
                     }
                     Err(e) => {
@@ -1116,13 +1120,20 @@ pub(crate) mod mock_cross_loader_clc {
 #[cfg(test)]
 #[allow(refining_impl_trait)]
 pub(crate) mod mock_cross_loader_receiver {
-    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_common::runner::common::RunCtx;
     use mockall::mock;
     use std::fmt::Debug;
     use std::sync::Arc;
-    use thoosa_shared::ThoError;
+    use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
+    use thoosa_common::runner::common::RunCtx;
     use thoosa_shared::applicables_runner::{Input, Output};
+
+    trait CrossLoaderReceiverMockApi<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        fn consume_owned(&self, out: In, ctx: C) -> ConsumeResult<In, ()>;
+    }
 
     mock! {
         #[derive(Debug)]
@@ -1130,29 +1141,38 @@ pub(crate) mod mock_cross_loader_receiver {
         where
             In: Input + Output + Send + Debug + 'static,
             C: RunCtx + 'static,
-        {
-        }
+        {}
 
-        impl<In, C> Stage for CrossLoaderReceiver<In, C>
+        impl<In, C> CrossLoaderReceiverMockApi<In, C> for CrossLoaderReceiver<In, C>
         where
             In: Input + Output + Send + Debug + 'static,
             C: RunCtx + 'static,
         {
-            type Ctx = C;
-            type In<'a> = In where Self: 'a;
-            type Out = ();
+            fn consume_owned(&self, out: In, ctx: C) -> ConsumeResult<In, ()>;
         }
+    }
 
-        impl<In, C> SyncStage for CrossLoaderReceiver<In, C>
-        where
-            In: Input + Output + Send + Debug + 'static,
-            C: RunCtx + 'static,
-        {
-            fn consume<'s>(
-                self: Arc<Self>,
-                out: <Self as Stage>::In<'s>,
-                ctx: <Self as Stage>::Ctx,
-            ) -> Result<<Self as Stage>::Out, ThoError>;
+    impl<In, C> Stage for MockCrossLoaderReceiver<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        type Ctx = C;
+        type In<'a> = In where Self: 'a;
+        type Out = ();
+    }
+
+    impl<In, C> SyncStage for MockCrossLoaderReceiver<In, C>
+    where
+        In: Input + Output + Send + Debug + 'static,
+        C: RunCtx + 'static,
+    {
+        fn consume<'f>(
+            self: Arc<Self>,
+            out: <Self as Stage>::In<'f>,
+            ctx: <Self as Stage>::Ctx,
+        ) -> ConsumeResult<<Self as Stage>::In<'f>, <Self as Stage>::Out> {
+            self.consume_owned(out, ctx)
         }
     }
 
@@ -1172,21 +1192,18 @@ pub(crate) mod mock_cross_loader_receiver {
     {
         pub fn with_receive_fn<F>(mut self, f: F) -> Self
         where
-            F: Fn(In, C) -> Result<(), ThoError> + Send + Sync + 'static,
+            F: Fn(In, C) -> ConsumeResult<In, ()> + Send + Sync + 'static,
         {
             let receive_fn = Arc::new(f);
             self.mock
-                .expect_consume()
+                .expect_consume_owned()
                 .returning(move |out, ctx| Arc::clone(&receive_fn)(out, ctx));
             self.consume_configured = true;
             self
         }
 
         pub fn finish(self) -> MockCrossLoaderReceiver<In, C> {
-            assert!(
-                self.consume_configured,
-                "MockCrossLoaderReceiverBuilder requires receive_fn to be set"
-            );
+            assert!(self.consume_configured, "MockCrossLoaderReceiverBuilder requires receive_fn to be set");
             self.mock
         }
     }
@@ -1208,6 +1225,7 @@ pub(crate) mod mock_cross_loader_receiver {
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
+    use thoosa_common::runner::common::runnable::ConsumeResult;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use super::*;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
@@ -1871,7 +1889,7 @@ mod tests {
                                 move |out, _ctx| {
                                     let result = out.clc_result();
                                     receiver_observed.lock().unwrap().push(result);
-                                    Ok(())
+                                    ConsumeResult::Ok(())
                                 }
                             })
                             .finish(),
@@ -2023,7 +2041,7 @@ mod tests {
 
         let receiver = Arc::new(
             mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
-                .with_receive_fn(|_out, _ctx| Ok(()))
+                .with_receive_fn(|_out, _ctx| ConsumeResult::Ok(()))
                 .finish(),
         );
 

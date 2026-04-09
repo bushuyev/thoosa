@@ -26,7 +26,7 @@ use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use crate::runner::cache_areas::CacheAreaId;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, Stage};
+use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 
@@ -759,7 +759,7 @@ where
         let _ = wrap.load_from_any_device_(to_device_idx).await?;
 
         let mut v = wrap.cached_data.into_vec();
-        let lock = v.swap_remove(to_device_idx);
+        let lock = v.remove(to_device_idx);
         let opt: Option<O> = lock.into_inner();
         Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", wrap.id)))
     }
@@ -1217,15 +1217,17 @@ pub trait ConsumeData {
     type O: Data + WithId + Send + Sync;
 
     fn consume<R, F, P>(
-        &self,
+        self,
         to_device_idx: usize,
         permits_ctx: P,
         trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send
+    ) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
     where
-        F: FnOnce(Self::O, P) -> Result<R, ThoError> + Send,
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx;
+
+    fn burp(o:Self::O) -> impl Future<Output = Self> + Send;
 }
 
 impl <O> WithDataRef for DevicesWrap<O>

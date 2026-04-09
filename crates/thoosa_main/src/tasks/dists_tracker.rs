@@ -24,7 +24,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunId;
-use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_shims::stream::ThoCudaStream;
 use thoosa_shims::stream::ThoStreamGuard;
@@ -1594,7 +1594,7 @@ where
         self: Arc<Self>,
         input: Self::In<'a>,
         _ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    ) -> ConsumeResult<Self::In<'a>, Self::Out> {
         //TODO clone to resources ref
         let iter_0 = input.iter_0();
         let iter_1 = input.iter_1();
@@ -1605,7 +1605,7 @@ where
         let input_id = input.id().clone();
         debug!("DistsTracker::consume:  input.id={input_id:?} slices_0={slices_0:?} slices_1={slices_1:?}");
         let clc_result = input.clc_result();
-        let mask_size = clc_result.mask_size_hint()?;
+        let mask_size = clc_result.mask_size_hint().unwrap();
 
         assert_eq!(mask_size.len(), 3, "DistsTracker::consume: expected 3D mask, got {mask_size:?}");
         assert!(mask_size[1] as usize == slices_0.len() && mask_size[2] as usize == slices_1.len(), "DistsTracker::consume: mask size mismatch mask={mask_size:?} slices_0={} slices_1={}", slices_0.len(), slices_1.len());
@@ -1662,9 +1662,9 @@ where
                 })?;
 
             Ok::<_, ThoError>(())
-        })?;
+        }).unwrap();
 
-        Ok(())
+        ConsumeResult::Ok(())
     }
 }
 
