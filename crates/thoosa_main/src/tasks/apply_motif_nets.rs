@@ -46,7 +46,7 @@ use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
@@ -436,10 +436,6 @@ where
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-
         let tmp_cache = TmpCached::new("tmp_apply_motif_nets").await;
         let tmp_cache_name = tmp_cache.registered_name();
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
@@ -533,21 +529,18 @@ where
         .collect::<Vec<_>>();
 
         let batch_applied_motif_nets = Arc::new(BatchAppliedMotifNets::<C>::new(self.id.clone()));
-        let batch_input = Arc::new(BatchAppliedMotifNetsInput::new(
-            input.id().clone(),
-            Arc::into_inner(tmp_cache).unwrap().into_inner(),
-            motif_nets_applied.len(),
-            device_idx,
-        ));
+
+        let batch_input = TmpCacheWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
-        let motif_nets_applied = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("batch_apply_motif_nets"))),
             ],
             None,
-        )
+        );
+        let motif_nets_applied = oom_handler
         .consume(
             &batch_applied_motif_nets,
             batch_input,
@@ -584,20 +577,17 @@ struct BatchAppliedMotifNetsInput {
     id: SynKey,
     len: usize,
     device_idx: usize,
-    tmp_cache: Arc<tokio::sync::Mutex<Option<TmpCached<ThoTensor<MotifProbability, SynKey>>>>>,
-    materialized_motif_nets_applied: Arc<tokio::sync::OnceCell<Vec<Arc<ThoTensor<MotifProbability, SynKey>>>>>,
-    motif_nets_applied: Option<Vec<Arc<ThoTensor<MotifProbability, SynKey>>>>,
+    motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>,
+
 }
 
 impl BatchAppliedMotifNetsInput {
-    fn new(id: SynKey, tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>, len: usize, device_idx: usize) -> Self {
+    fn new(id: SynKey, motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>, len: usize, device_idx: usize) -> Self {
         Self {
             id,
             len,
             device_idx,
-            tmp_cache: Arc::new(tokio::sync::Mutex::new(Some(tmp_cache))),
-            materialized_motif_nets_applied: Arc::new(tokio::sync::OnceCell::new()),
-            motif_nets_applied: None,
+            motif_nets_applied,
         }
     }
 }
@@ -615,18 +605,15 @@ impl Data for BatchAppliedMotifNetsInput {
     type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
-        self.motif_nets_applied.as_ref().map(|v| v.len()).unwrap_or(self.len).into()
+        self.motif_nets_applied.len().into()
     }
 
     fn device(&self) -> usize {
-        self.motif_nets_applied
-            .as_ref()
-            .and_then(|v| v.first().map(|vv| vv.device()))
-            .unwrap_or(self.device_idx)
+        self.device_idx
     }
 
     fn mem_size(&self) -> u64 {
-        self.motif_nets_applied.as_ref().map(|v| v.iter().map(|vv| vv.mem_size()).sum()).unwrap_or_default()
+        self.motif_nets_applied.iter().map(|vv| vv.mem_size()).sum()
     }
 }
 
@@ -642,54 +629,69 @@ impl Select<()> for BatchAppliedMotifNetsInput {
 
 impl Adjustable for BatchAppliedMotifNetsInput {}
 
-impl ConsumeData for BatchAppliedMotifNetsInput {
-    type O = Self;
+//to avoid Only traits defined in the current crate can be implemented for arbitrary types [E0117]
+#[derive(Debug)]
+struct TmpCacheWrapper {
+    id:SynKey,
+    tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>
+}
+
+impl TmpCacheWrapper {
+    pub fn new(tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>) -> Self {
+        Self { id: SynKey::new(vec![/*todo*/]), tmp_cache }
+    }
+}
+
+impl WithId for TmpCacheWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl ConsumeData for TmpCacheWrapper {
+    type O = BatchAppliedMotifNetsInput;
 
     fn consume<R, F, P>(
-        &self,
+        self,
         to_device_idx: usize,
-        permits_ctx: P,
+        ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
+    ) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
     where
-        F: FnOnce(Self::O, P) -> Result<R, ThoError> + Send,
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx,
     {
-        let id = self.id.clone();
-        let len = self.len;
-        let tmp_cache = Arc::clone(&self.tmp_cache);
-        let tmp_cache_for_load = Arc::clone(&tmp_cache);
-        let materialized_motif_nets_applied = Arc::clone(&self.materialized_motif_nets_applied);
-        let materialized_motif_nets_applied_for_load = Arc::clone(&materialized_motif_nets_applied);
 
         async move {
-            let motif_nets_applied = materialized_motif_nets_applied_for_load
-                .get_or_try_init(|| async move {
-                    let mut tmp_cache = tmp_cache_for_load.lock().await;
-                    let tmp_cache = tmp_cache.take().ok_or_else(|| ThoError::new("BatchAppliedMotifNetsInput::consume: tmp_cache already taken before materialization"))?;
-                    // Materialize inside OOMHandler::consume's executor closure so nobody can run dump_to_cpu after take_all and before batch consume starts.
-                    let motif_nets_applied = tmp_cache.take_all(to_device_idx).await?;
-                    Ok::<_, ThoError>(motif_nets_applied.into_iter().map(Arc::new).collect())
-                })
-                .await?
-                .clone();
-            let device_idx = motif_nets_applied.first().map(|v| v.device()).unwrap_or(to_device_idx);
-
             do_run(
-                Self {
-                    id,
-                    len,
-                    device_idx,
-                    tmp_cache,
-                    materialized_motif_nets_applied,
-                    motif_nets_applied: Some(motif_nets_applied),
+                BatchAppliedMotifNetsInput {
+                    id: SynKey::new(vec![]),//TODO seems to be not used
+                    len: 0, //seems tobe not used
+                    device_idx: ctx.device_idx(),
+
+                    motif_nets_applied: self.tmp_cache.take_all(ctx.device_idx()).await.unwrap(),
                 },
-                permits_ctx,
+                ctx,
             )
         }
     }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCacheWrapper::burp"))]
+    fn burp(o: Self::O) -> impl Future<Output=Self> + Send {
+        debug!("TmpCacheWrapper::burp: o.motif_nets_applied.len={}", o.motif_nets_applied.len());
+        async {
+            let cache = TmpCached::new("tmp tmp").await;
+            for x in o.motif_nets_applied {
+                cache.insert(x);
+            }
+            TmpCacheWrapper::new(cache)
+        }
+    }
 }
+
 
 #[derive(Debug, Named)]
 struct BatchAppliedMotifNets<C>
@@ -741,12 +743,10 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="BatchAppliedMotifNets::consume"))]
-    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
         let input_id = input.id().clone();
 
-        let mut motif_nets_applied = input
-            .motif_nets_applied
-            .ok_or_else(|| ThoError::new("BatchAppliedMotifNets::consume: input must be materialized via ConsumeData before execution"))?;
+        let mut motif_nets_applied = input.motif_nets_applied;
 
         debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?}", motif_nets_applied.len(), input_id);
 
@@ -763,8 +763,8 @@ where
                 }
                 let id = v.id().clone();
                 let t = stretch(v.t_ref(), max_match_len as usize, 0)?;//stretch instead of pad to keep it time-aligned in motif nets with different window
-                Ok(Arc::new(ThoTensor::new(id, t)?))
-            }).collect::<Result<Vec<_>, ThoError>>()?
+                Ok(ThoTensor::new(id, t)?)
+            }).collect::<Result<Vec<_>, ThoError>>().unwrap()
         } else {
             motif_nets_applied
         };
@@ -775,13 +775,13 @@ where
 
         let res_t = Tensor::f_vstack(
             &motif_nets_applied.iter().map(|v| v.t_ref().shallow_clone()).collect::<Vec<_>>(),
-        )?;
+        ).unwrap();
 
         debug!("BatchAppliedMotifNets::consume: res_t.size={:?}", res_t.size());
 
-        let motif_nets_applied = ThoTensor::new(self.out_id(&input_id), res_t)?;
+        let motif_nets_applied = ThoTensor::new(self.out_id(&input_id), res_t).unwrap();
 
-        Ok(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens))
+        ConsumeResult::Ok(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens))
     }
 }
 

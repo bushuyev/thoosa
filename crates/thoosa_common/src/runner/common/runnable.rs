@@ -39,6 +39,11 @@ where
 
 }
 
+#[derive(Debug)]
+pub enum ConsumeResult<I, O> {
+    Failed{input:I, error:ThoError},
+    Ok(O)
+}
 
 pub trait SyncStage: Stage + Debug {
     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
@@ -49,7 +54,7 @@ pub trait SyncStage: Stage + Debug {
         self: Arc<Self>,
         _input: Self::In<'f>,
         _ctx: Self::Ctx,
-    ) -> Result<Self::Out, ThoError> {
+    ) -> ConsumeResult<Self::In<'f>, Self::Out> {
         unimplemented!()
     }
 }

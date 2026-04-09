@@ -75,7 +75,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
 
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{BandPassFilter, NotchBandFilter, SavGolFilter, MedianFilter, AverageFilter};
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -86,7 +86,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
+use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_hook, PERF};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, Metrics};
@@ -305,6 +305,10 @@ where
     } else {
         None
     };
+
+    install_panic_hook(ws.read()
+        .log_path()
+        .join(format!("panic_{}.log", cdt_for_dir).to_owned()));
 
 
     let _logging_guards = init_tracing(
@@ -1309,7 +1313,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             select_motifs_run_config: run_all_select_motifs_config_opt_0::<FindAndSelectMotifsRunConfigFields>(),
         },
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig::new(10, 3),
+        find_and_select_motifs_opt_config: OptConfig::new(30, 10),
     };
 
     /////////////////////train_motifs
@@ -2525,7 +2529,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, median_window_from_find_and_select, run_all, run_all_config_0, run_all_config_test_1, run_all_find_motifs_config_opt_0, run_all_find_motifs_config_grid_0, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
+    use crate::cli::{import_resources, import_resources_with_pure_sets, median_window_from_find_and_select, run_all, run_all_config_0, run_all_config_test_1, run_all_find_motifs_config_grid_0, run_all_find_motifs_config_opt_0, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -2579,13 +2583,13 @@ mod cli_tests {
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::run_configs::RunId;
-    use thoosa_shared::test_utils::{set_panic_hook, MotifKind};
+    use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::{cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use thoosa_shared::perf_logging::{format_perf_map, PERF};
+    use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, MaxParallelCtx, RunCtx};
+    use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_common::runner::common::runnable::AsyncStage;
