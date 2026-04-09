@@ -234,7 +234,7 @@ impl FindAndSelectMotifsStage {
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?));
 
-        let select_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?)));
+
 
         let find_run_id = Self::save_run_config_with_input(
             store,
@@ -289,7 +289,10 @@ impl FindAndSelectMotifsStage {
         );
 
         let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = Arc::clone(&select_stage)
-            .run(select_input, ctx.branch(Some("select_stage_output"), true))
+            .run(
+                Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?))),
+                ctx.branch(Some("select_stage_output"), true)
+            )
             .await?;
 
         let mut select_savable:SelectMotifsSavableResult = Arc::into_inner(select_stage_output)

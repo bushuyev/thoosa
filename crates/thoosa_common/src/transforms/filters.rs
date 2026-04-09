@@ -126,7 +126,9 @@ pub struct MedianFilterParams {
 
 impl InputFilterLengthAdjuster for MedianFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
-        Box::new(|l: u32| l)
+        let window = self.window;
+
+        Box::new(move |l: u32| l.saturating_sub(window))
     }
 }
 
@@ -143,7 +145,10 @@ pub struct AverageFilterParams {
 
 impl InputFilterLengthAdjuster for AverageFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
-        Box::new(|l: u32| l)
+        let window = self.window;
+        let step = self.step;
+
+        Box::new(move |l: u32| l.saturating_sub(window) / step)
     }
 }
 
