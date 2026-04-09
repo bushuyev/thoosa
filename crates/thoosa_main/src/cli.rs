@@ -863,8 +863,7 @@ async fn run_all(
             info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_ids={best_find_and_select_result_ids:?}");
             assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
 
-            let read_guard = store;
-            let select_motifs_run_ids = read_guard
+            let select_motifs_run_ids = store
                 .list_input_run_ids(&best_find_and_select_result_ids)
                 .await?
                 .into_iter().map(

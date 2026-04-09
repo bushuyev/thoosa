@@ -500,7 +500,7 @@ pub mod mock_global_ctx {
             debug!("install_global_ctx_mock");
             use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
             let ctx = MockGlobalCtx::global_context();
-            if unsafe {USE_REAL_CTX} {
+            if unsafe {USE_REAL_CTX} {//TODO make it param
                 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
                 let real: &'static RealGlobalCtx = RealGlobalCtx::real_global();
