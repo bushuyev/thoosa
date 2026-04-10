@@ -1112,7 +1112,7 @@ where
 
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(5),
+        step: RangeOrValue::Value(10),
         // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
         window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((100, 0)) },
@@ -1122,7 +1122,7 @@ where
             // }),
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(2),
+                step: RangeOrValue::Value(10),
             }),
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
@@ -1131,17 +1131,17 @@ where
             //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
             // }),
         ]),
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                q: RangeOrValue::Range { range: 0.0..0.05, step: None },
-            }),
-        }),
-        // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
         //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
         //         q: RangeOrValue::Range { range: 0.0..0.05, step: None },
         //     }),
-        //     slices: RangeOrValue::Value(1000),
         // }),
+        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+            }),
+            slices: RangeOrValue::Value(1000),
+        }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
@@ -1201,6 +1201,14 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
     SelectMotifsRunConfigRangeOrValue {
         id: None,
         extend_config: None,
+        // extend_config: Some(ExtendMotifsConfigRangeOrValue{
+        //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue { _path_pd: Default::default() }),
+        //     slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+        //         // q: RangeOrValue::Value(0.05),
+        //         q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+        //         // q: RangeOrValue::Range { range: 0.0..0.05, step: Some((0.05, 2)) },
+        //     }),
+        // }),
         motif_criteria: MotifCriteriaRangeOrValue {
             norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
                 criterion: NormThicknessRunConfigRangeOrValue {

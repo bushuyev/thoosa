@@ -423,7 +423,7 @@ where
                     let self_arc = Arc::clone(&self_for_train);
 
                     self_arc.run_inner(
-                        ctx.branch(/*TODO impl WithId for RunConfigs*/Some(&format!("train on run_config={run_config:?}")), false),
+                        ctx.branch(Some(&format!("train on run_config={run_config:?}")), false),
                         device_idx_for_train,
                         vs,
                         run_config,
