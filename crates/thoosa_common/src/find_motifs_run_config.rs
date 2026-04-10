@@ -470,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn test_input_len_adjuster_median_is_identity() {
+    fn test_input_len_adjuster_median() {
         let config = FindMotifsRunConfig::new_with_running_mean(
             None,
             100,
@@ -479,11 +479,11 @@ mod tests {
             None,
         );
         let adjust = config.input_len_adjuster();
-        assert_eq!(1000, adjust(1000));
+        assert_eq!(989, adjust(1000));
     }
 
     #[test]
-    fn test_input_len_adjuster_moving_average_is_identity() {
+    fn test_input_len_adjuster_moving_average() {
         let config = FindMotifsRunConfig::new_with_running_mean(
             None,
             100,
@@ -492,7 +492,7 @@ mod tests {
             None,
         );
         let adjust = config.input_len_adjuster();
-        assert_eq!(1000, adjust(1000));
+        assert_eq!(989, adjust(1000));
     }
 
     #[test]
@@ -1514,24 +1514,8 @@ impl SelectMotifsRunConfig {
         Self { id, extend_config, motif_criteria, avg_threshold: threshold, min_slices: None, max_slices: None, extend_max_slices: None }
     }
 
-    // #[cfg(test)]
-    pub fn new_(id: Option<RunId>, _motif_selector: MotifSelector) -> Self {
+    pub fn new(id: Option<RunId>) -> Self {
         Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), MotifCriteria::default(), 0.5)
     }
 
-    pub fn new() -> Self {
-        Self::new_with_fields(None, Some(ExtendMotifsConfig::default()), MotifCriteria::default(), 0.5)
-    }
-}
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
-pub struct ByAvgEucDist {
-    #[in_map]
-    #[run_config]
-    pub k: f32,
-}
-
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
-pub enum MotifSelector {
-    ByAvgEucDist(ByAvgEucDist), //TODO
 }
