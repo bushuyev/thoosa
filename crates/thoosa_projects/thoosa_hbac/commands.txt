@@ -94,6 +94,3 @@ sqlite> insert into selected_motifs (motif_id, run_id, rate) values
 
 gdb -p 572915 -batch   -ex "set pagination off"   -ex "set height 0"   -ex "set width 0"   -ex "set print thread-events off"   -ex "set backtrace limit 0"   -ex "set logging file /tmp/gdb_threads_572915_full.txt"   -ex "set logging overwrite on"   -ex "set logging redirect on"   -ex "set logging enabled on"   -ex "info threads"   -ex "thread apply all bt full 200"   -ex "set logging enabled off"
 
-
-
-oom consume in RandomSlicesLoader and MotifLoader codex resume 019d6d99-87f3-7381-a0f2-04a35c1cd499

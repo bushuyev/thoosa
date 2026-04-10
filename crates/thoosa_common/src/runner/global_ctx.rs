@@ -12,7 +12,7 @@ use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{backtrace_head_lines, with_async_perf_log, with_perf_log, Cause, ThoError, LOCK_TIMEOUT};
-use tokio::sync::{RwLock as AsyncRwLock, RwLockReadGuard};
+use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
@@ -21,11 +21,11 @@ use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
-    // semaphores: Vec<Box<dyn PermitSource>>,
+
     executors: Vec<DynamicTaskExecutor>,
     num_devices: usize,
 
-    caches: tokio::sync::RwLock<HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>,
+    caches: parking_lot::RwLock<HashMap<&'static str, Arc<CacheRegistryEntry>>>,
     is_all_on_cpu: Vec<AtomicBool>,
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_time: AtomicU64, //for tracking CPU-only lifetime
@@ -34,6 +34,46 @@ pub struct GlobalCtx {
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
+
+#[derive(Debug)]
+struct CacheRegistryEntry {
+    purger: Arc<dyn FuturesRunnerMapPurger>,
+    gate: Arc<AsyncRwLock<()>>,
+}
+
+type CacheSnapshot = Vec<(&'static str, Arc<CacheRegistryEntry>)>;
+
+#[derive(Debug, Clone)]
+pub struct RegisteredCacheHandle {
+    name: &'static str,
+    gate: Arc<AsyncRwLock<()>>,
+}
+
+impl RegisteredCacheHandle {
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    pub async fn lock_exclusive(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        with_async_perf_log(
+            async || {
+                tokio::time::timeout(LOCK_TIMEOUT, self.gate.clone().write_owned())
+                    .await
+                    .expect("RegisteredCacheHandle::lock_exclusive: timed out waiting for cache gate write lock")
+            },
+            "RegisteredCacheHandle/lock_exclusive/write_cache_gate",
+        )
+        .await
+    }
+
+    #[cfg(any(test, feature = "mock_global_ctx"))]
+    pub fn for_tests(name: &'static str) -> Self {
+        Self {
+            name,
+            gate: Arc::new(AsyncRwLock::new(())),
+        }
+    }
+}
 
 #[cfg_attr(any(test, feature = "mock_global_ctx"), automock)]
 impl GlobalCtx {
@@ -50,7 +90,7 @@ impl GlobalCtx {
             executors: (1..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(16).unwrap()))
                 .collect(),
 
-            caches: tokio::sync::RwLock::new(HashMap::new()),
+            caches: parking_lot::RwLock::new(HashMap::new()),
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
@@ -81,31 +121,63 @@ impl GlobalCtx {
         Self::global()
     }
 
-    pub async fn register_cache(&self, cache: (&'static str, &'static dyn FuturesRunnerMapPurger)) {
+    pub fn register_cache(&self, cache: (&'static str, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {
         debug!("GlobalCtx::register_cache: cache={}", cache.0);
 
+        let gate = Arc::new(AsyncRwLock::new(()));
+        let entry = Arc::new(CacheRegistryEntry {
+            purger: cache.1,
+            gate: Arc::clone(&gate),
+        });
+
         assert!(
-            with_async_perf_log(
-                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect("GlobalCtx::register_cache: timed out waiting for caches write lock"),
+            with_perf_log(
+                || self.caches.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::register_cache: timed out waiting for caches write lock"),
                 "GlobalCtx/register_cache/write_caches",
             )
-            .await
-            .insert(cache.0, cache.1)
+            .insert(cache.0, entry)
             .is_none()
         );
 
         debug!("GlobalCtx::register_cache: cache={} lock acquired/released, done", cache.0);
+
+        RegisteredCacheHandle { name: cache.0, gate }
     }
 
-    pub async fn remove_cache(&self, key:&'static str) {
+    fn caches_snapshot(&self, ctx: &'static str) -> CacheSnapshot {
+        with_perf_log(
+            || {
+                self.caches
+                    .try_read_for(LOCK_TIMEOUT)
+                    .unwrap_or_else(|| panic!("{ctx}: timed out waiting for caches read lock"))
+                    .iter()
+                    .map(|(type_name, entry)| (*type_name, Arc::clone(entry)))
+                    .collect()
+            },
+            ctx,
+        )
+    }
+
+    async fn lock_cache_shared(entry: &Arc<CacheRegistryEntry>, ctx: &'static str) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        with_async_perf_log(
+            async || {
+                tokio::time::timeout(LOCK_TIMEOUT, entry.gate.clone().read_owned())
+                    .await
+                    .unwrap_or_else(|_| panic!("{ctx}: timed out waiting for cache gate read lock"))
+            },
+            ctx,
+        )
+        .await
+    }
+
+    pub fn remove_cache(&self, key:&'static str) {
         debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
-            with_async_perf_log(
-                async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.write()).await.expect(&format!("GlobalCtx::remove_cache, key={key}: timed out waiting for caches write lock")),
+            with_perf_log(
+                || self.caches.try_write_for(LOCK_TIMEOUT).expect(&format!("GlobalCtx::remove_cache, key={key}: timed out waiting for caches write lock")),
                 "GlobalCtx/remove_cache/write_caches",
             )
-            .await
             .remove(key)
             .is_some()
         );
@@ -137,47 +209,31 @@ impl GlobalCtx {
 
 
     #[cfg(tho_debug)]
-    pub async fn debug_caches<'a>(
-        &self,
-        device_idx: usize,
-        descr: &str,
-        maps_guard: Option<&'a RwLockReadGuard<'a, HashMap<&'static str, &'static dyn FuturesRunnerMapPurger>>>,
-    ) {
+    async fn debug_caches_snapshot(&self, device_idx: usize, descr: &str, maps: &CacheSnapshot) {
         debug!("GlobalCtx::debug_caches: descr={descr:?}");
 
-        let local_guard;
-        let maps = match maps_guard {
-            Some(g) => g,
-            None => {
-                local_guard = with_async_perf_log(
-                    async || {
-                        tokio::time::timeout(LOCK_TIMEOUT, self.caches.read())
-                            .await
-                            .expect("GlobalCtx::debug_caches: timed out waiting for caches read lock")
-                    },
-                    "GlobalCtx/debug_caches/read_caches",
-                )
-                    .await;
-                &local_guard
-            }
-        };
-
-        debug!("debug_caches: descr={descr} lock acquired device_idx={device_idx}");
-
         let mut total_gpu_mem = 0;
-        for (type_name, map) in maps.iter() {
+        for (type_name, entry) in maps.iter() {
+            let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::debug_caches: timed out waiting for cache gate read lock").await;
             info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
-            match map.debug_gpu(device_idx).await {
+            match entry.purger.debug_gpu(device_idx).await {
                 Ok(v) => total_gpu_mem += v,
                 Err(e) => error!("GlobalCtx::debug_gpu: failed with {e:?}"),
             }
         }
 
         info!(
-        "GlobalCtx::debug_gpu: descr={descr} lock acquired/released device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
+        "GlobalCtx::debug_gpu: descr={descr} device_idx={device_idx} total_gpu_mem={total_gpu_mem} device_stats={:?}",
         thoosa_shims::device_stats::get_device_stats((device_idx - 1) as i32)
     );
     }
+
+    #[cfg(tho_debug)]
+    pub async fn debug_caches(&self, device_idx: usize, descr: &str) {
+        let maps = self.caches_snapshot("GlobalCtx::debug_caches: timed out waiting for caches read lock");
+        self.debug_caches_snapshot(device_idx, descr, &maps).await;
+    }
+
     ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn dump_all_to_cpu<'a>(
@@ -188,26 +244,19 @@ impl GlobalCtx {
     ) -> Result<(), ThoError> {
         assert_ne!(device_idx, 0);
         debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} descr={descr}");
-        let maps = with_async_perf_log(//needs to be held while iterating over the maps so that purge_gpu is not invoked on dropped item if the (TmpCached) map was removed
-            async || tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock"),
-            "GlobalCtx/dump_all_to_cpu/read_caches",
-        ).await;
-
-        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} lock acquired  required_ids={required_ids:?}  descr={descr}");
-
+        let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
-        for (type_name, map) in maps.iter() {
+        for (type_name, entry) in maps.iter() {
+            let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock").await;
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
-
-            map.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx, type_name).await?;
-
+            entry.purger.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx, type_name).await?;
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
         self.is_all_on_cpu[device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} lock acquired/released required_ids={required_ids:?}  descr={descr} done");
+        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} descr={descr} done");
 
         Ok(())
     }
@@ -218,35 +267,25 @@ impl GlobalCtx {
 
         let purge_until = self.cache_time.load(Relaxed).saturating_sub(retain_last);
 
-        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} lock acquired");
+
         if purge_until > 0 {
-
-
-            //needs to be held while iterating over the maps so that purge_cpu is not invoked on dropped item if the (TmpCached) map was removed
-            let maps = with_async_perf_log(
-                async || {
-                    tokio::time::timeout(LOCK_TIMEOUT, self.caches.read()).await.expect("GlobalCtx::purge_cpu: timed out waiting for caches read lock")
-                },
-                "GlobalCtx/purge_cpu/read_caches",
-            ).await;
+            let maps = self.caches_snapshot("GlobalCtx::purge_cpu: timed out waiting for caches read lock");
 
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(1, "before purge_cpu", Some(&maps)).await;
+            self.debug_caches_snapshot(1, "before purge_cpu", &maps).await;
 
-            for (type_name, map) in maps.iter() {
-                let purged = map.purge_cpu(purge_until).await;
+            for (type_name, entry) in maps.iter() {
+                let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::purge_cpu: timed out waiting for cache gate read lock").await;
+                let purged = entry.purger.purge_cpu(purge_until).await;
                 debug!("GlobalCtx::purge_cpu: purged {purged} from {type_name}");
             }
 
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(1, "after purge_cpu", Some(&maps)).await;
+            self.debug_caches_snapshot(1, "after purge_cpu", &maps).await;
         }
 
-
-
-        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} lock acquired/released done");
+        debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
     }
-
 
     pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {
         with_perf_log(
@@ -288,7 +327,7 @@ impl GlobalCtx {
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
     use std::sync::Arc;
-    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
     use thoosa_shared::Cause;
     use thoosa_shared::ThoError;
     use async_trait::async_trait;
@@ -398,14 +437,10 @@ pub mod mock_global_ctx {
         pub fn with_register_cache(mut self) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_register_cache().returning({
-                    move |cache| {
-                        tokio::task::block_in_place(move || {
-                            tokio::runtime::Handle::current().block_on(real.register_cache(cache));
-                        });
-                    }
+                    move |cache| real.register_cache(cache)
                 });
             } else {
-                self.mock.expect_register_cache();
+                self.mock.expect_register_cache().returning(|cache| RegisteredCacheHandle::for_tests(cache.0));
             }
 
             self
@@ -414,11 +449,7 @@ pub mod mock_global_ctx {
         pub fn with_remove_cache(mut self) -> Self {
             if let Some(real) = self.real {
                 self.mock.expect_remove_cache().returning({
-                    move |key| {
-                        tokio::task::block_in_place(move || {
-                            tokio::runtime::Handle::current().block_on(real.remove_cache(key));
-                        });
-                    }
+                    move |key| real.remove_cache(key)
                 });
             } else {
                 self.mock.expect_remove_cache();
