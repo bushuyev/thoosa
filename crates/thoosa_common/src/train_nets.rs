@@ -2561,28 +2561,110 @@ mod train_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_train_self_attention_label_node() -> Result<(), ThoError> {
+        tch::manual_seed(42);
+        let motif_nets = 2;
+
+
+
+        let batch = 10usize;
+        let eval_x_y = gen_motifs_output(
+            batch,
+            motif_nets as usize,
+            100..=100,
+            LabelSignal::ByOrder,
+            0.1,
+            None,
+        )?;
+        // crate::utils::debug_plot_impl(&eval_x_y.0.i((.., 0, ..)), &format!("eval_random_motif_net_0_output_label_{:?}",  eval_x_y.1), 0)?;
+        // crate::utils::debug_plot_impl(&eval_x_y.0.i((.., 1, ..)), &format!("eval_random_motif_net_1_output_label_{:?}",  eval_x_y.1), 0)?;
+
+        let (eval_loss_before, first_loss, last_loss, eval_loss) = train_self_attention(
+            motif_nets,
+            SelfAttentionNetParams::new(20, 1, 1, 0.1),
+            batch,
+            eval_x_y,
+            |step| {
+                let v = gen_motifs_output(
+                    batch,
+                    motif_nets as usize,
+                    100..=100,
+                    LabelSignal::ByOrder,
+                    0.1,
+                    None,
+                )?;
+                debug!("y {}", v.1);
+                // crate::utils::debug_plot_impl(&v.0.i((.., 0, ..)), &format!("{step}_random_motif_net_0_output_label_{:?}",  v.1), 0)?;
+                // crate::utils::debug_plot_impl(&v.0.i((.., 1, ..)), &format!("{step}_random_motif_net_1_output_label_{:?}",  v.1), 0)?;
+                Ok(v)
+            },
+            100,
+        )?;
+
+        debug!(
+            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
+            first_loss,
+        );
+
+
+
+        Ok(())
+    }
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_test_train_self_attention_label_node() -> Result<(), ThoError> {
         tch::manual_seed(42);
         let motif_nets = 30;
-        let self_attention_net_params = SelfAttentionNetParams::new(64, 4, 4, 0.1);
+
+        let (eval_loss_before, first_loss, last_loss, eval_loss) = train_self_attention(
+            motif_nets,
+            SelfAttentionNetParams::new(64, 4, 2, 0.1),
+            32usize,
+            gen_motifs_output(
+                32,
+                motif_nets as usize,
+                220..=320,
+                LabelSignal::ByOrder,
+                0.35,
+                Some(22),
+            )?, |step| gen_motifs_output(
+                32,
+                motif_nets as usize,
+                220..=320,
+                LabelSignal::ByOrder,
+                0.35,
+                Some(1_000 + step as u64),
+            ), 120,
+        )?;
+
+        debug!(
+            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
+            first_loss,
+        );
+
+        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
+        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
+    fn train_self_attention<XYF>(motif_nets: u32, attention_net_params: SelfAttentionNetParams, batch: usize, x_y_lengths_eval: (Tensor, Tensor, Vec<usize>), x_y_lengths_train: XYF, steps: i32) -> Result<(f64, Option<f64>, f64, f64), ThoError>
+    where
+        XYF: Fn(i32)->Result<(Tensor, Tensor, Vec<usize>), ThoError>
+    {
+
         let params = LabelNetParams::new(
             motif_nets,
-            LabelNetTypeParams::SelfAttentionNetParams(self_attention_net_params),
+            LabelNetTypeParams::SelfAttentionNetParams(attention_net_params),
         );
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
-        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
+        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-2)?;
 
-        let batch = 32usize;
-        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(
-            batch,
-            motif_nets as usize,
-            220..=320,
-            LabelSignal::ByOrder,
-            0.35,
-            Some(22),
-        )?;
+
+        let (x_eval, y_eval, lengths_eval) = x_y_lengths_eval;
         let target_eval = y_eval.unsqueeze(1);
         let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
 
@@ -2592,15 +2674,8 @@ mod train_tests {
 
         let mut first_loss = None;
         let mut last_loss = 0.0;
-        for step in 0..120 {
-            let (x_train, y_train, lengths_train) = gen_motifs_output(
-                batch,
-                motif_nets as usize,
-                220..=320,
-                LabelSignal::ByOrder,
-                0.35,
-                Some(1_000 + step as u64),
-            )?;
+        for step in 0..steps {
+            let (x_train, y_train, lengths_train) = x_y_lengths_train(step)?;
             let target_train = y_train.unsqueeze(1);
             let mut batch_lengths = BatchLengths::new(lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>());
             let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
@@ -2615,16 +2690,7 @@ mod train_tests {
         let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
         let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
         let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
-
-        debug!(
-            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
-            first_loss,
-        );
-
-        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
-        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
-
-        Ok(())
+        Ok((eval_loss_before, first_loss, last_loss, eval_loss))
     }
 
     async fn _test_save_load_conv_label_node(motif_nets: u32, max_motif_nodes: i32, all_slices: &[i32], batch: i64, conv_net_params: ConvNetParams) -> Result<(), ThoError> {
