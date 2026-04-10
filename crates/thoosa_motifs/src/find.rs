@@ -54,7 +54,7 @@ use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use thoosa_common::tho_device::{ThoDevice};
 use thoosa_common::bool_iter::BoolTensorIterator;
 use thoosa_common::dims::{Dims, TCD, TCSD};
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifSelector, SelectMotifsRunConfig, SlicesFilter};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig, SlicesFilter};
 use thoosa_common::loader::Loader;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
