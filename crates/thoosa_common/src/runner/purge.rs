@@ -20,6 +20,75 @@ use crate::runner::common::cachable::WithDataRef;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;
 
+#[derive(Debug)]
+pub struct StaticMapPurger<M: 'static> {
+    map: &'static M,
+}
+
+impl<M> StaticMapPurger<M> {
+    pub const fn new(map: &'static M) -> Self {
+        Self { map }
+    }
+}
+
+#[async_trait]
+impl<M> FuturesRunnerMapPurger for StaticMapPurger<M>
+where
+    M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
+{
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        self.map.purge_gpu(ids_to_keep, device_idx, name).await
+    }
+
+    #[cfg(any(debug_assertions, tho_debug))]
+    async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
+        self.map.debug_gpu(device_idx).await
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        self.map.purge_cpu(purge_until).await
+    }
+}
+
+#[derive(Debug)]
+pub struct WeakMapPurger<M> {
+    map: std::sync::Weak<M>,
+}
+
+impl<M> WeakMapPurger<M> {
+    pub fn new(map: std::sync::Weak<M>) -> Self {
+        Self { map }
+    }
+}
+
+#[async_trait]
+impl<M> FuturesRunnerMapPurger for WeakMapPurger<M>
+where
+    M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
+{
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self.map.upgrade() {
+            Some(map) => map.purge_gpu(ids_to_keep, device_idx, name).await,
+            None => Ok(()),
+        }
+    }
+
+    #[cfg(any(debug_assertions, tho_debug))]
+    async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
+        match self.map.upgrade() {
+            Some(map) => map.debug_gpu(device_idx).await,
+            None => Ok(0),
+        }
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        match self.map.upgrade() {
+            Some(map) => map.purge_cpu(purge_until).await,
+            None => 0,
+        }
+    }
+}
+
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
     async fn purge_gpu(

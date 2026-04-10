@@ -580,7 +580,10 @@ mod tests {
         len: usize,
     }
 
-    static DUMMY_LOADER_CACHE_PTR: OnceLock<usize> = OnceLock::new();
+    static DUMMY_LOADER_CACHE_PTR: OnceLock<Arc<DashMap<
+        <<DummyLoader as Stage>::Out as WithId>::ID,
+        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<<DummyLoader as Stage>::Out>>, ThoError>>>,
+    >>> = OnceLock::new();
     static DUMMY_LOADER_REGISTER: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
 
     #[async_trait::async_trait]
@@ -593,38 +596,21 @@ mod tests {
             Self: Sized,
             Self::Out: Data + Sync + Send,
         {
-            let ptr_ref = DUMMY_LOADER_CACHE_PTR.get_or_init(|| {
-                let map: &'static DashMap<
-                    <<Self as Stage>::Out as WithId>::ID,
-                    Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
-                > = Box::leak(Box::new(Default::default()));
-                map as *const _ as usize
-            });
-
-            let map: &'static DashMap<
-                <<Self as Stage>::Out as WithId>::ID,
-                Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
-            > = unsafe { &*((*ptr_ref) as *const _) };
+            let map = DUMMY_LOADER_CACHE_PTR.get_or_init(|| Arc::new(Default::default()));
 
             let cache_name: &'static str = "LoadedTensorId";
 
-
-
             DUMMY_LOADER_REGISTER
                 .get_or_init(|| async move {
-                    // #[cfg(any(test, feature = "mock_global_ctx"))]
-                    // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
                     GlobalCtx::global()
                         .register_cache((
                             cache_name,
-                            map as &'static dyn FuturesRunnerMapPurger,
-                        ))
-                        .await;
+                            Arc::new(crate::runner::purge::StaticMapPurger::new(map.as_ref())) as Arc<dyn FuturesRunnerMapPurger>,
+                        ));
                 })
                 .await;
 
-            map
+            map.as_ref()
         }
     }
 

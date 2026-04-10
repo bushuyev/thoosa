@@ -9,15 +9,15 @@ use rand::distr::{Alphanumeric, SampleString};
 use log::{debug, error, info, warn};
 use mockall_double::double;
 use parking_lot::RwLock;
-use tokio::runtime::Handle;
 use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::{ThoError, LOCK_TIMEOUT};
+use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::purge::FuturesRunnerMapPurger;
+use crate::runner::global_ctx::RegisteredCacheHandle;
+use crate::runner::purge::{FuturesRunnerMapPurger, WeakMapPurger};
 
 
 
@@ -28,9 +28,8 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     pub name: String,
-    registered_name: Option<&'static str>,
-    // map: RwLock<Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>>
-    map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>
+    registered_cache: Option<RegisteredCacheHandle>,
+    map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>>,
 
 }
 
@@ -39,12 +38,15 @@ where
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     pub fn registered_name(&self) -> &'static str {
-        self.registered_name.expect("TmpCached::registered_name: cache already unregistered")
+        self.registered_cache.as_ref().expect("TmpCached::registered_name: cache already unregistered").name()
     }
 
-    async fn unregister_cache(&mut self) {
-        if let Some(name) = self.registered_name.take() {
-            GlobalCtx::global().remove_cache(name).await;
+    async fn unregister_cache(&mut self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
+        if let Some(cache) = self.registered_cache.take() {
+            GlobalCtx::global().remove_cache(cache.name());
+            Some(cache.lock_exclusive().await)
+        } else {
+            None
         }
     }
 
@@ -62,12 +64,10 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
     pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all: name={}", self.name);
-        self.unregister_cache().await;
+        let _cache_guard = self.unregister_cache().await;
 
         let mut res = vec![];
-        let map = {
-            mem::take(&mut self.map)
-        };
+        let map = Arc::into_inner(mem::take(&mut self.map)).expect("TmpCached::take_all: map still in use after unregister_cache");
 
         for (key, val) in map.into_iter() {
 
@@ -95,20 +95,13 @@ where
         let name = format!("{}_{}", name, Alphanumeric.sample_string(&mut rand::rng(), 16));
         let registered_name = name.clone().leak();
 
-        let map: Box<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Box::new(Default::default());
-
-        let ptr_ref: *const DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>> = std::ptr::from_ref(&*map);
-
-        let map_ref: &'static DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>> = unsafe {
-            &*(ptr_ref)
-        };
-
-
-        GlobalCtx::global().register_cache((registered_name, map_ref as &'static dyn FuturesRunnerMapPurger,)).await;
+        let map: Arc<DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>> = Arc::new(Default::default());
+        let registered_cache = GlobalCtx::global()
+            .register_cache((registered_name, Arc::new(WeakMapPurger::new(Arc::downgrade(&map))) as Arc<dyn FuturesRunnerMapPurger>));
 
         Self {
             name,
-            registered_name: Some(registered_name),
+            registered_cache: Some(registered_cache),
 
             map,
         }
@@ -143,31 +136,19 @@ where
 
         for (key, val) in keys_vals {
             debug!("TmpCached::purge_gpu: key={key:?}");
-            // if let Some(value) = self.get(&key) {
-                if let Err(err) = val.dump_to_cpu(device_idx).await {
-                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
-                } else {
-                    debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
-                }
-            // }
+
+            if let Err(err) = val.dump_to_cpu(device_idx).await {
+                debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
+            } else {
+                debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
+            }
+
         }
         Ok(())
     }
 
+    //it's just dropped
     async fn purge_cpu(&self, purge_until: u64) -> usize {
-       /* let mut purged_count = 0usize;
-
-        debug!("TmpCached::purge_cpu: purge_since={purge_until}");
-        self.retain(|key, value| {
-            let keep = !value.is_on_cpu_before(purge_until);
-            if !keep {
-                purged_count+=1;
-                debug!("TmpCached::purge_cpu: key={key:?} removed");
-            }
-            keep
-        });
-
-        purged_count*/
         0
     }
 }
@@ -179,15 +160,10 @@ where
 {
     fn drop(&mut self) {
 
-
-        if let Some(name) = self.registered_name.take() {
+        if let Some(cache) = self.registered_cache.take() {
             warn!("TmpCached::drop: {}", self.name);//i.e. take_all was not called
 
-            tokio::task::block_in_place(move || {
-                Handle::current().block_on(async move {
-                    GlobalCtx::global().remove_cache(name).await
-                });
-            });
+            GlobalCtx::global().remove_cache(cache.name());
         }
 
     }
@@ -208,6 +184,7 @@ mod tests {
     use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
     // use crate::common::Data;
     use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::global_ctx::RegisteredCacheHandle;
     use crate::runner::tmp_cache::TmpCached;
 
     #[tokio::test]

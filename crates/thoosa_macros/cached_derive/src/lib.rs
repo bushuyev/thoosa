@@ -49,33 +49,27 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
                 #[double]
                 use thoosa_common::runner::global_ctx::GlobalCtx;
 
-                let ptr_ref = #cache_static_ident.get_or_init(|| {
-                    let map: &'static #map_type = Box::leak(Box::new(Default::default()));
-                    map as *const #map_type as usize
+                let arc_ptr = #cache_static_ident.get_or_init(|| {
+                    let map: std::sync::Arc<#map_type> = std::sync::Arc::new(Default::default());
+                    Box::into_raw(Box::new(map)) as usize
                 });
 
-                let map: &'static #map_type = unsafe {
-                    &*((*ptr_ref) as *const #map_type)
+                let map: &'static std::sync::Arc<#map_type> = unsafe {
+                    &*((*arc_ptr) as *const std::sync::Arc<#map_type>)
                 };
-
 
                 #register_static_ident
                     .get_or_init(|| async move {
                         use thoosa_shared::traits::Named;
 
-                        // #[cfg(any(test, feature = "mock_global_ctx"))]
-                        // let _mock_ctx = thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
-
-                        GlobalCtx::global()
-                            .register_cache((
-                                Self::name(),
-                                map as &'static dyn thoosa_common::runner::purge::FuturesRunnerMapPurger,
-                            ))
-                            .await;
+                        GlobalCtx::global().register_cache((
+                            Self::name(),
+                            std::sync::Arc::new(thoosa_common::runner::purge::StaticMapPurger::new(map.as_ref())) as std::sync::Arc<dyn thoosa_common::runner::purge::FuturesRunnerMapPurger>,
+                        ));
                     })
                     .await;
 
-                map
+                map.as_ref()
             }
         }
     };

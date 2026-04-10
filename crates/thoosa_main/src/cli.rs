@@ -1112,7 +1112,7 @@ where
 
     FindMotifsRunConfigRangeOrValue {
         id: None,
-        step: RangeOrValue::Value(10),
+        step: RangeOrValue::Value(5),
         // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
         window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((100, 0)) },
@@ -1122,7 +1122,7 @@ where
             // }),
             AverageFilter(AverageFilterParamsRangeOrValue {
                 window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(10),
+                step: RangeOrValue::Value(2),
             }),
             // SavGolFilter(SavGolFilterParamsRangeOrValue {
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
@@ -1174,19 +1174,19 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
-            periodicity_acf_01: None,
-            // periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
-            //     criterion: PeriodicityAcfRunConfigRangeOrValue {
-            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
-            //         lag_min: RangeOrValue::Value(1. / 32.),
-            //         lag_max: RangeOrValue::Value(0.5),
-            //         struct0: RangeOrValue::Value(0.2),
-            //         peak_good: RangeOrValue::Value(0.25),
-            //         peak_bad: RangeOrValue::Value(0.65),
-            //         eps: RangeOrValue::Value(1e-8),
-            //     },
-            //     min: RangeOrValue::Value(0.80),
-            // }),
+            // periodicity_acf_01: None,
+            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
+                criterion: PeriodicityAcfRunConfigRangeOrValue {
+                    struct_lag_max: RangeOrValue::Value(1. / 64.),
+                    lag_min: RangeOrValue::Value(1. / 32.),
+                    lag_max: RangeOrValue::Value(0.5),
+                    struct0: RangeOrValue::Value(0.2),
+                    peak_good: RangeOrValue::Value(0.25),
+                    peak_bad: RangeOrValue::Value(0.65),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.80),
+            }),
         },
         avg_threshold: RangeOrValue::Value(0.8),
         min_slices: Some(RangeOrValue::Value(5)),
@@ -1392,7 +1392,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
             head_size: RangeOrValue::Range { range: Range { start: 128, end: 256 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
+            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
             // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             ff_mult: RangeOrValue::Value(2),
             // dropout: RangeOrValue::Value(0.1),
