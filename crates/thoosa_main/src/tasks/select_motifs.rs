@@ -32,7 +32,7 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, MotifSelector, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -1584,7 +1584,7 @@ pub mod tests {
     use thoosa_common::runner::global_ctx;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
-    use thoosa_common::find_motifs_run_config::{ByAvgEucDist, CoherenceConstraint, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioConstraint, InlierRatioRunConfig, MotifCriteria, MotifSelector, NormThicknessConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
+    use thoosa_common::find_motifs_run_config::{CoherenceConstraint, CoherenceRunConfig, FindMotifsRunConfig, InlierRatioConstraint, InlierRatioRunConfig, MotifCriteria, NormThicknessConstraint, NormThicknessRunConfig, SelectMotifsRunConfig};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
@@ -1706,7 +1706,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
             vec![find_motifs_run_id],
             1000,
             None,
@@ -1784,7 +1784,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
             vec![find_motifs_run_id],
             1000,
             None
@@ -1864,7 +1864,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
             vec![find_motifs_run_id],
             1000,
             None
@@ -2007,7 +2007,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
             vec![find_motifs_run_id],
             10000, //TODO fails with max_batch 1000
             Some(801) //TODO check if ran through OOMHandler
@@ -2060,7 +2060,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
             vec![find_motifs_run_id],
             1024,
             None,
@@ -2081,7 +2081,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
         select_motifs_run_config.motif_criteria = MotifCriteria {
             norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
             inlier_ratioRunConfig: Some(InlierRatioConstraint { criterion: InlierRatioRunConfig { k: 3.0, eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN }),
@@ -2162,7 +2162,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_motifs_run_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
         select_motifs_run_config.extend_config = None;
         select_motifs_run_config.motif_criteria = MotifCriteria {
             norm_thickness: Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: 0.7 }),
@@ -2304,7 +2304,7 @@ pub mod tests {
         let clc_dist = Arc::new(MotifStats::new(store, loader, Arc::clone(&ws), motif_loader));
 
         let mut ctx = mock_run_ctx::default(1);
-        let select_motifs_run_config = SelectMotifsRunConfig::new_(Some(101), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        let select_motifs_run_config = SelectMotifsRunConfig::new(Some(101));
         let motifs_stats = SelectMotifsStage::<MockTensorLoader, MockMotifLoader, MockRunCtx>::clc_stacked_motifs_statistics(
             clc_dist,
             motif_data,
@@ -2383,7 +2383,7 @@ pub mod tests {
             (MotifLoaderInput::all_slices(DataId(12)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_12_t)),
         ]).finish());
 
-        let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
         select_config.extend_config = None;
         select_config.avg_threshold = 0.0;
 
@@ -2475,7 +2475,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_config = SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }));
+        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
         select_config.extend_config = None;
         select_config.motif_criteria.norm_thickness = Some(NormThicknessConstraint { criterion: NormThicknessRunConfig { eps: 1e-8 }, min: MotifCriteria::DEFAULT_CRITERION_MIN });
         select_config.avg_threshold = 0.5;
@@ -2772,7 +2772,7 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new_(Some(select_motifs_run_id), MotifSelector::ByAvgEucDist(ByAvgEucDist { k: 0.5 }))],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
             vec![find_motifs_run_id],
             30_000_000, //slices
             None
