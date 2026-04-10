@@ -93,7 +93,7 @@ where
         debug!("DumpToCpu::adjust: acquired 100 max_parallel, dumping");
 
         #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu", None).await;
+        GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu").await;
 
 
         GlobalCtx::global()
@@ -104,7 +104,7 @@ where
         })?;
 
         #[cfg(tho_debug)]
-        GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu", None).await;
+        GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu").await;
 
 
         Ok(adjustable.branch(None, false))
