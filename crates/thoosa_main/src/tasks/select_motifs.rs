@@ -32,7 +32,7 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ComparisonMethod as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, SimilarityMetric as RunConfigMetrics, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, MotifCriteria, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
@@ -145,14 +145,15 @@ impl WithId for SelectMotifsInput {
 struct SelectedMotifEvaluation {
     motif_id: u32,
     criterion_scores: Vec<(&'static str, f64)>,
+    weighted_criterion_scores: Vec<(&'static str, f64)>,
 }
 
 impl SelectedMotifEvaluation {
     fn score_sum(&self) -> f64 {
-        if self.criterion_scores.is_empty() {
+        if self.weighted_criterion_scores.is_empty() {
             1.0
         } else {
-            self.criterion_scores.iter().map(|(_, score)| *score).sum()
+            self.weighted_criterion_scores.iter().map(|(_, score)| *score).sum()
         }
     }
 
@@ -841,10 +842,7 @@ where
 
     #[inline]
     fn slices_selector_metric_to_stats(metric: RunConfigMetrics) -> Metrics {
-        match metric {
-            RunConfigMetrics::EucDist(_) => Metrics::EucDist,
-            RunConfigMetrics::PearsonCorr(_) => Metrics::PearsonCorr,
-        }
+        metric.into()
     }
 
     #[inline]
@@ -1388,6 +1386,7 @@ where
             return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| SelectedMotifEvaluation {
                 motif_id: *v,
                 criterion_scores: vec![],
+                weighted_criterion_scores: vec![],
             }).collect::<Vec<_>>());
         }
 
@@ -1449,9 +1448,11 @@ where
                     });
                     debug!("SelectMotifsStage::run: motif_id={motif_id} satisfies_constraints={satisfies_constraints} criterion_scores={criterion_scores:?} criteria_constraints={criteria_constraints:?}");
                     let k = hump(motif_stats_output.num_slices as f64, 20., 0.1, 5.0);//TODO config
+                    let weighted_criterion_scores = criterion_scores.iter().map(|(key, score)| (*key, score*k)).collect::<Vec<_>>();
                     Ok::<Option<SelectedMotifEvaluation>, ThoError>(satisfies_constraints.then_some(SelectedMotifEvaluation {
                         motif_id: *motif_id,
-                        criterion_scores: criterion_scores.into_iter().map(|(key, score)| (key, score*k)).collect::<Vec<_>>(),
+                        criterion_scores,
+                        weighted_criterion_scores,
                     }))
                 })
 
@@ -1612,7 +1613,6 @@ pub mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
     use thoosa_common::ws::mock_ws_simp;
-    use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::criteria::mock_criteria;
     use thoosa_common::tch_test_utils::generate_motifs_with_avg_distance;
     use thoosa_common::tch_test_utils::Interval;

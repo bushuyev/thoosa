@@ -151,16 +151,16 @@ where
         let channel_masks_dists_ids = {
 
 
-            let (mask, dists)  = thoosa_motifs::distance::clc_dist_d2_and_mask(
-                    input
+            let (mask, dists)  = thoosa_motifs::distance::clc_d2_similarity_and_mask(
+                input
                         .stacked_motifs_output
                         .motifs
                         .data()
-                        .t_ref()
-                        .shallow_clone(),
-                    batch_1_t.shallow_clone(),
-                    true,
-                    &mut mask_makers,
+                        .t_ref(),
+                &batch_1_t,
+                input.stacked_motifs_output.motifs.extra().1.similarity_metric,
+                true,
+                &mut mask_makers,
                 )?;
 
             (0..self.num_channels)

@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethod, ComparisonMethodRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -1066,6 +1066,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
             //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
             // }),
         ]),
+        similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
         slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
             aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
                 q: RangeOrValue::Value(0.05),
@@ -1131,6 +1132,7 @@ where
                 padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
             }),
         ]),
+        similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
         //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
         //         // q: RangeOrValue::Range { range: 0.0..0.5, step: None },
@@ -1153,7 +1155,7 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
         id: None,
         // extend_config: None,
         extend_config: Some(ExtendMotifsConfigRangeOrValue{
-            slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue { _path_pd: Default::default() }),
+            slices_selector_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
                 // q: RangeOrValue::Value(0.05),
                 q: RangeOrValue::Range { range: 0.0..0.05, step: None },
@@ -1201,7 +1203,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
         id: None,
         extend_config: None,
         // extend_config: Some(ExtendMotifsConfigRangeOrValue{
-        //     slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue { _path_pd: Default::default() }),
+        //     slices_selector_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { _path_pd: Default::default() }),
         //     slices_selector_aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
         //         // q: RangeOrValue::Value(0.05),
         //         q: RangeOrValue::Range { range: 0.0..0.05, step: None },
@@ -1254,6 +1256,7 @@ fn run_all_find_motifs_config_test_1<P: FieldName + 'static>() -> FindMotifsRunC
             stride: RangeOrValue::Value(1),
             padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
         })]),
+        similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
         slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
             aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
             slices: RangeOrValue::Value(100),
@@ -2555,7 +2558,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetricRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, NotchBandFilter};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -2572,7 +2575,6 @@ mod cli_tests {
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::distance::clc_dist_d2_and_mask;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_motifs::find::{
         FixedFindMotifsConfig, SelectMotifsParams};
@@ -2677,6 +2679,7 @@ mod cli_tests {
                 }),
 
             ]),
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                 aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
                     q: RangeOrValue::Range { range: 0.0..0.05, step: None },
@@ -2728,6 +2731,7 @@ mod cli_tests {
                     step: RangeOrValue::Value(10),
                 }),
             ]),
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
                 aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
                     q: RangeOrValue::Value(0.05),

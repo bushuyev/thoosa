@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use tch::Kind;
 use tch::Tensor;
+use thoosa_common::find_motifs_run_config::SimilarityMetric;
+use thoosa_common::utils::z_norm_dims;
 use thoosa_dummy_data_derive::DummyData;
 use tracing::debug;
 use thoosa_motifs::common_stats::Stats as CommonStatsValue;
@@ -11,7 +13,9 @@ use thoosa_shared::{panic_to_err, ThoError};
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, DummyData)]
 pub enum Metrics {
     EucDist,
+    EucDistZNorm,
     PearsonCorr,
+    DotProduct,
     CommonEucDist,
     CommonPearson,
     CommonA0,
@@ -45,11 +49,29 @@ impl Default for Metrics {
     }
 }
 
+impl From<SimilarityMetric> for Metrics {
+    fn from(value: SimilarityMetric) -> Self {
+        match value {
+            SimilarityMetric::EucDist(config) => {
+                if config.z_normalize {
+                    Self::EucDistZNorm
+                } else {
+                    Self::EucDist
+                }
+            }
+            SimilarityMetric::PearsonCorr(_) => Self::PearsonCorr,
+            SimilarityMetric::DotProduct(_) => Self::DotProduct,
+        }
+    }
+}
+
 impl Metrics {
     pub fn all() -> Vec<Self> {
         vec![
             Self::EucDist,
+            Self::EucDistZNorm,
             Self::PearsonCorr,
+            Self::DotProduct,
             Self::CommonEucDist,
             Self::CommonPearson,
             Self::CommonA0,
@@ -136,7 +158,9 @@ impl Default for Aggr {
 pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: Metrics, aggr: Aggr) -> Result<f32, ThoError> {
     let score_t = match metric {
         Metrics::EucDist => return panic_to_err!(euclidean_distance(motif_slices, aggr)),
+        Metrics::EucDistZNorm => return panic_to_err!(z_normalized_euclidean_distance(motif_slices, aggr)),
         Metrics::PearsonCorr => return panic_to_err!(pearson_corr_distance_matrix_0_2_single(motif_slices, 1e-8, aggr)),
+        Metrics::DotProduct => return panic_to_err!(dot_product_distance(motif_slices, aggr)),
         Metrics::CommonEucDist
         | Metrics::CommonPearson
         | Metrics::CommonA0
@@ -199,6 +223,22 @@ pub fn pearson_corr_distance_matrix_0_2_single(x: &Tensor, eps: f64, aggr: Aggr)
 
     let matrix = pearson_corr_distance_matrix_0_2_single_matrix(x, eps)?;
     let pairwise = upper_triangle_without_diagonal(&matrix)?;
+    aggregate_distances(&pairwise, aggr)
+}
+
+pub fn z_normalized_euclidean_distance(t: &Tensor, aggr: Aggr) -> Result<f32, ThoError> {
+    let normalized = z_norm_dims(t, &[1], 1e-8)?;
+    euclidean_distance(&normalized, aggr)
+}
+
+pub fn dot_product_distance(t: &Tensor, aggr: Aggr) -> Result<f32, ThoError> {
+    let n = t.size()[0];
+    if n < 2 {
+        return Ok(0.0);
+    }
+
+    let gram = t.f_mm(&t.f_transpose(0, 1)?)?.f_neg()?;
+    let pairwise = upper_triangle_without_diagonal(&gram)?;
     aggregate_distances(&pairwise, aggr)
 }
 

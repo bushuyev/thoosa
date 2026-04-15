@@ -18,7 +18,7 @@ use futures_util::FutureExt;
 use tch::{TchError, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::utils::tensor_mem_size;
-use thoosa_motifs::distance::{clc_dist_d2, clc_dist_d2_and_mask};
+use thoosa_motifs::distance::clc_dist_d2;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::copy_mode::CpuOnly;
