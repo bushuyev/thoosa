@@ -236,9 +236,7 @@ impl<'a> SimpleMotifTracker<'a> {
     }
 }
 
-/**
-TODO  selects motifs based on correlation to a label only
-*/
+
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
     #[arg(long)]
