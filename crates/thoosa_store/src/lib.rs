@@ -4996,6 +4996,28 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_save_run_config(
+        mut self,
+        input_run_id: Option<Vec<RunId>>,
+        run_config_type: &'static str,
+        descr: &'static str,
+        keys: &'static str,
+        properties_vals: HashMap<String, Val>,
+        result: Result<RunId, ThoError>,
+    ) -> Self {
+        self.store.expect_save_run_config().returning(move |p_input_run_id, p_run_config_type, p_descr, p_keys, p_properties_vals| {
+            let p_input_run_id = p_input_run_id.map(|ids| ids.to_vec());
+            if p_input_run_id == input_run_id && p_run_config_type == run_config_type && p_descr == descr && p_keys == keys && p_properties_vals == properties_vals {
+                result.clone()
+            } else {
+                Err(ThoError::new(format!(
+                    "mock is not configured to save_run_config for input_run_id={p_input_run_id:?} run_config_type={p_run_config_type} descr={p_descr} keys={p_keys} properties_vals={p_properties_vals:?}"
+                )))
+            }
+        });
+        self
+    }
+
     pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<u32>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(
@@ -5011,23 +5033,14 @@ impl MockStoreBuilder {
         mut self,
         motif_id: u32,
         select_motifs_run_id: Option<Vec<RunId>>,
-        limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32)>, r:Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
+        _limit: Option<u32>,
+        _all_but_in_run_id: Option<(RunId, u32)>, r:Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
-
-        let expected_select = select_motifs_run_id.clone();
-
-        self.store.expect_list_motif_slices().returning(
-            move |p_motif_id, p_select_motifs_run_id, limit, all_but_in_run_id| {
-                debug!("with_list_motif_slices: p_motif_id={p_motif_id} motif_id={motif_id} p_select_motifs_run_id={p_select_motifs_run_id:?} expected_select={expected_select:?}");
-                if p_motif_id == motif_id && p_select_motifs_run_id == expected_select {
-                    r.clone()
-                } else {
-                    Err(ThoError::new("Not found"))
-                }
-
-            }
-        );
+        self.store
+            .expect_list_motif_slices()
+            .withf(move |p_motif_id, p_select_motifs_run_id, _limit, _all_but_in_run_id| *p_motif_id == motif_id && *p_select_motifs_run_id == select_motifs_run_id)
+            .times(1)
+            .return_const(r);
 
         self
     }
@@ -5250,6 +5263,16 @@ impl MockStoreBuilder {
                 true
             })
             .return_const(Ok(()));
+        self
+    }
+
+    pub fn with_save_groups_as_motifs_inputs(
+        mut self,
+        inputs: impl IntoIterator<Item = (RunId, i64, HashMap<u16, HashSet<IdSlice>>)> + Debug,
+    ) -> Self {
+        for (run_id, channel, groups) in inputs {
+            self.store.expect_save_groups_as_motifs().with(eq(run_id), eq(channel), eq(groups)).times(1).return_const(Ok(()));
+        }
         self
     }
 

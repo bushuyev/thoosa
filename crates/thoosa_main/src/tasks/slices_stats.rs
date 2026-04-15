@@ -141,7 +141,7 @@ impl Metrics {
     }
 }
 
-#[derive(Debug, Copy, Clone, DummyData)]
+#[derive(Debug, Copy, Clone, DummyData, PartialEq)]
 pub enum Aggr {
     Mean(f32),
     Min(f32),
