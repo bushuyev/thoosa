@@ -146,7 +146,7 @@ where
 }
 
 //group of similar slices - motif
-pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>>
+pub fn group_slices<T>(pairs: impl Iterator<Item = (T, T)>) -> HashMap<u16, HashSet<T>> //TODO replace with group_slices_try
 where
     T: Hash + Eq + Debug,
 {
