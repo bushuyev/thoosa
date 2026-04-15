@@ -94,6 +94,7 @@ fn criterion_score_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, criterion:
 #[derive(Debug, Clone)]
 pub enum MotifStatsSource {
     Motif(MotifLoaderInput),
+    MergedMotifs(Vec<MotifLoaderInput>),
     Random { max_slices: u32, find_motifs_run_id: RunId },
 }
 
@@ -140,6 +141,28 @@ impl MotifStatsInput {
             metrics,
             aggr,
         }
+    }
+
+    pub fn from_merged_motif_inputs(
+        motif_loader_inputs: Vec<MotifLoaderInput>,
+        metrics: Vec<Metrics>,
+        aggr: Aggr,
+    ) -> Result<Self, ThoError> {
+        if motif_loader_inputs.is_empty() {
+            return Err(ThoError::new("MotifStatsInput::from_merged_motif_inputs: empty motif_loader_inputs"));
+        }
+
+        let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
+        let id = motif_loader_inputs.iter().fold(SynKey::new([mono_key!("MotifStatsMergedInput", "stage")]), |acc, motif_loader_input| {
+            &acc + motif_loader_input.id()
+        });
+
+        Ok(Self {
+            id: &(&id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(format!("{aggr:?}"), format!("aggr={aggr:?}")),
+            source: MotifStatsSource::MergedMotifs(motif_loader_inputs),
+            metrics,
+            aggr,
+        })
     }
 
 
@@ -198,6 +221,7 @@ impl CopyToDevice for MotifStatsInput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         let source = match &self.source {
             MotifStatsSource::Motif(motif_loader_input) => MotifStatsSource::Motif(motif_loader_input.clone()),
+            MotifStatsSource::MergedMotifs(motif_loader_inputs) => MotifStatsSource::MergedMotifs(motif_loader_inputs.clone()),
             MotifStatsSource::Random { max_slices, find_motifs_run_id } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_id: *find_motifs_run_id },
         };
 
@@ -272,9 +296,11 @@ impl Select<()> for MotifStatsCalcInput {
     type Output = MotifStatsCalcInput;
 
     fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
+        let mut cloned = self.channels_motifs_slices.t_ref().f_zeros_like()?;
+        cloned.f_copy_(self.channels_motifs_slices.t_ref())?;
         Ok(Self {
             id: self.id.clone(),
-            channels_motifs_slices: Arc::new(ThoTensor::new(self.channels_motifs_slices.id().clone(), self.channels_motifs_slices.t_ref().shallow_clone())?),
+            channels_motifs_slices: Arc::new(ThoTensor::new(self.channels_motifs_slices.id().clone(), cloned)?),
             metrics: self.metrics.clone(),
             aggr: self.aggr,
         })
@@ -658,6 +684,52 @@ where
                     Ok::<_, ThoError>(Arc::new(ThoTensor::new(motif.data().id().clone(), channels_3d)?))
                 })?
             }
+            MotifStatsSource::MergedMotifs(motif_loader_inputs) => {
+                if motif_loader_inputs.is_empty() {
+                    return Err(ThoError::new("MotifStats::run: merged motif inputs are empty"));
+                }
+
+                let mut expected_channel = None;
+                let mut expected_window = None;
+                let mut motif_tensors = Vec::with_capacity(motif_loader_inputs.len());
+
+                for (idx, motif_loader_input) in motif_loader_inputs.into_iter().enumerate() {
+                    let motif = Arc::clone(&self.motif_loader)
+                        .run_cached(
+                            Arc::new(DevicesWrap::wrap(motif_loader_input)),
+                            ctx.branch(Some("motif_stats_merged_motif_loader"), false),
+                        )
+                        .await?;
+
+                    let (tensor_copy, meta) = with_data!(ctx.branch(Some("motif_stats_merged_motif_to_channels"), false), motif; |_ctx, motif: &thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
+                        let src = motif.data().t_ref();
+                        let mut dst = src.f_zeros_like()?;
+                        dst.f_copy_(&src)?;
+                        Ok::<_, ThoError>((dst, motif.extra().clone()))
+                    })?;
+
+                    match expected_channel {
+                        Some(channel) if channel != meta.channel => {
+                            return Err(ThoError::new(format!("MotifStats::run: merged motifs must have the same channel, got {channel} and {}", meta.channel)));
+                        }
+                        None => expected_channel = Some(meta.channel),
+                        _ => {}
+                    }
+                    match expected_window {
+                        Some(window) if window != meta.window => {
+                            return Err(ThoError::new(format!("MotifStats::run: merged motifs must have the same window, got {window} and {}", meta.window)));
+                        }
+                        None => expected_window = Some(meta.window),
+                        _ => {}
+                    }
+
+                    debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, tensor_copy.size());
+                    motif_tensors.push(tensor_copy);
+                }
+
+                let channels_3d = Tensor::f_cat(motif_tensors.as_slice(), 0)?.f_unsqueeze(0)?;
+                Arc::new(ThoTensor::new(input_id.clone(), channels_3d)?)
+            }
             MotifStatsSource::Random { max_slices, find_motifs_run_id } => {
                 if max_slices < 2 {
                     return Err(ThoError::new(format!("MotifStats::run: max_slices must be >= 2, got {max_slices}")));
@@ -820,10 +892,11 @@ pub fn random_non_overlapping_slices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tasks::motif_loader::mock_motif_loader;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use parking_lot::RwLock;
     use std::sync::Arc;
-    use tch::kind::FLOAT_CPU;
+    use tch::{kind::FLOAT_CPU, Tensor};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_common::runner::cache_areas::CacheArea;
@@ -833,7 +906,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_store::MockStoreBuilder;
-    use crate::tasks::motif_loader::MotifLoader;
+    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_random_stats_basic() -> Result<(), ThoError> {
@@ -914,6 +987,74 @@ mod tests {
             .await?;
 
         assert_eq!(size, vec![3, 1]);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_merged_motifs_stats_source() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
+        let store = Arc::new(MockStoreBuilder::new().build());
+        let loader = Arc::new(mock_tensor_loader::build().finish());
+        let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![100]));
+        let motif_input_1 = MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![200]));
+        let motif_loader = Arc::new(
+            mock_motif_loader::build()
+                .with_run_cached([
+                    (
+                        motif_input_0.clone(),
+                        (
+                            MotifMeta { channel: 0, find_motifs_run_id: 10, window: 3 },
+                            Tensor::from_slice(&[0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0]).view((2, 3)),
+                        ),
+                    ),
+                    (
+                        motif_input_1.clone(),
+                        (
+                            MotifMeta { channel: 0, find_motifs_run_id: 10, window: 3 },
+                            Tensor::from_slice(&[0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0]).view((2, 3)),
+                        ),
+                    ),
+                ])
+                .finish(),
+        );
+        let stage = Arc::new(MotifStats::new(Arc::clone(&store), loader, Arc::clone(&ws), motif_loader));
+        let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_merged_motif_inputs(
+            vec![motif_input_0, motif_input_1],
+            vec![Metrics::EucDist],
+            Aggr::Mean(1.0),
+        )?));
+
+        let output = Arc::clone(&stage)
+            .run(
+                input,
+                thoosa_shared::with_perf_log(
+                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                    "MotifStats::test_merged_motifs_stats_source/write_ctx",
+                )
+                .branch(Some("motif_stats_merged"), false),
+            )
+            .await?;
+
+        let value = output
+            .with_data_ref(
+                0,
+                thoosa_shared::with_perf_log(
+                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+                    "MotifStats::test_merged_motifs_stats_source/read_ctx",
+                )
+                .branch(Some("motif_stats_merged_data"), false),
+                None,
+                |stats: &MotifStatsOutput, _ctx| stats.channel_value(Metrics::EucDist, 0),
+            )
+            .await?;
+
+        assert!((value - 6.6666665).abs() < 1e-4, "unexpected merged motif metric: {value}");
 
         Ok(())
     }

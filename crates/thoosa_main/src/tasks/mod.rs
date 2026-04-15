@@ -10,6 +10,7 @@ pub mod motif_loader;
 pub mod welch_psd;
 pub mod slices_stats;
 pub mod motif_stats;
+pub mod merge_selected_motifs;
 pub mod transforms;
 pub mod stages_seq;
 pub mod select_motifs;
