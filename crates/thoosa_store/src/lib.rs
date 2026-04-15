@@ -191,7 +191,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_groups_as_motifs_with_slices_matches(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
 
-    async fn save_groups_as_motifs(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<(), ThoError>;
+    async fn save_groups_as_motifs(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError>;
 
     async fn add_slices_to_motif(&self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
 
@@ -367,7 +367,7 @@ mock! {
             run_id: RunId,
             channel: i64,
             groups: HashMap<u16, HashSet<IdSlice>>,
-        ) -> Result<(), ThoError>;
+        ) -> Result<Vec<u32>, ThoError>;
 
         async fn add_slices_to_motif(
             &self,
@@ -1560,9 +1560,10 @@ impl Store for SqlStore {
         run_id: RunId,
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
-    ) -> Result<(), ThoError> {
+    ) -> Result<Vec<u32>, ThoError> {
         self.with_writer_conn("save_groups_as_motifs", move |conn| {
         let t = conn.transaction()?;
+        let mut motif_ids = Vec::new();
 
         debug!("save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}");
 
@@ -1580,6 +1581,8 @@ impl Store for SqlStore {
 
                 let motif_id: i64 =
                     t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+                let motif_id_u32 = u32::try_from(motif_id).map_err(|_| ThoError::new(format!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32")))?;
+                motif_ids.push(motif_id_u32);
 
                 debug!("save_groups_as_motifs: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());
                 trace!("save_groups_as_motifs: slices={slices:?} ");
@@ -1598,7 +1601,7 @@ impl Store for SqlStore {
 
         t.commit()?;
 
-        Ok(())
+        Ok(motif_ids)
         })
         .await
     }
@@ -5262,16 +5265,26 @@ impl MockStoreBuilder {
                 debug!("with_save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}, groups={groups:?}");
                 true
             })
-            .return_const(Ok(()));
+            .returning(|_, _, groups| Ok((0..groups.len()).map(|idx| idx as u32 + 1).collect()));
         self
     }
 
     pub fn with_save_groups_as_motifs_inputs(
         mut self,
-        inputs: impl IntoIterator<Item = (RunId, i64, HashMap<u16, HashSet<IdSlice>>)> + Debug,
+        inputs: impl IntoIterator<Item = (RunId, i64, HashMap<u16, HashSet<IdSlice>>, Vec<u32>)> + Debug,
     ) -> Self {
-        for (run_id, channel, groups) in inputs {
-            self.store.expect_save_groups_as_motifs().with(eq(run_id), eq(channel), eq(groups)).times(1).return_const(Ok(()));
+        for (run_id, channel, groups, motif_ids) in inputs {
+            self.store.expect_save_groups_as_motifs().with(eq(run_id), eq(channel), eq(groups)).times(1).return_const(Ok(motif_ids));
+        }
+        self
+    }
+
+    pub fn with_save_selected_motifs(
+        mut self,
+        inputs: impl IntoIterator<Item = (RunId, Vec<(u32, f64)>, Result<RunId, ThoError>)> + Debug,
+    ) -> Self {
+        for (run_id, selected_motifs, result) in inputs {
+            self.store.expect_save_selected_motifs().with(eq(run_id), eq(selected_motifs)).times(1).return_const(result);
         }
         self
     }

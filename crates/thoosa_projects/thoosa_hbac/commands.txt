@@ -8,6 +8,7 @@ cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug_plot
 cargo nextest run --release  --config 'build.rustflags=["--cfg","tho_debug_plots=\"motifs_batch_make_batch_\""]'
 
 cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_test_hbac" import-resources --source-path=/home/bu/dvl/data/kaggle/hbac
+cargo run --bin thoosa_hbac --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_test_hbac" import-resources --source-path=/home/bu/dvl/data/kaggle/hbac --freq-filters='{NotchBandFilter:{low_hz:59.5,high_hz:60.5}}'
 
 
 
@@ -36,6 +37,8 @@ cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logg
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: {'norm_thickness': {'criterion': {'eps':'0.00000001'}, 'min':'0.9'}}}"
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids=3 --resources-group="not_group:pure group 100" --run-config-cnt="{motif_criteria: {'norm_thickness': {'criterion': {'eps':'0.00000001'}, 'min':'0.9'}}, 'extend_config': {'slices_selector_metric':{EucDist: {}}, 'slices_selector_aggr':{QuantileAggr: {'q':'0.01'}} }}"
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  select-motifs --find-motifs-run-ids='109803,109804,109805,109806,109807,109808,109809,109810,109811,109812,109813,109814,109815,109816,109817,109818,109819,109820,109821,109822,109823,109824,109825,109826,109827,109828,109829,109830,109831,109832,109833,109834,109835,109836,109837,109838,109839,109840,109841,109842,109843,109844,109845,109846,109847' --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: {'norm_thickness': {'criterion': {'eps':'0.00000001'}, 'min':'0.8'}, 'periodicity_acf_01': {'criterion': {'struct_lag_max':'0.01', 'lag_min':'0.03', 'lag_max':'0.5','struct0':'0.2','peak_good':'0.25','peak_bad':'0.65','eps':'0.00000001'}, 'min':'0.8'}}}"
+
+cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  merge-selected-motifs ---select-motifs-run-ids='186939,189788'
 
 //'head_pool':{Lse:{'tau':'0.1..0.9'}}
 cargo run --release  --bin thoosa_hbac  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_test_hbac/  train-motifs-nets --select-motifs-run-ids='196308, 196301, 196296, 196310, 196304'  --run-config-cnt="{ 'common_training_args': { 'epochs' : '10', 'batch_size': '10', 'lr': '0.00001..0.001', 'patience':'10', 'min_delta':'0.0001'}, 'net': {CosineNet:{'a':'1.0..10.0', 'b':'0.0..1.0'}}}" --epoch-size=5 --opt-max-evals=10 --opt-num-init=3
@@ -94,3 +97,16 @@ sqlite> insert into selected_motifs (motif_id, run_id, rate) values
 
 gdb -p 572915 -batch   -ex "set pagination off"   -ex "set height 0"   -ex "set width 0"   -ex "set print thread-events off"   -ex "set backtrace limit 0"   -ex "set logging file /tmp/gdb_threads_572915_full.txt"   -ex "set logging overwrite on"   -ex "set logging redirect on"   -ex "set logging enabled on"   -ex "info threads"   -ex "thread apply all bt full 200"   -ex "set logging enabled off"
 
+the workspace is now in the middle of refactoring aimed at applying filters, which are currently used in FindMotifsStage, during import.
+The first step, which is in the progress, is to add freq_filters  (crates/thoosa_main/src/cli.rs:231) to the  ImportResourcesArgs. Compilation fails with
+```
+error[E0599]: the method `value_parser` exists for reference `&&&&&&clap::builder::_infer_ValueParser_for<InputFilter>`, but its trait bounds were not satisfied
+    --> thoosa_main/src/cli.rs:230:5
+     |
+ 230 | /     #[arg(long, value_enum)]
+ 231 | |     pub freq_filter: Vec<InputFilter>,
+     | |_____________________________________^ method cannot be called due to unsatisfied trait bounds
+```
+
+fix error my implementing std::str::FromStr for InputFilter and adding all required Derive directive as needed.
+Then instantiate   FreqFilter (crates/thoosa_main/src/tasks/transforms/freq_filter.rs:82) in crates/thoosa_main/src/cli.rs:430 and pass it down to import_resources_with_pure_sets (crates/thoosa_main/src/cli.rs:1625) where it should be applied to tensors being imported at crates/thoosa_main/src/cli.rs:1663

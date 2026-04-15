@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-
+use clap::Args;
 use log::debug;
 use parking_lot::RwLock;
 use thoosa_common::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, SlicesFilter, StatsKeys};
@@ -26,6 +26,12 @@ use crate::tasks::motif_loader::MotifLoaderInput;
 use crate::tasks::motif_stats::{MotifStatsInput, MotifStatsOutput};
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::stage_ids::MERGE_SELECTED_MOTIFS;
+
+#[derive(Debug, Args, Clone)]
+pub struct MergeSelectedMotifsArgs {
+    #[arg(long, value_delimiter = ',')]
+    pub select_motifs_run_ids: Vec<RunId>,
+}
 
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
@@ -312,7 +318,7 @@ where
 
             let candidates_by_channel = self.load_candidates_by_channel(run_ids.as_slice()).await?;
             let mut merged_groups_by_channel = Vec::with_capacity(candidates_by_channel.len());
-
+            let mut motif_ids = vec![];
             for (channel, candidates) in candidates_by_channel.into_iter().enumerate() {
                 let mut similar_pairs = Vec::new();
                 let mut self_metric_cache = HashMap::<SelectedMotifKey, f32>::new();
@@ -348,7 +354,7 @@ where
                         let merged_metric = self.metric_for_pair(left, right, ctx.branch(Some("merge_selected_motifs_pair"), false)).await?;
 
                         debug!("MergeSelectedMotifs::run: channel={channel} left_metric={left_metric:.6} right_metric={right_metric:.6} merged_metric={merged_metric:.6}");
-                        if merged_metric <= left_metric && merged_metric <= right_metric {
+                        if merged_metric <= left_metric * 1.2 && merged_metric <= right_metric * 1.2 {
                             similar_pairs.push((left.key.clone(), right.key.clone()));
                         }
                     }
@@ -373,11 +379,20 @@ where
                 }
 
                 if !slice_groups.is_empty() {
-                    self.store.save_groups_as_motifs(merge_run_id, channel as i64, slice_groups).await?;
+                    motif_ids.extend(
+                        self.store
+                            .save_groups_as_motifs(merge_run_id, channel as i64, slice_groups)
+                            .await?
+                            .into_iter()
+                            .map(|motif_id| (motif_id, 1.0)),
+                    );
                 }
             }
 
-            Ok(Arc::new(DevicesWrap::wrap(MergeSelectedMotifsOutput::new(merge_run_id, merged_groups_by_channel))))
+            motif_ids.sort_by_key(|(motif_id, _)| *motif_id);
+            let select_motifs_run_id = self.store.save_selected_motifs(merge_run_id, motif_ids).await?;
+
+            Ok(Arc::new(DevicesWrap::wrap(MergeSelectedMotifsOutput::new(select_motifs_run_id, merged_groups_by_channel))))
         }
     }
 }
@@ -438,6 +453,7 @@ mod tests {
                 .with_list_motif_slices(1u32, Some(vec![select_run_id_0]), None, None, Ok((0i64, find_run_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
                 .with_list_motif_slices(2u32, Some(vec![select_run_id_1]), None, None, Ok((0i64, find_run_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
                 .with_save_groups_as_motifs()
+                .with_save_selected_motifs([(merge_run_id, vec![(1u32, 1.0f64)], Ok(merge_run_id))])
                 .build(),
         );
         let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_run_id_0]));

@@ -1,5 +1,6 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
+use clap::{Args, Subcommand};
 use crate::utils::from;
 use serde::Deserialize;
 use tch::kind::FLOAT_CPU;
@@ -13,7 +14,7 @@ pub trait InputFilterLengthAdjuster {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync>;
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct BandPassFilterParams {
     #[in_map]
     #[run_config]
@@ -33,6 +34,7 @@ pub struct BandPassFilterParams {
 
     #[in_map]
     #[run_config]
+    #[command(subcommand)]
     pub padding: Padding,
 }
 
@@ -58,7 +60,7 @@ impl InputFilterLengthAdjuster for BandPassFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct NotchBandFilterParams {
     #[in_map]
     #[run_config]
@@ -75,7 +77,7 @@ impl InputFilterLengthAdjuster for NotchBandFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub struct SavGolFilterParams {
     #[in_map]
     #[run_config]
@@ -91,6 +93,7 @@ pub struct SavGolFilterParams {
 
     #[in_map]
     #[run_config]
+    #[command(subcommand)]
     pub padding: Padding,
 }
 
@@ -117,7 +120,7 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub struct MedianFilterParams {
     #[in_map]
     #[run_config]
@@ -132,7 +135,7 @@ impl InputFilterLengthAdjuster for MedianFilterParams {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub struct AverageFilterParams {
     #[in_map]
     #[run_config]
@@ -261,38 +264,38 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Padding {
     /// Pad with zeros (uses conv1d's built-in padding).
-    Zero(SgZeroPadding),
+    Zero(ZeroPadding),
     /// Mirror the signal at the boundary, **excluding** the edge value (PyTorch "reflect").
-    Reflect(SgReflectPadding),
+    Reflect(ReflectPadding),
     /// Repeat the edge value (PyTorch "replicate").
-    Replicate(SgReplicatePadding),
+    Replicate(ReplicatePadding),
 }
 
 impl Padding {
     pub fn zero() -> Self {
-        Self::Zero(SgZeroPadding {})
+        Self::Zero(ZeroPadding {})
     }
 
     pub fn reflect() -> Self {
-        Self::Reflect(SgReflectPadding {})
+        Self::Reflect(ReflectPadding {})
     }
 
     pub fn replicate() -> Self {
-        Self::Replicate(SgReplicatePadding {})
+        Self::Replicate(ReplicatePadding {})
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SgZeroPadding {}
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct ZeroPadding {}
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SgReflectPadding {}
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct ReflectPadding {}
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
-pub struct SgReplicatePadding {}
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub struct ReplicatePadding {}
 
 
 /// Pad a [N, C, T] tensor along the last dimension by `pad` on both sides.

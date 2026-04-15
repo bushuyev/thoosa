@@ -4,8 +4,8 @@ use async_trait::async_trait;
 use log::debug;
 use mockall_double::double;
 use parking_lot::RwLock;
-use tch::{IndexOp, Tensor};
-use tch::Device::Cuda;
+use tch::{Device, IndexOp, Tensor};
+use tch::Device::{Cpu, Cuda};
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_common::debug_plot;
@@ -198,6 +198,17 @@ where
             num_channels,
             sample_rate
         })
+    }
+
+    pub fn input_device(&self) -> Device {
+        self.filters
+            .iter()
+            .find_map(|filter| match filter {
+                PreparedFilter::BandPass { kernel, .. } => Some(kernel.as_ref().device()),
+                PreparedFilter::SavGol { weights, .. } => Some(weights.as_ref().device()),
+                _ => None,
+            })
+            .unwrap_or(Cpu)
     }
 
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData2, SynKey>) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> {

@@ -534,12 +534,17 @@ where
             .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
             .await?;
 
+        let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+        // TODO check if all find run configs have same properties - for merged motifs
+        let find_motifs_run_id = find_motifs_run_id[0];
+
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
             find_motifs_run_id,
             &self.store.list_run_config_values(find_motifs_run_id).await?,
         )?;
+
         let window = find_motifs_run_config.window;
         let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
             acc.entry(slice.0).or_insert_with(Vec::new).push(slice.1);
@@ -1104,6 +1109,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                 (1, resource_a.clone()),
                 (2, resource_b.clone())
             ]))))
+            .with_get_input_run_ids([(run_id, Ok(vec![run_id]))])
             .with_list_run_config_values(
                 run_id,
                 Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())

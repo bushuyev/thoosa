@@ -552,6 +552,7 @@ mod tests {
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
+                .with_get_input_run_ids([(find_motifs_run_id, Ok(vec![find_motifs_run_id]))])
                 .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_id]), None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
 
                 )))
