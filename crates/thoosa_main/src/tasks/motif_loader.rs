@@ -534,9 +534,13 @@ where
             .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
             .await?;
 
-        let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-        // TODO check if all find run configs have same properties - for merged motifs
-        let find_motifs_run_id = find_motifs_run_id[0];
+        let find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
+            find_motifs_run_id
+        } else {
+            let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+            // TODO check if all find run configs have same properties - for merged motifs
+            *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))? 
+        };
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
 
@@ -1087,6 +1091,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::average_euclidean_distance;
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_store::RunConfigRow;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_motifs() -> Result<(), ThoError> {
@@ -1096,12 +1101,13 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
-        let run_id = 1;
+        let find_motifs_run_id = 1;
+        let motif_source_run_id = 2;
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, run_id, vec![
+            .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, motif_source_run_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
@@ -1109,10 +1115,19 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                 (1, resource_a.clone()),
                 (2, resource_b.clone())
             ]))))
-            .with_get_input_run_ids([(run_id, Ok(vec![run_id]))])
+            .with_run_config_descr([(
+                motif_source_run_id,
+                Ok(RunConfigRow {
+                    id: motif_source_run_id,
+                    r#type: "SelectMotifsRunConfig".to_string(),
+                    descr: "test select".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
+            .with_get_input_run_ids([(motif_source_run_id, Ok(vec![find_motifs_run_id]))])
             .with_list_run_config_values(
-                run_id,
-                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, 100, None, None).to_properties_iter(None).collect())
+                find_motifs_run_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 100, 100, None, None).to_properties_iter(None).collect())
             )
             .build();
 
