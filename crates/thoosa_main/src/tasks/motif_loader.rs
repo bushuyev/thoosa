@@ -377,25 +377,26 @@ impl ConsumeData for SyncMotifLoaderInput {
                 }
             };
 
-            let stream = copy_ctx::CopyCtx::instance(to_device_idx).acquire_stream().await;
-
-            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
-
-            let r= do_run(
-                SyncMotifLoaderLoadedInput::new(
-                    id,
-                    motif_id,
-                    select_motifs_run_id,
-                    find_motifs_run_id,
-                    channel,
-                    window,
-                    loaded_resources,
-                    descr,
-                ),
-                ctx,
+            let input = SyncMotifLoaderLoadedInput::new(
+                id,
+                motif_id,
+                select_motifs_run_id,
+                find_motifs_run_id,
+                channel,
+                window,
+                loaded_resources,
+                descr,
             );
-            stream.synchronize().unwrap();
-            r
+
+            if to_device_idx == 0 {
+                do_run(input, ctx)
+            } else {
+                let stream = copy_ctx::CopyCtx::instance(to_device_idx).acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
+                let r = do_run(input, ctx);
+                stream.synchronize().unwrap();
+                r
+            }
         }
     }
 

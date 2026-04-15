@@ -158,7 +158,7 @@ mod tests {
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::distance::clc_dist_d2_and_mask;
+    use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};

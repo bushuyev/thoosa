@@ -818,7 +818,7 @@ mod tests {
     use thoosa_main::cli::{import_resources, Cli};
     use thoosa_main::{ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
-    use thoosa_motifs::distance::clc_dist_d2_and_mask;
+    use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;

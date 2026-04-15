@@ -42,7 +42,7 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore};
 
 use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LocalMin, Tril};
 use crate::distance::{MaskMaker, average_euclidean_distance, clc_dist_d2, slice_t};
-use crate::distance::{clc_dist_d2_and_mask, dist_d2};
+use crate::distance::dist_d2;
 use plotters::prelude::BLACK;
 use rayon::iter::IndexedParallelIterator;
 use rayon::iter::ParallelIterator;
