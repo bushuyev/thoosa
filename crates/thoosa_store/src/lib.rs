@@ -99,6 +99,14 @@ pub struct RunConfigEntry {
     pub run_on: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunConfigRow {
+    pub id: RunId,
+    pub r#type: String,
+    pub descr: String,
+    pub run_on: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunConfigFilter {
     pub id: Option<RunId>,
@@ -274,7 +282,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
 
-    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
+    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
     #[cfg(test)]
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
@@ -465,7 +473,7 @@ mock! {
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<(PathBuf, f32)>, ThoError>;
-        async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError>;
+        async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
         #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
@@ -2435,12 +2443,19 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<Vec<(i64, String)>, ThoError> {
+    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError> {
         self.with_reader_conn("run_config_descr", move |conn| {
-            let descr: String = conn.query_row("SELECT descr FROM run_configs WHERE id=?", [corr_run_id], |row| row.get(0))?;
-            debug!("descr={:?}", descr);
+            let run_config = conn.query_row("SELECT id, type, descr, run_on FROM run_configs WHERE id=?", [corr_run_id], |row| {
+                Ok(RunConfigRow {
+                    id: row.get::<usize, RunId>(0)?,
+                    r#type: row.get::<usize, String>(1)?,
+                    descr: row.get::<usize, String>(2)?,
+                    run_on: row.get::<usize, String>(3)?,
+                })
+            })?;
+            debug!("run_config={run_config:?}");
 
-            parse_corr_labels(descr.as_str())
+            Ok(run_config)
         })
         .await
     }
@@ -4994,6 +5009,16 @@ impl MockStoreBuilder {
         self.store.expect_get_input_run_ids().returning(
             move |run_id, input_type|{
                 map.get(&run_id).cloned().expect(&format!("mock is not configured to return input_run_ids for run_id {run_id}"))
+            }
+        );
+        self
+    }
+
+    pub fn with_run_config_descr<R: Into<HashMap<RunId, Result<RunConfigRow, ThoError>>>>(mut self, results: R) -> Self {
+        let map = results.into();
+        self.store.expect_run_config_descr().returning(
+            move |run_id| {
+                map.get(&run_id).cloned().expect(&format!("mock is not configured to return run_config_descr for run_id {run_id}"))
             }
         );
         self
