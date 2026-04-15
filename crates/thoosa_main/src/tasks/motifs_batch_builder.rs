@@ -27,35 +27,57 @@ pub fn make_batch(in_tensor: &Tensor, batch_size: i64) -> TchResult<Tensor> {
 
 /// Main entry. Expects `x` of shape [num_records X seq_len], float dtype.
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MixupJitterCfg::make_batch_with"))]
-pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg) -> TchResult<Tensor> {
-    debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}", in_tensor.size());
-    let (num_records, seq_len) = in_tensor.size2()?; // ensures 2-D and returns (N, M)
+pub fn make_batch_with(
+    in_tensor: &Tensor,
+    batch_size: i64,
+    cfg: MixupJitterCfg,
+) -> TchResult<Tensor> {
+    debug!(
+        "make_batch_with: batch_size={batch_size} in_tensor.size={:?}",
+        in_tensor.size()
+    );
+
+    let (num_records, _seq_len) = in_tensor.size2()?; // ensures 2-D and returns (N, M)
     let device = in_tensor.device();
     let kind = in_tensor.kind();
-    debug_assert!(matches!(kind, Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double));
+
+    debug_assert!(matches!(
+        kind,
+        Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double
+    ));
 
     // Case 1: enough data — sample without replacement.
     if num_records > 2 * batch_size {
-        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size)?;
+        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?
+            .f_narrow(0, 0, batch_size)?;
         return Ok(in_tensor.f_index_select(0, &idx)?);
     }
 
     // Case 2: data paucity — build a batch via sampling with replacement,
     // then mixup (optional) and jitter (optional).
-    let base_idx = Tensor::f_randint(num_records, &[batch_size], (Kind::Int64, device))?;
-    let mut out = in_tensor.f_index_select(0, &base_idx)?.f_to_kind(Kind::Float)?;
+    let base_idx = Tensor::f_randint(num_records, [batch_size], (Kind::Int64, device))?;
+    let mut out = in_tensor
+        .f_index_select(0, &base_idx)?
+        .f_to_kind(Kind::Float)?;
 
     if cfg.do_mixup {
-        let perm_idx = Tensor::f_randint(num_records, &[batch_size], (Kind::Int64, device))?;
-        let partner = in_tensor.f_index_select(0, &perm_idx)?.f_to_kind(Kind::Float)?;
+        let perm_idx = Tensor::f_randint(num_records, [batch_size], (Kind::Int64, device))?;
+        let partner = in_tensor
+            .f_index_select(0, &perm_idx)?
+            .f_to_kind(Kind::Float)?;
+
         let lam = beta_tensor(cfg.alpha, batch_size, device)?.f_to_kind(out.kind())?; // [B]
         let w = lam.f_unsqueeze(1)?; // [B,1] to broadcast over M
-        out = &w * out + (1.0 - &w) * partner;
+        let one_minus_w = w.f_ones_like()?.f_sub(&w)?;
+
+        let mixed_a = w.f_mul(&out)?;
+        let mixed_b = one_minus_w.f_mul(&partner)?;
+        out = mixed_a.f_add(&mixed_b)?;
     }
 
     if cfg.do_jitter && cfg.sigma > 0.0 {
-        let noise = out.f_randn_like()? * cfg.sigma;
-        out += noise;
+        let noise = out.f_randn_like()?.f_mul_scalar(cfg.sigma)?;
+        out = out.f_add(&noise)?;
     }
 
     // Cast back to the original float kind if needed (avoid integer kinds).
@@ -64,7 +86,6 @@ pub fn make_batch_with(in_tensor: &Tensor, batch_size: i64, cfg: MixupJitterCfg)
         _ => out, // leave as Float
     })
 }
-
 /// Samples Beta(alpha, alpha) for `batch_size` entries and returns a 1-D tensor on `device`.
 fn beta_tensor(alpha: f64, batch_size: i64, device: Device) -> TchResult<Tensor> {
     use rand_distr::{Distribution, Gamma};

@@ -506,7 +506,7 @@ mod tests {
             motif_criteria: MotifCriteriaRangeOrValue {
                 norm_thickness: Some(NormThicknessConstraintRangeOrValue {
                     criterion: NormThicknessRunConfigRangeOrValue {eps: RangeOrValue::Value(1e-8) },
-                    min: RangeOrValue::Value(MotifCriteria::DEFAULT_CRITERION_MIN),
+                    min: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
                 }),
                 inlier_ratioRunConfig: Some(InlierRatioConstraintRangeOrValue {
                     criterion: InlierRatioRunConfigRangeOrValue { k: RangeOrValue::Value(3.0), eps: RangeOrValue::Value(1e-8) },
@@ -522,9 +522,6 @@ mod tests {
                 interesting_entropy_band_01: None,
                 periodicity_acf_01: None,
             },
-            avg_threshold: RangeOrValue::Range { range: 0.4..0.6, step: Some((0.1, 1)) },
-            min_slices: None,
-            max_slices: None,
             extend_max_slices: None,
         };
 
@@ -534,9 +531,9 @@ mod tests {
         assert!(run_configs[0].motif_criteria.norm_thickness.is_some());
         assert!(run_configs[0].motif_criteria.inlier_ratioRunConfig.is_some());
         assert!(run_configs[0].motif_criteria.coherenceRunConfig.is_none());
-        assert!((run_configs[0].avg_threshold - 0.4).abs() < 1e-6, "unexpected threshold: {}", run_configs[0].avg_threshold);
-        assert!((run_configs[1].avg_threshold - 0.5).abs() < 1e-6, "unexpected threshold: {}", run_configs[1].avg_threshold);
-        assert!((run_configs[2].avg_threshold - 0.6).abs() < 1e-6, "unexpected threshold: {}", run_configs[2].avg_threshold);
+        assert!((run_configs[0].motif_criteria.norm_thickness.as_ref().expect("missing norm_thickness").min - 0.4).abs() < 1e-6);
+        assert!((run_configs[1].motif_criteria.norm_thickness.as_ref().expect("missing norm_thickness").min - 0.5).abs() < 1e-6);
+        assert!((run_configs[2].motif_criteria.norm_thickness.as_ref().expect("missing norm_thickness").min - 0.6).abs() < 1e-6);
     }
 
     #[test]
@@ -1489,33 +1486,16 @@ pub struct SelectMotifsRunConfig {
 
     #[in_map]
     #[run_config]
-    pub avg_threshold: f32,
-
-    #[in_map]
-    #[run_config]
-    pub min_slices: Option<u32>,
-
-    #[in_map]
-    #[run_config]
-    pub max_slices: Option<u32>,
-
-    #[in_map]
-    #[run_config]
     pub extend_max_slices: Option<MaxSlices>//TODO move into extend_config
 }
 
 impl SelectMotifsRunConfig {
-    fn validate_threshold(threshold: f32) {
-        assert!((0.0..=1.0).contains(&threshold), "SelectMotifsRunConfig::threshold must be within 0..1, got {threshold}");
-    }
-
-    pub fn new_with_fields(id: Option<RunId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: MotifCriteria, threshold: f32) -> Self {
-        Self::validate_threshold(threshold);
-        Self { id, extend_config, motif_criteria, avg_threshold: threshold, min_slices: None, max_slices: None, extend_max_slices: None }
+    pub fn new_with_fields(id: Option<RunId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: MotifCriteria) -> Self {
+        Self { id, extend_config, motif_criteria, extend_max_slices: None }
     }
 
     pub fn new(id: Option<RunId>) -> Self {
-        Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), MotifCriteria::default(), 0.5)
+        Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), MotifCriteria::default())
     }
 
 }

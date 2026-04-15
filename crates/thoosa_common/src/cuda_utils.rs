@@ -3,8 +3,9 @@ use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use futures_util::{stream, StreamExt};
-use log::{debug, error};
+use futures_util::{stream, StreamExt, TryStreamExt};
+use log::{debug, warn, error};
+use mockall::predicate::ne;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{Cause, ThoError};
@@ -79,10 +80,12 @@ impl Drop for PinnedHostBuffer {
 }
 // test-only imports moved into test modules
 
+
 //free_mem, total_mem
 pub fn cuda_mem() -> (usize, usize) {
     use cust::sys::cuMemGetInfo_v2;
 
+    //TODO replace with shim
     let ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
     ctx
         .bind_to_thread()
@@ -242,7 +245,11 @@ pub async fn copy_d2h_from_ptr(
                         );
                         let r: sys::CUresult = std::mem::transmute(raw);
                         if r != sys::CUresult::CUDA_SUCCESS {
-                            return Err::<(), Cause>(Cause::SomethingElse(format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")).into());
+                            let needs_reset = r == sys::CUresult::CUDA_ERROR_ASSERT;
+                            if needs_reset {
+                                warn!("copy_d2h_from_ptr: needs_reset");
+                            }
+                            return Err::<(), Cause>(Cause::Cuda{ needs_reset: needs_reset, msg: format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")});
                         }
 
                         debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={r:?}");
@@ -365,7 +372,7 @@ pub async fn copy_h2d_from_ptr(
             .chain((last != 0).then_some((chunks, last)))
             .collect::<Vec<_>>();
 
-        let concurrency = 32; //chunk_ranges.len().max(1);
+        let concurrency = 32; //32 pytorch priority pooled streams
 
         stream::iter(chunk_ranges)
             .map(|(i, c_buf_size)| {
@@ -400,7 +407,7 @@ pub async fn copy_h2d_from_ptr(
                         //----------------------------------------------------------
                         // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                         //----------------------------------------------------------
-                        let _guard = ThoStreamGuard::new(buf_stream.1.as_ref()).unwrap();
+                        let _guard = ThoStreamGuard::new(buf_stream.1.as_ref()).map_err(|te|te.what().clone())?;
                         let raw = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                             dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                             buf_ptr as *const c_void,
@@ -409,20 +416,32 @@ pub async fn copy_h2d_from_ptr(
                         );
                         let r: sys::CUresult = std::mem::transmute(raw);
                         if r != sys::CUresult::CUDA_SUCCESS {
-                            panic!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
+                            let needs_reset = r == sys::CUresult::CUDA_ERROR_ASSERT;
+                            if needs_reset {
+                                warn!("copy_h2d_from_ptr: needs reset");
+                            }
+                            return Err::<(), Cause>(Cause::Cuda{ needs_reset: needs_reset, msg: format!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}")});
                         }
                         let _ = buf_stream.1.synchronize();
                         drop(buf_stream); // return buffer/stream to pool
                         debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?} done", os_thread_id());
 
-                    }).await.unwrap();//TODO handle CUDA_ERROR_OUT_OF_MEMORY
+                        Ok(())
 
+                    }).await.map_err(|e| Cause::External {
+                        type_name: std::any::type_name::<tokio::task::JoinError>(),
+                        source: Arc::new(e),
+                    })??;//TODO handle CUDA_ERROR_OUT_OF_MEMORY
+
+                    Ok(())
                     // wait for GPU work to finish before recycling buffer
                 }
             })
             .buffer_unordered(concurrency)
             .collect::<Vec<_>>()
-            .await;
+            .await
+            .into_iter()
+            .collect::<Result<(), Cause>>()?;
     }
 
     Ok(dst_t)
@@ -959,8 +978,21 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_cuda_stream(){
+    async fn test_device_reset() -> Result<(), ThoError>{
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
 
+        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+        cu_ctx
+            .bind_to_thread()
+            .expect("failed to bind CUDA context for test_small_one_copy_types");
+
+
+        cu_ctx.reset()?;
+
+
+        Ok(())
     }
 
 }

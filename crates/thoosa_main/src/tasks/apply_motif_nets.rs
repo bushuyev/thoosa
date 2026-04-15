@@ -664,18 +664,24 @@ impl ConsumeData for TmpCacheWrapper {
         F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
         P: RunCtx,
     {
-
         async move {
-            do_run(
-                BatchAppliedMotifNetsInput {
-                    id: SynKey::new(vec![]),//TODO seems to be not used
-                    len: 0, //seems tobe not used
-                    device_idx: ctx.device_idx(),
+            let TmpCacheWrapper { id, tmp_cache } = self;
+            let device_idx = ctx.device_idx();
 
-                    motif_nets_applied: self.tmp_cache.take_all(ctx.device_idx()).await.unwrap(),
-                },
-                ctx,
-            )
+            match tmp_cache.take_all_recovering(device_idx).await {
+                Ok(motif_nets_applied) => {
+                    let len = motif_nets_applied.len();
+                    do_run(BatchAppliedMotifNetsInput::new(id, motif_nets_applied, len, device_idx), ctx)
+                }
+                Err(err) => {
+                    let len = err.data.len();
+                    let input = BatchAppliedMotifNetsInput::new(id, err.data, len, device_idx);
+                    ConsumeResult::Failed {
+                        input,
+                        error: err.error,
+                    }
+                }
+            }
         }
     }
 
@@ -743,43 +749,75 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="BatchAppliedMotifNets::consume"))]
-    fn consume<'f>(self: Arc<Self>, input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
+    fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
         let input_id = input.id().clone();
-
-        let mut motif_nets_applied = input.motif_nets_applied;
+        let mut motif_nets_applied = std::mem::take(&mut input.motif_nets_applied);
 
         debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?}", motif_nets_applied.len(), input_id);
 
-        motif_nets_applied.sort_unstable_by_key(|v| v.id().clone());
+        motif_nets_applied.sort_by(|a,b|a.id().partial_cmp(&b.id()).unwrap_or(Ordering::Equal));
+
         let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t_ref().size()[0]).collect::<Vec<_>>();
         let unique_motif_nets_applied_lens = motif_nets_applied_lens.iter().copied().collect::<HashSet<_>>();
         let max_match_len = motif_nets_applied_lens.iter().copied().max().unwrap_or(0);
-        let mut motif_nets_applied = if unique_motif_nets_applied_lens.len() > 1 {
-            debug!("BatchAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
-            motif_nets_applied.into_iter().map(|v| {
-                let size = v.t_ref().size();
-                if size[0] == max_match_len {
-                    return Ok(v);
-                }
-                let id = v.id().clone();
-                let t = stretch(v.t_ref(), max_match_len as usize, 0)?;//stretch instead of pad to keep it time-aligned in motif nets with different window
-                Ok(ThoTensor::new(id, t)?)
-            }).collect::<Result<Vec<_>, ThoError>>().unwrap()
-        } else {
-            motif_nets_applied
-        };
+        let output_options = motif_nets_applied
+            .first()
+            .map(|v| (v.t_ref().kind(), v.t_ref().device()))
+            .unwrap_or((Float, ThoDevice::from(input.device_idx).into()));
 
-        motif_nets_applied.sort_by(|a,b|a.id().partial_cmp(&b.id()).unwrap_or(Ordering::Equal));
+
+        if unique_motif_nets_applied_lens.len() > 1 {
+            debug!("BatchAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
+        }
 
         trace!("BatchAppliedMotifNets::consume: matches_={motif_nets_applied:?}");
 
-        let res_t = Tensor::f_vstack(
-            &motif_nets_applied.iter().map(|v| v.t_ref().shallow_clone()).collect::<Vec<_>>(),
-        ).unwrap();
+        let res_t = match Tensor::f_zeros([motif_nets_applied.len() as i64, max_match_len], output_options) {
+            Ok(res_t) => res_t,
+            Err(error) => {
+                input.motif_nets_applied = motif_nets_applied;
+                return ConsumeResult::Failed { input, error: error.into() };
+            }
+        };
+
+        for (row_i, motif_net_applied) in motif_nets_applied.iter().enumerate() {
+            let size = motif_net_applied.t_ref().size();
+            let stretched;
+            let src = if size[0] == max_match_len {
+                motif_net_applied.t_ref()
+            } else {
+                stretched = match stretch(motif_net_applied.t_ref(), max_match_len as usize, 0) {
+                    Ok(stretched) => stretched,
+                    Err(error) => {
+                        input.motif_nets_applied = motif_nets_applied;
+                        return ConsumeResult::Failed { input, error };
+                    }
+                };
+                &stretched
+            };
+
+            let mut dst = match res_t.f_get(row_i as i64) {
+                Ok(dst) => dst,
+                Err(error) => {//TODO it's not rally recoverable, returning input only wastes memory
+                    input.motif_nets_applied = motif_nets_applied;
+                    return ConsumeResult::Failed { input, error: error.into() };
+                }
+            };
+            if let Err(error) = dst.f_copy_(src) {
+                input.motif_nets_applied = motif_nets_applied;
+                return ConsumeResult::Failed { input, error: error.into() };
+            }
+        }
 
         debug!("BatchAppliedMotifNets::consume: res_t.size={:?}", res_t.size());
 
-        let motif_nets_applied = ThoTensor::new(self.out_id(&input_id), res_t).unwrap();
+        let motif_nets_applied = match ThoTensor::new(self.out_id(&input_id), res_t) {
+            Ok(motif_nets_applied) => motif_nets_applied,
+            Err(error) => {
+                input.motif_nets_applied = motif_nets_applied;
+                return ConsumeResult::Failed { input, error };
+            }
+        };
 
         ConsumeResult::Ok(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens))
     }

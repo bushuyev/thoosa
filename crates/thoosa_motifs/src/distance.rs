@@ -154,17 +154,17 @@ impl<'a> MaskMaker<'a> {
 /*
     t_0, t_1 - channels x slices x slice_len
 */
-/// returns bool mask and if with_distances is true distances
+/// returns bool mask and, if with_distances is true, distances
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="distance::clc_dist_d2_and_mask"))]
 pub fn clc_dist_d2_and_mask(
-    t_0: Tensor,
-    t_1: Tensor,
+    t_0: Tensor, // TODO change to &Tensor
+    t_1: Tensor, // TODO change to &Tensor
     with_distances: bool,
     mask_makers: &mut [MaskMaker],
 ) -> Result<(Tensor, Option<Tensor>), ThoError> {
     let device = t_0.device();
 
-    if t_0.size()[1] < 2 /*|| t_1.size()[1] < 2 TODO - when calculating distances between slices and motifs there can be single motif?*/ {
+    if t_0.size()[1] < 2 {
         return Err(ThoError::new(format!(
             "not enough slices in dimension 0 to calculate distances and mask: t_0.size={:?} t_1.size={:?}",
             t_0.size(),
@@ -188,10 +188,14 @@ pub fn clc_dist_d2_and_mask(
     // )?;
 
     // let distances = pearson_corr_distance_matrix_0_2(&t_0, &t_1, 1e-8)?;
+    /*
+     let t_1_t = t_1.transpose(1, 2);
+     let distances = t_0.f_matmul(&t_1_t)?.f_neg()?;
+    */
 
     let distances = Tensor::f_cdist(&t_0, &t_1, 2.0, 0)?;
 
-    debug!("clc_dist_d2_and_mask: t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",t_0.size(), t_0.device(), t_1.size(), t_1.device());
+    debug!("clc_dist_d2_and_mask: t_0.size={:?}, t_0.device={:?}, t_1.size={:?}, t_1.device={:?}",t_0.size(),t_0.device(),t_1.size(),t_1.device());
     debug!("clc_dist_d2_and_mask: mask_makers={mask_makers:?} distances size={:?}",distances.size());
     trace!("clc_dist_d2_and_mask: distances=\n{distances} device={:?}",distances.device());
 
@@ -210,7 +214,11 @@ pub fn clc_dist_d2_and_mask(
 
     Ok((
         mask,
-        if with_distances { Some(distances) } else { None },
+        if with_distances {
+            Some(distances)
+        } else {
+            None
+        },
     ))
 }
 

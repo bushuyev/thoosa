@@ -1,4 +1,5 @@
 #![feature(async_fn_traits, fn_traits, unboxed_closures)]
+#![recursion_limit = "256"]
 #![allow(
     unused_imports,
     unused_variables,

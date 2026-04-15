@@ -35,6 +35,8 @@ use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
+use sha2::{Digest, Sha256};
+use crate::copy_ctx::CopyCtx;
 
 #[macro_export]
 macro_rules! debug_plot {
@@ -1685,7 +1687,7 @@ pub fn stretch<T: AsRef<Tensor>>(
         idx.push(src);
     }
 
-    let index = Tensor::from_slice(&idx).to_device(t.device());
+    let index = Tensor::f_from_slice(&idx)?.f_to_device(t.device())?;
     Ok(t.f_index_select(dim as i64, &index)?)
 }
 
@@ -2931,4 +2933,151 @@ pub fn make_periodic_signal(width: i64, periods: i64) -> Tensor {
         + (&phi * 7.0).sin() * 0.15;
 
     x.view([1, width])
+}
+
+
+
+
+#[derive(Debug, Clone)]
+pub struct TensorDigest {
+    pub hex: String,
+    pub shape: Vec<i64>,
+    pub stride: Vec<i64>,
+    pub kind: Kind,
+    pub device: Device,
+    pub requires_grad: bool,
+}
+
+/// Compute a debugging digest for a tensor.
+///
+/// The digest includes:
+/// - shape
+/// - stride
+/// - kind
+/// - device
+/// - requires_grad
+/// - tensor contents
+///
+/// Notes:
+/// - This is intended for debugging, not performance-sensitive code.
+/// - For best reproducibility, values are copied to CPU and made contiguous first.
+/// - Half/BFloat16 are converted to Float before hashing because extracting raw
+///   f16/bf16 bytes ergonomically in `tch` is awkward. If you need bit-exact
+///   distinction between Float16/BFloat16 payloads, that can be added separately.
+pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
+    let shape = t.size();
+    let stride = t.stride();
+    let kind = t.kind();
+    let device = t.device();
+    let requires_grad = t.requires_grad();
+
+    let mut hasher = Sha256::new();
+
+    // Hash metadata first.
+    hasher.update(b"shape");
+    for x in &shape {
+        hasher.update(x.to_le_bytes());
+    }
+
+    hasher.update(b"stride");
+    for x in &stride {
+        hasher.update(x.to_le_bytes());
+    }
+
+    hasher.update(b"kind");
+    hasher.update(format!("{kind:?}").as_bytes());
+
+    hasher.update(b"device");
+    hasher.update(format!("{device:?}").as_bytes());
+
+    hasher.update(b"requires_grad");
+    hasher.update([requires_grad as u8]);
+
+    // Normalize layout for stable content hashing.
+    let cpu = t.f_to_device(Device::Cpu)?.f_contiguous()?;
+
+    match kind {
+        Kind::Uint8 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
+            hasher.update(&v);
+        }
+        Kind::Int8 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i8> = Vec::<i8>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int16 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i16> = Vec::<i16>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i32> = Vec::<i32>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Int64 => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<i64> = Vec::<i64>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_le_bytes());
+            }
+        }
+        Kind::Bool => {
+            let flat = cpu.f_to_kind(Kind::Uint8)?.f_view([-1])?;
+            let v: Vec<u8> = Vec::<u8>::try_from(&flat)?;
+            hasher.update(&v);
+        }
+        Kind::Float => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        Kind::Double => {
+            let flat = cpu.f_view([-1])?;
+            let v: Vec<f64> = Vec::<f64>::try_from(&flat)?;
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        Kind::Half | Kind::BFloat16 => {
+            // Preserves values well enough for debugging, but not the exact 16-bit payload.
+            let flat = cpu.f_to_kind(Kind::Float)?.f_view([-1])?;
+            let v: Vec<f32> = Vec::<f32>::try_from(&flat)?;
+            hasher.update(format!("{kind:?}").as_bytes()); // keep original dtype distinct
+            for x in v {
+                hasher.update(x.to_bits().to_le_bytes());
+            }
+        }
+        other => {
+            return Err(tch::TchError::Torch(format!(
+                "tensor_digest: unsupported kind: {other:?}"
+            )));
+        }
+    }
+
+    let bytes = hasher.finalize();
+    let mut hex = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{:02x}", b).unwrap();
+    }
+
+    Ok(TensorDigest {
+        hex,
+        shape,
+        stride,
+        kind,
+        device,
+        requires_grad,
+    })
 }

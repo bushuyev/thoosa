@@ -1,8 +1,10 @@
+use std::fmt::Debug;
 use std::sync::{Arc, OnceLock};
 use parking_lot::RwLock;
 use tch::{Kind, TchError, Tensor};
 use tch::Kind::Float;
 use tracing::debug;
+use thoosa_common::utils::tensor_digest;
 
 type NormThicknessMockFn = Arc<dyn Fn(&Tensor, f64) -> Result<Tensor, TchError> + Send + Sync>;
 type InlierRatioMockFn = Arc<dyn Fn(&Tensor, f64, f64) -> Result<Tensor, TchError> + Send + Sync>;
@@ -147,7 +149,9 @@ fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, TchError> {
 /// thickness = mean_t( q90(x[:,t]) - q10(x[:,t]) )
 /// amp       = q95(consensus) - q05(consensus)
 /// score     = 1 / (1 + k * thickness / (amp + eps))
-pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
+pub fn norm_thickness<ID:Debug>(id:&ID, x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
+    debug!("norm_thickness: id={id:?} tensor_digest={:?}", tensor_digest(x));
+
     if let Some(mocked) = maybe_norm_thickness_mock(x, eps) {
         return mocked;
     }
@@ -170,6 +174,8 @@ pub fn norm_thickness(x: &Tensor, eps: f64) -> Result<Tensor, TchError> {
     // s = thickness / (amp + eps)#[cfg(test)]
     let denom = amp.f_add_scalar(eps)?;
     let s = thickness.f_div(&denom)?;                    // scalar
+
+    debug!("norm_thickness: s=\n{s}");
 
     // Q = 1 / (1 + s)
     let one = Tensor::from(1.0).to_device(x.device()).to_kind(x.kind());
@@ -1000,7 +1006,7 @@ mod tests {
             ])
                 .view([3, 4]);
 
-            let s = norm_thickness(&x, 1e-8)?;
+            let s = norm_thickness(&"identical", &x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 1.0, 1e-12);
             Ok(())
         }
@@ -1025,7 +1031,7 @@ mod tests {
             ])
             .view([3, 4]);
 
-            let s = norm_thickness(&x, 1e-8)?;
+            let s = norm_thickness(&"known_value_n3_rounding", &x, 1e-8)?;
             assert_close(f64_of_scalar(&s), 0.952381014824, 1e-6);
             Ok(())
         }

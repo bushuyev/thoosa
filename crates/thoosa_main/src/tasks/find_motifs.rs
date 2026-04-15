@@ -223,12 +223,13 @@ where
                         SlicesFilter::Precalculate(v) => {
                             let motif_stats = random_stats_arc.run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![Metrics::EucDist], to_stats_aggr(v.aggr)))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
 
-                            let dists = with_data!(ctx, motif_stats; |ctx, t:&MotifStatsOutput|{//ThoTensor<ChannelsMotifsDists, SynKey>
-                                    let metric_val = t.metric_values(Metrics::EucDist).expect("no dists");
-                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t);
+                            let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
+                                let metric_val = t.channels_motifs_dists(Metrics::EucDist)?;
+                                let metric_val_id = metric_val.id().clone();
+                                debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 
-                                    ThoTensor::new(t.id().clone(), metric_val.t.f_view((-1, 1, 1))?)
-                                })?;
+                                ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.device_idx()).into())?)
+                            })?;
                             MasksCtx::PrecalculatedDist { dists }
                         }
                         SlicesFilter::ExactS(v) => {
@@ -290,16 +291,14 @@ where
                             //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
                             debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
-                            // let (clc_dist_d2_and_mask_result, motifs_stream) =// with_cuda_stream(device_idx, || {
+                            //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
                             let (mask, dists) = thoosa_motifs::distance::clc_dist_d2_and_mask(//stream is set in CrossInputSelectorWrap/with_[select]_data_ref + with_data
                                     t_0.shallow_clone(),
                                     t_1.shallow_clone(),
                                     fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
                                     &mut mask_makers,
                                 )?;
-                            // });
 
-                            // let (mask, dists) = clc_dist_d2_and_mask_result?;
 
                             trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
                             debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
