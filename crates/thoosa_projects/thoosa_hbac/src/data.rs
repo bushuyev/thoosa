@@ -1012,6 +1012,7 @@ mod tests {
                 Tensor::load(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str())
                     .map_err(|e| e.into())
             },
+            None,
             true,
             false,
         ).await?;

@@ -29,6 +29,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
 use thoosa_store::Store;
@@ -691,7 +692,7 @@ where
 
                 let mut expected_channel = None;
                 let mut expected_window = None;
-                let mut motif_tensors = Vec::with_capacity(motif_loader_inputs.len());
+                let motif_tensors: TmpCached<ThoTensor<MotifSlices, SynKey>> = TmpCached::new("tmp_motif_stats_merged_motifs").await;
 
                 for (idx, motif_loader_input) in motif_loader_inputs.into_iter().enumerate() {
                     let motif = Arc::clone(&self.motif_loader)
@@ -705,7 +706,8 @@ where
                         let src = motif.data().t_ref();
                         let mut dst = src.f_zeros_like()?;
                         dst.f_copy_(&src)?;
-                        Ok::<_, ThoError>((dst, motif.extra().clone()))
+                        let tensor_id = &motif.data().id().clone() + mono_key!(idx, format!("merged_motif_idx={idx}"));
+                        Ok::<_, ThoError>((ThoTensor::new(tensor_id, dst)?, motif.extra().clone()))
                     })?;
 
                     match expected_channel {
@@ -724,9 +726,15 @@ where
                     }
 
                     debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, tensor_copy.size());
-                    motif_tensors.push(tensor_copy);
+                    motif_tensors.insert(tensor_copy);
                 }
 
+                let motif_tensors = motif_tensors
+                    .take_all(ctx.device_idx())
+                    .await?
+                    .into_iter()
+                    .map(|motif_tensor| motif_tensor.t)
+                    .collect::<Vec<_>>();
                 let channels_3d = Tensor::f_cat(motif_tensors.as_slice(), 0)?.f_unsqueeze(0)?;
                 Arc::new(ThoTensor::new(input_id.clone(), channels_3d)?)
             }

@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, InputFilter};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -76,7 +76,7 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
 
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
-use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, SgZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -94,6 +94,7 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
+use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
@@ -225,6 +226,9 @@ export LD_LIBRARY_PATH=/home/bu/dvl/torch/libtorch-2.5.0/lib/ && cargo run --rel
 pub struct ImportResourcesArgs {
     #[arg(long)]
     pub source_path: String,
+
+    #[arg(long)]
+    pub freq_filters: Vec<InputFilter>,
 }
 
 #[derive(Debug, Args, Clone)]
@@ -237,6 +241,7 @@ pub enum Commands {
     PlotData(PlotDataArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
+    MergeSelectedMotifs(MergeSelectedMotifsArgs),
     TrainMotifsNets(TrainMotifsNetsArgs),
     TrainLabelNets(TrainLabelNetsArgs),
     TrainFinalNet(TrainFinalNetArgs),
@@ -422,19 +427,29 @@ where
     let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
     match &cli.command {
-        Some(ImportResources(import_resources_params)) => {
+        Some(ImportResources(import_resources_args)) => {
             debug!(
                 "ImportResources: import_resources_params={:?}",
-                import_resources_params
+                import_resources_args
             );
+            let freq_filter = if import_resources_args.freq_filters.is_empty() {
+                None
+            } else {
+                Some(Arc::new(FreqFilter::<RunCtxImpl>::new(
+                    import_resources_args.freq_filters.as_slice(),
+                    &ws,
+                    0,
+                )?))
+            };
             import_resources(
                 &ws,
                 &store,
                 labels,
-                || labeled_resources(&import_resources_params.source_path),
+                || labeled_resources(&import_resources_args.source_path),
                 |key: String| {
-                    resource_to_tensor(&import_resources_params.source_path, key.as_str())
+                    resource_to_tensor(&import_resources_args.source_path, key.as_str())
                 },
+                freq_filter,
                 true,
                 true,
             ).await?;
@@ -486,7 +501,7 @@ where
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
-            debug!("SelectMotifs2: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
+            debug!("SelectMotifs: select_motifs_args.run_config_cnt={:?}",select_motifs_args.run_config_cnt);
 
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
@@ -523,6 +538,29 @@ where
             ).await?;
 
             info!("SelectMotifs done, run_ids={run_ids:?}");
+        }
+
+        Some(Commands::MergeSelectedMotifs(merge_selected_motifs_args)) => {
+            debug!("MergeSelectedMotifs: merge_selected_motifs_args{:?}",merge_selected_motifs_args);
+            let motif_stats = Arc::new(MotifStats::new(
+                Arc::clone(&store),
+                Arc::clone(&loader),
+                Arc::clone(&ws),
+                Arc::new(MotifLoader::new(
+                    Arc::clone(&store),
+                    Arc::clone(&loader),
+                    &ws
+                ))
+            ));
+
+            let output_wrap = Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
+                Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_ids.clone()))),
+                root_ctx.branch(Some("select motifs"), true)
+            ).await?;
+
+            let output  = Arc::into_inner(output_wrap).unwrap().take_data(0).await?;
+
+            info!("MergeSelectedMotifs done, output={output:?}");
         }
 
         Some(TrainMotifsNets(train_motif_nets_args)) => {
@@ -1063,7 +1101,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
             //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
             //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: Some((1, 0)) },
             //     stride: RangeOrValue::Value(10),
-            //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
         similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
@@ -1121,16 +1159,16 @@ where
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
             // }),
-            // AverageFilter(AverageFilterParamsRangeOrValue {
-            //     window: RangeOrValue::dynamic(median_window),
-            //     step: RangeOrValue::Value(10),
-            // }),
-            SavGolFilter(SavGolFilterParamsRangeOrValue {
-                window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
-                stride: RangeOrValue::Value(10),
-                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            AverageFilter(AverageFilterParamsRangeOrValue {
+                window: RangeOrValue::dynamic(median_window),
+                step: RangeOrValue::Value(10),
             }),
+            // SavGolFilter(SavGolFilterParamsRangeOrValue {
+            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
+            //     stride: RangeOrValue::Value(10),
+            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            // }),
         ]),
         similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
@@ -1254,7 +1292,7 @@ fn run_all_find_motifs_config_test_1<P: FieldName + 'static>() -> FindMotifsRunC
             band_hz: RangeOrValue::Value(2.),
             kernel_size: RangeOrValue::Value(10),
             stride: RangeOrValue::Value(1),
-            padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
         })]),
         similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
         slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
@@ -1584,6 +1622,7 @@ pub async fn import_resources<F, R>(
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
+    freq_filter: Option<Arc<FreqFilter<RunCtxImpl>>>,
     insert_label: bool,
     save_pure_sets: bool,
 ) -> Result<Vec<ResourceId>, ThoError>
@@ -1591,7 +1630,7 @@ where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
-    import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
+    import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, freq_filter, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
 }
 
 pub async fn import_resources_with_pure_sets<F, R>(
@@ -1600,6 +1639,7 @@ pub async fn import_resources_with_pure_sets<F, R>(
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
+    freq_filter: Option<Arc<FreqFilter<RunCtxImpl>>>,
     insert_label: bool,
     pure_sets_lens: Option<&[(usize, bool)]>,
 ) -> Result<Vec<ResourceId>, ThoError>
@@ -1631,7 +1671,10 @@ where
                 trace!("import_resources: resource_key={resource_key} ok={} err={}",a.0.len(),a.1.len());
 
                 match resource_to_tensor(resource_key.clone())
-                    .and_then(|t| ws_guard.import_tensor(t, import_id, resource_key.as_str()))
+                    .and_then(|t| apply_import_freq_filter(freq_filter.as_deref(), resource_key.as_str(), t))
+                    .and_then(|t| {
+                        ws_guard.import_tensor(t, import_id, resource_key.as_str())
+                    })
                 {
                     Ok(stats) => {
                         //resource keys should not repeat
@@ -1683,6 +1726,26 @@ where
     trace!("import_resources: resource_ids={resource_ids:?}, failed_tensors={failed_tensors:?}");
 
     Ok(resource_ids) //for tests
+}
+
+fn apply_import_freq_filter(
+    freq_filter: Option<&FreqFilter<RunCtxImpl>>,
+    resource_key: &str,
+    tensor: Tensor,
+) -> Result<Tensor, ThoError> {
+    match freq_filter {
+        Some(freq_filter) => Ok(freq_filter
+            .apply_tho_tensor(
+                &ThoTensor::new(
+                    SynKey::new([mono_key!(resource_key.to_string(), format!("resource_key={resource_key}"))]),
+                    tensor,
+                )?
+                .to_device(freq_filter.input_device())?,
+            )?
+            .to_device(Cpu)?
+            .t()),
+        None => Ok(tensor),
+    }
 }
 
 pub async fn run_plot<C>(
@@ -1966,11 +2029,13 @@ where
     C: RunCtx + Adjustable,
 {
     let channels = ws.read().channels();
-    debug!("run_plot: MotifsBy::GoodMotifs select_motifs_run_id={select_motifs_run_id} channels={channels}");
+    debug!("plot_selected_motifs: select_motifs_run_id={select_motifs_run_id} channels={channels}");
 
     let motifs = store
         .list_selected_motifs(select_motifs_run_id, channels)
         .await?;
+
+    debug!("plot_selected_motifs: motifs={motifs:?}");
 
     let motif_ids: Vec<usize> = motifs
         .into_iter()
@@ -1978,7 +2043,7 @@ where
         .collect();
 
     if motif_ids.is_empty() {
-        warn!("run_plot: no motifs found for select_motifs_run_id={select_motifs_run_id}");
+        warn!("plot_selected_motifs: no motifs found for select_motifs_run_id={select_motifs_run_id}");
         return Ok(());
     }
 
@@ -1995,7 +2060,7 @@ where
             let suffix = suffix.clone();
             let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true);
             async move {
-                debug!("run_plot: motif_id={motif_id}");
+                debug!("plot_selected_motifs: motif_id={motif_id}");
                 if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
@@ -2569,7 +2634,7 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-    use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding};
+    use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, NotchBandFilterParamsRangeOrValue, Padding};
     use thoosa_common::debug_plot;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
@@ -2661,6 +2726,33 @@ mod cli_tests {
 
         match cli.command {
             Some(crate::cli::Commands::RunAll(args)) => assert_eq!(args.resolution, Resolution::High),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_import_resources_freq_filters_parse() {
+        let cli = Cli::parse_from([
+            "thoosa_main",
+            "import-resources",
+            "--source-path",
+            "/tmp/input",
+            "--freq-filters",
+            "{MedianFilter:{window:5}}",
+            "--freq-filters",
+            "{AverageFilter:{window:7,step:1}}",
+        ]);
+
+        match cli.command {
+            Some(crate::cli::Commands::ImportResources(args)) => {
+                assert_eq!(
+                    args.freq_filters,
+                    vec![
+                        InputFilter::MedianFilter(MedianFilterParams { window: 5 }),
+                        InputFilter::AverageFilter(AverageFilterParams { window: 7, step: 1 }),
+                    ],
+                );
+            }
             other => panic!("unexpected command: {other:?}"),
         }
     }
@@ -2788,6 +2880,7 @@ mod cli_tests {
                 ]))
             },
             |_: String| Ok(Tensor::from_slice(&[0., 1., 2., 0., 10., 20.]).view((2, -1))),
+            None,
             true,
             false,
         ).await?;
@@ -2802,6 +2895,47 @@ mod cli_tests {
         imported_keys.sort();
 
         assert_eq!(vec!["t_0_0", "t_0_1", "t_1_0", "t_1_1",], imported_keys);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_import_resources_applies_freq_filter() -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            test_dir,
+            1,
+            100,
+            32000,
+        )?));
+        let store = Arc::new(SqlStore::in_mem().await?);
+        let freq_filter = Arc::new(FreqFilter::<RunCtxImpl>::new(
+            &[InputFilter::MedianFilter(MedianFilterParams { window: 5 })],
+            &ws,
+            0,
+        )?);
+
+        let imported_ids = import_resources(
+            &ws,
+            &store,
+            &["label_0"],
+            || Ok(HashMap::from([("t_0_0".to_string(), vec![("label_0".to_string(), 1.0)])])),
+            |_: String| Ok(Tensor::from_slice(&[0., 100., 0.]).view((1, -1))),
+            Some(freq_filter),
+            true,
+            false,
+        ).await?;
+
+        let imported_resources: Vec<Resource> = store.list_resources_by_ids(&imported_ids).await?;
+        let imported = &imported_resources[0];
+        let imported_tensor = Tensor::load(
+            ws.read()
+                .tensors_path()
+                .join(format!("{}_{}.pt", imported.import_id(), imported.file_stem())),
+        )?;
+        let expected = Tensor::zeros([1, 3], (imported_tensor.kind(), imported_tensor.device()));
+
+        assert!(imported_tensor.allclose(&expected, 1e-5, 1e-5, false));
 
         Ok(())
     }
@@ -3029,6 +3163,7 @@ mod cli_tests {
                 Tensor::load(tensors_path_for_import.join(format!("{}.pt", key)))
                     .map_err(ThoError::from)
             },
+            None,
             true,
             Some(&[(20, true), (10, true)])
         ).await?;

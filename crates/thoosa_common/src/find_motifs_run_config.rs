@@ -5,7 +5,9 @@ use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::Hash;
+use std::str::FromStr;
 use std::sync::Arc;
+use clap::{Args, Subcommand};
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
@@ -240,13 +242,21 @@ impl FindMotifsRunConfig {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
 pub enum InputFilter {
     NotchBandFilter(NotchBandFilterParams),
     BandPassFilter(BandPassFilterParams),
     SavGolFilter(SavGolFilterParams),
     MedianFilter(MedianFilterParams),
     AverageFilter(AverageFilterParams),
+}
+
+impl FromStr for InputFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json5::from_str(s).map_err(|e| format!("parse InputFilter from `{s}`: {e}"))
+    }
 }
 
 impl InputFilterLengthAdjuster for InputFilter {
@@ -390,7 +400,7 @@ pub struct ExactStats {
 mod tests {
     use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioConstraintRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteria, MotifCriteriaRangeOrValue, NormThicknessConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use crate::find_motifs_run_config::InputFilter::{BandPassFilter, MedianFilter, AverageFilter, NotchBandFilter, SavGolFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, AverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
+    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, AverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use log::debug;
     use tch::Tensor;
     use thoosa_properties_map::ToHashmap;
@@ -418,7 +428,7 @@ mod tests {
                     band_hz: 300f64.into(),
                     kernel_size: 12000u32.into(),
                     stride: 1u32.into(),
-                    padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+                    padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
                 },
             ), InputFilterRangeOrValue::MedianFilter(MedianFilterParamsRangeOrValue { window: 11u32.into() })]),
             similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
