@@ -18,8 +18,8 @@ use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::tmp_cache::TmpCached;
-use thoosa_common::debug_plot;
-use thoosa_common::dims::{AnyDims, Dims, MotifSlices};
+use thoosa_common::{copy_ctx, debug_plot};
+use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices, Slice};
 use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
@@ -51,6 +51,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::utils::tensor_digest;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
@@ -175,7 +176,7 @@ struct LoadedMotifResource {
     id: LoadedMotifResourceId,
     resource_id: ResourceId,
     slices: Vec<u32>,
-    raw_tensor: ThoTensor<ChannelsData2, SynKey>,
+    raw_tensor: ThoTensor<Slice, SynKey>,
 }
 
 impl WithId for LoadedMotifResource {
@@ -187,11 +188,11 @@ impl WithId for LoadedMotifResource {
 }
 
 impl Data for LoadedMotifResource {
-    type Metrics = <ThoTensor<ChannelsData2, SynKey> as Data>::Metrics;
+    type Metrics = <ThoTensor<Slice, SynKey> as Data>::Metrics;
     type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
-        <ThoTensor<ChannelsData2, SynKey> as Data>::size(&self.raw_tensor)
+        <ThoTensor<Slice, SynKey> as Data>::size(&self.raw_tensor)
     }
 
     fn device(&self) -> usize {
@@ -346,22 +347,55 @@ impl ConsumeData for SyncMotifLoaderInput {
         P: RunCtx,
     {
         async move {
-            do_run(
+            let SyncMotifLoaderInput {
+                id,
+                motif_id,
+                select_motifs_run_id,
+                find_motifs_run_id,
+                channel,
+                window,
+                loaded_resources,
+                descr,
+            } = self;
+
+            let loaded_resources = match loaded_resources.take_all_recovering(to_device_idx).await {
+                Ok(loaded_resources) => loaded_resources,
+                Err(err) => {
+                    return ConsumeResult::Failed {
+                        input: SyncMotifLoaderLoadedInput::new(
+                            id,
+                            motif_id,
+                            select_motifs_run_id,
+                            find_motifs_run_id,
+                            channel,
+                            window,
+                            err.data,
+                            descr,
+                        ),
+                        error: err.error,
+                    };
+                }
+            };
+
+            let stream = copy_ctx::CopyCtx::instance(to_device_idx).acquire_stream().await;
+
+            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
+
+            let r= do_run(
                 SyncMotifLoaderLoadedInput::new(
-                    self.id,
-                    self.motif_id,
-                    self.select_motifs_run_id,
-                    self.find_motifs_run_id,
-                    self.channel,
-                    self.window,
-                    self.loaded_resources
-                        .take_all(to_device_idx)
-                        .await
-                        .expect("SyncMotifLoaderInput::consume: failed to take loaded_resources"),
-                    self.descr,
+                    id,
+                    motif_id,
+                    select_motifs_run_id,
+                    find_motifs_run_id,
+                    channel,
+                    window,
+                    loaded_resources,
+                    descr,
                 ),
                 ctx,
-            )
+            );
+            stream.synchronize().unwrap();
+            r
         }
     }
 
@@ -514,6 +548,7 @@ where
         let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
         let loaded_resources = load_motif_resource_tensors(
             motif_id_value.clone(),
+            channel,
             find_motifs_run_id,
             resources_map,
             resource_ids_slices,
@@ -666,6 +701,7 @@ where
         let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
         let loaded_resources = load_motif_resource_tensors(
             motif_id_value.clone(),
+            channel,
             find_motifs_run_id,
             resources_map,
             resource_ids_slices,
@@ -718,6 +754,7 @@ where
 
 async fn load_motif_resource_tensors<L, C>(
     motif_id: DataId,
+    channel: i64,
     find_motifs_run_id: u32,
     resources_map: HashMap<ResourceId, Resource>,
     resource_ids_slices: HashMap<ResourceId, Vec<u32>>,
@@ -739,14 +776,20 @@ where
         let raw_tensor = Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
             .await?;
-        let raw_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
-            ThoTensor::new(raw_tt.id().clone(), raw_tt.t_ref().shallow_clone())
+        let channel_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
+
+            let src = raw_tt.t_ref().i((channel, ..));
+            let mut dst = src.f_zeros_like()?;
+            dst.f_copy_(&src)?;
+
+            ThoTensor::new(raw_tt.id().clone(), dst)
         })?;
+        drop(raw_tensor);
         loaded_resources.insert(LoadedMotifResource {
             id: LoadedMotifResourceId::new(resource_id),
             resource_id,
             slices,
-            raw_tensor,
+            raw_tensor: channel_tensor,
         });
         loaded_resources_count += 1;
     }
@@ -774,17 +817,18 @@ fn build_motif_from_loaded_resources(
 
     for resource in loaded_resources {
         let size = resource.raw_tensor.t_ref().size();
+
+        debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} raw_tensor={:?}", resource.resource_id);
+        // debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} raw_tensor={:?} tensor_digest={:?}", resource.resource_id, tensor_digest(resource.raw_tensor.t_ref()));
+
         for &slice in &resource.slices {
 
-            if channel + 1 > size[0] {
-                warn!("build_motif_slices_from_loaded_resources: motif_id={motif_id} channel is out of range channel={channel} size[0]={} for resource_id={} in find_motifs_run_id={find_motifs_run_id} in {descr}", size[0], resource.resource_id);
-
-            } else if (slice + window) as i64 > size[1] {
+            if (slice + window) as i64 > size[0] {
                 warn!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={} in find_motifs_run_id={find_motifs_run_id} in {descr}", resource.resource_id);
 
             } else {
                 debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?} resource_id={} descr={descr}", resource.resource_id);
-                motif_t.t.f_get(slice_i)?.f_copy_(&resource.raw_tensor.t.f_i((channel, slice as i64..(slice + window) as i64))?)?;
+                motif_t.t.f_get(slice_i)?.f_copy_(&resource.raw_tensor.t.f_i(( slice as i64..(slice + window) as i64))?)?;
                 slice_i += 1;
             }
         }
@@ -798,13 +842,17 @@ fn build_motif_from_loaded_resources(
             })
         })
      */
-    //TODO motif can contain either only slices found during initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
+    // TODO motif can contain either only slices found during initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
+    // let tensor = motif_t.t.f_i((0..slice_i, ..))?;
+    // debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id:?} tensor_digest={:?}", tensor_digest(&tensor));
+    // ThoTensor::new(mono_key!(*motif_id, descr).into(), tensor) //f_i - if there were skipped slices. TODO error if it's emtpy?
     ThoTensor::new(mono_key!(*motif_id, descr).into(), motif_t.t.f_i((0..slice_i, ..))?) //f_i - if there were skipped slices. TODO error if it's emtpy?
+
+
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices_"))]
-pub(crate) async fn load_motif_slices_<L, C>(
-    motif_id: DataId,
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_random_slices"))]
+pub(crate) async fn load_random_slices<L, C>(
     find_motifs_run_id: u32,
     resources_map: HashMap<ResourceId, Resource>,
     slices: Vec<TensorIdSliceIdx>,
@@ -819,7 +867,7 @@ where
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
     let device_idx = ctx.device_idx();
-    debug!("load_motif_slices_: motif_id={motif_id} slices={slices:?} descr={descr}");
+    debug!("load_random_slices: slices={slices:?} descr={descr}");
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
@@ -838,16 +886,16 @@ where
     let window = find_motifs_run_config.window;
     let channels = thoosa_shared::with_perf_log(
         || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-        "load_motif_slices_/read_ws",
+        "load_random_slices/read_ws",
     )
     .channels() as i64;
-    assert!(channels > 0, "load_motif_slices_: channels must be > 0");
+    assert!(channels > 0, "load_random_slices: channels must be > 0");
 
-    debug!("load_motif_slices_: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx} channels={channels}");
+    debug!("load_random_slices:  find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx} channels={channels}");
 
     //it won't be dumped to cpu - add to TmpCache
     let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<AnyDims, DataId>::zeros(
-        motif_id.clone(),
+        DataId(0),
         [channels, resource_ids_slices.values().map(|v| v.len()).sum::<usize>() as i64, window as i64],
         (Float, ThoDevice::from(ctx.device_idx()).into()),
     )?));
@@ -855,7 +903,7 @@ where
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
     let mut slice_i: i64 = 0;
     for (resource_id, slices) in resource_ids_slices {
-        debug!("load_motif_slices_: motif_id={motif_id} resource_id={resource_id} slices={slices:?}");
+        debug!("load_random_slices: resource_id={resource_id} slices={slices:?}");
 
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource));
@@ -868,9 +916,9 @@ where
             for slice in slices {
                 let in_range = MonoMetrics::<1,2>::from([channels, (slice + window) as i64]) <= *size;
                 if !in_range {
-                    warn!("load_motif_slices_: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                    warn!("load_random_slices:  slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
                 } else {
-                    debug!("load_motif_slices_: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?}");
+                    debug!("load_random_slices:  slice_i={slice_i} slice={slice:?} size={size:?}");
                     let src = raw_tt.t.f_i((0..channels, slice as i64..(slice + window) as i64))?;
                     let mut dst = motif_tt.t.f_i((0..channels, slice_i, ..))?;
                     dst.f_copy_(&src)?;

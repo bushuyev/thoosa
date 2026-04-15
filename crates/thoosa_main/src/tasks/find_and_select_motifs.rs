@@ -6,8 +6,8 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, MotifCriteria, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue};
-use thoosa_common::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, ConfigurationSpace};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue};
+use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use thoosa_common::runs::{SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::OptConfig;
@@ -99,15 +99,11 @@ impl Output for FindAndSelectMotifsResult {}
 #[derive(Debug)]
 struct FindAndSelectEvalMetrics {
     score_sum: f64,
-    constraint_metrics: HashMap<String, f32>,
 }
 
 impl FindAndSelectEvalMetrics {
     fn failed() -> Self {
-        Self {
-            score_sum: 0.0,
-            constraint_metrics: MotifCriteria::failed_constraint_metrics(),
-        }
+        Self { score_sum: 0.0 }
     }
 }
 
@@ -290,7 +286,7 @@ impl FindAndSelectMotifsStage {
 
         let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = Arc::clone(&select_stage)
             .run(
-                Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?))),
+                Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store).await?))),
                 ctx.branch(Some("select_stage_output"), true)
             )
             .await?;
@@ -299,10 +295,6 @@ impl FindAndSelectMotifsStage {
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx)
             .await?;
-        let constraint_metrics = select_savable
-            .constraint_metrics()
-            .cloned()
-            .ok_or_else(|| ThoError::new("FindAndSelectMotifsStage::run_find_and_select: missing constraint metrics in SelectMotifs output".to_string()))?;
         let score_sum = select_savable.score_sum();
         select_savable.save(store, ws).await?;
 
@@ -311,41 +303,13 @@ impl FindAndSelectMotifsStage {
         #[cfg(tho_debug_plots)]
         run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
 
-        Ok(FindAndSelectEvalMetrics { score_sum, constraint_metrics })
-    }
-
-    fn active_optimizer_constraints(
-        const_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
-        grid_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
-        opt_params: &[Hyperparameter<FindAndSelectMotifsRunConfigFields>],
-    ) -> HashMap<String, f32> {
-        let representative_opt_vals = opt_params
-            .iter()
-            .map(|opt_param| NamedVal::try_from(opt_param).expect("FindAndSelectMotifsStage::active_optimizer_constraints: failed to sample representative opt value"))
-            .collect::<Vec<_>>();
-        let representative_run_config: FindAndSelectMotifsRunConfig = [
-            const_vals,
-            grid_vals,
-            representative_opt_vals.as_slice(),
-        ]
-        .concat()
-        .into_iter()
-        .into();
-
-        representative_run_config
-            .select_motifs_run_config
-            .motif_criteria
-            .constraints()
-            .into_iter()
-            .map(|constraint| (constraint.key.to_string(), 0.0))
-            .collect()
+        Ok(FindAndSelectEvalMetrics { score_sum })
     }
 
     async fn eval_opt_config<C: RunCtx + Adjustable>(
         const_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         grid_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         opt_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
-        active_constraint_keys: &[String],
         min_loss_ref: &Arc<RwLock<(f32, Option<FindAndSelectMotifsRunConfig>)>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
@@ -387,13 +351,9 @@ impl FindAndSelectMotifsStage {
         });
 
         let loss = if eval_metrics.score_sum == 0.0 { f32::MAX } else { 1.0 / eval_metrics.score_sum as f32 };
-        let is_satisfied = active_constraint_keys.is_empty()
-            || active_constraint_keys
-                .iter()
-                .all(|constraint_key| eval_metrics.constraint_metrics.get(constraint_key).map(|value| *value <= 0.0).unwrap_or(false));
-        debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} selected_count={} loss={loss} constraint_metrics={:?} active_constraint_keys={active_constraint_keys:?} is_satisfied={is_satisfied}", eval_metrics.score_sum, eval_metrics.constraint_metrics);
+        debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} score_sum={} loss={loss}", eval_metrics.score_sum);
 
-        if is_satisfied && loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
+        if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
             *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/write_min_loss") = (loss, Some(run_config));
         }
 
@@ -450,80 +410,35 @@ impl AsyncStage for FindAndSelectMotifsStage {
                 let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
                 let max_chunk_size = self.max_chunk_size;
                 let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false);
-                let optimizer_constraints = Self::active_optimizer_constraints(const_vals.as_slice(), grid_vals.as_slice(), opt_params.as_slice());
-                let mut active_constraint_keys = optimizer_constraints.keys().cloned().collect::<Vec<_>>();
-                active_constraint_keys.sort();
                 async move {
-                    debug!("FindAndSelectMotifsStage::run: grid_idx={grid_idx} active_constraint_keys={active_constraint_keys:?}");
+                    let mut opt = AsyncTPEOptimizer::new(
+                        async |opt_vals| {
+                            Self::eval_opt_config(
+                                const_vals.as_slice(),
+                                grid_vals.as_slice(),
+                                opt_vals,
+                                &min_loss_ref,
+                                &ws,
+                                &store,
+                                &loader,
+                                &find_resources,
+                                &select_resources,
+                                &fixed_find_motifs_config,
+                                max_chunk_size,
+                                device_idx,
+                                grid_idx,
+                                &mut find_and_select_run_find_ctx,
+                            )
+                            .await
+                            .1
+                        },
+                        ConfigurationSpace::new(opt_params),
+                        opt_max_evals,
+                        opt_num_init,
+                        &format!("find_and_select_{}", grid_idx),
+                    );
 
-                    if active_constraint_keys.is_empty() {
-                        let mut opt = AsyncTPEOptimizer::new(
-                            async |opt_vals| {
-                                Self::eval_opt_config(
-                                    const_vals.as_slice(),
-                                    grid_vals.as_slice(),
-                                    opt_vals,
-                                    active_constraint_keys.as_slice(),
-                                    &min_loss_ref,
-                                    &ws,
-                                    &store,
-                                    &loader,
-                                    &find_resources,
-                                    &select_resources,
-                                    &fixed_find_motifs_config,
-                                    max_chunk_size,
-                                    device_idx,
-                                    grid_idx,
-                                    &mut find_and_select_run_find_ctx,
-                                )
-                                .await
-                                .1
-                            },
-                            ConfigurationSpace::new(opt_params),
-                            opt_max_evals,
-                            opt_num_init,
-                            &format!("find_and_select_{}", grid_idx),
-                        );
-
-                        opt.optimize().await;
-                    } else {
-                        let mut opt = AsyncCTPEOptimizer::new(
-                            async |opt_vals| {
-                                let (eval_metrics, loss) = Self::eval_opt_config(
-                                    const_vals.as_slice(),
-                                    grid_vals.as_slice(),
-                                    opt_vals,
-                                    active_constraint_keys.as_slice(),
-                                    &min_loss_ref,
-                                    &ws,
-                                    &store,
-                                    &loader,
-                                    &find_resources,
-                                    &select_resources,
-                                    &fixed_find_motifs_config,
-                                    max_chunk_size,
-                                    device_idx,
-                                    grid_idx,
-                                    &mut find_and_select_run_find_ctx,
-                                )
-                                .await;
-
-                                let mut optimizer_metrics = active_constraint_keys
-                                    .iter()
-                                    .filter_map(|constraint_key| eval_metrics.constraint_metrics.get(constraint_key).map(|value| (constraint_key.clone(), *value)))
-                                    .collect::<HashMap<_, _>>();
-                                optimizer_metrics.insert("loss".to_string(), loss);
-                                optimizer_metrics
-                            },
-                            ConfigurationSpace::new(opt_params),
-                            optimizer_constraints,
-                            opt_max_evals,
-                            opt_num_init,
-                            &format!("find_and_select_{}", grid_idx),
-                        );
-
-                        opt.optimize().await;
-                    }
+                    opt.optimize().await;
 
                     let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                         "FindAndSelectMotifs/run/read_min_loss",

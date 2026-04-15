@@ -3551,7 +3551,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
     match max_slices_counts {
         None => groups,
         Some(max_slices_counts) => groups.into_iter().fold(HashMap::new(), |mut a, v| {
-            if v.1.len() < max_slices_counts as usize {
+            if v.1.len() >= 3 && v.1.len() < max_slices_counts as usize {
                 a.insert(v.0, v.1);
             } else {
                 warn!("skipping group with {} slices",v.1.len());

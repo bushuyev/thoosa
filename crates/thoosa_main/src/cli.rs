@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, ByAvgEucDistRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethod, ComparisonMethodRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, MotifSelectorRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, ComparisonMethod, ComparisonMethodRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -1115,30 +1115,32 @@ where
         step: RangeOrValue::Value(10),
         // step: RangeOrValue::dynamic(dyn_step),
         // window: RangeOrValue::Value(200),
-        window: RangeOrValue::Range { range: Range { start: 100, end: 1001 }, step: Some((100, 0)) },
+        window: RangeOrValue::Range { range: Range { start: 10, end: 170 }, step: Some((20, 0)) },
         freq_filter: Some(vec![
             // MedianFilter(MedianFilterParamsRangeOrValue {
             //     window: RangeOrValue::dynamic(median_window.clone()),
             // }),
-            AverageFilter(AverageFilterParamsRangeOrValue {
-                window: RangeOrValue::dynamic(median_window),
-                step: RangeOrValue::Value(10),
-            }),
-            // SavGolFilter(SavGolFilterParamsRangeOrValue {
-            //     window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-            //     poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
-            //     stride: RangeOrValue::Value(10),
-            //     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            // AverageFilter(AverageFilterParamsRangeOrValue {
+            //     window: RangeOrValue::dynamic(median_window),
+            //     step: RangeOrValue::Value(10),
             // }),
+            SavGolFilter(SavGolFilterParamsRangeOrValue {
+                window_len: RangeOrValue::dynamic(median_window),//RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
+                poly_order: RangeOrValue::Range { range: Range { start: 1, end: 10 }, step: None },
+                stride: RangeOrValue::Value(10),
+                padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
+            }),
         ]),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
         //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-        //         q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+        //         // q: RangeOrValue::Range { range: 0.0..0.5, step: None },
+        //         q: RangeOrValue::Value (0.1),
         //     }),
         // }),
         slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
             aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+                q: RangeOrValue::Range { range: 0.0..0.5, step: None },
+                // q: RangeOrValue::Value (0.1),
             }),
             slices: RangeOrValue::Value(1000),
         }),
@@ -1188,9 +1190,6 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 min: RangeOrValue::Value(0.80),
             }),
         },
-        avg_threshold: RangeOrValue::Value(0.8),
-        min_slices: Some(RangeOrValue::Value(5)),
-        max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
@@ -1214,7 +1213,7 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
                 criterion: NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
                 },
-                min: RangeOrValue::Value(0.8),
+                min: RangeOrValue::Value(0.9),
             }),
             inlier_ratioRunConfig: None,
             coherenceRunConfig: None,
@@ -1225,23 +1224,20 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
             interesting_band_energy_ratio_01: None,
             interesting_entropy_gauss_01: None,
             interesting_entropy_band_01: None,
-            periodicity_acf_01: None,
-            // periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
-            //     criterion: PeriodicityAcfRunConfigRangeOrValue {
-            //         struct_lag_max: RangeOrValue::Value(1. / 64.),
-            //         lag_min: RangeOrValue::Value(1. / 32.),
-            //         lag_max: RangeOrValue::Value(0.5),
-            //         struct0: RangeOrValue::Value(0.2),
-            //         peak_good: RangeOrValue::Value(0.25),
-            //         peak_bad: RangeOrValue::Value(0.65),
-            //         eps: RangeOrValue::Value(1e-8),
-            //     },
-            //     min: RangeOrValue::Value(0.80),
-            // }),
+            // periodicity_acf_01: None,
+            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
+                criterion: PeriodicityAcfRunConfigRangeOrValue {
+                    struct_lag_max: RangeOrValue::Value(1. / 64.),
+                    lag_min: RangeOrValue::Value(1. / 32.),
+                    lag_max: RangeOrValue::Value(0.5),
+                    struct0: RangeOrValue::Value(0.2),
+                    peak_good: RangeOrValue::Value(0.25),
+                    peak_bad: RangeOrValue::Value(0.65),
+                    eps: RangeOrValue::Value(1e-8),
+                },
+                min: RangeOrValue::Value(0.70),
+            }),
         },
-        avg_threshold: RangeOrValue::Value(0.8),
-        min_slices: Some(RangeOrValue::Value(5)),
-        max_slices: Some(RangeOrValue::Value(100)),
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
     }
 }
@@ -1298,9 +1294,6 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
             interesting_entropy_band_01: None,
             periodicity_acf_01: None,
         },
-        avg_threshold: RangeOrValue::Value(0.8),
-        min_slices: None,
-        max_slices: None,
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
     }
 }
@@ -1399,7 +1392,7 @@ fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // }),
         net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
             // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 128, end: 256 }, step: None },
+            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
             n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
             // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
             ff_mult: RangeOrValue::Value(2),

@@ -3,11 +3,11 @@ use std::cmp::max;
 use std::fmt::Debug;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use std::panic;
+use std::{io, panic};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use log::{debug, LevelFilter, Log};
@@ -31,7 +31,9 @@ use file_rotate::{
     ContentLimit,
     FileRotate,
 };
+use parking_lot::{Mutex, MutexGuard};
 use tracing_appender::non_blocking;
+use tracing_subscriber::fmt::MakeWriter;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
@@ -213,10 +215,7 @@ pub(crate) fn init_log_tracer(max_level: LevelFilter) {
     log::set_max_level(max_level);
 }
 
-pub struct TracingGuards {
-    _log_guard: tracing_appender::non_blocking::WorkerGuard,
-    _perf_guard: tracing_appender::non_blocking::WorkerGuard,
-}
+
 
 fn init_perf_writer(
     perf_file: Option<PathBuf>,
@@ -264,7 +263,54 @@ fn make_file_layer<P:AsRef<Path>>(
     (layer, guard)
 }
 
-/// Initialize tracing logging for stdout, log file, and perf output.
+/// A synchronous writer factory that serializes all writes through a Mutex.
+/// Each tracing event gets its own locked writer, so whole events are written
+/// without byte-level interleaving from other threads.
+#[derive(Clone)]
+pub struct SyncMakeWriter<W> {
+    inner: Arc<Mutex<W>>,
+}
+
+impl<W> SyncMakeWriter<W> {
+    pub fn new(writer: W) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(writer)),
+        }
+    }
+}
+
+pub struct SyncWriterGuard<'a, W> {
+    guard: MutexGuard<'a, W>,
+}
+
+impl<'a, W: Write> Write for SyncWriterGuard<'a, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.guard.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.guard.flush()
+    }
+}
+
+impl<'a, W> MakeWriter<'a> for SyncMakeWriter<W>
+where
+    W: Write + Send + 'static,
+{
+    type Writer = SyncWriterGuard<'a, W>;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SyncWriterGuard {
+            guard: self.inner.lock(),
+        }
+    }
+}
+
+/// No non_blocking workers anymore, so guards are no longer needed for flushing.
+/// You can keep this type if other code expects it.
+pub struct TracingGuards {}
+
+/// Initialize tracing logging for stdout, log file, and perf output, synchronously.
 pub fn init_tracing(
     term_level: LevelFilter,
     term_extra_fields: bool,
@@ -276,39 +322,46 @@ pub fn init_tracing(
 ) -> Result<TracingGuards, ThoError> {
     let max_level = max(term_level, file_level);
 
-    let _ = set_perf_log_level(perf_filter)?;
+    set_perf_log_level(perf_filter)?;
 
-    // Local timestamp like: `2025-12-15 08:35:30`
     let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
 
+    // stdout is already synchronized internally, but wrapping it here also ensures
+    // each event is emitted while holding a single lock from tracing's point of view.
+    let stdout_writer = SyncMakeWriter::new(std::io::stdout());
     let stdout_layer = fmt::layer()
         .with_ansi(true)
-        .with_writer(std::io::stdout)
+        .with_writer(stdout_writer)
         .event_format(SimplelogLikeEvent::new(timer.clone(), true, term_extra_fields))
         .with_filter(EnvFilter::new(level_filter_string(term_level)));
 
-    let rotating = FileRotate::new(
-        log_file,
-        AppendCount::new(2),
-        ContentLimit::BytesSurpassed(1024 * 1024 * 1024), // 1 GiB
-        Compression::None,
-        None,
-    );
-
-    let (log_writer, log_guard) = tracing_appender::non_blocking(rotating);
+    let log_file_handle = File::create(log_file)?;
+    let log_writer = SyncMakeWriter::new(log_file_handle);
     let file_layer = fmt::layer()
         .with_ansi(false)
         .with_writer(log_writer)
-        .event_format(SimplelogLikeEvent::new(timer.clone(), false, file_extra_fields))
+        .event_format(SimplelogLikeEvent::new(
+            timer.clone(),
+            false,
+            file_extra_fields,
+        ))
         .with_filter(EnvFilter::new(level_filter_string(file_level)));
 
-    let (perf_writer, perf_guard) = init_perf_writer(perf_file)?;
-    let perf_layer = fmt::layer()
-        .with_ansi(false)
-        .with_writer(perf_writer)
-        .with_span_events(fmt::format::FmtSpan::CLOSE)
-        .event_format(SimplelogLikeEvent::new(timer, false, false))
-        .with_filter(FilterFn::new(perf_output_filter));
+    let perf_layer = if let Some(perf_path) = perf_file {
+        let perf_file_handle = File::create(perf_path)?;
+        let perf_writer = SyncMakeWriter::new(perf_file_handle);
+
+        Some(
+            fmt::layer()
+                .with_ansi(false)
+                .with_writer(perf_writer)
+                .with_span_events(fmt::format::FmtSpan::CLOSE)
+                .event_format(SimplelogLikeEvent::new(timer, false, false))
+                .with_filter(FilterFn::new(perf_output_filter)),
+        )
+    } else {
+        None
+    };
 
     let console_layer = console_subscriber::spawn();
 
@@ -319,20 +372,15 @@ pub fn init_tracing(
         .with(perf_layer)
         .with(PerfLayer::new());
 
-    tracing::subscriber::set_global_default(subscriber)
-        .map_err(|e| {
-            error!("Init tracing logging failed: {e:?}");//TODO print in CLI
-            e
-        })?;
+    tracing::subscriber::set_global_default(subscriber).map_err(|e| {
+        error!("Init tracing logging failed: {e:?}");
+        e
+    })?;
 
     init_log_tracer(max_level);
 
-    Ok(TracingGuards {
-        _log_guard: log_guard,
-        _perf_guard: perf_guard,
-    })
+    Ok(TracingGuards {})
 }
-
 
 #[derive(Debug)]
 pub struct SpanTiming {

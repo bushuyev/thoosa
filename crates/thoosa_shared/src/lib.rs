@@ -341,6 +341,7 @@ impl Display for TensorIdSliceIdx {
 #[derive(Debug, Clone)]
 pub enum Cause {
     OutOfMemory,
+    Cuda{needs_reset:bool, msg:String},
     AdjusterFailed,
     UnsupportedDegradeLevel,
     ExpectedValue,
@@ -429,6 +430,14 @@ impl ThoError {
 
     pub fn is_oom(&self) -> bool {
         self.is_oom
+    }
+
+    pub fn needs_cuda_ctx_reset(&self) -> bool {
+        match self.what {
+            Cause::Cuda { needs_reset, .. } => needs_reset,
+
+            _=> false
+        }
     }
 
     pub fn what(&self) -> &Cause {

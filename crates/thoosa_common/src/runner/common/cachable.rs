@@ -119,6 +119,7 @@ where
                     };
 
                     trace!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+
                     if let Some(data) = shared_fut
                         .peek()  //to avoid locking on itself
                         .and_then(|peeked| peeked.as_ref().ok())
@@ -914,6 +915,25 @@ where
         O::M::load_from_any_device_(self, to_device_idx).await
     }
 
+    pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
+        let id = format!("{:?}", self.id);
+        let mut cached_data = self.cached_data.into_vec();
+
+        if preferred_device_idx < cached_data.len() {
+            if let Some(data) = cached_data.swap_remove(preferred_device_idx).into_inner() {
+                return Ok(data);
+            }
+        }
+
+        for slot in cached_data {
+            if let Some(data) = slot.into_inner() {
+                return Ok(data);
+            }
+        }
+
+        Err(ThoError::new_with_error(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
+    }
+
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
         O::M::is_all_on_cpu(self)
     }
@@ -1205,7 +1225,7 @@ where
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
 pub trait ConsumeData {
     type O: Data + WithId + Send + Sync;
-
+    //it should be run from OOM OOMHandler::consume where tensors can't be dumped to cpu while being used
     fn consume<R, F, P>(
         self,
         to_device_idx: usize,

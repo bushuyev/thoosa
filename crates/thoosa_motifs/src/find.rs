@@ -319,7 +319,7 @@ impl SelectMotifsSavableResult {
     pub fn score_sum(&self) -> f64 {
         //always one - from run_find_and_select
         assert_eq!(self.run_results.len(), 1, "expected one run config");
-        self.run_results[0].selected_motif_ids_scores.iter().map(|v| v.1).sum::<f64>()
+        self.run_results[0].selected_motif_ids_scores.iter().map(|v| v.1).sum::<f64>() / self.run_results[0].selected_motif_ids_scores.len() as f64
     }
 
     pub fn selected_motif_ids_scores(&self) -> &[(u32, f64)] {
