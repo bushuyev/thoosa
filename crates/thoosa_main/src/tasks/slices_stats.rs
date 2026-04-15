@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use tch::Kind;
 use tch::Tensor;
 use thoosa_dummy_data_derive::DummyData;
@@ -132,7 +133,7 @@ impl Default for Aggr {
     }
 }
 
-pub fn metric_scalar_for_motif(motif_slices: &Tensor, metric: Metrics, aggr: Aggr) -> Result<f32, ThoError> {
+pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: Metrics, aggr: Aggr) -> Result<f32, ThoError> {
     let score_t = match metric {
         Metrics::EucDist => return panic_to_err!(euclidean_distance(motif_slices, aggr)),
         Metrics::PearsonCorr => return panic_to_err!(pearson_corr_distance_matrix_0_2_single(motif_slices, 1e-8, aggr)),
@@ -154,7 +155,7 @@ pub fn metric_scalar_for_motif(motif_slices: &Tensor, metric: Metrics, aggr: Agg
             let stats = common_stats.first().ok_or_else(|| ThoError::new("metric_scalar_for_motif: no common stats for motif"))?;
             return metric.common_stats_value(stats);
         }
-        Metrics::NormThickness => norm_thickness(motif_slices, 1e-8)?,
+        Metrics::NormThickness => norm_thickness(id, motif_slices, 1e-8)?,
         Metrics::InlierRatioRunConfig => inlier_ratio(motif_slices, 4.5, 1e-8)?,
         Metrics::CoherenceRunConfig => coherence(motif_slices, 10, 1e-8)?,
         Metrics::InterestingAmp01 => interesting_amp_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
@@ -282,7 +283,7 @@ mod tests {
 
         let t = Tensor::arange(1024, (Kind::Float, Device::Cpu)) / 64;
         let motif = t.sin().view([1, -1]);
-        let score = metric_scalar_for_motif(&motif, Metrics::PeriodicityAcf, Aggr::Mean(1.0)).unwrap();
+        let score = metric_scalar_for_motif(&"periodicity_test", &motif, Metrics::PeriodicityAcf, Aggr::Mean(1.0)).unwrap();
 
         assert!(score.is_finite(), "expected finite periodicity score, got {score}");
         assert!((0.0..=1.0).contains(&score), "expected periodicity score in [0, 1], got {score}");

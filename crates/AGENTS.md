@@ -12,6 +12,7 @@ async engine is Tokio, rayon is used to parallel sync functions.
 - **Use fallible tensor APIs and propagate tensor errors.** In `thoosa_main` and code invoked from it, prefer `Tensor::f_*`/`tensor.f_*` forms and bubble errors up; do not `unwrap`/`expect` tensor operations.
 - if you've got any questions, ask before starting tasks.
 - before finishing task always check if everything compiles (run `cargo build --release && cargo test --no-run`) and relevant tests pass (`cargo nextest run --profile codex  --no-fail-fast --retries=0 -p [crate]`)
+- Never use Tensor::shallow_clone to return tensor out of sync function or over .await wrapped in ThoTensor
 
 ## Project Structure & Module Organization
 - Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).

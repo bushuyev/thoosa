@@ -6,6 +6,10 @@ CUresult tho_cu_init(unsigned int flags) {
   return cuInit(flags);
 }
 
+CUresult tho_cu_reset(CUdevice device) {
+  return cuDevicePrimaryCtxReset(device);
+}
+
 CUresult tho_cu_device_get(CUdevice *device, int ordinal) {
   return cuDeviceGet(device, ordinal);
 }

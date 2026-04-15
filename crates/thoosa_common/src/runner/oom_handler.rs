@@ -351,11 +351,16 @@ where
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
                 oom_executor(device_idx).submit(run_ctx.max_other_parallel().into(), async move {
-
-                    Ok(input.consume(device_idx, run_ctx, None, |input, run_ctx| {
+                    let consume_result = input.consume(device_idx, run_ctx, None, |input, run_ctx| {
                         Arc::clone(&task).consume(input, run_ctx)
+                    }).await;
 
-                    }).await)
+                    if matches!(&consume_result, ConsumeResult::Failed { error, .. } if error.needs_cuda_ctx_reset()) {
+                        warn!("OOMHandler::consume: needs_cuda_ctx_reset device_idx={device_idx}");
+                        oom_executor(device_idx).request_cuda_reset();
+                    }
+
+                    Ok(consume_result)
 
 
                 }, job_id_to_rerun).await.unwrap()
@@ -693,7 +698,7 @@ where
 
                     loop {
                         i += 1;
-                        if i > 10000 {
+                        if i > 10000 {//TODO
                             panic!("OOMHandler: ctx_id={ctx_id:?}  i={i}");
                         }
 

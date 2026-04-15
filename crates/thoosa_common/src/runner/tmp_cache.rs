@@ -33,6 +33,12 @@ where
 
 }
 
+#[derive(Debug)]
+pub struct TmpCacheTakeAllError<D> {
+    pub data: Vec<D>,
+    pub error: ThoError,
+}
+
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
 where
     <D as Data>::M: DevicesWrapCopyMode<D>,
@@ -56,32 +62,81 @@ where
 
     }
 
+
+
     #[cfg(test)]
     pub fn get(&self, id: &<D as WithId>::ID) -> Option<Arc<DevicesWrap<D>>> {
         self.map.get(id).map(|reff| Arc::clone(reff.value()))
     }
 
+    fn take_owned_wrap(key: &<D as WithId>::ID, val: Arc<DevicesWrap<D>>) -> Option<DevicesWrap<D>> {
+        let count = Arc::strong_count(&val);
+
+        match Arc::into_inner(val) {
+            None => {
+                error!("can't take {key:?} from cache: count={count}");
+                None
+            }
+            Some(val) => Some(val),
+        }
+    }
+
+    fn recover_owned_value(res: &mut Vec<D>, key: &<D as WithId>::ID, val: DevicesWrap<D>, device: usize) {
+        match val.take_data_prefer_device_or_any(device) {
+            Ok(value) => res.push(value),
+            Err(err) => error!("TmpCached::recover_owned_value: can't recover {key:?}: err={err:?}"),
+        }
+    }
+
+    fn recover_remaining_values(
+        res: &mut Vec<D>,
+        entries: impl Iterator<Item = (<D as WithId>::ID, Arc<DevicesWrap<D>>)>,
+        device: usize,
+    ) {
+        for (key, val) in entries {
+            if let Some(val) = Self::take_owned_wrap(&key, val) {
+                Self::recover_owned_value(res, &key, val, device);
+            }
+        }
+    }
+
+    fn contextualize_take_error(key: &<D as WithId>::ID, err: ThoError) -> ThoError {
+        ThoError::new_with_error(format!("can't take from cache for {key:?}: {}", err.msg), err.what().clone())
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
-    pub async fn take_all(mut self, device:usize) -> Result<Vec<D>, ThoError> {//TODO it can have only one device set when created
+    pub async fn take_all(self, device:usize) -> Result<Vec<D>, ThoError> {//TODO it can have only one device set when created
+        self.take_all_recovering(device).await.map_err(|err| err.error)
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all_recovering"))]
+    pub async fn take_all_recovering(mut self, device:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all: name={}", self.name);
         let _cache_guard = self.unregister_cache().await;
 
         let mut res = vec![];
         let map = Arc::into_inner(mem::take(&mut self.map)).expect("TmpCached::take_all: map still in use after unregister_cache");
+        let mut entries = map.into_iter();
 
-        for (key, val) in map.into_iter() {
+        while let Some((key, val)) = entries.next() {
+            let Some(devices_wrap) = Self::take_owned_wrap(&key, val) else {
+                continue;
+            };
 
-            let count = Arc::strong_count(&val);
-
-            match Arc::into_inner(val) {
-                None => {
-                    error!("can't take {key:?} from cache: count={count}");
+            match devices_wrap.load_from_any_device_(device).await.map(|guard| drop(guard)) {
+                Ok(()) => match devices_wrap.take_data_prefer_device_or_any(device) {
+                    Ok(value) => res.push(value),
+                    Err(err) => {
+                        let error = Self::contextualize_take_error(&key, err);
+                        Self::recover_remaining_values(&mut res, entries, device);
+                        return Err(TmpCacheTakeAllError { data: res, error });
+                    }
                 }
-                Some(val) => {
-
-                    res.push(
-                        val.take_data(device).await.expect(&format!("can't take from cache for {key:?}"))
-                    );
+                Err(err) => {
+                    let error = Self::contextualize_take_error(&key, err);
+                    Self::recover_owned_value(&mut res, &key, devices_wrap, device);
+                    Self::recover_remaining_values(&mut res, entries, device);
+                    return Err(TmpCacheTakeAllError { data: res, error });
                 }
             }
         }
@@ -178,7 +233,7 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::{simple_id, CopyToDevice, ThoError};
+    use thoosa_shared::{Cause, simple_id, CopyToDevice, ThoError};
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
     use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
@@ -295,6 +350,94 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
 
         Ok(())
 
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+    async fn test_take_all_recovering_preserves_data_on_cuda_reset_error() -> Result<(), ThoError> {
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices(2);
+
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        #[derive(Debug, Clone)]
+        struct TestData {
+            id: SimpleId,
+            device: usize,
+        }
+
+        impl CopyToDevice for TestData {
+            fn copy_to_device<'life0, 'async_trait>(&'life0 self, dst_device: usize) -> Pin<Box<dyn Future<Output = Result<Self, ThoError>> + Send + 'async_trait>>
+            where
+                Self: Sized,
+                'life0: 'async_trait,
+                Self: 'async_trait
+            {
+                Box::pin(async move {
+                    if self.device == 0 && dst_device == 1 {
+                        Err(ThoError::new_with_error(
+                            "copy failed",
+                            Cause::Cuda {
+                                needs_reset: true,
+                                msg: "copy failed".into(),
+                            },
+                        ))
+                    } else {
+                        Ok(TestData {
+                            id: self.id.clone(),
+                            device: dst_device,
+                        })
+                    }
+                })
+            }
+        }
+
+        impl Data for TestData {
+            type Metrics = ();
+            type M = CpuOrGpu<Self>;
+
+            fn size(&self) -> Self::Metrics {
+                ()
+            }
+
+            fn device(&self) -> usize {
+                self.device
+            }
+
+            fn mem_size(&self) -> u64 {
+                0
+            }
+        }
+
+        impl WithId for TestData {
+            type ID = SimpleId;
+
+            fn id(&self) -> &Self::ID {
+                &self.id
+            }
+        }
+
+        impl Output for TestData {  }
+
+        let tmp_cache: TmpCached<TestData> = TmpCached::new("tmp").await;
+        let foo_id = simple_id!("foo");
+
+        tmp_cache.insert(TestData {
+            id: foo_id.clone(),
+            device: 0,
+        });
+
+        let err = tmp_cache
+            .take_all_recovering(1)
+            .await
+            .expect_err("expected CUDA reset error");
+
+        assert!(err.error.needs_cuda_ctx_reset());
+        assert_eq!(err.data.len(), 1);
+        assert_eq!(err.data[0].id, foo_id);
+        assert_eq!(err.data[0].device, 0);
+
+        Ok(())
     }
 
 

@@ -638,3 +638,12 @@ impl<T: Send + Sync> Adjustable for std::ops::Range<T> {}
 
 
 impl <A:Adjustable> Adjustable for Arc<A> {}
+
+/// steepness: larger values mean a steeper slope.
+/// flatness: larger values mean a flatter slope.
+///https://www.wolframalpha.com/input?i=plot+1%2F%281%2Babs%280.2*%28x-10%29%29%5E5%29
+pub fn hump(x: f64, center: f64, steepness: f64, flatness: f64) -> f64 {
+    assert!(steepness > 0.0);
+    assert!(flatness > 0.0);
+    1.0 / (1.0 + (steepness * (x - center)).abs().powf(flatness))
+}

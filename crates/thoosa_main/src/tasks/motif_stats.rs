@@ -13,6 +13,7 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifCriterion, MotifCriterionConstraint, SelectMotifsRunConfig};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_dummy_data_derive::DummyData;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_trapezoid_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01_frac};
 use thoosa_named_derive::Named;
@@ -34,7 +35,7 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
-use crate::tasks::motif_loader::{load_motif_slices_, MotifLoaderInput, MotifMeta};
+use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
 use crate::tasks::slices_stats::{metric_scalar_for_motif, Aggr, Metrics};
 use crate::tasks::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
 
@@ -45,7 +46,7 @@ const DEFAULT_Q_HI: f64 = 0.95;
 const DEFAULT_SCALE_Q: f64 = 0.50;
 const DEFAULT_EPS: f64 = 1e-8;
 
-fn criterion_metric(criterion: &MotifCriterion) -> Metrics {
+pub(crate) fn criterion_metric(criterion: &MotifCriterion) -> Metrics {
     match criterion {
         MotifCriterion::NormThickness(_) => Metrics::NormThickness,
         MotifCriterion::InlierRatio(_) => Metrics::InlierRatioRunConfig,
@@ -61,9 +62,13 @@ fn criterion_metric(criterion: &MotifCriterion) -> Metrics {
     }
 }
 
-fn criterion_score_for_motif(motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
+pub(crate) fn criteria_constraint_metrics(criteria_constraints: &[MotifCriterionConstraint]) -> Vec<Metrics> {
+    criteria_constraints.iter().map(|constraint| criterion_metric(&constraint.criterion)).collect()
+}
+
+fn criterion_score_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
     let score_t = match criterion {
-        MotifCriterion::NormThickness(v) => norm_thickness(motif_slices, v.eps)?,
+        MotifCriterion::NormThickness(v) => norm_thickness(id, motif_slices, v.eps)?,
         MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
         MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
         MotifCriterion::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
@@ -76,6 +81,8 @@ fn criterion_score_for_motif(motif_slices: &Tensor, criterion: &MotifCriterion) 
         MotifCriterion::PeriodicityAcf(v) => periodicity_acf_01_frac(motif_slices, v.struct_lag_max, v.lag_min, v.lag_max, v.struct0, v.peak_good, v.peak_bad, v.eps)?,
     };
     let raw_score = score_t.f_double_value(&[])?;
+    debug!("MotifStatsSyncStage::criterion_score_for_motif: raw_score={raw_score:?}");
+
     if raw_score.is_finite() {
         Ok(raw_score.clamp(0.0, 1.0))
     } else {
@@ -88,7 +95,6 @@ fn criterion_score_for_motif(motif_slices: &Tensor, criterion: &MotifCriterion) 
 pub enum MotifStatsSource {
     Motif(MotifLoaderInput),
     Random { max_slices: u32, find_motifs_run_id: RunId },
-    ChannelsMotifsSlices(Arc<ThoTensor<ChannelsMotifsSlices, SynKey>>),
 }
 
 #[derive(Debug, Clone)]
@@ -173,10 +179,7 @@ impl Data for MotifStatsInput {
     }
 
     fn mem_size(&self) -> u64 {
-        match &self.source {
-            MotifStatsSource::Motif(_) | MotifStatsSource::Random { .. } => 0,
-            MotifStatsSource::ChannelsMotifsSlices(channels_motifs_slices) => channels_motifs_slices.mem_size(),
-        }
+        0
     }
 }
 
@@ -196,7 +199,6 @@ impl CopyToDevice for MotifStatsInput {
         let source = match &self.source {
             MotifStatsSource::Motif(motif_loader_input) => MotifStatsSource::Motif(motif_loader_input.clone()),
             MotifStatsSource::Random { max_slices, find_motifs_run_id } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_id: *find_motifs_run_id },
-            MotifStatsSource::ChannelsMotifsSlices(t) => MotifStatsSource::ChannelsMotifsSlices(Arc::new(t.copy_to_device(dst_device).await?)),
         };
 
         Ok(Self {
@@ -295,17 +297,12 @@ impl CopyToDevice for MotifStatsCalcInput {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MotifCriteriaEvaluation {
-    avg_score: f64,
     criterion_scores: Vec<(&'static str, f64)>,
 }
 
 impl MotifCriteriaEvaluation {
-    pub fn new(avg_score: f64, criterion_scores: Vec<(&'static str, f64)>) -> Self {
-        Self { avg_score, criterion_scores }
-    }
-
-    pub fn avg_score(&self) -> f64 {
-        self.avg_score
+    pub fn new(criterion_scores: Vec<(&'static str, f64)>) -> Self {
+        Self { criterion_scores }
     }
 
     pub fn criterion_scores(&self) -> &Vec<(&'static str, f64)> {
@@ -313,20 +310,22 @@ impl MotifCriteriaEvaluation {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(no_clone)]
 pub struct MotifStatsOutput {
     id: SynKey,
-    values: Vec<(Metrics, ThoTensor<ChannelsMotifsDists, SynKey>)>,
+    values: Vec<(Metrics, Vec<f32>)>,
     criteria_evaluation: Option<MotifCriteriaEvaluation>,
+    pub num_slices: u32
 }
 
 impl MotifStatsOutput {
-    pub fn new(id: SynKey, values: Vec<(Metrics, ThoTensor<ChannelsMotifsDists, SynKey>)>) -> Self {
-        Self { id, values, criteria_evaluation: None }
+    pub fn new(id: SynKey, values: Vec<(Metrics, Vec<f32>)>, num_slices: u32) -> Self {
+        Self { id, values, criteria_evaluation: None, num_slices }
     }
 
-    pub fn with_criteria_evaluation(id: SynKey, values: Vec<(Metrics, ThoTensor<ChannelsMotifsDists, SynKey>)>, criteria_evaluation: Option<MotifCriteriaEvaluation>) -> Self {
-        Self { id, values, criteria_evaluation }
+    pub fn with_criteria_evaluation(id: SynKey, values: Vec<(Metrics, Vec<f32>)>, criteria_evaluation: Option<MotifCriteriaEvaluation>, num_slices: u32) -> Self {
+        Self { id, values, criteria_evaluation, num_slices }
     }
 
     pub fn metrics(&self) -> Vec<Metrics> {
@@ -337,28 +336,29 @@ impl MotifStatsOutput {
         self.criteria_evaluation.as_ref()
     }
 
-    pub(crate) fn metric_values(&self, metric: Metrics) -> Option<&ThoTensor<ChannelsMotifsDists, SynKey>> {
+    fn metric_values(&self, metric: Metrics) -> Option<&Vec<f32>> {
         self.values.iter().find_map(|(cur, values)| if *cur == metric { Some(values) } else { None })
+    }
+
+    fn metric_values_id(&self, metric: Metrics) -> SynKey {
+        let metric_key = mono_key!(format!("{metric:?}"), format!("metric={metric:?}"));
+        &self.id + &metric_key
     }
 
     pub fn channel_value(&self, metric: Metrics, channel: usize) -> Result<f32, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
-        let channels = values.t_ref().size().first().copied().unwrap_or(0).max(0) as usize;
-        if channel >= channels {
-            return Err(ThoError::new(format!("MotifStatsOutput: channel index out of bounds: channel={channel} channels={channels}")));
-        }
-        Ok(values.t_ref().f_double_value(&[channel as i64, 0])? as f32)
+        values.get(channel).copied().ok_or_else(|| ThoError::new(format!("MotifStatsOutput: channel index out of bounds: channel={channel} channels={}", values.len())))
     }
 
     pub fn channels_values(&self, metric: Metrics) -> Result<Vec<f32>, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
-        let channels = values.t_ref().size().first().copied().unwrap_or(0).max(0) as i64;
-        (0..channels).map(|channel| Ok(values.t_ref().f_double_value(&[channel, 0])? as f32)).collect()
+        Ok(values.clone())
     }
 
     pub fn channels_motifs_dists(&self, metric: Metrics) -> Result<ThoTensor<ChannelsMotifsDists, SynKey>, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
-        ThoTensor::new(values.id().clone(), values.t_ref().shallow_clone())
+        let t = Tensor::f_from_slice(values.as_slice())?.f_view([values.len() as i64, 1])?;
+        ThoTensor::new(self.metric_values_id(metric), t)
     }
 }
 
@@ -372,47 +372,20 @@ impl WithId for MotifStatsOutput {
 
 impl Output for MotifStatsOutput {}
 
-impl Data for MotifStatsOutput {
-    type Metrics = MonoMetrics<0, 1>;
-    type M = CpuOrGpu<Self>;
-
-    fn size(&self) -> Self::Metrics {
-        self.values.len().into()
-    }
-
-    fn device(&self) -> usize {
-        self.values.first().map(|(_, t)| t.device()).unwrap_or(0)
-    }
-
-    fn mem_size(&self) -> u64 {
-        self.values.iter().map(|(_, t)| t.mem_size()).sum()
-    }
-}
-
 #[async_trait]
 impl CopyToDevice for MotifStatsOutput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
-        let mut values = Vec::with_capacity(self.values.len());
-        for (metric, tensor) in &self.values {
-            values.push((*metric, tensor.copy_to_device(dst_device).await?));
-        }
-        Ok(Self {
-            id: self.id.clone(),
-            values,
-            criteria_evaluation: self.criteria_evaluation.clone(),
-        })
+    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
+        Ok(self.clone())
     }
 }
 
 #[derive(Debug, Clone)]
 struct MotifStatsCriteriaConfig {
     constraints: Vec<MotifCriterionConstraint>,
-    min_slices: i64,
-    max_slices: i64,
 }
 
 #[derive(Debug, Named)]
-pub struct MotifStatsSyncStage<C>
+struct MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -441,8 +414,7 @@ where
         }
     }
 
-    pub fn with_criteria(criteria_constraints: Vec<MotifCriterionConstraint>, min_slices: i64, max_slices: i64, select_motifs_run_id: RunId) -> Self {
-        assert!(min_slices <= max_slices, "MotifStatsSyncStage::with_criteria: min_slices={min_slices} must be <= max_slices={max_slices}");
+    fn with_criteria(criteria_constraints: Vec<MotifCriterionConstraint>, select_motifs_run_id: RunId) -> Self {
 
         Self {
             id: mono_key!(MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage") + &mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
@@ -450,7 +422,7 @@ where
             q_hi: DEFAULT_Q_HI,
             scale_q: DEFAULT_SCALE_Q,
             eps: DEFAULT_EPS,
-            criteria_config: Some(MotifStatsCriteriaConfig { constraints: criteria_constraints, min_slices, max_slices }),
+            criteria_config: Some(MotifStatsCriteriaConfig { constraints: criteria_constraints }),
             _ctx: PhantomData,
         }
     }
@@ -492,52 +464,36 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsSyncStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let channels_motifs_slices = input.channels_motifs_slices().t_ref();
-        let channels = channels_motifs_slices
-            .size()
-            .first()
-            .copied()
-            .ok_or_else(|| ThoError::new(format!("MotifStatsSyncStage::do_run: expected [channels, slices, window], got {:?}", channels_motifs_slices.size())))? as usize;
 
+        let size = channels_motifs_slices.size();
+        let [channels,  num_slices, ..] = size.as_slice() else {
+            panic!("expected [channels x num_slices x slice], got {:?}", size);
+        };
+        let (channels,  num_slices) = (*channels, *num_slices);
+
+
+        debug!("MotifStatsSyncStage::do_run: self.criteria_config={:?}", self.criteria_config);
         if let Some(criteria_config) = &self.criteria_config {
-            let motif_slices_count = channels_motifs_slices.size().get(1).copied().unwrap_or(0);
-            if motif_slices_count < criteria_config.min_slices || motif_slices_count > criteria_config.max_slices {
-                return Ok(MotifStatsOutput::with_criteria_evaluation(self.out_id(input.id()), Vec::new(), None));
-            }
+
 
             let motif_slices = channels_motifs_slices.f_get(0)?;
             let mut values = Vec::with_capacity(criteria_config.constraints.len());
             let mut criterion_scores = Vec::with_capacity(criteria_config.constraints.len());
-            let mut score_sum = 0.0f64;
 
-            for (idx, criterion_constraint) in criteria_config.constraints.iter().enumerate() {
-                let criterion_score = criterion_score_for_motif(&motif_slices, &criterion_constraint.criterion)?;
-                if criterion_score < criterion_constraint.min as f64 {
-                    return Ok(MotifStatsOutput::with_criteria_evaluation(self.out_id(input.id()), values, None));
-                }
+            for criterion_constraint in &criteria_config.constraints {
+                let criterion_score = criterion_score_for_motif(input.id(), &motif_slices, &criterion_constraint.criterion)?;
+
                 let metric = criterion_metric(&criterion_constraint.criterion);
-                let t = Tensor::f_from_slice(&[criterion_score as f32])?.f_view([1, 1])?;
-                values.push((
-                    metric,
-                    ThoTensor::new(
-                        SynKey::new([
-                            mono_key!("motif_stats", "motif_stats"),
-                            mono_key!(format!("{:?}", input.id()), format!("input_id={:?}", input.id())),
-                            mono_key!(format!("{metric:?}"), format!("metric={metric:?}")),
-                        ]),
-                        t,
-                    )?,
-                ));
-                score_sum += criterion_score;
-                let avg_score = score_sum / (idx + 1) as f64;
+                values.push((metric, vec![criterion_score as f32]));
                 criterion_scores.push((criterion_constraint.key, criterion_score));
-                debug!("MotifStatsSyncStage::do_run: criterion_constraint={criterion_constraint:?} criterion_score={criterion_score:.6} avg_score={avg_score:.6}");
+                debug!("MotifStatsSyncStage::do_run: input={:?} values={values:?} key={:?} criterion_score={criterion_score:.6}", input.id(), criterion_constraint.key, );
             }
 
-            let avg_score = if criterion_scores.is_empty() { 1.0 } else { score_sum / criterion_scores.len() as f64 };
             return Ok(MotifStatsOutput::with_criteria_evaluation(
                 self.out_id(input.id()),
                 values,
-                Some(MotifCriteriaEvaluation::new(avg_score, criterion_scores)),
+                Some(MotifCriteriaEvaluation::new(criterion_scores)),
+                num_slices as u32
             ));
         }
 
@@ -558,28 +514,19 @@ where
                 let common_stats = common_stats_cache.as_ref().expect("set above");
                 common_stats.iter().map(|stats| metric.common_stats_value(stats)).collect::<Result<Vec<_>, ThoError>>()?
             } else {
-                let mut channel_values = Vec::with_capacity(channels);
-                for channel_idx in 0..channels {
+                let mut channel_values = Vec::with_capacity(channels as usize);
+                for channel_idx in 0..channels as usize {
                     let motif_slices = channels_motifs_slices.f_get(channel_idx as i64)?;
-                    channel_values.push(metric_scalar_for_motif(&motif_slices, *metric, input.aggr())?);
+                    channel_values.push(metric_scalar_for_motif(input.id(), &motif_slices, *metric, input.aggr())?);
                 }
                 channel_values
             };
-            let t = Tensor::f_from_slice(channel_values.as_slice())?.f_view([channels as i64, 1])?;
-            values.push((
-                *metric,
-                ThoTensor::new(
-                    SynKey::new([
-                        mono_key!("motif_stats", "motif_stats"),
-                        mono_key!(format!("{:?}", input.id()), format!("input_id={:?}", input.id())),
-                        mono_key!(format!("{metric:?}"), format!("metric={metric:?}")),
-                    ]),
-                    t,
-                )?,
-            ));
+            values.push((*metric, channel_values));
         }
 
-        Ok(MotifStatsOutput::new(self.out_id(input.id()), values))
+        debug!("MotifStatsSyncStage::do_run: input.id={:?} valuese={values:?}", input.id());
+
+        Ok(MotifStatsOutput::new(self.out_id(input.id()), values, num_slices as u32))
     }
 }
 
@@ -640,8 +587,6 @@ where
         motif_loader: Arc<ML>,
         select_motifs_run_id: RunId,
         criteria_constraints: Vec<MotifCriterionConstraint>,
-        min_slices: i64,
-        max_slices: i64,
     ) -> Self {
 
         Self {
@@ -650,7 +595,7 @@ where
             loader,
             ws,
             motif_loader,
-            clc_stats: Arc::new(MotifStatsSyncStage::with_criteria(criteria_constraints, min_slices, max_slices, select_motifs_run_id)),
+            clc_stats: Arc::new(MotifStatsSyncStage::with_criteria(criteria_constraints, select_motifs_run_id)),
             _ctx: PhantomData,
         }
     }
@@ -696,6 +641,7 @@ where
 
         let channels_motifs_slices = match source {
             MotifStatsSource::Motif(motif_loader_input) => {
+                debug!("MotifStats::run: motif_loader_input={motif_loader_input:?}");
                 let motif = Arc::clone(&self.motif_loader)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(motif_loader_input)),
@@ -704,8 +650,11 @@ where
                     .await?;
 
                 with_data!(ctx.branch(Some("motif_stats_motif_to_channels"), false), motif; |_ctx, motif: &thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
-                    let motif_2d = motif.data().t_ref().shallow_clone();
-                    let channels_3d = motif_2d.f_unsqueeze(0)?;
+                    let src = motif.data().t_ref();
+                    let mut dst = src.f_zeros_like()?;
+                    dst.f_copy_(&src)?;
+
+                    let channels_3d = dst.f_unsqueeze(0)?;//to match random slices shapes
                     Ok::<_, ThoError>(Arc::new(ThoTensor::new(motif.data().id().clone(), channels_3d)?))
                 })?
             }
@@ -722,8 +671,7 @@ where
                 let resources = self.store.list_random_resources(None).await?;
                 let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
 
-                let (_window, channels_slices) = load_motif_slices_(
-                    DataId(0),
+                let (_window, channels_slices) = load_random_slices(
                     find_motifs_run_id,
                     resources_map,
                     slices,
@@ -735,9 +683,8 @@ where
                 )
                 .await?;
 
-                Arc::new(ThoTensor::new(channels_slices.id().clone(), channels_slices.t_ref().shallow_clone())?)
+                Arc::new(channels_slices)
             }
-            MotifStatsSource::ChannelsMotifsSlices(t) => t,
         };
 
         let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsCalcInput::new(input_id.clone(), channels_motifs_slices, metrics, aggr)));
@@ -761,7 +708,7 @@ where
         )
         .await?;
 
-        debug!("MotifStats::run: done input_id={input_id:?} stats.id={:?}", stats.id());
+        debug!("MotifStats::run: done input_id={input_id:?} stats={:?}", stats);
 
         Ok(Arc::new(DevicesWrap::wrap(stats)))
     }
@@ -958,7 +905,7 @@ mod tests {
             .branch(Some("random_stats_data"), false);
         let size = output
             .with_data_ref(0, ctx_for_data, None, |stats: &MotifStatsOutput, _ctx| {
-                let t = stats.metric_values(Metrics::EucDist).expect("no dists");
+                let t = stats.channels_motifs_dists(Metrics::EucDist)?;
                 debug!("t=\n{}", t.as_ref());
                 assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
 

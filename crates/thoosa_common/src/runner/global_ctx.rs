@@ -87,7 +87,7 @@ impl GlobalCtx {
 
         Self {
             num_devices,
-            executors: (1..num_devices).map(|_| DynamicTaskExecutor::new(1024, NonZeroUsize::new(16).unwrap()))
+            executors: (1..num_devices).map(|device_idx| DynamicTaskExecutor::new_for_device(1024, NonZeroUsize::new(16).unwrap(), device_idx))
                 .collect(),
 
             caches: parking_lot::RwLock::new(HashMap::new()),
@@ -287,7 +287,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
     }
 
-    pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {
+    pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {//TODO remove
         with_perf_log(
             || self.caches_areas.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::next_cache_area: timed out waiting for cache_areas write lock"),
             "GlobalCtx/next_cache_area/write_cache_areas",

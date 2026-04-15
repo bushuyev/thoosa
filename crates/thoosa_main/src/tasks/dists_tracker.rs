@@ -1655,7 +1655,7 @@ where
                 .try_for_each(|(mt, matches)| {
                     let mut guard = thoosa_shared::with_perf_log(
                         || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "DistsTracker/consume/write_tracker",
+                        "DistsTracker/consume/write_tracker_final",
                     );
                     guard.dump();
                     Ok::<(), ThoError>(())

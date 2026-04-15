@@ -12,13 +12,12 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
-use tokio::sync::watch::Receiver;
 use tracing::{debug, warn};
-use std::borrow::BorrowMut;
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
 use parking_lot::RwLock;
 use thoosa_shared::{Cause, ThoError, LOCK_TIMEOUT};
+use thoosa_shims::context::ThoCudaContext;
 
 enum IsOOM {
     Yes,
@@ -37,7 +36,7 @@ impl From<bool> for IsOOM {
 
 type BoxFuture = Pin<Box<dyn Future<Output = IsOOM> + Send + 'static>>;
 type JobId = u64;
-type ExecutorId = u64;
+type ResetFn = Arc<dyn Fn(usize) -> Result<(), ThoError> + Send + Sync>;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -117,6 +116,7 @@ enum ManagerCmd {
         job_id: JobId,
         reply: oneshot::Sender<()>,
     },
+    RequestCudaReset,
     Recheck,
 }
 
@@ -242,30 +242,99 @@ pub struct DynamicTaskExecutor {
     tx: mpsc::Sender<Job>,
     limit_tx: watch::Sender<usize>,
     cmd_tx: mpsc::UnboundedSender<ManagerCmd>,
+    accepting_tx: watch::Sender<bool>,
+    accept_gate: Arc<tokio::sync::RwLock<()>>,
     worker: JoinHandle<()>,
     exclusive_job_id: Arc<RwLock<Option<JobId>>>,
 }
 
 impl DynamicTaskExecutor {
     pub fn new(queue_capacity: usize, initial_limit: NonZeroUsize) -> Self {
+        Self::new_inner(queue_capacity, initial_limit, None, Arc::new(|_| Ok(())))
+    }
+
+    pub fn new_for_device(queue_capacity: usize, initial_limit: NonZeroUsize, device_idx: usize) -> Self {
+        Self::new_inner(queue_capacity, initial_limit, Some(device_idx), Arc::new(Self::reset_cuda_context))
+    }
+
+    #[cfg(test)]
+    fn new_with_reset_hook(
+        queue_capacity: usize,
+        initial_limit: NonZeroUsize,
+        device_idx: usize,
+        reset_fn: ResetFn,
+    ) -> Self {
+        Self::new_inner(queue_capacity, initial_limit, Some(device_idx), reset_fn)
+    }
+
+    fn new_inner(
+        queue_capacity: usize,
+        initial_limit: NonZeroUsize,
+        reset_device_idx: Option<usize>,
+        reset_fn: ResetFn,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(queue_capacity);
         let (limit_tx, limit_rx) = watch::channel(initial_limit.get());
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+        let (accepting_tx, _) = watch::channel(true);
+        let accept_gate = Arc::new(tokio::sync::RwLock::new(()));
 
         let cmd_tx_for_tasks = cmd_tx.clone();
         let exclusive_job_id = Arc::new(RwLock::new(None));
         let exclusive_job_id_for_manager = Arc::clone(&exclusive_job_id);
+        let accepting_tx_for_manager = accepting_tx.clone();
+        let accept_gate_for_manager = Arc::clone(&accept_gate);
 
         let worker = tokio::spawn(async move {
-            Self::run_manager(rx, limit_rx, cmd_rx, cmd_tx_for_tasks, exclusive_job_id_for_manager).await;
+            Self::run_manager(
+                rx,
+                limit_rx,
+                cmd_rx,
+                cmd_tx_for_tasks,
+                exclusive_job_id_for_manager,
+                accepting_tx_for_manager,
+                accept_gate_for_manager,
+                reset_device_idx,
+                reset_fn,
+            ).await;
         });
 
         Self {
             tx,
             limit_tx,
             cmd_tx,
+            accepting_tx,
+            accept_gate,
             worker,
             exclusive_job_id,
+        }
+    }
+
+    fn reset_cuda_context(device_idx: usize) -> Result<(), ThoError> {
+        let cu_ctx = ThoCudaContext::new((device_idx - 1) as i32).map_err(ThoError::new)?;
+        cu_ctx.reset()?;
+
+        warn!("DynamicTaskExecutor::reset_cuda_context: done");
+        Ok(())
+    }
+
+    fn resetting_submit_error() -> ThoError {
+        ThoError::new_with_error("Can't submit job: CUDA context reset is in progress", Cause::SubmitErrorClosed)
+    }
+
+    async fn wait_until_accepting(&self, parent: Option<&CurrentJob>) -> Result<(), ThoError> {
+        let mut accepting_rx = self.accepting_tx.subscribe();
+
+        loop {
+            if *accepting_rx.borrow_and_update() {
+                return Ok(());
+            }
+
+            if parent.is_some() {
+                return Err(Self::resetting_submit_error());
+            }
+
+            accepting_rx.changed().await.map_err(|_| ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed))?;
         }
     }
 
@@ -281,62 +350,119 @@ impl DynamicTaskExecutor {
     {
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
         let job_id = job_id_to_rerun.unwrap_or_else(|| NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed));
+        let mut fut = Some(fut);
         debug!("DynamicTaskExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
-        let mut suspend_guard = ParentSuspendGuard::new(parent);
-        suspend_guard.maybe_suspend().await?;
+        loop {
+            self.wait_until_accepting(parent.as_ref()).await?;
 
-        let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
-        let exclusive_job_id = Arc::clone(&self.exclusive_job_id);
-        let rerun_job_id = job_id_to_rerun;
-        let wrapped = async move {
-            let result = fut.await;
-            let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
-            let mut exclusive_job_id = exclusive_job_id.write();
-
-            let result = if is_oom && max_other_parallel == 0 {
-                exclusive_job_id.replace(job_id);
-                result.map_err(|e| ThoError::new_with_error(e.msg.clone(), Cause::JobError { job_id, inner: Box::new(e.clone()) }))
-            } else {
-                if rerun_job_id == Some(job_id) && exclusive_job_id.as_ref() == Some(&job_id) {
-                    exclusive_job_id.take();
+            let permit = match tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve()).await {
+                Ok(Ok(permit)) => permit,
+                Ok(Err(e)) => {
+                    error!("DynamicTaskExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
+                    if let Some(job_id) = job_id_to_rerun {
+                        self.clear_exclusive_job_id(job_id);
+                    }
+                    return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
                 }
-                result
+                Err(e) => {
+                    error!("DynamicTaskExecutor::submit: reserve job_id={job_id} timed out: e={e:?}");
+                    if let Some(job_id) = job_id_to_rerun {
+                        self.clear_exclusive_job_id(job_id);
+                    }
+                    return Err(ThoError::new("Can't submit job: timed out"));
+                }
             };
 
-            debug!("DynamicTaskExecutor::submit: wrapped  result={result:?}");
-
-            let _ = result_tx.send(result);
-
-            is_oom.into()
-        };
-
-        match tokio::time::timeout(LOCK_TIMEOUT, self.tx.send(Job::new(job_id, max_other_parallel, wrapped))).await {
-            Ok(Ok(())) => {
-                debug!("DynamicTaskExecutor::submit: submitted job_id={job_id}")
+            if !*self.accepting_tx.borrow() {
+                drop(permit);
+                if parent.is_some() {
+                    if let Some(job_id) = job_id_to_rerun {
+                        self.clear_exclusive_job_id(job_id);
+                    }
+                    return Err(Self::resetting_submit_error());
+                }
+                continue;
             }
-            Ok(Err(e)) => {
-                error!("DynamicTaskExecutor::submit: submit job_id={job_id} failed: e={e:?}");
-                if let Some(job_id) = rerun_job_id {
+
+            let mut suspend_guard = ParentSuspendGuard::new(parent.clone());
+            suspend_guard.maybe_suspend().await?;
+
+            if !*self.accepting_tx.borrow() {
+                drop(permit);
+                let _ = suspend_guard.resume().await;
+                if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
                 }
-                let _ = suspend_guard.resume().await;
-                return Err(ThoError::new_with_error("Can't submit job", Cause::SubmitErrorClosed));
-            }
-            Err(e) => {
-                error!("DynamicTaskExecutor::submit: submit job_id={job_id} timed out: e={e:?}");
-                if let Some(job_id) = rerun_job_id {
-                    self.clear_exclusive_job_id(job_id);
+                if parent.is_some() {
+                    return Err(Self::resetting_submit_error());
                 }
-                let _ = suspend_guard.resume().await;
-                return Err(ThoError::new("Can't submit job: timed out"));
+                continue;
             }
+
+            let accept_guard = match self.accept_gate.try_read() {
+                Ok(guard) => guard,
+                Err(_) => {
+                    drop(permit);
+                    let _ = suspend_guard.resume().await;
+                    if let Some(job_id) = job_id_to_rerun {
+                        self.clear_exclusive_job_id(job_id);
+                    }
+                    if parent.is_some() {
+                        return Err(Self::resetting_submit_error());
+                    }
+                    continue;
+                }
+            };
+
+            let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
+            let exclusive_job_id = Arc::clone(&self.exclusive_job_id);
+            let rerun_job_id = job_id_to_rerun;
+            let cmd_tx = self.cmd_tx.clone();
+
+            let fut = fut.take().expect("future must only be moved into a submitted job");
+            let wrapped = async move {
+                let result = fut.await;
+
+                let needs_reset = result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset());
+                if needs_reset {
+                    warn!("DynamicTaskExecutor::submit: needs_reset");
+                }
+                if needs_reset && cmd_tx.send(ManagerCmd::RequestCudaReset).is_err() {
+                    error!("DynamicTaskExecutor::submit: failed to request CUDA context reset for job_id={job_id}");
+                }
+
+                let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
+                let mut exclusive_job_id = exclusive_job_id.write();
+
+                let result = if is_oom && max_other_parallel == 0 {
+                    exclusive_job_id.replace(job_id);
+                    result.map_err(|e| ThoError::new_with_error(e.msg.clone(), Cause::JobError { job_id, inner: Box::new(e.clone()) }))
+
+                } else {
+                    if rerun_job_id == Some(job_id) && exclusive_job_id.as_ref() == Some(&job_id) {
+                        exclusive_job_id.take();
+                    }
+                    result
+                };
+
+                debug!("DynamicTaskExecutor::submit: wrapped  result={result:?}");
+
+                let _ = result_tx.send(result);
+
+                is_oom.into()
+            };
+
+            permit.send(Job::new(job_id, max_other_parallel, wrapped));
+            drop(accept_guard);
+
+            debug!("DynamicTaskExecutor::submit: submitted job_id={job_id}");
+
+            let result = result_rx.await?;//TODO if wrapped panics this fails with "channel closed"
+
+            suspend_guard.resume().await?;
+            return result;
         }
-
-        let result = result_rx.await?;//TODO if wrapped panics this fails with "channel closed"
-
-        suspend_guard.resume().await?;
-        result
     }
 
     pub fn clear_exclusive_job_id(&self, job_id: u64) {
@@ -347,6 +473,12 @@ impl DynamicTaskExecutor {
         if exclusive_job_id.as_ref() == Some(&job_id) {
             exclusive_job_id.take();
             let _ = self.cmd_tx.send(ManagerCmd::Recheck);
+        }
+    }
+
+    pub fn request_cuda_reset(&self) {
+        if self.cmd_tx.send(ManagerCmd::RequestCudaReset).is_err() {
+            error!("DynamicTaskExecutor::request_cuda_reset: manager is closed");
         }
     }
 
@@ -368,10 +500,14 @@ impl DynamicTaskExecutor {
 
     async fn run_manager(
         mut rx: mpsc::Receiver<Job>,
-        mut limit_rx: watch::Receiver<usize>,
+        _limit_rx: watch::Receiver<usize>,
         mut cmd_rx: mpsc::UnboundedReceiver<ManagerCmd>,
         cmd_tx_for_tasks: mpsc::UnboundedSender<ManagerCmd>,
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+        accepting_tx: watch::Sender<bool>,
+        accept_gate: Arc<tokio::sync::RwLock<()>>,
+        reset_device_idx: Option<usize>,
+        reset_fn: ResetFn,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -383,9 +519,11 @@ impl DynamicTaskExecutor {
         let (done_tx, mut done_rx) = mpsc::unbounded_channel::<JobId>();
 
         let mut input_closed = false;
-        let mut limit_closed = false;
         let mut cmd_closed = false;
-        let mut global_limit = Arc::new(AtomicU64::new(2)); //*limit_rx.borrow();
+        let _limit_closed = false;
+        let global_limit = Arc::new(AtomicU64::new(2)); //*limit_rx.borrow();
+        let mut reset_in_progress = false;
+        let mut accept_gate_guard = None::<tokio::sync::OwnedRwLockWriteGuard<()>>;
 
         loop {
             debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} running.len={}, pending.len={} global_limit={global_limit:?}", running.len(), pending.len());
@@ -418,7 +556,21 @@ impl DynamicTaskExecutor {
                 current_exclusive_job_id,
             );
 
-            if input_closed && pending.is_empty() && jobs.is_empty() {
+            if reset_in_progress && pending.is_empty() && jobs.is_empty() {
+                if let Some(device_idx) = reset_device_idx {
+                    if let Err(e) = reset_fn(device_idx) {
+                        error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={device_idx}: e={e:?}");
+                    }
+                } else {
+                    warn!("DynamicTaskExecutor::run_manager: CUDA context reset requested but executor has no bound device");
+                }
+
+                accept_gate_guard.take();
+                reset_in_progress = false;
+                let _ = accepting_tx.send(true);
+            }
+
+            if input_closed && pending.is_empty() && jobs.is_empty() && !reset_in_progress {
                 break;
             }
 
@@ -464,6 +616,13 @@ impl DynamicTaskExecutor {
                                         job_id,
                                         reply,
                                     );
+                                }
+                                ManagerCmd::RequestCudaReset => {
+                                    if !reset_in_progress {
+                                        reset_in_progress = true;
+                                        let _ = accepting_tx.send(false);
+                                        accept_gate_guard = Some(Arc::clone(&accept_gate).write_owned().await);
+                                    }
                                 }
                                 ManagerCmd::Recheck => {}
                             }
@@ -822,7 +981,7 @@ mod tests {
     use futures_util::{StreamExt, TryStreamExt};
     use parking_lot::Mutex;
     use std::{sync::Arc, time::Duration};
-    use std::sync::atomic::AtomicU8;
+    use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
     use rand::prelude::IndexedRandom;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -941,6 +1100,85 @@ mod tests {
         assert!(e.is_oom());
 
 
+        exec.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_cuda_reset_blocks_new_jobs_until_running_jobs_finish() -> Result<(), ThoError> {
+        let reset_calls = Arc::new(AtomicUsize::new(0));
+        let reset_active = Arc::new(AtomicBool::new(false));
+        let exec = Arc::new(DynamicTaskExecutor::new_with_reset_hook(
+            64,
+            NonZeroUsize::new(4).unwrap(),
+            1,
+            {
+                let reset_calls = Arc::clone(&reset_calls);
+                let reset_active = Arc::clone(&reset_active);
+                Arc::new(move |_device_idx| {
+                    reset_calls.fetch_add(1, Ordering::SeqCst);
+                    reset_active.store(true, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(50));
+                    reset_active.store(false, Ordering::SeqCst);
+                    Ok(())
+                })
+            },
+        ));
+
+        let (running_started_tx, running_started_rx) = oneshot::channel();
+        let (release_running_tx, release_running_rx) = oneshot::channel();
+        let running_job = {
+            let exec = Arc::clone(&exec);
+            tokio::spawn(async move {
+                exec.submit(usize::MAX, async move {
+                    let _ = running_started_tx.send(());
+                    let _ = release_running_rx.await;
+                    Ok::<_, ThoError>(())
+                }, None).await
+            })
+        };
+
+        let _ = running_started_rx.await;
+
+        let reset_err: Result<(), ThoError> = exec.submit(usize::MAX, async move {
+            Err(ThoError::new_with_error(
+                "needs reset",
+                Cause::Cuda {
+                    needs_reset: true,
+                    msg: "reset me".into(),
+                },
+            ))
+        }, None).await;
+        assert!(reset_err.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
+
+        let late_started = Arc::new(AtomicBool::new(false));
+        let late_started_during_reset = Arc::new(AtomicBool::new(false));
+        let late_job = {
+            let exec = Arc::clone(&exec);
+            let late_started = Arc::clone(&late_started);
+            let late_started_during_reset = Arc::clone(&late_started_during_reset);
+            let reset_active = Arc::clone(&reset_active);
+            tokio::spawn(async move {
+                exec.submit(usize::MAX, async move {
+                    late_started_during_reset.store(reset_active.load(Ordering::SeqCst), Ordering::SeqCst);
+                    late_started.store(true, Ordering::SeqCst);
+                    Ok::<_, ThoError>(())
+                }, None).await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(!late_started.load(Ordering::SeqCst));
+        assert_eq!(reset_calls.load(Ordering::SeqCst), 0);
+
+        let _ = release_running_tx.send(());
+        running_job.await??;
+        late_job.await??;
+
+        assert_eq!(reset_calls.load(Ordering::SeqCst), 1);
+        assert!(!late_started_during_reset.load(Ordering::SeqCst));
+
+        let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
         exec.shutdown().await;
         Ok(())
     }

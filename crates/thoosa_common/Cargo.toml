@@ -77,7 +77,7 @@ console-subscriber.workspace = true
 tracing-subscriber.workspace = true
 with-id = "1.0.2"
 tub = "0.3"
-
+sha2.workspace = true
 
 [build-dependencies]
 chrono.workspace = true

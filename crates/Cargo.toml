@@ -97,7 +97,7 @@ statrs = "0"
 proc-macro2 = {version = "1.0.103"}
 time="0"
 libc = "0.2.175"
-
+sha2 = "0.11"
 [profile.test]
 opt-level = 0
 [profile.dev]
