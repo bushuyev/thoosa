@@ -35,6 +35,10 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
+    pub similarity_metric: SimilarityMetric,
+
+    #[run_config]
+    #[in_map]
     pub slices_filter: SlicesFilter,
 
     #[run_config]
@@ -51,6 +55,7 @@ pub struct StatsKeys {
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum StatsKey {
     Window(u32),
+    ComparisonMethod(SimilarityMetric),
     NotchBandFilterKey{low_hz:F64BitsKey, high_hz:F64BitsKey},
     BandPassFilter{
         low_hz: F64BitsKey,
@@ -154,7 +159,9 @@ impl FindMotifsRunConfig {
     pub fn to_stats_keys(&self) -> StatsKeys {
 
         StatsKeys {
-            keys: std::iter::once(StatsKey::Window(self.window)).chain(
+            keys: std::iter::once(StatsKey::Window(self.window))
+                .chain(std::iter::once(StatsKey::ComparisonMethod(self.similarity_metric)))
+                .chain(
                 self.freq_filter
                     .as_deref()
                     .into_iter()
@@ -180,6 +187,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
+            similarity_metric: SimilarityMetric::default(),
             slices_filter: SlicesFilter::Accumulate(AccumulateStats {
                 aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
@@ -201,6 +209,7 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
+            similarity_metric: SimilarityMetric::default(),
             slices_filter: SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
             max_slices: None,
         }
@@ -252,26 +261,33 @@ impl InputFilterLengthAdjuster for InputFilter {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub struct EucDistConfig {
-
+    #[in_map]
+    #[run_config]
+    pub z_normalize: bool,
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub struct PearsonCorrConfig {
 
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct DotProductConfig {
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
-pub enum ComparisonMethod {
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum SimilarityMetric {
     #[run_config_default]
     EucDist(EucDistConfig),
     PearsonCorr(PearsonCorrConfig),
+    DotProduct(DotProductConfig),
 }
 
-impl Default for ComparisonMethod {
+impl Default for SimilarityMetric {
     fn default() -> Self {
         Self::EucDist(EucDistConfig::default())
     }
@@ -372,7 +388,7 @@ pub struct ExactStats {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, ComparisonMethodRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioConstraintRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteria, MotifCriteriaRangeOrValue, NormThicknessConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
+    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioConstraintRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, MotifCriteria, MotifCriteriaRangeOrValue, NormThicknessConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use crate::find_motifs_run_config::InputFilter::{BandPassFilter, MedianFilter, AverageFilter, NotchBandFilter, SavGolFilter};
     use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, AverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, SgZeroPaddingRangeOrValue};
     use log::debug;
@@ -405,6 +421,7 @@ mod tests {
                     padding: PaddingRangeOrValue::Zero(SgZeroPaddingRangeOrValue::default()),
                 },
             ), InputFilterRangeOrValue::MedianFilter(MedianFilterParamsRangeOrValue { window: 11u32.into() })]),
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             slices_filter: SlicesFilterRangeOrValue::Accumulate(
                 AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
@@ -500,7 +517,7 @@ mod tests {
         let rc = SelectMotifsRunConfigRangeOrValue {
             id: Some(7),
             extend_config: Some(ExtendMotifsConfigRangeOrValue {
-                slices_selector_metric: ComparisonMethodRangeOrValue::EucDist(EucDistConfigRangeOrValue::default()),
+                slices_selector_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
                 slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
             }),
             motif_criteria: MotifCriteriaRangeOrValue {
@@ -538,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), similarity_metric: SimilarityMetric::default(), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
 
         let keys = run_config.to_stats_keys();
         
@@ -546,6 +563,7 @@ mod tests {
             keys,
             StatsKeys { keys: vec![
                 StatsKey::Window(1000),
+                StatsKey::ComparisonMethod(SimilarityMetric::default()),
                 StatsKey::BandPassFilter { low_hz: F64BitsKey(4626322717216342016), band_hz: F64BitsKey(4611686018427387904), kernel_size: 10 },
                 StatsKey::NotchBandFilterKey { low_hz: F64BitsKey(4633500329122463744), high_hz: F64BitsKey(4633922541587529728) }
             ] }
@@ -560,6 +578,7 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() })]),
+            similarity_metric: SimilarityMetric::default(),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
         };
@@ -571,6 +590,7 @@ mod tests {
             StatsKeys {
                 keys: vec![
                     StatsKey::Window(1000),
+                    StatsKey::ComparisonMethod(SimilarityMetric::default()),
                     StatsKey::SavGolFilter { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() },
                 ]
             }
@@ -584,6 +604,7 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![MedianFilter(MedianFilterParams { window: 11 })]),
+            similarity_metric: SimilarityMetric::default(),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
         };
@@ -595,6 +616,7 @@ mod tests {
             StatsKeys {
                 keys: vec![
                     StatsKey::Window(1000),
+                    StatsKey::ComparisonMethod(SimilarityMetric::default()),
                     StatsKey::MedianFilter { window: 11 },
                 ]
             }
@@ -608,6 +630,7 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]),
+            similarity_metric: SimilarityMetric::default(),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
         };
@@ -619,6 +642,7 @@ mod tests {
             StatsKeys {
                 keys: vec![
                     StatsKey::Window(1000),
+                    StatsKey::ComparisonMethod(SimilarityMetric::default()),
                     StatsKey::MovingAverageFilter { window: 11 },
                 ]
             }
@@ -714,7 +738,7 @@ mod tests {
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
 pub struct ExtendMotifsConfig {
     #[run_config]
-    pub slices_selector_metric: ComparisonMethod,
+    pub slices_selector_metric: SimilarityMetric,
 
     #[run_config]
     pub slices_selector_aggr: Aggr,
@@ -723,7 +747,7 @@ pub struct ExtendMotifsConfig {
 impl Default for ExtendMotifsConfig {
     fn default() -> Self {
         Self {
-            slices_selector_metric: ComparisonMethod::EucDist(EucDistConfig::default()),
+            slices_selector_metric: SimilarityMetric::EucDist(EucDistConfig::default()),
             slices_selector_aggr: Aggr::Mean(MeanAggr { k: 1.0 }),
         }
     }
@@ -748,7 +772,7 @@ impl FromHashmap for ExtendMotifsConfig {
     fn from_properties_map(parent: Option<String>, properties: &HashMap<String, thoosa_shared::val::Val>) -> Result<Self, thoosa_shared::ThoError> {
         let prefix = parent.unwrap_or("ExtendMotifsConfig::".to_string());
         Ok(Self {
-            slices_selector_metric: ComparisonMethod::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "slices_selector_metric.")), properties)?,
+            slices_selector_metric: SimilarityMetric::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "slices_selector_metric.")), properties)?,
             slices_selector_aggr: Aggr::from_properties_map(Some(thoosa_shared::conc_str(&prefix, "slices_selector_aggr.")), properties)?,
         })
     }
