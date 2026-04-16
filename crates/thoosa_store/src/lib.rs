@@ -128,6 +128,7 @@ pub struct RunMotifEntry {
 
 #[async_trait]
 pub trait Store: ResourceStore + Debug + Sync + Send {
+    fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
     async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
     async fn save_run_config<'a, 'b, 'c>(
         &self,
@@ -292,6 +293,7 @@ mock! {
 
     #[async_trait]
     impl Store for Store {
+        fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
         async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
         async fn save_run_config<'a, 'b, 'c>(
             &self,
@@ -539,6 +541,8 @@ pub struct SqlStore {
     conn: Mutex<Connection>,
     writer: tokio_rusqlite::Connection,
     readers: Arc<Vec<tokio_rusqlite::Connection>>,
+    conn_target: String,
+    conn_flags: OpenFlags,
     rr: AtomicUsize,
 }
 
@@ -789,11 +793,17 @@ impl ResourceStore for SqlStore {
 #[async_trait]
 //TODO move out all prepare stmts
 impl Store for SqlStore {
+    fn open_external_writer_conn(&self) -> Result<Connection, ThoError> {
+        let mut conn = Connection::open_with_flags(&self.conn_target, self.conn_flags)?;
+        Self::create_tables(&mut conn)?;
+        Self::init_external_writer_conn(&mut conn)?;
+        Ok(conn)
+    }
+
     async fn save_import(&self, descr: String) -> Result<u32, ThoError> {
         self.with_writer_conn("save_import", move |conn| {
             let t = conn.transaction()?;
-            t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
-            let import_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+            let import_id = Self::save_import_tx(descr.as_str(), &t)?;
             t.commit()?;
             Ok(import_id)
         })
@@ -994,8 +1004,7 @@ impl Store for SqlStore {
         let label = label.to_string();
         self.with_writer_conn("save_label", move |conn| {
             let t = conn.transaction()?;
-            t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
-            let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+            let label_id = Self::save_label_tx(label.as_str(), &t)?;
             t.commit()?;
             Ok(label_id)
         })
@@ -1022,24 +1031,7 @@ impl Store for SqlStore {
             .collect::<Vec<_>>();
         self.with_writer_conn("save_resources_labels", move |conn| {
             let t = conn.transaction()?;
-            debug!("save_resources_labels: resource_labels_probs.len()={}", resource_stats_labels_probs.len());
-
-            let resources_len = resource_stats_labels_probs.len();
-            let mut resource_labels_iter = resource_stats_labels_probs.into_iter().array_chunks::<500>();
-            let mut resource_ids = Vec::with_capacity(resources_len);
-
-            while let Some(resource_keys) = resource_labels_iter.next() {
-                resource_ids.extend(Self::save_resources_labels_do_insert(resource_keys.into_iter(), import_id, &t)?);
-            }
-
-            let remainder = resource_labels_iter.into_remainder();
-
-            if remainder.len() != 0 {
-            // if !remainder.is_empty() {
-                resource_ids.extend(Self::save_resources_labels_do_insert(remainder, import_id, &t)?);
-            }
-
-
+            let resource_ids = Self::save_resources_labels_tx(resource_stats_labels_probs, import_id, &t)?;
             t.commit()?;
             Ok(resource_ids)
         })
@@ -1104,133 +1096,7 @@ impl Store for SqlStore {
     ) -> Result<(), ThoError> {
         self.with_writer_conn("save_groups_by_label_cnt", move |conn| {
             let t = conn.transaction()?;
-
-        {
-            let labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = {
-                let mut stmt = t.prepare(
-                    "SELECT r.id, GROUP_CONCAT(l.label, ','), count(lr.resource_id) labels_cnt FROM resources r JOIN labeled_resources lr ON lr.resource_id=r.id JOIN labels l ON l.id=lr.label_id GROUP BY resource_id ORDER BY labels_cnt"
-                )?;
-                let mut rows = stmt.query(())?;
-                let mut labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> =
-                    HashMap::new(); //labels_cnt -> Labels->Resources. labels_cnt==1 - pure resources
-
-                while let Some(label_row) = rows.next()? {
-                    let resource_id = label_row.get::<usize, usize>(0)?;
-                    let labels = label_row.get::<usize, String>(1)?;
-                    let labels_cnt = label_row.get::<usize, usize>(2)?;
-
-                    let cnt_labels = labels_cnt_labels_resources
-                        .entry(labels_cnt)
-                        .or_insert_with(|| HashMap::new());
-                    let labels_resources = cnt_labels.entry(labels).or_insert_with(|| vec![]);
-
-                    labels_resources.push(resource_id);
-                }
-                labels_cnt_labels_resources
-            };
-
-            debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}",labels_cnt_labels_resources.len());
-            let mut rng = rand::rng();
-
-            let labels_ids: HashMap<String, usize> =
-                Self::list_labels(&t)?
-                    .into_iter()
-                    .fold(HashMap::new(), |mut a, v| {
-                        a.insert(v.1, v.0);
-                        a
-                    });
-
-            //labels_cnt number of labels a resource has - the fewer labels the more chances that resource is classified correctly
-            for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
-                let max_labels_resources = labels_resources.values().map(|r| r.len()).sum::<usize>();
-
-                debug!(
-                    "save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}",
-                    labels_cnt,
-                    max_labels_resources,
-                    max_resources_in_set,
-                    max_labels_resources / max_resources_in_set
-                );
-
-                let num_groups = max(1, max_labels_resources / max_resources_in_set).ilog2();
-                let groups_max_resources = (0..num_groups)
-                    .map(|i| max_resources_in_set * 2usize.pow(i as u32) as usize)
-                    .collect::<Vec<usize>>();
-
-                let groups_max_ids = groups_max_resources
-                    .iter()
-                    .map(|max_r| {
-                        (0..max_labels_resources)
-                            .step_by(*max_r)
-                            .map(|i| {
-                                Self::save_resource_set_group(
-                                    format!(
-                                        "group {} labels/{}/{}-{}",
-                                        labels_cnt,
-                                        max_r,
-                                        i,
-                                        i + *max_r
-                                    ),
-                                    &t,
-                                )
-                                .map(|g| (i, i + *max_r, g))
-                            })
-                            .collect::<Result<Vec<(usize, usize, usize)>, ThoError>>()
-                    })
-                    .collect::<Result<Vec<Vec<(usize, usize, usize)>>, ThoError>>()?;
-
-                let group_all_id =
-                    Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), &t)?;
-
-                debug!(
-                    "save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}",
-                    num_groups, groups_max_resources
-                );
-
-                for (label, mut resources) in labels_resources {
-                    resources.shuffle(&mut rng);
-
-                    let label_id = labels_ids.get(&label); //if more than one label - label_id is None and Null in the db
-
-                    debug!(
-                        "save_groups_by_label_cnt: labels={} resources.len()={} label_id={:?}",
-                        label,
-                        resources.len(),
-                        label_id
-                    );
-
-                    if resources.len() > 10 {
-                        //TODO min resources
-
-                        for (group_id, _max_resources) in
-                            groups_max_ids.iter().zip(groups_max_resources.iter())
-                        {
-                            for (resources_0, resources_1, group_id) in group_id {
-                                if *resources_0 < resources.len() - 1 {
-                                    Self::insert_resource_set_resources(
-                                        &t,
-                                        labels_cnt,
-                                        *group_id,
-                                        format!("{}/{}", labels_cnt, label),
-                                        label_id,
-                                        &resources
-                                            [*resources_0..min(resources.len() - 1, *resources_1)],
-                                    )?;
-                                }
-                            }
-                        }
-                    }
-                    Self::insert_resource_set_resources(
-                        &t,
-                        labels_cnt,
-                        group_all_id,
-                        format!("{}/{}", labels_cnt, label),
-                        label_id,
-                        resources.as_slice(),
-                    )?;
-                }
-            }
-        }
+            Self::save_groups_by_label_cnt_tx(max_resources_in_set, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -1243,49 +1109,10 @@ impl Store for SqlStore {
         only_unused: bool,
     ) -> Result<(), ThoError> {
         self.with_writer_conn("save_pure_sets", move |conn| {
-        let t = conn.transaction()?;
-
-        let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), &t)?;
-
-        {
-            let mut resource_resources_set_stmt = t.prepare(
-                if only_unused {
-                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
-                        SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
-                        GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? AND rrs.set_id IS NULL ORDER BY lr.resource_id\
-                    ) LIMIT ?"
-                } else {
-                    "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
-                        SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
-                    ) LIMIT ?"
-                }
-            )?;
-
-            //TODO replace with Self::list_labels
-            let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
-            let mut rows = stmt.query(())?;
-            while let Some(label_row) = rows.next()? {
-                debug!("row={:?}", label_row);
-                let label_id = label_row.get::<usize, usize>(0)?;
-                t.execute(
-                    "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
-                    params![
-                        format!("{}/{}", label_row.get::<usize, String>(1)?, max_len),
-                        group_id,
-                        label_id
-                    ],
-                )?;
-
-                let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
-                    row.get::<usize, usize>(0)
-                })?;
-
-                resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
-            }
-        }
-
-        t.commit()?;
-        Ok(())
+            let t = conn.transaction()?;
+            Self::save_pure_sets_tx(max_len, only_unused, &t)?;
+            t.commit()?;
+            Ok(())
         })
         .await
     }
@@ -1299,109 +1126,10 @@ impl Store for SqlStore {
     ) -> Result<(), ThoError> {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_pure_balanced_sets", move |conn| {
-        let t = conn.transaction()?;
-
-        if train_coeff < 0.0 || valid_coeff < 0.0 {
-            return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
-        }
-
-        if train_coeff + valid_coeff > 1.0 {
-            return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
-        }
-
-        let labels = Self::list_labels(&t)?;
-        let mut resources_by_label = labels
-            .iter()
-            .map(|(label_id, _)| (*label_id, Vec::new()))
-            .collect::<HashMap<usize, Vec<usize>>>();
-
-        {
-            let mut stmt = t.prepare(
-                "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING count(*)=1 ORDER BY lr.label_id, lr.resource_id",
-            )?;
-            let mut rows = stmt.query(())?;
-            while let Some(row) = rows.next()? {
-                let label_id = row.get::<usize, usize>(0)?;
-                let resource_id = row.get::<usize, usize>(1)?;
-                resources_by_label
-                    .entry(label_id)
-                    .or_insert_with(Vec::new)
-                    .push(resource_id);
-            }
-        }
-
-        let min_pure_resources = labels
-            .iter()
-            .map(|(label_id, _)| {
-                resources_by_label
-                    .get(label_id)
-                    .map(|resources| resources.len())
-                    .unwrap_or(0)
-            })
-            .min()
-            .unwrap_or(0);
-
-        if let Some(limit_val) = limit {
-            if limit_val > min_pure_resources {
-                return Err(ThoError::new(format!("limit {limit_val} exceeds smallest number of pure resources {min_pure_resources}")));
-            }
-        }
-
-        let target_count = limit.unwrap_or(min_pure_resources);
-        let train_count = ((target_count as f64) * (train_coeff as f64)).floor() as usize;
-        let valid_count = ((target_count as f64) * (valid_coeff as f64)).floor() as usize;
-        let test_count = target_count.saturating_sub(train_count + valid_count);
-
-        debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
-
-        let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), &t)?;
-
-        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_validation"), &t)?;
-
-        let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), &t)?;
-
-        let labels_cnt = labels.len();
-        let mut rng = rand::rng();
-
-        for (label_id, label) in labels {
-            let mut resources = resources_by_label.remove(&label_id).unwrap_or_default();
-            resources.shuffle(&mut rng);
-            let selected = resources
-                .into_iter()
-                .take(target_count)
-                .collect::<Vec<usize>>();
-
-            let (train_resources, rest) = selected.split_at(min(train_count, selected.len()));
-            let (valid_resources, test_resources) = rest.split_at(min(valid_count, rest.len()));
-
-            Self::insert_resource_set_resources(
-                &t,
-                labels_cnt,
-                train_group_id,
-                format!("{prefix}_balanced_set_{label}"),
-                Some(&label_id),
-                train_resources,
-            )?;
-            Self::insert_resource_set_resources(
-                &t,
-                labels_cnt,
-                valid_group_id,
-                format!("{prefix}_balanced_set_{label}"),
-                Some(&label_id),
-                valid_resources,
-            )?;
-            Self::insert_resource_set_resources(
-                &t,
-                labels_cnt,
-                test_group_id,
-                format!("{prefix}_balanced_set_{label}"),
-                Some(&label_id),
-                test_resources,
-            )?;
-        }
-
-        t.commit()?;
-        Ok(())
+            let t = conn.transaction()?;
+            Self::save_pure_balanced_sets_tx(prefix.as_str(), limit, train_coeff, valid_coeff, &t)?;
+            t.commit()?;
+            Ok(())
         })
         .await
     }
@@ -2954,8 +2682,10 @@ impl SqlStore {
 
     pub async fn from_path<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
         let path_buf = path.as_ref().to_path_buf();
+        let conn_target = path_buf.to_string_lossy().to_string();
+        let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE;
 
-        let mut conn = Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE)?;
+        let mut conn = Connection::open_with_flags(&path_buf, conn_flags)?;
         Self::create_tables(&mut conn)?;
 
         let writer = tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_WRITE).await?;
@@ -2981,6 +2711,8 @@ impl SqlStore {
             conn: Mutex::new(conn),
             writer,
             readers: Arc::new(readers),
+            conn_target,
+            conn_flags,
             rr: AtomicUsize::new(0),
         }))
     }
@@ -2988,6 +2720,7 @@ impl SqlStore {
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
         let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
         let uri = format!("file:thoosa_store_{db_idx}?mode=memory&cache=shared");
+        let conn_flags = OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI;
 
         let writer = tokio_rusqlite::Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_URI).await?;
         writer.call(init_sqlite_writer).await?;
@@ -2999,7 +2732,7 @@ impl SqlStore {
             readers.push(reader);
         }
 
-        let mut conn = Connection::open_with_flags(&uri, OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | OpenFlags::SQLITE_OPEN_URI)?;
+        let mut conn = Connection::open_with_flags(&uri, conn_flags)?;
         Self::create_tables(&mut conn)?;
 
         let readers = if readers.is_empty() {
@@ -3013,6 +2746,8 @@ impl SqlStore {
             conn: Mutex::new(conn),
             writer,
             readers: Arc::new(readers),
+            conn_target: uri,
+            conn_flags,
             rr: AtomicUsize::new(0),
         }))
     }
@@ -3255,6 +2990,276 @@ impl SqlStore {
             vec
         };
         Ok(set_resources)
+    }
+
+    pub fn init_external_writer_conn(conn: &mut Connection) -> Result<(), ThoError> {
+        init_sqlite_writer(conn)?;
+        Ok(())
+    }
+
+    pub fn save_import_tx(descr: &str, t: &Transaction) -> Result<u32, ThoError> {
+        t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
+        let import_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+        Ok(import_id)
+    }
+
+    pub fn save_label_tx(label: &str, t: &Transaction) -> Result<u32, ThoError> {
+        t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
+        let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+        Ok(label_id)
+    }
+
+    pub fn save_resources_labels_tx(
+        resource_stats_labels_probs: Vec<(String, u32, Vec<(String, f32)>)>,
+        import_id: u32,
+        t: &Transaction,
+    ) -> Result<Vec<ResourceId>, ThoError> {
+        debug!("save_resources_labels: resource_labels_probs.len()={}", resource_stats_labels_probs.len());
+
+        let resources_len = resource_stats_labels_probs.len();
+        let mut resource_labels_iter = resource_stats_labels_probs.into_iter().array_chunks::<500>();
+        let mut resource_ids = Vec::with_capacity(resources_len);
+
+        while let Some(resource_keys) = resource_labels_iter.next() {
+            resource_ids.extend(Self::save_resources_labels_do_insert(resource_keys.into_iter(), import_id, t)?);
+        }
+
+        let remainder = resource_labels_iter.into_remainder();
+        if remainder.len() != 0 {
+            resource_ids.extend(Self::save_resources_labels_do_insert(remainder, import_id, t)?);
+        }
+
+        Ok(resource_ids)
+    }
+
+    pub fn save_groups_by_label_cnt_tx(
+        max_resources_in_set: usize,
+        t: &Transaction,
+    ) -> Result<(), ThoError> {
+        let labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = {
+            let mut stmt = t.prepare(
+                "SELECT r.id, GROUP_CONCAT(l.label, ','), count(lr.resource_id) labels_cnt FROM resources r JOIN labeled_resources lr ON lr.resource_id=r.id JOIN labels l ON l.id=lr.label_id GROUP BY resource_id ORDER BY labels_cnt"
+            )?;
+            let mut rows = stmt.query(())?;
+            let mut labels_cnt_labels_resources: HashMap<usize, HashMap<String, Vec<usize>>> = HashMap::new();
+
+            while let Some(label_row) = rows.next()? {
+                let resource_id = label_row.get::<usize, usize>(0)?;
+                let labels = label_row.get::<usize, String>(1)?;
+                let labels_cnt = label_row.get::<usize, usize>(2)?;
+
+                let cnt_labels = labels_cnt_labels_resources.entry(labels_cnt).or_insert_with(|| HashMap::new());
+                let labels_resources = cnt_labels.entry(labels).or_insert_with(|| vec![]);
+
+                labels_resources.push(resource_id);
+            }
+            labels_cnt_labels_resources
+        };
+
+        debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}", labels_cnt_labels_resources.len());
+        let mut rng = rand::rng();
+
+        let labels_ids: HashMap<String, usize> = Self::list_labels(t)?.into_iter().fold(HashMap::new(), |mut a, v| {
+            a.insert(v.1, v.0);
+            a
+        });
+
+        for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
+            let max_labels_resources = labels_resources.values().map(|r| r.len()).sum::<usize>();
+
+            debug!(
+                "save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}",
+                labels_cnt,
+                max_labels_resources,
+                max_resources_in_set,
+                max_labels_resources / max_resources_in_set
+            );
+
+            let num_groups = max(1, max_labels_resources / max_resources_in_set).ilog2();
+            let groups_max_resources = (0..num_groups)
+                .map(|i| max_resources_in_set * 2usize.pow(i as u32) as usize)
+                .collect::<Vec<usize>>();
+
+            let groups_max_ids = groups_max_resources
+                .iter()
+                .map(|max_r| {
+                    (0..max_labels_resources)
+                        .step_by(*max_r)
+                        .map(|i| {
+                            Self::save_resource_set_group(
+                                format!("group {} labels/{}/{}-{}", labels_cnt, max_r, i, i + *max_r),
+                                t,
+                            )
+                            .map(|g| (i, i + *max_r, g))
+                        })
+                        .collect::<Result<Vec<(usize, usize, usize)>, ThoError>>()
+                })
+                .collect::<Result<Vec<Vec<(usize, usize, usize)>>, ThoError>>()?;
+
+            let group_all_id = Self::save_resource_set_group(format!("group {} labels/all", labels_cnt), t)?;
+
+            debug!("save_groups_by_label_cnt:  num_groups={:?}, groups_max_resources={:?}", num_groups, groups_max_resources);
+
+            for (label, mut resources) in labels_resources {
+                resources.shuffle(&mut rng);
+
+                let label_id = labels_ids.get(&label);
+
+                debug!("save_groups_by_label_cnt: labels={} resources.len()={} label_id={:?}", label, resources.len(), label_id);
+
+                if resources.len() > 10 {
+                    for (group_id, _max_resources) in groups_max_ids.iter().zip(groups_max_resources.iter()) {
+                        for (resources_0, resources_1, group_id) in group_id {
+                            if *resources_0 < resources.len() - 1 {
+                                Self::insert_resource_set_resources(
+                                    t,
+                                    labels_cnt,
+                                    *group_id,
+                                    format!("{}/{}", labels_cnt, label),
+                                    label_id,
+                                    &resources[*resources_0..min(resources.len() - 1, *resources_1)],
+                                )?;
+                            }
+                        }
+                    }
+                }
+                Self::insert_resource_set_resources(
+                    t,
+                    labels_cnt,
+                    group_all_id,
+                    format!("{}/{}", labels_cnt, label),
+                    label_id,
+                    resources.as_slice(),
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn save_pure_sets_tx(
+        max_len: usize,
+        only_unused: bool,
+        t: &Transaction,
+    ) -> Result<(), ThoError> {
+        let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
+
+        let mut resource_resources_set_stmt = t.prepare(
+            if only_unused {
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                    SELECT lr.resource_id FROM labeled_resources lr LEFT JOIN resource_resources_set rrs ON rrs.resource_id=lr.resource_id \
+                    GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? AND rrs.set_id IS NULL ORDER BY lr.resource_id\
+                ) LIMIT ?"
+            } else {
+                "INSERT INTO resource_resources_set (set_id, resource_id) SELECT ?, resource_id FROM (\
+                    SELECT lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING sum(p)=max(p) AND lr.label_id=? ORDER BY lr.resource_id\
+                ) LIMIT ?"
+            }
+        )?;
+
+        let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
+        let mut rows = stmt.query(())?;
+        while let Some(label_row) = rows.next()? {
+            debug!("row={:?}", label_row);
+            let label_id = label_row.get::<usize, usize>(0)?;
+            t.execute(
+                "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
+                params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id, label_id],
+            )?;
+
+            let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
+
+            resource_resources_set_stmt.execute(params![resource_set_id, label_id, max_len])?;
+        }
+
+        Ok(())
+    }
+
+    pub fn save_pure_balanced_sets_tx(
+        prefix: &str,
+        limit: Option<usize>,
+        train_coeff: f32,
+        valid_coeff: f32,
+        t: &Transaction,
+    ) -> Result<(), ThoError> {
+        if train_coeff < 0.0 || valid_coeff < 0.0 {
+            return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
+        }
+
+        if train_coeff + valid_coeff > 1.0 {
+            return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
+        }
+
+        let (labels, mut resources_by_label) = Self::pure_resources_by_label_tx(t)?;
+        let min_pure_resources = labels
+            .iter()
+            .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+
+        if let Some(limit_val) = limit {
+            if limit_val > min_pure_resources {
+                return Err(ThoError::new(format!("limit {limit_val} exceeds smallest number of pure resources {min_pure_resources}")));
+            }
+        }
+
+        let target_count = limit.unwrap_or(min_pure_resources);
+        let train_count = ((target_count as f64) * (train_coeff as f64)).floor() as usize;
+        let valid_count = ((target_count as f64) * (valid_coeff as f64)).floor() as usize;
+        let test_count = target_count.saturating_sub(train_count + valid_count);
+
+        debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
+
+        let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), t)?;
+        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_validation"), t)?;
+        let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), t)?;
+
+        let labels_cnt = labels.len();
+        let mut rng = rand::rng();
+
+        for (label_id, label) in labels {
+            let mut resources = resources_by_label.remove(&label_id).unwrap_or_default();
+            resources.shuffle(&mut rng);
+            let selected = resources.into_iter().take(target_count).collect::<Vec<usize>>();
+
+            let (train_resources, rest) = selected.split_at(min(train_count, selected.len()));
+            let (valid_resources, test_resources) = rest.split_at(min(valid_count, rest.len()));
+
+            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), train_resources)?;
+            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), valid_resources)?;
+            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), test_resources)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn min_pure_resources_tx(t: &Transaction) -> Result<usize, ThoError> {
+        let (labels, resources_by_label) = Self::pure_resources_by_label_tx(t)?;
+        let min_pure_resources = labels
+            .iter()
+            .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
+            .min()
+            .unwrap_or(0);
+        Ok(min_pure_resources)
+    }
+
+    fn pure_resources_by_label_tx(
+        t: &Transaction,
+    ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
+        let labels = Self::list_labels(t)?;
+        let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, Vec::new())).collect::<HashMap<usize, Vec<usize>>>();
+
+        let mut stmt = t.prepare(
+            "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING count(*)=1 ORDER BY lr.label_id, lr.resource_id",
+        )?;
+        let mut rows = stmt.query(())?;
+        while let Some(row) = rows.next()? {
+            let label_id = row.get::<usize, usize>(0)?;
+            let resource_id = row.get::<usize, usize>(1)?;
+            resources_by_label.entry(label_id).or_insert_with(Vec::new).push(resource_id);
+        }
+
+        Ok((labels, resources_by_label))
     }
 
     fn save_param_value(
