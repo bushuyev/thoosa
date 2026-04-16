@@ -1635,7 +1635,7 @@ where
 
 pub async fn import_resources_with_pure_sets<F, R>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    store: &Arc<Box<dyn Store>>,
+    _store: &Arc<Box<dyn Store>>,
     labels: &[&str],
     labeled_resources: F,
     resource_to_tensor: R, //None for tests - do not import parquet files
@@ -1647,17 +1647,19 @@ where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
 {
-    let store_guard = store;
+    let mut conn = _store.open_external_writer_conn()?;
+    let t = conn.transaction()?;
 
     if insert_label {
         for label in labels {
-            store_guard.save_label(label).await?; //TODO merge with save_resources_labels
+            SqlStore::save_label_tx(label, &t)?; //TODO merge with save_resources_labels
         }
     }
 
     let labeled_resources_map = labeled_resources()?;
     let ws_guard = ws.write();
-    let import_id = store_guard.save_import(format!("Import on {}", cdt())).await?;
+    let import_descr = format!("Import on {}", cdt());
+    let import_id = SqlStore::save_import_tx(import_descr.as_str(), &t)?;
 
     let (imported_tensors_stats, failed_tensors): (
         HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
@@ -1696,7 +1698,14 @@ where
         })
         .expect("imported_tensors");
 
-    let resource_ids = store_guard.save_resources_labels(&imported_tensors_stats, import_id).await?;
+    let resource_ids = SqlStore::save_resources_labels_tx(
+        imported_tensors_stats
+            .iter()
+            .map(|(resource_key, (stats, labels))| (resource_key.clone(), stats.length(), labels.clone()))
+            .collect(),
+        import_id,
+        &t,
+    )?;
 
     info!(
         "Import id: {}, imported {} tensors to {:?}, failed {}",
@@ -1708,20 +1717,36 @@ where
 
     if let Some(pure_sets_lens) = pure_sets_lens {
         for pure_sets_len in pure_sets_lens {
-            store_guard.save_pure_sets(pure_sets_len.0, pure_sets_len.1).await?;//
+            SqlStore::save_pure_sets_tx(pure_sets_len.0, pure_sets_len.1, &t)?;
         }
     }
 
+    let min_pure_resources = SqlStore::min_pure_resources_tx(&t)?;
+    if min_pure_resources >= 10 {
+        SqlStore::save_pure_balanced_sets_tx("A10", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("B10", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("C10", Some(10), 0.6, 0.2, &t)?;
+    }
+    if min_pure_resources >= 20 {
+        SqlStore::save_pure_balanced_sets_tx("A20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("B20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("C20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("D20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("E20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("F20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("G20", Some(10), 0.6, 0.2, &t)?;
+    }
+    if min_pure_resources >= 100 {
+        SqlStore::save_pure_balanced_sets_tx("A100", Some(100), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("B100", Some(100), 0.6, 0.2, &t)?;
+        SqlStore::save_pure_balanced_sets_tx("C100", Some(100), 0.6, 0.2, &t)?;
+    }
+    if min_pure_resources > 0 {
+        SqlStore::save_pure_balanced_sets_tx("All", None, 0.6, 0.2, &t)?;
+    }
 
-    // store_guard.save_pure_balanced_sets("A10", Some(10), 0.6, 0.2, &t)?;
-    // store_guard.save_pure_balanced_sets("B10", Some(10), 0.6, 0.2, &t)?;
-    // store_guard.save_pure_balanced_sets("C10", Some(10), 0.6, 0.2, &t)?;
-    // store_guard.save_pure_balanced_sets("A100", Some(100), 0.6, 0.2, &t)?;
-    // store_guard.save_pure_balanced_sets("B100", Some(100), 0.6, 0.2, &t)?;
-    // store_guard.save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
-    // store_guard.save_pure_balanced_sets("All", None,  0.6, 0.2, &t)?;
-
-    store_guard.save_groups_by_label_cnt(100).await?;
+    SqlStore::save_groups_by_label_cnt_tx(100, &t)?;
+    t.commit()?;
 
     trace!("import_resources: resource_ids={resource_ids:?}, failed_tensors={failed_tensors:?}");
 
