@@ -803,7 +803,7 @@ impl Store for SqlStore {
     async fn save_import(&self, descr: String) -> Result<u32, ThoError> {
         self.with_writer_conn("save_import", move |conn| {
             let t = conn.transaction()?;
-            let import_id = Self::save_import_tx(descr.as_str(), &t)?;
+            let import_id = Self::save_import(descr.as_str(), &t)?;
             t.commit()?;
             Ok(import_id)
         })
@@ -1004,7 +1004,7 @@ impl Store for SqlStore {
         let label = label.to_string();
         self.with_writer_conn("save_label", move |conn| {
             let t = conn.transaction()?;
-            let label_id = Self::save_label_tx(label.as_str(), &t)?;
+            let label_id = Self::save_label(label.as_str(), &t)?;
             t.commit()?;
             Ok(label_id)
         })
@@ -1031,7 +1031,7 @@ impl Store for SqlStore {
             .collect::<Vec<_>>();
         self.with_writer_conn("save_resources_labels", move |conn| {
             let t = conn.transaction()?;
-            let resource_ids = Self::save_resources_labels_tx(resource_stats_labels_probs, import_id, &t)?;
+            let resource_ids = Self::save_resources_labels(resource_stats_labels_probs, import_id, &t)?;
             t.commit()?;
             Ok(resource_ids)
         })
@@ -1096,7 +1096,7 @@ impl Store for SqlStore {
     ) -> Result<(), ThoError> {
         self.with_writer_conn("save_groups_by_label_cnt", move |conn| {
             let t = conn.transaction()?;
-            Self::save_groups_by_label_cnt_tx(max_resources_in_set, &t)?;
+            Self::save_groups_by_label_cnt(max_resources_in_set, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -1110,7 +1110,7 @@ impl Store for SqlStore {
     ) -> Result<(), ThoError> {
         self.with_writer_conn("save_pure_sets", move |conn| {
             let t = conn.transaction()?;
-            Self::save_pure_sets_tx(max_len, only_unused, &t)?;
+            Self::save_pure_sets(max_len, only_unused, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -1127,7 +1127,7 @@ impl Store for SqlStore {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_pure_balanced_sets", move |conn| {
             let t = conn.transaction()?;
-            Self::save_pure_balanced_sets_tx(prefix.as_str(), limit, train_coeff, valid_coeff, &t)?;
+            Self::save_pure_balanced_sets(prefix.as_str(), limit, train_coeff, valid_coeff, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -2997,19 +2997,19 @@ impl SqlStore {
         Ok(())
     }
 
-    pub fn save_import_tx(descr: &str, t: &Transaction) -> Result<u32, ThoError> {
+    pub fn save_import(descr: &str, t: &Transaction) -> Result<u32, ThoError> {
         t.execute("INSERT INTO imports (descr) VALUES (?)", params![descr])?;
         let import_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
         Ok(import_id)
     }
 
-    pub fn save_label_tx(label: &str, t: &Transaction) -> Result<u32, ThoError> {
+    pub fn save_label(label: &str, t: &Transaction) -> Result<u32, ThoError> {
         t.execute("INSERT INTO labels (label) VALUES (?)", params![label])?;
         let label_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
         Ok(label_id)
     }
 
-    pub fn save_resources_labels_tx(
+    pub fn save_resources_labels(
         resource_stats_labels_probs: Vec<(String, u32, Vec<(String, f32)>)>,
         import_id: u32,
         t: &Transaction,
@@ -3032,7 +3032,7 @@ impl SqlStore {
         Ok(resource_ids)
     }
 
-    pub fn save_groups_by_label_cnt_tx(
+    pub fn save_groups_by_label_cnt(
         max_resources_in_set: usize,
         t: &Transaction,
     ) -> Result<(), ThoError> {
@@ -3137,7 +3137,7 @@ impl SqlStore {
         Ok(())
     }
 
-    pub fn save_pure_sets_tx(
+    pub fn save_pure_sets(
         max_len: usize,
         only_unused: bool,
         t: &Transaction,
@@ -3175,7 +3175,7 @@ impl SqlStore {
         Ok(())
     }
 
-    pub fn save_pure_balanced_sets_tx(
+    pub fn save_pure_balanced_sets(
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
@@ -3190,7 +3190,7 @@ impl SqlStore {
             return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
 
-        let (labels, mut resources_by_label) = Self::pure_resources_by_label_tx(t)?;
+        let (labels, mut resources_by_label) = Self::pure_resources_by_label(t)?;
         let min_pure_resources = labels
             .iter()
             .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
@@ -3233,8 +3233,8 @@ impl SqlStore {
         Ok(())
     }
 
-    pub fn min_pure_resources_tx(t: &Transaction) -> Result<usize, ThoError> {
-        let (labels, resources_by_label) = Self::pure_resources_by_label_tx(t)?;
+    pub fn min_pure_resources(t: &Transaction) -> Result<usize, ThoError> {
+        let (labels, resources_by_label) = Self::pure_resources_by_label(t)?;
         let min_pure_resources = labels
             .iter()
             .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
@@ -3243,7 +3243,7 @@ impl SqlStore {
         Ok(min_pure_resources)
     }
 
-    fn pure_resources_by_label_tx(
+    fn pure_resources_by_label(
         t: &Transaction,
     ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
         let labels = Self::list_labels(t)?;

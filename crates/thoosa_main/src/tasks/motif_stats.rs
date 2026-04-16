@@ -665,7 +665,7 @@ where
         let (source, metrics, aggr) = with_data!(ctx.branch(Some("motif_stats_input"), false), input; |_ctx, input: &MotifStatsInput| {
             Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), input.aggr()))
         })?;
-
+        //TODO MotifStatsSource::Motif MotifStatsSource::MergedMotifs are being copied only to get unsqueezed to match random slices channels x slices x slice_len shape. Pass them as slices x slice_len and do unsqueezee in MotifStatsSyncStage::do_run if shape.len == 2
         let channels_motifs_slices = match source {
             MotifStatsSource::Motif(motif_loader_input) => {
                 debug!("MotifStats::run: motif_loader_input={motif_loader_input:?}");
