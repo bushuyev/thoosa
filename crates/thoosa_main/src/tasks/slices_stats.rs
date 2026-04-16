@@ -1,199 +1,171 @@
 use std::fmt::Debug;
 use tch::Kind;
 use tch::Tensor;
-use thoosa_common::find_motifs_run_config::SimilarityMetric;
+pub use thoosa_common::find_motifs_run_config::{Aggr, CommonStatsMetric, Metrics};
 use thoosa_common::utils::z_norm_dims;
-use thoosa_dummy_data_derive::DummyData;
 use tracing::debug;
 use thoosa_motifs::common_stats::Stats as CommonStatsValue;
 use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_peaked_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01, periodicity_acf_01_frac};
 use thoosa_motifs::pearson_corr::pearson_corr_distance_matrix_0_2_single as pearson_corr_distance_matrix_0_2_single_matrix;
 use thoosa_shared::{panic_to_err, ThoError};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, DummyData)]
-pub enum Metrics {
-    EucDist,
-    EucDistZNorm,
-    PearsonCorr,
-    DotProduct,
-    CommonEucDist,
-    CommonPearson,
-    CommonA0,
-    CommonTv0,
-    CommonCurv0,
-    CommonAmpP10,
-    CommonAmpP50,
-    CommonAmpP90,
-    CommonTvnP10,
-    CommonTvnP50,
-    CommonTvnP90,
-    CommonCurvnP10,
-    CommonCurvnP50,
-    CommonCurvnP90,
-    NormThickness,
-    InlierRatioRunConfig,
-    CoherenceRunConfig,
-    InterestingAmp01,
-    InterestingTvNorm01,
-    InterestingCurvatureNorm01,
-    InterestingTurningPointsRatio,
-    InterestingBandEnergyRatio01,
-    InterestingEntropyGauss01,
-    InterestingEntropyBand01,
-    PeriodicityAcf,
-}
-
-impl Default for Metrics {
-    fn default() -> Self {
-        Self::EucDist
-    }
-}
-
-impl From<SimilarityMetric> for Metrics {
-    fn from(value: SimilarityMetric) -> Self {
-        match value {
-            SimilarityMetric::EucDist(config) => {
-                if config.z_normalize {
-                    Self::EucDistZNorm
-                } else {
-                    Self::EucDist
-                }
-            }
-            SimilarityMetric::PearsonCorr(_) => Self::PearsonCorr,
-            SimilarityMetric::DotProduct(_) => Self::DotProduct,
-        }
-    }
-}
-
-impl Metrics {
-    pub fn all() -> Vec<Self> {
-        vec![
-            Self::EucDist,
-            Self::EucDistZNorm,
-            Self::PearsonCorr,
-            Self::DotProduct,
-            Self::CommonEucDist,
-            Self::CommonPearson,
-            Self::CommonA0,
-            Self::CommonTv0,
-            Self::CommonCurv0,
-            Self::CommonAmpP10,
-            Self::CommonAmpP50,
-            Self::CommonAmpP90,
-            Self::CommonTvnP10,
-            Self::CommonTvnP50,
-            Self::CommonTvnP90,
-            Self::CommonCurvnP10,
-            Self::CommonCurvnP50,
-            Self::CommonCurvnP90,
-            Self::NormThickness,
-            Self::InlierRatioRunConfig,
-            Self::CoherenceRunConfig,
-            Self::InterestingAmp01,
-            Self::InterestingTvNorm01,
-            Self::InterestingCurvatureNorm01,
-            Self::InterestingTurningPointsRatio,
-            Self::InterestingBandEnergyRatio01,
-            Self::InterestingEntropyGauss01,
-            Self::InterestingEntropyBand01,
-            Self::PeriodicityAcf,
-        ]
-    }
-
-    pub fn is_common_stats_metric(&self) -> bool {
-        matches!(
-            self,
-            Metrics::CommonEucDist
-                | Metrics::CommonPearson
-                | Metrics::CommonA0
-                | Metrics::CommonTv0
-                | Metrics::CommonCurv0
-                | Metrics::CommonAmpP10
-                | Metrics::CommonAmpP50
-                | Metrics::CommonAmpP90
-                | Metrics::CommonTvnP10
-                | Metrics::CommonTvnP50
-                | Metrics::CommonTvnP90
-                | Metrics::CommonCurvnP10
-                | Metrics::CommonCurvnP50
-                | Metrics::CommonCurvnP90
-        )
-    }
-
-    pub fn common_stats_value(&self, stats: &CommonStatsValue) -> Result<f32, ThoError> {
-        match self {
-            Metrics::CommonEucDist => Ok(stats.euc_dist),
-            Metrics::CommonPearson => Ok(stats.pearson),
-            Metrics::CommonA0 => Ok(stats.a0),
-            Metrics::CommonTv0 => Ok(stats.tv0),
-            Metrics::CommonCurv0 => Ok(stats.curv0),
-            Metrics::CommonAmpP10 => Ok(stats.amp_p10),
-            Metrics::CommonAmpP50 => Ok(stats.amp_p50),
-            Metrics::CommonAmpP90 => Ok(stats.amp_p90),
-            Metrics::CommonTvnP10 => Ok(stats.tvn_p10),
-            Metrics::CommonTvnP50 => Ok(stats.tvn_p50),
-            Metrics::CommonTvnP90 => Ok(stats.tvn_p90),
-            Metrics::CommonCurvnP10 => Ok(stats.curvn_p10),
-            Metrics::CommonCurvnP50 => Ok(stats.curvn_p50),
-            Metrics::CommonCurvnP90 => Ok(stats.curvn_p90),
-            _ => Err(ThoError::new(format!("common_stats_value called with non-common metric: {self:?}"))),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, DummyData, PartialEq)]
-pub enum Aggr {
-    Mean(f32),
-    Min(f32),
-    Max(f32),
-    Quantile(f32),
-}
-
-impl Default for Aggr {
-    fn default() -> Self {
-        Self::Mean(0.1)
-    }
-}
-
-pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: Metrics, aggr: Aggr) -> Result<f32, ThoError> {
+pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: &Metrics) -> Result<f32, ThoError> {
     let score_t = match metric {
-        Metrics::EucDist => return panic_to_err!(euclidean_distance(motif_slices, aggr)),
-        Metrics::EucDistZNorm => return panic_to_err!(z_normalized_euclidean_distance(motif_slices, aggr)),
-        Metrics::PearsonCorr => return panic_to_err!(pearson_corr_distance_matrix_0_2_single(motif_slices, 1e-8, aggr)),
-        Metrics::DotProduct => return panic_to_err!(dot_product_distance(motif_slices, aggr)),
-        Metrics::CommonEucDist
-        | Metrics::CommonPearson
-        | Metrics::CommonA0
-        | Metrics::CommonTv0
-        | Metrics::CommonCurv0
-        | Metrics::CommonAmpP10
-        | Metrics::CommonAmpP50
-        | Metrics::CommonAmpP90
-        | Metrics::CommonTvnP10
-        | Metrics::CommonTvnP50
-        | Metrics::CommonTvnP90
-        | Metrics::CommonCurvnP10
-        | Metrics::CommonCurvnP50
-        | Metrics::CommonCurvnP90 => {
-            let common_stats = thoosa_motifs::common_stats::estimate_channel_stats_from_windows(&motif_slices.f_unsqueeze(0)?, 0.05, 0.95, 0.50, 1e-8)?;
-            let stats = common_stats.first().ok_or_else(|| ThoError::new("metric_scalar_for_motif: no common stats for motif"))?;
-            return metric.common_stats_value(stats);
+        Metrics::EucDist(v) => {
+            if v.z_normalize {
+                return panic_to_err!(z_normalized_euclidean_distance(motif_slices, v.aggr));
+            }
+            return panic_to_err!(euclidean_distance(motif_slices, v.aggr));
         }
-        Metrics::NormThickness => norm_thickness(id, motif_slices, 1e-8)?,
-        Metrics::InlierRatioRunConfig => inlier_ratio(motif_slices, 4.5, 1e-8)?,
-        Metrics::CoherenceRunConfig => coherence(motif_slices, 10, 1e-8)?,
-        Metrics::InterestingAmp01 => interesting_amp_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
-        Metrics::InterestingTvNorm01 => interesting_tv_norm_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
-        Metrics::InterestingCurvatureNorm01 => interesting_curvature_norm_01(motif_slices, 0.05, 0.95, 1.0, 1e-8)?,
-        Metrics::InterestingTurningPointsRatio => interesting_turning_points_ratio_peaked_01(motif_slices, 4)?,
-        Metrics::InterestingBandEnergyRatio01 => interesting_band_energy_ratio_01(motif_slices, 250.0, 8.0, 30.0, 1e-8)?,
-        Metrics::InterestingEntropyGauss01 => interesting_entropy_gauss_01(motif_slices, 0.6, 0.15, 1e-8)?,
-        Metrics::InterestingEntropyBand01 => interesting_entropy_band_01(motif_slices, 0.3, 0.85, 1e-8)?,
-        Metrics::PeriodicityAcf => periodicity_acf_01_frac(motif_slices, 1./64., 1./32., 0.5,  0.2, 0.25, 0.65, 1e-8)?,
+        Metrics::PearsonCorr(v) => return panic_to_err!(pearson_corr_distance_matrix_0_2_single(motif_slices, v.eps, v.aggr)),
+        Metrics::DotProduct(v) => return panic_to_err!(dot_product_distance(motif_slices, v.aggr)),
+        //TODO move Common* into single Metric, call common_stats_for_motif once
+        Metrics::CommonEucDist(v) => return Ok(common_stats_for_motif(motif_slices, v)?.euc_dist),
+        Metrics::CommonPearson(v) => return Ok(common_stats_for_motif(motif_slices, v)?.pearson),
+        Metrics::CommonA0(v) => return Ok(common_stats_for_motif(motif_slices, v)?.a0),
+        Metrics::CommonTv0(v) => return Ok(common_stats_for_motif(motif_slices, v)?.tv0),
+        Metrics::CommonCurv0(v) => return Ok(common_stats_for_motif(motif_slices, v)?.curv0),
+        Metrics::NormThickness(v) => norm_thickness(id, motif_slices, v.eps)?,
+        Metrics::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
+        Metrics::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
+        Metrics::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
+        Metrics::InterestingTvNorm01(v) => interesting_tv_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.tv0, v.eps)?,
+        Metrics::InterestingCurvatureNorm01(v) => interesting_curvature_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.curv0, v.eps)?,
+        Metrics::InterestingTurningPointsRatio(v) => interesting_turning_points_ratio_peaked_01(motif_slices, v.peak)?,
+        Metrics::InterestingBandEnergyRatio01(v) => interesting_band_energy_ratio_01(motif_slices, v.fs, v.f_lo, v.f_hi, v.eps)?,
+        Metrics::InterestingEntropyGauss01(v) => interesting_entropy_gauss_01(motif_slices, v.h0, v.sigma, v.eps)?,
+        Metrics::InterestingEntropyBand01(v) => interesting_entropy_band_01(motif_slices, v.h_min, v.h_max, v.eps)?,
+        Metrics::PeriodicityAcf(v) => periodicity_acf_01_frac(motif_slices, v.struct_lag_max, v.lag_min, v.lag_max, v.struct0, v.peak_good, v.peak_bad, v.eps)?,
     };
 
     let raw = score_t.f_double_value(&[])?;
     if raw.is_finite() { Ok(raw as f32) } else { Ok(0.0) }
+}
+
+pub fn metric_quantiles_for_motif(motif_slices: &Tensor, metric: &Metrics, quantiles: &[f32]) -> Result<Option<Vec<(f32, f32)>>, ThoError> {
+    let quantiles = quantiles
+        .iter()
+        .copied()
+        .filter(|q| q.is_finite())
+        .map(|q| q.clamp(0.0, 1.0))
+        .collect::<Vec<_>>();
+    if quantiles.is_empty() {
+        return Ok(None);
+    }
+
+    match metric {
+        Metrics::CommonA0(v) => Ok(Some(common_metric_quantiles_for_motif(motif_slices, v, &quantiles, CommonQuantileMetric::Amp)?)),
+        Metrics::CommonTv0(v) => Ok(Some(common_metric_quantiles_for_motif(motif_slices, v, &quantiles, CommonQuantileMetric::Tvn)?)),
+        Metrics::CommonCurv0(v) => Ok(Some(common_metric_quantiles_for_motif(motif_slices, v, &quantiles, CommonQuantileMetric::Curvn)?)),
+        _ => Ok(None),
+    }
+}
+
+fn common_stats_for_motif(motif_slices: &Tensor, params: &CommonStatsMetric) -> Result<CommonStatsValue, ThoError> {
+    let common_stats = thoosa_motifs::common_stats::estimate_channel_stats_from_windows(
+        &motif_slices.f_unsqueeze(0)?,
+        params.q_lo,
+        params.q_hi,
+        params.scale_q,
+        params.eps,
+    )?;
+    common_stats
+        .into_iter()
+        .next()
+        .ok_or_else(|| ThoError::new("common_stats_for_motif: no common stats for motif"))
+}
+
+#[derive(Clone, Copy)]
+enum CommonQuantileMetric {
+    Amp,
+    Tvn,
+    Curvn,
+}
+
+fn common_metric_quantiles_for_motif(
+    motif_slices: &Tensor,
+    params: &CommonStatsMetric,
+    quantiles: &[f32],
+    metric: CommonQuantileMetric,
+) -> Result<Vec<(f32, f32)>, ThoError> {
+    let (amp, tvn, curvn) = per_window_metrics(motif_slices, params.q_lo, params.q_hi, params.eps)?;
+    let src = match metric {
+        CommonQuantileMetric::Amp => amp,
+        CommonQuantileMetric::Tvn => tvn,
+        CommonQuantileMetric::Curvn => curvn,
+    };
+
+    quantiles
+        .iter()
+        .map(|q| Ok((*q, f_quantile_1d(&src, *q as f64)?.f_double_value(&[])? as f32)))
+        .collect()
+}
+
+fn f_quantile_1d(v: &Tensor, q: f64) -> Result<Tensor, ThoError> {
+    let sz = v.size();
+    if sz.len() != 1 {
+        return Err(ThoError::new(format!("f_quantile_1d: expected [M], got {:?}", sz)));
+    }
+    let m = sz[0];
+    if m < 1 {
+        return Err(ThoError::new("f_quantile_1d: M must be >= 1"));
+    }
+    let (sorted, _idx) = v.f_sort(0, false)?;
+    let mut i = ((m - 1) as f64 * q).round() as i64;
+    if i < 0 { i = 0; }
+    if i > m - 1 { i = m - 1; }
+    Ok(sorted.f_select(0, i)?)
+}
+
+fn f_quantile_dim1_per_row(x: &Tensor, q: f64) -> Result<Tensor, ThoError> {
+    let sz = x.size();
+    if sz.len() != 2 {
+        return Err(ThoError::new(format!("f_quantile_dim1_per_row: expected [M,L], got {:?}", sz)));
+    }
+    let l = sz[1];
+    if l < 1 {
+        return Err(ThoError::new("f_quantile_dim1_per_row: L must be >= 1"));
+    }
+    let (sorted, _idx) = x.f_sort(1, false)?;
+    let mut i = ((l - 1) as f64 * q).round() as i64;
+    if i < 0 { i = 0; }
+    if i > l - 1 { i = l - 1; }
+    Ok(sorted.f_select(1, i)?)
+}
+
+fn per_window_metrics(w: &Tensor, q_lo: f64, q_hi: f64, eps: f64) -> Result<(Tensor, Tensor, Tensor), ThoError> {
+    let sz = w.size();
+    if sz.len() != 2 {
+        return Err(ThoError::new(format!("per_window_metrics: expected [M,L], got {:?}", sz)));
+    }
+    let m = sz[0];
+    let l = sz[1];
+    if l < 2 {
+        return Err(ThoError::new("per_window_metrics: need L>=2"));
+    }
+
+    let lo = f_quantile_dim1_per_row(w, q_lo)?;
+    let hi = f_quantile_dim1_per_row(w, q_hi)?;
+    let amp = hi.f_sub(&lo)?;
+
+    let x1 = w.f_narrow(1, 1, l - 1)?;
+    let x0 = w.f_narrow(1, 0, l - 1)?;
+    let tv = x1.f_sub(&x0)?.f_abs()?.f_sum_dim_intlist(1, false, w.kind())?;
+
+    let curv = if l >= 3 {
+        let xp = w.f_narrow(1, 2, l - 2)?;
+        let xc = w.f_narrow(1, 1, l - 2)?;
+        let xm = w.f_narrow(1, 0, l - 2)?;
+        let two = Tensor::from(2.0).to_device(w.device()).to_kind(w.kind());
+        xp.f_sub(&xc.f_mul(&two)?)?.f_add(&xm)?.f_abs()?.f_sum_dim_intlist(1, false, w.kind())?
+    } else {
+        Tensor::f_zeros([m], (w.kind(), w.device()))?
+    };
+
+    let denom = amp.f_add_scalar(eps)?;
+    let tvn = tv.f_div(&denom)?;
+    let curvn = curv.f_div(&denom)?;
+    Ok((amp, tvn, curvn))
 }
 
 pub fn euclidean_distance(t: &Tensor, aggr: Aggr) -> Result<f32, ThoError> {
@@ -257,23 +229,26 @@ fn aggregate_distances(distances: &Tensor, aggr: Aggr) -> Result<f32, ThoError> 
 
     let scalar = match aggr {
         Aggr::Mean(k) => {
+            let k = k.k as f64;
             let mean = distances.f_mean(Kind::Float)?;
             debug!("aggregate_distances, Mean: k={k} distances=\n{distances} mean=\n{mean}");
-            k * mean
+            mean.f_mul_scalar(k)?
         }
         Aggr::Min(k) => {
+            let k = k.k as f64;
             let min = distances.f_min()?;
             debug!("aggregate_distances, Min: k={k} distances=\n{distances} min=\n{min}");
-            k * min
+            min.f_mul_scalar(k)?
         }
         Aggr::Max(k) => {
+            let k = k.k as f64;
             let max = distances.f_max()?;
             debug!("aggregate_distances, Max: k={k} distances=\n{distances} max=\n{max}");
-            k * max
+            max.f_mul_scalar(k)?
         }
         Aggr::Quantile(q) => {
-            debug!("aggregate_distances, Quantile: q={q} distances=\n{distances}");
-            let q = q.clamp(0.0, 1.0) as f64;
+            debug!("aggregate_distances, Quantile: q={} distances=\n{distances}", q.q);
+            let q = q.q.clamp(0.0, 1.0) as f64;
             let quantile = distances.f_quantile_scalar(q, 0, true, "lower")?;
             debug!("aggregate_distances, Quantile: distances=\n{distances}, quantile=\n{quantile}");
             let mask = distances.f_le_tensor(&quantile)?;
@@ -296,34 +271,35 @@ mod tests {
     use tch::{Device, Kind, Tensor};
 
     use super::{aggregate_distances, metric_scalar_for_motif, Aggr, Metrics};
+    use thoosa_common::find_motifs_run_config::{MeanAggr, MinAggr, MaxAggr, QuantileAggr, PeriodicityAcfRunConfig};
 
     #[test]
     fn test_aggregate_distances() {
         let distances = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]);
-        let mean_k_half = aggregate_distances(&distances, Aggr::Mean(0.5)).unwrap();
+        let mean_k_half = aggregate_distances(&distances, Aggr::Mean(MeanAggr { k: 0.5 })).unwrap();
         assert!((mean_k_half - 1.25).abs() < 1e-6, "expected mean([1,2,3,4]) * 0.5 = 1.25, got {mean_k_half}");
-        let min_k_2 = aggregate_distances(&distances, Aggr::Min(2.0)).unwrap();
+        let min_k_2 = aggregate_distances(&distances, Aggr::Min(MinAggr { k: 2.0 })).unwrap();
         assert!((min_k_2 - 2.0).abs() < 1e-6, "expected min([1,2,3,4]) * 2.0 = 2.0, got {min_k_2}");
-        let max_k_2 = aggregate_distances(&distances, Aggr::Max(2.0)).unwrap();
+        let max_k_2 = aggregate_distances(&distances, Aggr::Max(MaxAggr { k: 2.0 })).unwrap();
         assert!((max_k_2 - 8.0).abs() < 1e-6, "expected max([1,2,3,4]) * 2.0 = 8.0, got {max_k_2}");
-        let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.5)).unwrap();
+        let median_lower = aggregate_distances(&distances, Aggr::Quantile(QuantileAggr { q: 0.5 })).unwrap();
         assert!((median_lower - 2.0).abs() < 1e-6, "expected quantile(0.5, lower) for [1,2,3,4] to be 2.0, got {median_lower}");
     }
 
     #[test]
     fn test_aggregate_distances_with_zeros() {
         let distances = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0]);
-        let median_lower = aggregate_distances(&distances, Aggr::Quantile(0.0)).unwrap();
+        let median_lower = aggregate_distances(&distances, Aggr::Quantile(QuantileAggr { q: 0.0 })).unwrap();
         assert!((median_lower - 1.0).abs() < 1e-6, "expected quantile(0.0, lower) for [1,2,3,4] to be 1.0, got {median_lower}");
     }
 
     #[test]
     fn test_metrics_all_includes_periodicity_acf_and_scalar_is_finite() {
-        assert!(Metrics::all().contains(&Metrics::PeriodicityAcf));
+        assert!(Metrics::all().iter().any(|metric| matches!(metric, Metrics::PeriodicityAcf(_))));
 
         let t = Tensor::arange(1024, (Kind::Float, Device::Cpu)) / 64;
         let motif = t.sin().view([1, -1]);
-        let score = metric_scalar_for_motif(&"periodicity_test", &motif, Metrics::PeriodicityAcf, Aggr::Mean(1.0)).unwrap();
+        let score = metric_scalar_for_motif(&"periodicity_test", &motif, &Metrics::PeriodicityAcf(PeriodicityAcfRunConfig::default())).unwrap();
 
         assert!(score.is_finite(), "expected finite periodicity score, got {score}");
         assert!((0.0..=1.0).contains(&score), "expected periodicity score in [0, 1], got {score}");

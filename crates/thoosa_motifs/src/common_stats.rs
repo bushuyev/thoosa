@@ -182,7 +182,7 @@ pub fn estimate_channel_stats_from_windows(
     }
 
     // For stats/scalar extraction, easiest is CPU float.
-    let x = channels_windows.f_to_device(Device::Cpu)?.f_to_kind(Kind::Float)?;
+    let x = channels_windows/*.f_to_device(Device::Cpu)?*/.f_to_kind(Kind::Float)?;
 
     let mut out = Vec::with_capacity(c as usize);
 

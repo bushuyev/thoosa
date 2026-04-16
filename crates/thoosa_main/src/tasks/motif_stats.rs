@@ -5,17 +5,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cached_derive::Cached;
-use log::{debug, warn};
+use log::debug;
 use parking_lot::RwLock;
-use tch::Tensor;
 use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
+use tch::Tensor;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, MotifCriterion, MotifCriterionConstraint, SelectMotifsRunConfig};
+use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, Metrics};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_common::ws::Workspace;
-use thoosa_motifs::criteria::{coherence, inlier_ratio, interesting_amp_01, interesting_band_energy_ratio_01, interesting_curvature_norm_01, interesting_entropy_band_01, interesting_entropy_gauss_01, interesting_turning_points_ratio_trapezoid_01, interesting_tv_norm_01, norm_thickness, periodicity_acf_01_frac};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
@@ -37,60 +36,10 @@ use thoosa_with_data::with_data;
 use tracing::error;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
-use crate::tasks::slices_stats::{metric_scalar_for_motif, Aggr, Metrics};
+use crate::tasks::slices_stats::{metric_quantiles_for_motif, metric_scalar_for_motif};
 use crate::tasks::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
-
-const DEFAULT_Q_LO: f64 = 0.05;
-const DEFAULT_Q_HI: f64 = 0.95;
-const DEFAULT_SCALE_Q: f64 = 0.50;
-const DEFAULT_EPS: f64 = 1e-8;
-
-pub(crate) fn criterion_metric(criterion: &MotifCriterion) -> Metrics {
-    match criterion {
-        MotifCriterion::NormThickness(_) => Metrics::NormThickness,
-        MotifCriterion::InlierRatio(_) => Metrics::InlierRatioRunConfig,
-        MotifCriterion::Coherence(_) => Metrics::CoherenceRunConfig,
-        MotifCriterion::InterestingAmp01(_) => Metrics::InterestingAmp01,
-        MotifCriterion::InterestingTvNorm01(_) => Metrics::InterestingTvNorm01,
-        MotifCriterion::InterestingCurvatureNorm01(_) => Metrics::InterestingCurvatureNorm01,
-        MotifCriterion::InterestingTurningPointsRatio(_) => Metrics::InterestingTurningPointsRatio,
-        MotifCriterion::InterestingBandEnergyRatio01(_) => Metrics::InterestingBandEnergyRatio01,
-        MotifCriterion::InterestingEntropyGauss01(_) => Metrics::InterestingEntropyGauss01,
-        MotifCriterion::InterestingEntropyBand01(_) => Metrics::InterestingEntropyBand01,
-        MotifCriterion::PeriodicityAcf(_) => Metrics::PeriodicityAcf,
-    }
-}
-
-pub(crate) fn criteria_constraint_metrics(criteria_constraints: &[MotifCriterionConstraint]) -> Vec<Metrics> {
-    criteria_constraints.iter().map(|constraint| criterion_metric(&constraint.criterion)).collect()
-}
-
-fn criterion_score_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, criterion: &MotifCriterion) -> Result<f64, ThoError> {
-    let score_t = match criterion {
-        MotifCriterion::NormThickness(v) => norm_thickness(id, motif_slices, v.eps)?,
-        MotifCriterion::InlierRatio(v) => inlier_ratio(motif_slices, v.k, v.eps)?,
-        MotifCriterion::Coherence(v) => coherence(motif_slices, v.k.round().max(1.0) as i64, v.eps)?,
-        MotifCriterion::InterestingAmp01(v) => interesting_amp_01(motif_slices, v.q_lo, v.q_hi, v.a0, v.eps)?,
-        MotifCriterion::InterestingTvNorm01(v) => interesting_tv_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.tv0, v.eps)?,
-        MotifCriterion::InterestingCurvatureNorm01(v) => interesting_curvature_norm_01(motif_slices, v.amp_q_lo, v.amp_q_hi, v.curv0, v.eps)?,
-        MotifCriterion::InterestingTurningPointsRatio(_) => interesting_turning_points_ratio_trapezoid_01(motif_slices, 2, 3, 5, 7)?,
-        MotifCriterion::InterestingBandEnergyRatio01(v) => interesting_band_energy_ratio_01(motif_slices, v.fs, v.f_lo, v.f_hi, v.eps)?,
-        MotifCriterion::InterestingEntropyGauss01(v) => interesting_entropy_gauss_01(motif_slices, v.h0, v.sigma, v.eps)?,
-        MotifCriterion::InterestingEntropyBand01(v) => interesting_entropy_band_01(motif_slices, v.h_min, v.h_max, v.eps)?,
-        MotifCriterion::PeriodicityAcf(v) => periodicity_acf_01_frac(motif_slices, v.struct_lag_max, v.lag_min, v.lag_max, v.struct0, v.peak_good, v.peak_bad, v.eps)?,
-    };
-    let raw_score = score_t.f_double_value(&[])?;
-    debug!("MotifStatsSyncStage::criterion_score_for_motif: raw_score={raw_score:?}");
-
-    if raw_score.is_finite() {
-        Ok(raw_score.clamp(0.0, 1.0))
-    } else {
-        warn!("MotifStatsSyncStage::criterion_score_for_motif: got non-finite criterion score={raw_score}, treating it as 0.0");
-        Ok(0.0)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub enum MotifStatsSource {
@@ -104,50 +53,52 @@ pub struct MotifStatsInput {
     id: SynKey,
     source: MotifStatsSource,
     metrics: Vec<Metrics>,
-    aggr: Aggr,
+    quantiles: Option<Vec<f32>>,
 }
 
 impl MotifStatsInput {
     pub fn from_motif_input(
         motif_loader_input: MotifLoaderInput,
         metrics: Vec<Metrics>,
-        aggr: Aggr,
-        select_motifs_run_config: Option<&SelectMotifsRunConfig>,
+        quantiles: Option<Vec<f32>>,
     ) -> Self {
         let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
-        let aggr_sfx = format!("{aggr:?}");
-        let id = match select_motifs_run_config.and_then(|cfg| cfg.id) {
-            Some(select_motifs_run_id) => &motif_loader_input.id + mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
-            None => &(&motif_loader_input.id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(aggr_sfx.clone(), format!("aggr={aggr_sfx}")),
+        let id = if let Some(quantiles) = quantiles.as_ref() {
+            &(&motif_loader_input.id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"))
+        } else {
+            &motif_loader_input.id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))
         };
         Self {
             id,
             source: MotifStatsSource::Motif(motif_loader_input),
             metrics,
-            aggr,
+            quantiles,
         }
     }
 
-    pub fn from_random(max_slices: u32, find_motifs_run_id: RunId, metrics: Vec<Metrics>, aggr: Aggr) -> Self {
+    pub fn from_random(max_slices: u32, find_motifs_run_id: RunId, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
         let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
+        let mut id = SynKey::new([
+            mono_key!("MotifStatsInput", "stage"),
+            mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+            mono_key!(max_slices, format!("max_slices={max_slices}")),
+            mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
+        ]);
+        if let Some(quantiles) = quantiles.as_ref() {
+            id = &id + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"));
+        }
         Self {
-            id: SynKey::new([
-                mono_key!("MotifStatsInput", "stage"),
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
-                mono_key!(max_slices, format!("max_slices={max_slices}")),
-                mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
-                mono_key!(format!("{aggr:?}"), format!("aggr={aggr:?}")),
-            ]),
+            id,
             source: MotifStatsSource::Random { max_slices, find_motifs_run_id },
             metrics,
-            aggr,
+            quantiles,
         }
     }
 
     pub fn from_merged_motif_inputs(
         motif_loader_inputs: Vec<MotifLoaderInput>,
         metrics: Vec<Metrics>,
-        aggr: Aggr,
+        quantiles: Option<Vec<f32>>,
     ) -> Result<Self, ThoError> {
         if motif_loader_inputs.is_empty() {
             return Err(ThoError::new("MotifStatsInput::from_merged_motif_inputs: empty motif_loader_inputs"));
@@ -158,11 +109,17 @@ impl MotifStatsInput {
             &acc + motif_loader_input.id()
         });
 
+        let id = if let Some(quantiles) = quantiles.as_ref() {
+            &(&id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"))
+        } else {
+            &id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))
+        };
+
         Ok(Self {
-            id: &(&id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(format!("{aggr:?}"), format!("aggr={aggr:?}")),
+            id,
             source: MotifStatsSource::MergedMotifs(motif_loader_inputs),
             metrics,
-            aggr,
+            quantiles,
         })
     }
 
@@ -175,8 +132,8 @@ impl MotifStatsInput {
         &self.metrics
     }
 
-    pub fn aggr(&self) -> Aggr {
-        self.aggr
+    pub fn quantiles(&self) -> Option<&[f32]> {
+        self.quantiles.as_deref()
     }
 }
 
@@ -230,7 +187,7 @@ impl CopyToDevice for MotifStatsInput {
             id: self.id.clone(),
             source,
             metrics: self.metrics.clone(),
-            aggr: self.aggr,
+            quantiles: self.quantiles.clone(),
         })
     }
 }
@@ -240,7 +197,7 @@ pub struct MotifStatsCalcInput {
     id: SynKey,
     channels_motifs_slices: Arc<ThoTensor<ChannelsMotifsSlices, SynKey>>,
     metrics: Vec<Metrics>,
-    aggr: Aggr,
+    quantiles: Option<Vec<f32>>,
 }
 
 impl MotifStatsCalcInput {
@@ -248,9 +205,9 @@ impl MotifStatsCalcInput {
         id: SynKey,
         channels_motifs_slices: Arc<ThoTensor<ChannelsMotifsSlices, SynKey>>,
         metrics: Vec<Metrics>,
-        aggr: Aggr,
+        quantiles: Option<Vec<f32>>,
     ) -> Self {
-        Self { id, channels_motifs_slices, metrics, aggr }
+        Self { id, channels_motifs_slices, metrics, quantiles }
     }
 
     pub fn channels_motifs_slices(&self) -> &Arc<ThoTensor<ChannelsMotifsSlices, SynKey>> {
@@ -261,8 +218,8 @@ impl MotifStatsCalcInput {
         &self.metrics
     }
 
-    pub fn aggr(&self) -> Aggr {
-        self.aggr
+    pub fn quantiles(&self) -> Option<&[f32]> {
+        self.quantiles.as_deref()
     }
 }
 
@@ -303,7 +260,7 @@ impl Select<()> for MotifStatsCalcInput {
             id: self.id.clone(),
             channels_motifs_slices: Arc::new(ThoTensor::new(self.channels_motifs_slices.id().clone(), cloned)?),
             metrics: self.metrics.clone(),
-            aggr: self.aggr,
+            quantiles: self.quantiles.clone(),
         })
     }
 }
@@ -317,75 +274,124 @@ impl CopyToDevice for MotifStatsCalcInput {
             id: self.id.clone(),
             channels_motifs_slices: Arc::new(self.channels_motifs_slices.copy_to_device(dst_device).await?),
             metrics: self.metrics.clone(),
-            aggr: self.aggr,
+            quantiles: self.quantiles.clone(),
         })
     }
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct MotifCriteriaEvaluation {
-    criterion_scores: Vec<(&'static str, f64)>,
+pub struct MetricValue {
+    value: f32,
+    quantiles: Option<Vec<(f32, f32)>>,
 }
 
-impl MotifCriteriaEvaluation {
-    pub fn new(criterion_scores: Vec<(&'static str, f64)>) -> Self {
-        Self { criterion_scores }
+impl MetricValue {
+    pub fn new(value: f32, quantiles: Option<Vec<(f32, f32)>>) -> Self {
+        Self { value, quantiles }
     }
 
-    pub fn criterion_scores(&self) -> &Vec<(&'static str, f64)> {
-        &self.criterion_scores
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    pub fn quantiles(&self) -> Option<&Vec<(f32, f32)>> {
+        self.quantiles.as_ref()
     }
 }
 
-#[derive(Debug, Clone, DummyData)]
-#[dummy_data(no_clone)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetricsValue {
+    metric: Metrics,
+    channels_values: Vec<MetricValue>,
+}
+
+impl MetricsValue {
+    pub fn new(metric: Metrics, channels_values: Vec<MetricValue>) -> Self {
+        Self { metric, channels_values }
+    }
+
+    pub fn metric(&self) -> &Metrics {
+        &self.metric
+    }
+
+    pub fn channels_values(&self) -> &Vec<MetricValue> {
+        &self.channels_values
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct MotifStatsOutput {
     id: SynKey,
-    values: Vec<(Metrics, Vec<f32>)>,
-    criteria_evaluation: Option<MotifCriteriaEvaluation>,
-    pub num_slices: u32
+    channels_values: Vec<MetricsValue>,
+    pub num_slices: u32,
 }
 
 impl MotifStatsOutput {
-    pub fn new(id: SynKey, values: Vec<(Metrics, Vec<f32>)>, num_slices: u32) -> Self {
-        Self { id, values, criteria_evaluation: None, num_slices }
-    }
-
-    pub fn with_criteria_evaluation(id: SynKey, values: Vec<(Metrics, Vec<f32>)>, criteria_evaluation: Option<MotifCriteriaEvaluation>, num_slices: u32) -> Self {
-        Self { id, values, criteria_evaluation, num_slices }
+    pub fn new(id: SynKey, channels_values: Vec<MetricsValue>, num_slices: u32) -> Self {
+        Self { id, channels_values, num_slices }
     }
 
     pub fn metrics(&self) -> Vec<Metrics> {
-        self.values.iter().map(|(metric, _)| *metric).collect()
+        self.channels_values.iter().map(|values| values.metric().clone()).collect()
     }
 
-    pub fn criteria_evaluation(&self) -> Option<&MotifCriteriaEvaluation> {
-        self.criteria_evaluation.as_ref()
+    fn metric_values(&self, metric: &Metrics) -> Option<&Vec<MetricValue>> {
+        self.channels_values.iter().find_map(|values| if values.metric() == metric { Some(values.channels_values()) } else { None })
     }
 
-    fn metric_values(&self, metric: Metrics) -> Option<&Vec<f32>> {
-        self.values.iter().find_map(|(cur, values)| if *cur == metric { Some(values) } else { None })
-    }
-
-    fn metric_values_id(&self, metric: Metrics) -> SynKey {
+    fn metric_values_id(&self, metric: &Metrics) -> SynKey {
         let metric_key = mono_key!(format!("{metric:?}"), format!("metric={metric:?}"));
         &self.id + &metric_key
     }
 
-    pub fn channel_value(&self, metric: Metrics, channel: usize) -> Result<f32, ThoError> {
+    pub fn channel_metric_value(&self, metric: &Metrics, channel: usize) -> Result<&MetricValue, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
-        values.get(channel).copied().ok_or_else(|| ThoError::new(format!("MotifStatsOutput: channel index out of bounds: channel={channel} channels={}", values.len())))
+        values.get(channel).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: channel index out of bounds: channel={channel} channels={}", values.len())))
     }
 
-    pub fn channels_values(&self, metric: Metrics) -> Result<Vec<f32>, ThoError> {
+    pub fn channel_value(&self, metric: &Metrics, channel: usize) -> Result<f32, ThoError> {
+        Ok(self.channel_metric_value(metric, channel)?.value())
+    }
+
+    pub fn channels_values(&self, metric: &Metrics) -> Result<Vec<MetricValue>, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
         Ok(values.clone())
     }
 
-    pub fn channels_motifs_dists(&self, metric: Metrics) -> Result<ThoTensor<ChannelsMotifsDists, SynKey>, ThoError> {
+    pub fn channels_motifs_dists(&self, metric: &Metrics) -> Result<ThoTensor<ChannelsMotifsDists, SynKey>, ThoError> {
         let values = self.metric_values(metric).ok_or_else(|| ThoError::new(format!("MotifStatsOutput: metric {metric:?} was not requested")))?;
-        let t = Tensor::f_from_slice(values.as_slice())?.f_view([values.len() as i64, 1])?;
+        let scalar_values = values.iter().map(|value| value.value()).collect::<Vec<_>>();
+        let t = Tensor::f_from_slice(scalar_values.as_slice())?.f_view([scalar_values.len() as i64, 1])?;
         ThoTensor::new(self.metric_values_id(metric), t)
+    }
+}
+
+impl Data for MotifStatsOutput {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        1usize.into()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.channels_values
+            .iter()
+            .map(|values| {
+                values
+                    .channels_values()
+                    .iter()
+                    .map(|value| {
+                        let quantiles_len = value.quantiles().map(|quantiles| quantiles.len()).unwrap_or(0);
+                        std::mem::size_of::<MetricValue>() as u64 + (quantiles_len as u64 * std::mem::size_of::<(f32, f32)>() as u64)
+                    })
+                    .sum::<u64>()
+            })
+            .sum()
     }
 }
 
@@ -406,22 +412,12 @@ impl CopyToDevice for MotifStatsOutput {
     }
 }
 
-#[derive(Debug, Clone)]
-struct MotifStatsCriteriaConfig {
-    constraints: Vec<MotifCriterionConstraint>,
-}
-
 #[derive(Debug, Named)]
 struct MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    q_lo: f64,
-    q_hi: f64,
-    scale_q: f64,
-    eps: f64,
-    criteria_config: Option<MotifStatsCriteriaConfig>,
     _ctx: PhantomData<C>,
 }
 
@@ -429,27 +425,9 @@ impl<C> MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn with_common_stats_params(q_lo: f64, q_hi: f64, scale_q: f64, eps: f64) -> Self {
+    fn new() -> Self {
         Self {
             id: (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into(),
-            q_lo,
-            q_hi,
-            scale_q,
-            eps,
-            criteria_config: None,
-            _ctx: PhantomData,
-        }
-    }
-
-    fn with_criteria(criteria_constraints: Vec<MotifCriterionConstraint>, select_motifs_run_id: RunId) -> Self {
-
-        Self {
-            id: mono_key!(MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage") + &mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
-            q_lo: DEFAULT_Q_LO,
-            q_hi: DEFAULT_Q_HI,
-            scale_q: DEFAULT_SCALE_Q,
-            eps: DEFAULT_EPS,
-            criteria_config: Some(MotifStatsCriteriaConfig { constraints: criteria_constraints }),
             _ctx: PhantomData,
         }
     }
@@ -460,7 +438,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn default() -> Self {
-        Self::with_common_stats_params(DEFAULT_Q_LO, DEFAULT_Q_HI, DEFAULT_SCALE_Q, DEFAULT_EPS)
+        Self::new()
     }
 }
 
@@ -498,62 +476,25 @@ where
         };
         let (channels,  num_slices) = (*channels, *num_slices);
 
-
-        debug!("MotifStatsSyncStage::do_run: self.criteria_config={:?}", self.criteria_config);
-        if let Some(criteria_config) = &self.criteria_config {
-
-
-            let motif_slices = channels_motifs_slices.f_get(0)?;
-            let mut values = Vec::with_capacity(criteria_config.constraints.len());
-            let mut criterion_scores = Vec::with_capacity(criteria_config.constraints.len());
-
-            for criterion_constraint in &criteria_config.constraints {
-                let criterion_score = criterion_score_for_motif(input.id(), &motif_slices, &criterion_constraint.criterion)?;
-
-                let metric = criterion_metric(&criterion_constraint.criterion);
-                values.push((metric, vec![criterion_score as f32]));
-                criterion_scores.push((criterion_constraint.key, criterion_score));
-                debug!("MotifStatsSyncStage::do_run: input={:?} values={values:?} key={:?} criterion_score={criterion_score:.6}", input.id(), criterion_constraint.key, );
-            }
-
-            return Ok(MotifStatsOutput::with_criteria_evaluation(
-                self.out_id(input.id()),
-                values,
-                Some(MotifCriteriaEvaluation::new(criterion_scores)),
-                num_slices as u32
-            ));
-        }
-
-        let mut common_stats_cache: Option<Vec<thoosa_motifs::common_stats::Stats>> = None;
-        let mut values = Vec::with_capacity(input.metrics().len());
+        let mut channels_values = Vec::with_capacity(input.metrics().len());
 
         for metric in input.metrics() {
-            let channel_values = if metric.is_common_stats_metric() {
-                if common_stats_cache.is_none() {
-                    common_stats_cache = Some(thoosa_motifs::common_stats::estimate_channel_stats_from_windows(
-                        channels_motifs_slices,
-                        self.q_lo,
-                        self.q_hi,
-                        self.scale_q,
-                        self.eps,
-                    )?);
-                }
-                let common_stats = common_stats_cache.as_ref().expect("set above");
-                common_stats.iter().map(|stats| metric.common_stats_value(stats)).collect::<Result<Vec<_>, ThoError>>()?
-            } else {
-                let mut channel_values = Vec::with_capacity(channels as usize);
-                for channel_idx in 0..channels as usize {
-                    let motif_slices = channels_motifs_slices.f_get(channel_idx as i64)?;
-                    channel_values.push(metric_scalar_for_motif(input.id(), &motif_slices, *metric, input.aggr())?);
-                }
-                channel_values
-            };
-            values.push((*metric, channel_values));
+            let mut metric_channels_values = Vec::with_capacity(channels as usize);
+            for channel_idx in 0..channels as usize {
+                let motif_slices = channels_motifs_slices.f_get(channel_idx as i64)?;
+                let value = metric_scalar_for_motif(input.id(), &motif_slices, metric)?;
+                let quantiles = match input.quantiles() {
+                    Some(quantiles) => metric_quantiles_for_motif(&motif_slices, metric, quantiles)?,
+                    None => None,
+                };
+                metric_channels_values.push(MetricValue::new(value, quantiles));
+            }
+            channels_values.push(MetricsValue::new(metric.clone(), metric_channels_values));
         }
 
-        debug!("MotifStatsSyncStage::do_run: input.id={:?} valuese={values:?}", input.id());
+        debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={channels_values:?}", input.id());
 
-        Ok(MotifStatsOutput::new(self.out_id(input.id()), values, num_slices as u32))
+        Ok(MotifStatsOutput::new(self.out_id(input.id()), channels_values, num_slices as u32))
     }
 }
 
@@ -606,26 +547,6 @@ where
             _ctx: PhantomData,
         }
     }
-
-    pub fn with_criteria_constraints(
-        store: Arc<Box<dyn Store>>,
-        loader: Arc<L>,
-        ws: Arc<RwLock<Box<dyn Workspace>>>,
-        motif_loader: Arc<ML>,
-        select_motifs_run_id: RunId,
-        criteria_constraints: Vec<MotifCriterionConstraint>,
-    ) -> Self {
-
-        Self {
-            id: mono_key!(MOTIF_STATS, "MotifStats") + &mono_key!(select_motifs_run_id, format!("select_motifs_run_id={select_motifs_run_id}")),
-            store,
-            loader,
-            ws,
-            motif_loader,
-            clc_stats: Arc::new(MotifStatsSyncStage::with_criteria(criteria_constraints, select_motifs_run_id)),
-            _ctx: PhantomData,
-        }
-    }
 }
 
 impl<ML, L, C> OutId for MotifStats<ML, L, C>
@@ -662,8 +583,8 @@ where
         for<'a> Self::In<'a>: Send + Sync,
     {
         let input_id = input.id().clone();
-        let (source, metrics, aggr) = with_data!(ctx.branch(Some("motif_stats_input"), false), input; |_ctx, input: &MotifStatsInput| {
-            Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), input.aggr()))
+        let (source, metrics, quantiles) = with_data!(ctx.branch(Some("motif_stats_input"), false), input; |_ctx, input: &MotifStatsInput| {
+            Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), input.quantiles().map(|v| v.to_vec())))
         })?;
         //TODO MotifStatsSource::Motif MotifStatsSource::MergedMotifs are being copied only to get unsqueezed to match random slices channels x slices x slice_len shape. Pass them as slices x slice_len and do unsqueezee in MotifStatsSyncStage::do_run if shape.len == 2
         let channels_motifs_slices = match source {
@@ -767,7 +688,7 @@ where
             }
         };
 
-        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsCalcInput::new(input_id.clone(), channels_motifs_slices, metrics, aggr)));
+        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsCalcInput::new(input_id.clone(), channels_motifs_slices, metrics, quantiles)));
         let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
         let stats = OOMHandler::new(
             vec![
@@ -965,8 +886,8 @@ mod tests {
         ));
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
-        // let input = Arc::new(DevicesWrap::wrap(RandomStatsInput::new(4, run_id, Metrics::EucDist, Aggr::Mean(1.0))));
-        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_id, vec![Metrics::EucDist], Aggr::Mean(1.0))));
+        let metric = Metrics::default();
+        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_id, vec![metric.clone()], None)));
 
         let output = Arc::clone(&stage)
             .run(
@@ -986,7 +907,7 @@ mod tests {
             .branch(Some("random_stats_data"), false);
         let size = output
             .with_data_ref(0, ctx_for_data, None, |stats: &MotifStatsOutput, _ctx| {
-                let t = stats.channels_motifs_dists(Metrics::EucDist)?;
+                let t = stats.channels_motifs_dists(&metric)?;
                 debug!("t=\n{}", t.as_ref());
                 assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
 
@@ -1032,10 +953,11 @@ mod tests {
         );
         let stage = Arc::new(MotifStats::new(Arc::clone(&store), loader, Arc::clone(&ws), motif_loader));
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
+        let metric = Metrics::default();
         let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_merged_motif_inputs(
             vec![motif_input_0, motif_input_1],
-            vec![Metrics::EucDist],
-            Aggr::Mean(1.0),
+            vec![metric.clone()],
+            None,
         )?));
 
         let output = Arc::clone(&stage)
@@ -1058,7 +980,7 @@ mod tests {
                 )
                 .branch(Some("motif_stats_merged_data"), false),
                 None,
-                |stats: &MotifStatsOutput, _ctx| stats.channel_value(Metrics::EucDist, 0),
+                |stats: &MotifStatsOutput, _ctx| stats.channel_value(&metric, 0),
             )
             .await?;
 
