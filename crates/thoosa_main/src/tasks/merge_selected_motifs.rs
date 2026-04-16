@@ -6,7 +6,7 @@ use std::sync::Arc;
 use clap::Args;
 use log::debug;
 use parking_lot::RwLock;
-use thoosa_common::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, SlicesFilter, StatsKeys};
+use thoosa_common::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -24,7 +24,7 @@ use thoosa_with_data::with_data;
 
 use crate::tasks::motif_loader::MotifLoaderInput;
 use crate::tasks::motif_stats::{MotifStatsInput, MotifStatsOutput};
-use crate::tasks::slices_stats::{Aggr, Metrics};
+use crate::tasks::slices_stats::Aggr;
 use crate::tasks::stage_ids::MERGE_SELECTED_MOTIFS;
 
 #[derive(Debug, Args, Clone)]
@@ -110,7 +110,6 @@ impl SelectedMotifKey {
 struct MotifComparisonConfig {
     stats_keys: StatsKeys,
     metric: Metrics,
-    aggr: Aggr,
 }
 
 impl MotifComparisonConfig {
@@ -119,18 +118,17 @@ impl MotifComparisonConfig {
             SlicesFilter::Accumulate(ref v) => find_motifs_aggr_to_stats(v.aggr),
             SlicesFilter::Precalculate(ref v) => find_motifs_aggr_to_stats(v.aggr),
             // Exact thresholds do not carry an aggregation parameter, so use unscaled mean compactness for merge comparisons.
-            SlicesFilter::ExactS(_) => Aggr::Mean(1.0),
+            SlicesFilter::ExactS(_) => Aggr::Mean(MeanAggr { k: 1.0 }),
         };
 
         Self {
             stats_keys: run_config.to_stats_keys(),
-            metric: run_config.similarity_metric.into(),
-            aggr,
+            metric: Metrics::from_similarity_metric(run_config.similarity_metric, aggr),
         }
     }
 
     fn is_compatible_with(&self, other: &Self) -> bool {
-        self.stats_keys == other.stats_keys && self.metric == other.metric && self.aggr == other.aggr
+        self.stats_keys == other.stats_keys && self.metric == other.metric
     }
 }
 
@@ -143,10 +141,10 @@ struct SelectedMotifCandidate {
 
 fn find_motifs_aggr_to_stats(aggr: FindMotifsAggr) -> Aggr {
     match aggr {
-        FindMotifsAggr::Mean(v) => Aggr::Mean(v.k),
-        FindMotifsAggr::Min(v) => Aggr::Min(v.k),
-        FindMotifsAggr::Max(v) => Aggr::Max(v.k),
-        FindMotifsAggr::Quantile(v) => Aggr::Quantile(v.q),
+        FindMotifsAggr::Mean(v) => Aggr::Mean(v),
+        FindMotifsAggr::Min(v) => Aggr::Min(v),
+        FindMotifsAggr::Max(v) => Aggr::Max(v),
+        FindMotifsAggr::Quantile(v) => Aggr::Quantile(v),
     }
 }
 
@@ -236,14 +234,14 @@ where
             .await?;
 
         with_data!(ctx.branch(Some("merge_selected_motifs_metric_value"), false), stats; |_ctx, stats: &MotifStatsOutput| {
-            stats.channel_value(metric, 0)
+            stats.channel_value(&metric, 0)
         })
     }
 
     async fn metric_for_candidate(&self, candidate: &SelectedMotifCandidate, ctx: C) -> Result<f32, ThoError> {
         self.run_metric(
-            MotifStatsInput::from_motif_input(candidate.key.motif_loader_input(), vec![candidate.comparison.metric], candidate.comparison.aggr, None),
-            candidate.comparison.metric,
+            MotifStatsInput::from_motif_input(candidate.key.motif_loader_input(), vec![candidate.comparison.metric.clone()], None),
+            candidate.comparison.metric.clone(),
             ctx,
         )
         .await
@@ -253,10 +251,10 @@ where
         self.run_metric(
             MotifStatsInput::from_merged_motif_inputs(
                 vec![left.key.motif_loader_input(), right.key.motif_loader_input()],
-                vec![left.comparison.metric],
-                left.comparison.aggr,
+                vec![left.comparison.metric.clone()],
+                None,
             )?,
-            left.comparison.metric,
+            left.comparison.metric.clone(),
             ctx,
         )
         .await
