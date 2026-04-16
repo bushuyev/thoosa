@@ -146,10 +146,10 @@ impl QuantileDistsCtx {
 
 fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
     match aggr {
-        FilterAggr::Mean(v) => StatsAggr::Mean(v.k),
-        FilterAggr::Min(v) => StatsAggr::Min(v.k),
-        FilterAggr::Max(v) => StatsAggr::Max(v.k),
-        FilterAggr::Quantile(v) => StatsAggr::Quantile(v.q),
+        FilterAggr::Mean(v) => StatsAggr::Mean(v),
+        FilterAggr::Min(v) => StatsAggr::Min(v),
+        FilterAggr::Max(v) => StatsAggr::Max(v),
+        FilterAggr::Quantile(v) => StatsAggr::Quantile(v),
     }
 }
 
@@ -221,11 +221,11 @@ where
                             }
                         }
                         SlicesFilter::Precalculate(v) => {
-                            let comparison_metric = Metrics::from(run_config.similarity_metric);
-                            let motif_stats = random_stats_arc.run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric], to_stats_aggr(v.aggr)))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+                            let comparison_metric = Metrics::from_similarity_metric(run_config.similarity_metric, to_stats_aggr(v.aggr));
+                            let motif_stats = random_stats_arc.run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()], None))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
 
                             let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
-                                let metric_val = t.channels_motifs_dists(comparison_metric)?;
+                                let metric_val = t.channels_motifs_dists(&comparison_metric)?;
                                 let metric_val_id = metric_val.id().clone();
                                 debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 

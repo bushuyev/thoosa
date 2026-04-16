@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MinAggrRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfConstraintRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, InputFilter};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, InputFilter};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -1200,25 +1200,15 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                 // q: RangeOrValue::Range { range: 0.0..0.05, step: Some((0.05, 2)) },
             }),
         }),
-        motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
-                criterion: NormThicknessRunConfigRangeOrValue {
+        motif_criteria: vec![
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
-                },
+                }),
                 min: RangeOrValue::Value(0.8),
-            }),
-            inlier_ratioRunConfig: None,
-            coherenceRunConfig: None,
-            interesting_amp_01: None,
-            interesting_tv_norm_01: None,
-            interesting_curvature_norm_01: None,
-            interesting_turning_points_ratio: None,
-            interesting_band_energy_ratio_01: None,
-            interesting_entropy_gauss_01: None,
-            interesting_entropy_band_01: None,
-            // periodicity_acf_01: None,
-            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
-                criterion: PeriodicityAcfRunConfigRangeOrValue {
+            },
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
                     struct_lag_max: RangeOrValue::Value(1. / 64.),
                     lag_min: RangeOrValue::Value(1. / 32.),
                     lag_max: RangeOrValue::Value(0.5),
@@ -1226,10 +1216,10 @@ fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifs
                     peak_good: RangeOrValue::Value(0.25),
                     peak_bad: RangeOrValue::Value(0.65),
                     eps: RangeOrValue::Value(1e-8),
-                },
+                }),
                 min: RangeOrValue::Value(0.80),
-            }),
-        },
+            },
+        ],
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
     }
 }
@@ -1248,25 +1238,15 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
         //         // q: RangeOrValue::Range { range: 0.0..0.05, step: Some((0.05, 2)) },
         //     }),
         // }),
-        motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
-                criterion: NormThicknessRunConfigRangeOrValue {
+        motif_criteria: vec![
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
                     eps: RangeOrValue::Value(1e-8),
-                },
+                }),
                 min: RangeOrValue::Value(0.9),
-            }),
-            inlier_ratioRunConfig: None,
-            coherenceRunConfig: None,
-            interesting_amp_01: None,
-            interesting_tv_norm_01: None,
-            interesting_curvature_norm_01: None,
-            interesting_turning_points_ratio: None,
-            interesting_band_energy_ratio_01: None,
-            interesting_entropy_gauss_01: None,
-            interesting_entropy_band_01: None,
-            // periodicity_acf_01: None,
-            periodicity_acf_01: Some(PeriodicityAcfConstraintRangeOrValue {
-                criterion: PeriodicityAcfRunConfigRangeOrValue {
+            },
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::PeriodicityAcf(PeriodicityAcfRunConfigRangeOrValue {
                     struct_lag_max: RangeOrValue::Value(1. / 64.),
                     lag_min: RangeOrValue::Value(1. / 32.),
                     lag_max: RangeOrValue::Value(0.5),
@@ -1274,10 +1254,10 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
                     peak_good: RangeOrValue::Value(0.25),
                     peak_bad: RangeOrValue::Value(0.65),
                     eps: RangeOrValue::Value(1e-8),
-                },
+                }),
                 min: RangeOrValue::Value(0.70),
-            }),
-        },
+            },
+        ],
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
     }
 }
@@ -1307,34 +1287,26 @@ fn run_all_select_motifs_config_test_1<P: FieldName + 'static>() -> SelectMotifs
     SelectMotifsRunConfigRangeOrValue {
         id: None,
         extend_config: None,
-        motif_criteria: MotifCriteriaRangeOrValue {
-            norm_thickness: Some(thoosa_common::find_motifs_run_config::NormThicknessConstraintRangeOrValue {
-                criterion: NormThicknessRunConfigRangeOrValue {  eps: RangeOrValue::Value(1e-8) },
+        motif_criteria: vec![
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
                 min: RangeOrValue::Value(0.5),
-            }),
-            inlier_ratioRunConfig: Some(thoosa_common::find_motifs_run_config::InlierRatioConstraintRangeOrValue {
-                criterion: InlierRatioRunConfigRangeOrValue {
+            },
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
                     k: RangeOrValue::Value(3.0),
                     eps: RangeOrValue::Value(1e-8),
-                },
+                }),
                 min: RangeOrValue::Value(0.5),
-            }),
-            coherenceRunConfig: Some(thoosa_common::find_motifs_run_config::CoherenceConstraintRangeOrValue {
-                criterion: CoherenceRunConfigRangeOrValue {
+            },
+            MotifCriterionConstraintRangeOrValue {
+                metric: MetricsRangeOrValue::Coherence(CoherenceRunConfigRangeOrValue {
                     k: RangeOrValue::Value(10.0),
                     eps: RangeOrValue::Value(1e-8),
-                },
+                }),
                 min: RangeOrValue::Value(0.5),
-            }),
-            interesting_amp_01: None,
-            interesting_tv_norm_01: None,
-            interesting_curvature_norm_01: None,
-            interesting_turning_points_ratio: None,
-            interesting_band_energy_ratio_01: None,
-            interesting_entropy_gauss_01: None,
-            interesting_entropy_band_01: None,
-            periodicity_acf_01: None,
-        },
+            },
+        ],
         extend_max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
     }
 }
@@ -2367,7 +2339,7 @@ where
     let motif_loader_input = MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), select_motif_run_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone()));
     let metrics = Metrics::all();
-    let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone(), Aggr::Mean(1.0), None)));
+    let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone(), None)));
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
@@ -2385,7 +2357,7 @@ where
             move |stats: &MotifStatsOutput, _ctx| {
                 metrics
                     .iter()
-                    .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(*metric, 0)?)))
+                    .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
                     .collect::<Result<Vec<_>, ThoError>>()
             },
         )
@@ -2648,7 +2620,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetricRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MotifCriteriaRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetricRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, NotchBandFilter};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
