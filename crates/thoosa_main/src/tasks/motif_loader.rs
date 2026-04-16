@@ -945,14 +945,6 @@ where
     }).map(|v| (window, v))
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_slices/cat_slices"))]
-fn cat_slices(motif_id: &DataId, tensors: Vec<Tensor>) -> Result<ThoTensor<MotifSlices, DataId>, ThoError> {
-    ThoTensor::new(
-        motif_id.clone(),
-        Tensor::f_cat(tensors.as_slice(), 0)?,
-    )
-}
-
 #[cfg(test)]
 pub mod mock_motif_loader {
     use std::collections::{HashMap, HashSet};

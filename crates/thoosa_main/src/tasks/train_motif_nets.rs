@@ -499,7 +499,7 @@ mod tests {
     use thoosa_shared::traits::Named;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
@@ -552,7 +552,15 @@ mod tests {
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_get_input_run_ids([(find_motifs_run_id, Ok(vec![find_motifs_run_id]))])
+                .with_run_config_descr([(
+                    find_motifs_run_id,
+                    Ok(RunConfigRow {
+                        id: find_motifs_run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_id]), None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
 
                 )))
