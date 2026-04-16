@@ -354,7 +354,7 @@ where
                         let merged_metric = self.metric_for_pair(left, right, ctx.branch(Some("merge_selected_motifs_pair"), false)).await?;
 
                         debug!("MergeSelectedMotifs::run: channel={channel} left_metric={left_metric:.6} right_metric={right_metric:.6} merged_metric={merged_metric:.6}");
-                        if merged_metric <= left_metric * 1.2 && merged_metric <= right_metric * 1.2 {
+                        if merged_metric <= left_metric * 1.2 && merged_metric <= right_metric * 1.2 {//TODO param
                             similar_pairs.push((left.key.clone(), right.key.clone()));
                         }
                     }
