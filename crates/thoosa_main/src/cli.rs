@@ -86,7 +86,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_motifs::distance::average_euclidean_distance;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_hook, PERF};
+use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_hook, SyncMakeWriter, PERF};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, Metrics};
@@ -311,9 +311,10 @@ where
         None
     };
 
-    install_panic_hook(ws.read()
-        .log_path()
-        .join(format!("thoosa_panic_{}.log", cdt_for_dir).to_owned()));
+    install_panic_hook(SyncMakeWriter::new(OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&format!("thoosa_panic_{}.log", cdt_for_dir))?));
 
 
     let _logging_guards = init_tracing(

@@ -277,6 +277,8 @@ impl<W> SyncMakeWriter<W> {
             inner: Arc::new(Mutex::new(writer)),
         }
     }
+
+
 }
 
 pub struct SyncWriterGuard<'a, W> {
@@ -714,7 +716,10 @@ pub fn set_panic_hook() {
 }
 
 
-pub fn install_panic_hook(crash_file: PathBuf) {
+pub fn install_panic_hook<W>(make_writer: W)
+where
+    W:  for<'writer> MakeWriter<'writer> + Sync + Send + 'static,
+{
     let prev = panic::take_hook();
 
     panic::set_hook(Box::new(move |info| {
@@ -745,18 +750,13 @@ pub fn install_panic_hook(crash_file: PathBuf) {
             "panic"
         );
 
+        let mut writer = make_writer.make_writer();
         // Synchronous crash log, so it still has a chance to survive abort paths.
-        if let Ok(mut f) = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&crash_file)
-        {
-            let _ = writeln!(
-                f,
-                "\n=== PANIC ===\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\nbacktrace:\n{backtrace}\n"
-            );
-            let _ = f.flush();
-        }
+        let _ = writeln!(
+            writer,
+            "\n=== PANIC ===\nthread: {thread_name}\nlocation: {location}\npayload: {payload}\nbacktrace:\n{backtrace}\n"
+        );
+        let _ = writer.flush();
 
         // Keep the normal stderr panic output too.
         prev(info);
