@@ -34,8 +34,8 @@ fn main() -> Result<(), ThoError> {
                 panic!("Failed to create context: {err:?}"); //TODO device
             }
         })
-        .worker_threads(cpu_num) //std::thread::available_parallelism().expect("available_parallelism failed").into()) // async workers
-        .max_blocking_threads(cpu_num)        // more threads for spawn_blocking jobs
+        .worker_threads(cpu_num)
+        .max_blocking_threads(cpu_num)
         .enable_all()
         .build()
         .map_err(|err| {

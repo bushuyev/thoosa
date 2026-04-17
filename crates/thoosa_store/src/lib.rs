@@ -3191,7 +3191,7 @@ impl SqlStore {
         debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
 
         let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), t)?;
-        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_validation"), t)?;
+        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_valid"), t)?;
         let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), t)?;
 
         let labels_cnt = labels.len();
@@ -3872,7 +3872,7 @@ mod store_tests {
 
         let labels_count = store.list_labels().await?.len();
         let train_sets = store.list_resource_set_group_sets("A_balanced_group_train").await?;
-        let valid_sets = store.list_resource_set_group_sets("A_balanced_group_validation").await?;
+        let valid_sets = store.list_resource_set_group_sets("A_balanced_group_valid").await?;
         let test_sets = store.list_resource_set_group_sets("A_balanced_group_test").await?;
 
         assert_eq!(labels_count, train_sets.len());
