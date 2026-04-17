@@ -728,6 +728,91 @@ mod tests {
 
         assert_eq!(criteria, restored.motif_criteria);
     }
+
+    #[test]
+    fn test_default_metric_params_use_safe_non_zero_values() {
+        let norm = crate::find_motifs_run_config::NormThicknessRunConfig::default();
+        assert_eq!(norm.eps, 1e-8);
+        assert_eq!(crate::find_motifs_run_config::NormThicknessRunConfig::default().eps, norm.eps);
+
+        let inlier = crate::find_motifs_run_config::InlierRatioRunConfig::default();
+        assert_eq!(inlier.k, 4.5);
+        assert_eq!(inlier.eps, 1e-8);
+        assert_eq!(crate::find_motifs_run_config::InlierRatioRunConfig::default().k, inlier.k);
+        assert_eq!(crate::find_motifs_run_config::InlierRatioRunConfig::default().eps, inlier.eps);
+
+        let coherence = crate::find_motifs_run_config::CoherenceRunConfig::default();
+        assert_eq!(coherence.k, 10.0);
+        assert_eq!(coherence.eps, 1e-8);
+        assert_eq!(crate::find_motifs_run_config::CoherenceRunConfig::default().k, coherence.k);
+        assert_eq!(crate::find_motifs_run_config::CoherenceRunConfig::default().eps, coherence.eps);
+
+        let amp = crate::find_motifs_run_config::InterestingAmp01RunConfig::default();
+        assert_eq!((amp.q_lo, amp.q_hi, amp.a0, amp.eps), (0.05, 0.95, 1.0, 1e-8));
+        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().q_lo, amp.q_lo);
+        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().q_hi, amp.q_hi);
+        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().a0, amp.a0);
+        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().eps, amp.eps);
+
+        let tv = crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default();
+        assert_eq!((tv.amp_q_lo, tv.amp_q_hi, tv.tv0, tv.eps), (0.05, 0.95, 1.0, 1e-8));
+        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().amp_q_lo, tv.amp_q_lo);
+        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().amp_q_hi, tv.amp_q_hi);
+        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().tv0, tv.tv0);
+        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().eps, tv.eps);
+
+        let curvature = crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default();
+        assert_eq!((curvature.amp_q_lo, curvature.amp_q_hi, curvature.curv0, curvature.eps), (0.05, 0.95, 1.0, 1e-8));
+        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().amp_q_lo, curvature.amp_q_lo);
+        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().amp_q_hi, curvature.amp_q_hi);
+        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().curv0, curvature.curv0);
+        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().eps, curvature.eps);
+
+        let turns = crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig::default();
+        assert_eq!(turns.peak, 4);
+        assert_eq!(crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig::default().peak, turns.peak);
+
+        let band = crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default();
+        assert_eq!((band.fs, band.f_lo, band.f_hi, band.eps), (250.0, 8.0, 30.0, 1e-8));
+        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().fs, band.fs);
+        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().f_lo, band.f_lo);
+        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().f_hi, band.f_hi);
+        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().eps, band.eps);
+
+        let entropy_gauss = crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default();
+        assert_eq!((entropy_gauss.h0, entropy_gauss.sigma, entropy_gauss.eps), (0.6, 0.15, 1e-8));
+        assert_eq!(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().h0, entropy_gauss.h0);
+        assert_eq!(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().sigma, entropy_gauss.sigma);
+        assert_eq!(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().eps, entropy_gauss.eps);
+
+        let entropy_band = crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default();
+        assert_eq!((entropy_band.h_min, entropy_band.h_max, entropy_band.eps), (0.3, 0.85, 1e-8));
+        assert_eq!(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().h_min, entropy_band.h_min);
+        assert_eq!(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().h_max, entropy_band.h_max);
+        assert_eq!(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().eps, entropy_band.eps);
+
+        let periodicity = crate::find_motifs_run_config::PeriodicityAcfRunConfig::default();
+        assert_eq!(
+            (
+                periodicity.struct_lag_max,
+                periodicity.lag_min,
+                periodicity.lag_max,
+                periodicity.struct0,
+                periodicity.peak_good,
+                periodicity.peak_bad,
+                periodicity.eps,
+            ),
+            (1.0 / 64.0, 1.0 / 32.0, 0.5, 0.2, 0.25, 0.65, 1e-8),
+        );
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct_lag_max, periodicity.struct_lag_max);
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().lag_min, periodicity.lag_min);
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().lag_max, periodicity.lag_max);
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct0, periodicity.struct0);
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().peak_good, periodicity.peak_good);
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().peak_bad, periodicity.peak_bad);
+        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().eps, periodicity.eps);
+    }
+
 }
 
 #[derive(ThoosaRunConfig, Clone, PartialEq, Debug, Deserialize)]
@@ -773,7 +858,29 @@ impl FromHashmap for ExtendMotifsConfig {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+const DEFAULT_METRIC_EPS: f64 = 1e-8;
+const DEFAULT_INLIER_RATIO_K: f64 = 4.5;
+const DEFAULT_COHERENCE_ITERS: f64 = 10.0;
+const DEFAULT_INTERESTING_Q_LO: f64 = 0.05;
+const DEFAULT_INTERESTING_Q_HI: f64 = 0.95;
+const DEFAULT_INTERESTING_SCALE: f64 = 1.0;
+const DEFAULT_INTERESTING_TURNING_POINTS_PEAK: u32 = 4;
+const DEFAULT_INTERESTING_BAND_FS: f64 = 250.0;
+const DEFAULT_INTERESTING_BAND_F_LO: f64 = 8.0;
+const DEFAULT_INTERESTING_BAND_F_HI: f64 = 30.0;
+const DEFAULT_ENTROPY_GAUSS_H0: f64 = 0.6;
+const DEFAULT_ENTROPY_GAUSS_SIGMA: f64 = 0.15;
+const DEFAULT_ENTROPY_BAND_MIN: f64 = 0.3;
+const DEFAULT_ENTROPY_BAND_MAX: f64 = 0.85;
+const DEFAULT_PERIODICITY_STRUCT_LAG_MAX: f64 = 1.0 / 64.0;
+const DEFAULT_PERIODICITY_LAG_MIN: f64 = 1.0 / 32.0;
+const DEFAULT_PERIODICITY_LAG_MAX: f64 = 0.5;
+const DEFAULT_PERIODICITY_STRUCT0: f64 = 0.2;
+const DEFAULT_PERIODICITY_PEAK_GOOD: f64 = 0.25;
+const DEFAULT_PERIODICITY_PEAK_BAD: f64 = 0.65;
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct NormThicknessRunConfig {
 
     #[in_map]
@@ -781,7 +888,13 @@ pub struct NormThicknessRunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for NormThicknessRunConfig {
+    fn default() -> Self {
+        Self { eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InlierRatioRunConfig {
     #[in_map]
     #[run_config]
@@ -792,7 +905,13 @@ pub struct InlierRatioRunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InlierRatioRunConfig {
+    fn default() -> Self {
+        Self { k: DEFAULT_INLIER_RATIO_K, eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct CoherenceRunConfig {
     #[in_map]
     #[run_config]
@@ -803,7 +922,13 @@ pub struct CoherenceRunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for CoherenceRunConfig {
+    fn default() -> Self {
+        Self { k: DEFAULT_COHERENCE_ITERS, eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingAmp01RunConfig {
     #[in_map]
     #[run_config]
@@ -822,7 +947,13 @@ pub struct InterestingAmp01RunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InterestingAmp01RunConfig {
+    fn default() -> Self {
+        Self { q_lo: DEFAULT_INTERESTING_Q_LO, q_hi: DEFAULT_INTERESTING_Q_HI, a0: DEFAULT_INTERESTING_SCALE, eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingTvNorm01RunConfig {
     #[in_map]
     #[run_config]
@@ -841,7 +972,13 @@ pub struct InterestingTvNorm01RunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InterestingTvNorm01RunConfig {
+    fn default() -> Self {
+        Self { amp_q_lo: DEFAULT_INTERESTING_Q_LO, amp_q_hi: DEFAULT_INTERESTING_Q_HI, tv0: DEFAULT_INTERESTING_SCALE, eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingCurvatureNorm01RunConfig {
     #[in_map]
     #[run_config]
@@ -860,14 +997,26 @@ pub struct InterestingCurvatureNorm01RunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InterestingCurvatureNorm01RunConfig {
+    fn default() -> Self {
+        Self { amp_q_lo: DEFAULT_INTERESTING_Q_LO, amp_q_hi: DEFAULT_INTERESTING_Q_HI, curv0: DEFAULT_INTERESTING_SCALE, eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingTurningPointsRatioRunConfig {
     #[in_map]
     #[run_config]
     pub peak: u32,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InterestingTurningPointsRatioRunConfig {
+    fn default() -> Self {
+        Self { peak: DEFAULT_INTERESTING_TURNING_POINTS_PEAK }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingBandEnergyRatio01RunConfig {
     #[in_map]
     #[run_config]
@@ -886,7 +1035,18 @@ pub struct InterestingBandEnergyRatio01RunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InterestingBandEnergyRatio01RunConfig {
+    fn default() -> Self {
+        Self {
+            fs: DEFAULT_INTERESTING_BAND_FS,
+            f_lo: DEFAULT_INTERESTING_BAND_F_LO,
+            f_hi: DEFAULT_INTERESTING_BAND_F_HI,
+            eps: DEFAULT_METRIC_EPS,
+        }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingEntropyGauss01RunConfig {
     #[in_map]
     #[run_config]
@@ -901,7 +1061,13 @@ pub struct InterestingEntropyGauss01RunConfig {
     pub eps: f64,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+impl Default for InterestingEntropyGauss01RunConfig {
+    fn default() -> Self {
+        Self { h0: DEFAULT_ENTROPY_GAUSS_H0, sigma: DEFAULT_ENTROPY_GAUSS_SIGMA, eps: DEFAULT_METRIC_EPS }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct InterestingEntropyBand01RunConfig {
     #[in_map]
     #[run_config]
@@ -914,6 +1080,12 @@ pub struct InterestingEntropyBand01RunConfig {
     #[in_map]
     #[run_config]
     pub eps: f64,
+}
+
+impl Default for InterestingEntropyBand01RunConfig {
+    fn default() -> Self {
+        Self { h_min: DEFAULT_ENTROPY_BAND_MIN, h_max: DEFAULT_ENTROPY_BAND_MAX, eps: DEFAULT_METRIC_EPS }
+    }
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
@@ -950,16 +1122,17 @@ pub struct PeriodicityAcfRunConfig {
 impl Default for PeriodicityAcfRunConfig {
     fn default() -> Self {
         Self {
-            struct_lag_max: 1.0 / 64.0,
-            lag_min: 1.0 / 32.0,
-            lag_max: 0.5,
-            struct0: 0.2,
-            peak_good: 0.25,
-            peak_bad: 0.65,
-            eps: 1e-8,
+            struct_lag_max: DEFAULT_PERIODICITY_STRUCT_LAG_MAX,
+            lag_min: DEFAULT_PERIODICITY_LAG_MIN,
+            lag_max: DEFAULT_PERIODICITY_LAG_MAX,
+            struct0: DEFAULT_PERIODICITY_STRUCT0,
+            peak_good: DEFAULT_PERIODICITY_PEAK_GOOD,
+            peak_bad: DEFAULT_PERIODICITY_PEAK_BAD,
+            eps: DEFAULT_METRIC_EPS,
         }
     }
 }
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
 pub struct EucDistMetric {
