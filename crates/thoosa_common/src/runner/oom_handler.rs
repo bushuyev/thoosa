@@ -623,7 +623,7 @@ async fn run_with_runner_impl<'a, 'z, R, IC, RC, RCC, S, A>(
     adjusters: &[Adjusters<'a, R, IC, RC, RCC, S>],
     task: Arc<R>,
     input_id_dbg: String,
-    out_key: String,
+    out_key: <R::In<'_> as WithId>::ID,
     run_context: R::Ctx,
     mut contexts: Contexts<'a, R, IC, RC, RCC>,
     mut runner: A,
@@ -879,13 +879,12 @@ where
     Fut: Future<Output = Result<R::Out, ThoError>>,
 {
     let input_id_dbg = format!("{:?}", input.id());
-    let out_key = format!("stage_id={task:?} input_id={:?}", input.id());
 
     run_with_runner_impl(
         adjusters,
         task,
         input_id_dbg,
-        out_key,
+        input.id().clone(),
         run_context,
         contexts,
         SharedRunnerRetryAdapter { input, runner },
@@ -916,13 +915,13 @@ where
     Fut: Future<Output = ConsumeResult<R::In<'z>, R::Out>>,
 {
     let input_id_dbg = format!("{:?}", input.id());
-    let out_key = format!("stage_id={task:?} input_id={:?}", input.id());
+
 
     run_with_runner_impl(
         adjusters,
         task,
         input_id_dbg,
-        out_key,
+        input.id().clone(),
         run_context,
         contexts,
         ConsumeRunnerRetryAdapter {
@@ -1319,7 +1318,7 @@ mod tests {
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let next = self
                 .results
-                .lock().map_err(|e|ThoError::from(e.to_string()))?
+                .lock().unwrap()
                 .pop_front()
                 .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
 
