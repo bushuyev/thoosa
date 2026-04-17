@@ -1319,8 +1319,7 @@ mod tests {
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let next = self
                 .results
-                .lock()
-                .unwrap()
+                .lock().map_err(|e|ThoError::from(e.to_string()))?
                 .pop_front()
                 .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
 

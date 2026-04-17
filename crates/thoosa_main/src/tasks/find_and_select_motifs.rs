@@ -117,9 +117,6 @@ impl WithId for FindAndSelectMotifsResult {
 
 #[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
-    fn value(&self) -> f32 {
-        0.0
-    }
 
     async fn save(
         &mut self,
@@ -127,29 +124,20 @@ impl SavableResult for FindAndSelectMotifsResult {
         _ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
 
-        // let best_configs_ids = self.best_configs.iter().map(|config|{
-        //     store.try_write_for(thoosa_shared::TIMEOUT).expect("lock timeout").save_run_config(
-        //         Some(self.best_configs.iter().map(|v|v.id.unwrap()).collect::<Vec<_>>().as_ref()),
-        //         &FindAndSelectMotifsRunConfig::type_name(),
-        //         "FindAndSelectMotifs",
-        //         "FindAndSelectMotifs",
-        //         HashMap::from([]),
-        //     )
-        // }).collect::<Result<Vec<_>, ThoError>>();
 
-        //TODO it's not run_id, it's only to track best  find & select ids
         let best_run_ids = self
             .best_configs
             .iter()
             .map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config"))
             .collect::<Vec<_>>();
+
         let id = store.save_run_config(
             Some(&best_run_ids),
             FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
-            "best_run_ids",
             HashMap::from([]),
         ).await?;
+
         Ok(id)
     }
 }
@@ -210,7 +198,7 @@ impl FindAndSelectMotifsStage {
         R: RunConfig + ToHashmap,
     {
         let run_id = store
-            .save_run_config(input_run_ids, R::type_name(), descr, "todo", run_config.to_properties_iter(None).collect())
+            .save_run_config(input_run_ids, R::type_name(), descr, run_config.to_properties_iter(None).collect())
             .await?;
         run_config.set_id(run_id);
         Ok(run_id)
@@ -229,15 +217,14 @@ impl FindAndSelectMotifsStage {
         mut ctx: C
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?));
-
-
-
+        //code in FindMotifsStage and SelectMotifsStage expects pre saved run configurations
         let find_run_id = Self::save_run_config_with_input(
             store,
             None,
             &mut run_config.find_motifs_run_config,
             "FindAndSelectMotifs/find",
         ).await?;
+
         #[allow(unused_variables)]
         let select_run_id = Self::save_run_config_with_input(
             store,
@@ -381,6 +368,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
         let find_resources = parse_resources(&input.find_resources)
             .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse find_resources", e))?;
+
         let select_resources = parse_resources(&input.select_resources)
             .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse select_resources", e))?;
 
@@ -440,10 +428,10 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
                     opt.optimize().await;
 
-                    let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "FindAndSelectMotifs/run/read_min_loss",
-                    );
+                    let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss");
+
                     let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
+
                     if let Some(best_config) = best_config {
                         info!("FindAndSelectMotifsStage::run: best_loss={best_loss:?} best_config={best_config:?}");
                         Ok::<_, ThoError>((grid_idx, Some(best_config)))
@@ -462,11 +450,11 @@ impl AsyncStage for FindAndSelectMotifsStage {
         )
         .await;
 
-        // indexed_best_configs.sort_by_key(|(grid_idx, _)| *grid_idx);
 
-        let best_configs = indexed_best_configs.into_iter().filter_map(|(_, config)| config).collect::<Vec<_>>();
-
-
+        let best_configs = indexed_best_configs
+            .into_iter()
+            .filter_map(|(_, config)| config)
+            .collect::<Vec<_>>();
 
         Ok(Arc::new(DevicesWrap::wrap(FindAndSelectMotifsResult::new(best_configs))))
     }

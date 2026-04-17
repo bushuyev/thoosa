@@ -428,10 +428,8 @@ where
 
     match &cli.command {
         Some(ImportResources(import_resources_args)) => {
-            debug!(
-                "ImportResources: import_resources_params={:?}",
-                import_resources_args
-            );
+            debug!("ImportResources: import_resources_params={:?}",import_resources_args);
+
             let freq_filter = if import_resources_args.freq_filters.is_empty() {
                 None
             } else {
@@ -478,7 +476,6 @@ where
                 input_wrapper,
                 &ws,
                 &store,
-                true,
                 async move |run_configs| {
                     Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
@@ -519,7 +516,6 @@ where
                 input_wrapper,
                 &ws,
                 &store,
-                true,
                 |run_configs| async {
 
                     Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
@@ -571,7 +567,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()))));
 
-            let run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+            let run_ids = run_opt::<_, _, TrainMotifsNetsRunConfig, _, _>(
                 None,
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
@@ -598,8 +594,7 @@ where
 
             let train_motif_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
-                                                                                  train_label_nets_args.resource_config())));
+            let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(train_label_nets_args.resource_config())));
 
             let opt_config = Arc::new(train_label_nets_args.opt_config.clone());
             let init_ctx = root_ctx.branch(Some("init label nets"), true);
@@ -784,7 +779,6 @@ async fn run_all(
     let train_final_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
         run_all_args.train_final_resource_config()).check(&store).await?));
 
-    // let fixed_find_motifs_config_for_opt = all_config.fixed_find_motifs_config.clone();
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
     let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true);
@@ -797,7 +791,6 @@ async fn run_all(
         run_all_args.select_resources.clone(),
     )));
 
-    // let find_and_select_run_config = all_config.find_and_select_run_config_range_or_value.clone();
 
     let select_motifs_run_ids = match all_config.find_and_select {
         FindAndSelect::GridOnly { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config } => {
@@ -810,7 +803,6 @@ async fn run_all(
                 find_motifs_input,
                 &ws,
                 &store,
-                true,
                 async move |run_configs| {
                     Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
@@ -820,10 +812,8 @@ async fn run_all(
                             run_configs,
                             fixed_find_motifs_config,
                             ThoDevice::from(1),
-                            //gpt TODO!! hard-coded device index assumes GPU 1 exists; consider selecting from args or ctx.
                             init_ctx_find_motifs
                         ).await.expect("FindMotifsStage::new failed"),
-                        //gpt TODO!! `expect` will panic and bypass error propagation; consider returning the error instead.
                     )
                 },
                 || root_ctx.branch(Some("find_motifs"), true),
@@ -831,15 +821,7 @@ async fn run_all(
 
             info!("find motifs done, find_motif_run_ids={find_motifs_run_ids:?}");
 
-            //gpt Plot slices for each FindMotifs run (CPU plotting); useful for debugging but potentially expensive.
-            // for find_motifs_run_id in &find_motifs_run_ids {
-            //     run_plot_slices(&ws, &store, &loader, &PlotSlicesArgs::new(MotifsBy::RunId { find_motifs_run_id: *find_motifs_run_id, select_motifs_run_ids: None }), &Cpu).await?;
-            // }
-
-            // #[cfg(tho_debug)]
-            // debug!("starting select motifs: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-            //gpt The select stage depends on the FindMotifs run ids; keep the ids to join results across runs.
-            //gpt TODO!! if find_motifs_run_ids is empty, downstream stages will still run; should we short-circuit?
+            assert!(!find_motifs_run_ids.is_empty(), "no find_motifs_run_ids");
 
             //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
             let mut select_motifs_run_ids = vec![];
@@ -850,7 +832,6 @@ async fn run_all(
                     select_motifs_input.clone(),
                     &ws,
                     &store,
-                    true,
                     async |run_configs| {
                         Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                             &ws,
@@ -915,19 +896,14 @@ async fn run_all(
     };
 
 
-
-    // #[cfg(tho_debug_plots)]
     if run_all_args.with_plots {
         for select_motifs_run_id in &select_motifs_run_ids {
             run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), run_all_args.resolution, &Cpu, root_ctx.branch("plot".into(), false)).await?;
         }
     }
 
-    // #[cfg(tho_debug)]
-    // debug!("starting train motif nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-
     info!("find and select motifs  done: select_motifs_run_ids={select_motifs_run_ids:?}");
-    // return Ok(());
+
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
     let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(TrainMotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config))));
 
@@ -952,10 +928,6 @@ async fn run_all(
 
     info!("train motif nets done: train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
-    ///////////////////
-    // #[cfg(tho_debug)]
-    // debug!("starting train label nets: debug_semaphore={:?}", GlobalCtx::global().debug_semaphore(1));
-
     //gpt Pre-create context and shared handles for label-net stage construction.
     let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true);
     let store_in_train_labels = Arc::clone(&store);
@@ -963,7 +935,7 @@ async fn run_all(
     let labels_filter = run_all_args.labels_filter();
 
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
-    let train_label_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetsRunConfig, _, _>(
+    let train_label_nets_run_ids = run_opt::< _, _, TrainLabelNetsRunConfig, _, _>(
         None,
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
@@ -1578,7 +1550,6 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
                 input_run_ids,
                 &<R>::type_name(),
                 descr,
-                &"todo",
                 run_config.to_properties_iter(None).collect(),
             )
             .await?;
@@ -2403,13 +2374,11 @@ where
 }
 
 pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
-
     input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    presave: bool,
     f: F,
     ctx_f: CtxF,
 ) -> Result<Vec<RunId>, ThoError>
@@ -2433,24 +2402,17 @@ where
     info!("run_all_grid_step: run_configs.len={} ", run_configs.len());
     debug!("run_all_grid_step: run_configs={run_configs:?}");
 
-    let mut run_ids = if presave {
-        save_run_configs(
-            input_run_ids.as_ref().map(|v| v.as_slice()),
-            &store,
-            &mut run_configs,
-            "find motifs",
-        ).await?
-    } else {
-        vec![]
-    };
-    //gpt TODO!! run_ids only reflect pre-saved run_config ids; if presave is false this stays empty even though the stage output is saved below.
+    let mut run_ids = save_run_configs(
+        input_run_ids.as_ref().map(|v| v.as_slice()),
+        &store,
+        &mut run_configs,
+        "find motifs",
+    ).await?;
 
     let stage = f(run_configs).await;
 
-    //gpt TODO!! Arc::into_inner will panic if the output Arc has multiple owners; consider a fallible path or cloning the inner data.
-    let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
+    let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("top level stage should not have more than one reference").take_data(0).await?;
 
-    //gpt TODO!! savable.save returns a run_id, but it's ignored here; downstream uses presaved ids only.
     savable.save(store, ws).await?;
 
 
@@ -2487,15 +2449,13 @@ where
     let opt_run_configs = rcrv.opt_run_configs()?;
     debug!("run_all_grid_step: run_opt={opt_run_configs:?}");
 
-
     let stage = init_stage(opt_run_configs).await?;
 
-    //gpt TODO!! Arc::into_inner will panic if the output Arc has multiple owners; consider a fallible path or cloning the inner data.
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
     let run_id = savable.save(store, ws).await?;
 
-    Ok(vec![run_id])//TODO
+    Ok(vec![run_id])
 }
 
 async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{

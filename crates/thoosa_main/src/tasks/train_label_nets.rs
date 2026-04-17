@@ -255,17 +255,12 @@ impl Output for TrainLabelNetsOutput {
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
-    fn value(&self) -> f32 {
-        0.0
-    }
-
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
         let run_id = store
             .save_run_config(
                 Some(&self.train_motif_nets_run_ids),
                 TrainLabelNetsRunConfig::type_name(),
                 "TrainLabelNetsResult",
-                "todo",
                 HashMap::new(),
             )
             .await?;

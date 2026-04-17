@@ -139,16 +139,13 @@ impl FindMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for FindMotifsSavableResult {
-    fn value(&self) -> f32 {
-        0.0
-    }
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        //gpt TODO!! placeholder save: no persistence and always returns 0; callers rely on presaved run ids.
+        //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
         Ok(0)
     }
 }
@@ -333,21 +330,22 @@ impl SelectMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for SelectMotifsSavableResult {
-    fn value(&self) -> f32 {
-        0.1
-    }
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        for run_result in &self.run_results {
-            store.save_selected_motifs(run_result.run_config.id.expect("should be pre set in run_grid"), run_result.selected_motif_ids_scores.clone()).await?; //TODO mem::replace?
 
+        for run_result in &self.run_results {
+            store.save_selected_motifs(
+                run_result.run_config.id.expect("should be pre saved in run_grid"),
+                run_result.selected_motif_ids_scores.clone()
+            ).await?;
         }
-        //gpt TODO!! save returns a dummy run_id; run_grid currently ignores it and uses presaved ids.
-        Ok(0)//TODO not used
+
+        //RunConfig is pre saved in run_grid
+        Ok(0)
     }
 }
 #[cfg(test)]

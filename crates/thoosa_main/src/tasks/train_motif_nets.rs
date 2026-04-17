@@ -314,8 +314,6 @@ where
             StreamBuffering::Unordered,
             "train motif",
         ).await;
-        //gpt TODO!! collect_futures_with_progress drops errors; results.len() may be smaller than the number of selected motifs.
-
 
         Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results))))
     }
