@@ -187,9 +187,6 @@ fn run_config_values_with_loss(values: impl Iterator<Item = (String, Val)>, loss
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsRunConfigResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
 
     async fn save(
         &mut self,
@@ -208,7 +205,6 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
             Some(input_run_ids),
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
-            "todo",
             run_config_values_with_loss(self.train_label_nets_run_config.to_properties_iter(None), self.loss),
         ).await?;
 
@@ -258,9 +254,6 @@ impl TrainFinalNetsRunConfigResult {
 
 #[async_trait]
 impl SavableResult for TrainFinalNetsRunConfigResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
 
     async fn save(
         &mut self,
@@ -271,7 +264,6 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
             Some(&self.train_label_nodes_run_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
-            "todo",
             run_config_values_with_loss(self.train_final_net_run_config.to_properties_iter(None), self.loss),
         ).await?;
 
@@ -1774,17 +1766,13 @@ impl TrainMotifsNetsResult {
 
 #[async_trait]
 impl SavableResult for TrainMotifsNetsResult {
-    fn value(&self) -> f32 {
-        0.0
-    }
 
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
 
         self.id = store.save_run_config(
             Some(&self.select_motifs_run_ids),
             &TrainMotifsNetsRunConfig::type_name(),
-            "TrainMotifsNetResult",
-            "todo",
+            "TrainMotifsNetsResult",
             HashMap::new(),
         ).await?;
 
@@ -1822,25 +1810,20 @@ impl Output for TrainMotifsNetsResult {
 
 #[async_trait]
 impl SavableResult for TrainMotifNetResult {
-    fn value(&self) -> f32 {
-        self.loss
-    }
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        //TODO save loss to choose model
-        debug!("TrainMotifsNetsRunConfigResult::save: self={:?}", self);
 
+        debug!("TrainMotifNetResult::save: self={:?}", self);
 
         let train_motifs_nets_run_id = self.train_motifs_nets_run_id.expect("no train_motifs_nets_run_id");
         let run_config_id = store.save_run_config(
             Some(&[train_motifs_nets_run_id]),
             &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
-            "todo",
             run_config_values_with_loss(self.run_config_values.to_properties_iter(None), self.loss),
         ).await?;
 
@@ -3863,8 +3846,8 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", "todo", HashMap::new()).await?;
-        let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", "todo", HashMap::new()).await?;
+        let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", HashMap::new()).await?;
+        let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainLabelNetsRunConfigResult::new(
             vec![source_run_id],
             "alpha".to_string(),
@@ -3891,8 +3874,8 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let label_run_id_0 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_0", "todo", HashMap::new()).await?;
-        let label_run_id_1 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_1", "todo", HashMap::new()).await?;
+        let label_run_id_0 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_0", HashMap::new()).await?;
+        let label_run_id_1 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_1", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
             Some(&vec![label_run_id_0, label_run_id_1]),
             0.25,

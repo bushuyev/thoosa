@@ -261,7 +261,7 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 
 #[async_trait]
 pub trait SavableResult: Sync + Send + Debug {
-    fn value(&self) -> f32;//TODO remove
+
     async fn save(
         &mut self,//TODO consume
         store: &Arc<Box<dyn Store>>,
@@ -280,9 +280,6 @@ impl DummySavableOptResult {
 
 #[async_trait]
 impl SavableResult for DummySavableOptResult {
-    fn value(&self) -> f32 {
-        0.
-    }
 
     async fn save(
         &mut self,

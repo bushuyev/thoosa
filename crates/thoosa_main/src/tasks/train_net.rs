@@ -314,7 +314,7 @@ where
                             let pred_y = train_step.as_ref().forward(&x_t, lengths.as_mut(), false)?;
 
                             let valid_loss = (train_step.as_ref().loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
-                            let valid_loss_f32 = valid_loss.double_value(&[]) as f32;
+                            let valid_loss_f32 = panic_to_err!(Ok::<_, ThoError>(valid_loss.double_value(&[])))? as f32;
                             valid_loss_sum += valid_loss_f32;
                             valid_loss_count += 1;
 

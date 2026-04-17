@@ -135,7 +135,6 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         input_run_id: Option<&'a [RunId]>,
         run_config_type: &'b str,
         descr: &'c str,
-        _keys: &'c str,
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoError>;
 
@@ -300,7 +299,6 @@ mock! {
             input_run_id: Option<&'a [RunId]>,
             run_config_type: &'b str,
             descr: &'c str,
-            _keys: &'c str,
             properties_vals: HashMap<String, Val>,
         ) -> Result<RunId, ThoError>;
         async fn get_input_run_ids<'a>(&self,run_id: RunId,input_type: Option<&'a str>,) -> Result<Vec<RunId>, ThoError>;
@@ -816,7 +814,6 @@ impl Store for SqlStore {
         input_run_id: Option<&'a [RunId]>,
         run_config_type: &'b str,
         descr: &'c str,
-        _keys: &'c str,
         properties_vals: HashMap<String, Val>,
     ) -> Result<RunId, ThoError> {
         let input_run_id = input_run_id.map(|v| v.to_vec());
@@ -831,58 +828,41 @@ impl Store for SqlStore {
                 row.get::<usize, RunId>(0)
             })?;
 
-        /*if keys.len() > 0 {
-            let (mut q, params) = keys.into_iter().enumerate().fold(
-                //TODO  resources.id instead key  + group or set + create one-time set if resources passed as vec
-                (vec!["INSERT INTO run_resources (run_id, ord_id, key) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), (ord_id, v)| {
-                    a.0.push("(?, ?, ?)");
-                    a.0.push(", ");
-                    a.1.push(Value::Integer(run_id as i64));
-                    a.1.push(Value::Integer(ord_id as i64));
-                    a.1.push(Value::Text(v.to_string()));
-                    a
-                });
+            if let Some(input_run_ids) = input_run_id {
+                let (mut q, params) = input_run_ids.into_iter().fold(
+                    (
+                        vec!["INSERT INTO run_configs_input (run_id, input_run_id) VALUES"],
+                        vec![],
+                    ),
+                    |(mut q, mut params): (Vec<&str>, Vec<Value>), v| {
+                        q.push("(?, ?)");
+                        q.push(",");
 
-            q.pop();
+                        params.push(Value::Integer(run_id as i64));
+                        params.push(Value::Integer(v as i64)); //input_run_id
+                        //
+                        (q, params)
+                    },
+                );
 
-            t.execute(&q.into_iter().collect::<String>(), rusqlite::params_from_iter(params.into_iter()))?;
-        }*/
+                if params.len() > 0 {
+                    q.pop();
 
-        if let Some(input_run_ids) = input_run_id {
-            let (mut q, params) = input_run_ids.into_iter().fold(
-                (
-                    vec!["INSERT INTO run_configs_input (run_id, input_run_id) VALUES"],
-                    vec![],
-                ),
-                |(mut q, mut params): (Vec<&str>, Vec<Value>), v| {
-                    q.push("(?, ?)");
-                    q.push(",");
+                    let q_str = q.into_iter().collect::<String>();
 
-                    params.push(Value::Integer(run_id as i64));
-                    params.push(Value::Integer(v as i64)); //input_run_id
-                    //
-                    (q, params)
-                },
-            );
+                    debug!("SqlStore::save_run_config: params={params:?}");
 
-            if params.len() > 0 {
-                q.pop();
-
-                let q_str = q.into_iter().collect::<String>();
-
-                debug!("SqlStore::save_run_config: params={params:?}");
-
-                t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))?;
+                    t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))?;
+                }
             }
-        }
 
-        if properties_vals.len() > 0 {
-            for property_val in properties_vals.into_iter() {
-                Self::save_param_value(&t, run_id, &property_val.0, property_val.1, None)?;
+            if properties_vals.len() > 0 {
+                for property_val in properties_vals.into_iter() {
+                    Self::save_param_value(&t, run_id, &property_val.0, property_val.1, None)?;
+                }
             }
-        }
 
-        t.commit()?;
+            t.commit()?;
             Ok(run_id as RunId)
         })
         .await
@@ -3976,7 +3956,6 @@ mod store_tests {
             None,
             &"todo",
             "find_motifs",
-            "",
             HashMap::from([
                 ("prop1".into(), Val::Int(1)),
                 ("prop2".into(), Val::Real(2.0)),
@@ -4057,7 +4036,6 @@ mod store_tests {
             Some(&[find_motifs_run_id]),
             &"todo",
             "find_motifs",
-            "",
             HashMap::from([
                 ("prop1".into(), Val::Int(1)),
                 ("prop2".into(), Val::Real(2.0)),
@@ -4183,7 +4161,6 @@ mod store_tests {
             None,
             &"selected_nets",
             "selected_nets",
-            "",
             HashMap::new(),
         ).await?;
 
@@ -4236,12 +4213,11 @@ mod store_tests {
         };
 
         let find_run_id =
-            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new()).await?;
+            store.save_run_config(None, &"find", "find_motifs", HashMap::new()).await?;
         let select_run_id = store.save_run_config(
             Some(&[find_run_id]),
             &"select",
             "select_motifs",
-            "",
             HashMap::new(),
         ).await?;
 
@@ -4309,12 +4285,11 @@ mod store_tests {
         };
 
         let find_run_id =
-            store.save_run_config(None, &"find", "find_motifs", "", HashMap::new()).await?;
+            store.save_run_config(None, &"find", "find_motifs", HashMap::new()).await?;
         let select_run_id = store.save_run_config(
             Some(&[find_run_id]),
             &"select",
             "select_motifs",
-            "",
             HashMap::new(),
         ).await?;
 
@@ -4411,7 +4386,6 @@ mod store_tests {
             None,
             &"todo",
             "test",
-            "",
             HashMap::from([
                 ("prop1".into(), Val::Int(1)),
                 ("prop2".into(), Val::Real(2.0)),
@@ -4425,7 +4399,6 @@ mod store_tests {
             Some(&[run_id]),
             &"todo",
             "test next",
-            "",
             HashMap::from([
                 ("next_prop1".into(), Val::Int(1)),
                 ("next_prop2".into(), Val::Real(2.0)),
@@ -4471,9 +4444,9 @@ mod store_tests {
     async fn test_list_run_configs_page_and_by_ids() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
 
-        let run_id_1 = store.save_run_config(None, &"first", "test", "", HashMap::new()).await?;
-        let run_id_2 = store.save_run_config(None, &"second", "test", "", HashMap::new()).await?;
-        let run_id_3 = store.save_run_config(None, &"third", "test", "", HashMap::new()).await?;
+        let run_id_1 = store.save_run_config(None, &"first", "test", HashMap::new()).await?;
+        let run_id_2 = store.save_run_config(None, &"second", "test", HashMap::new()).await?;
+        let run_id_3 = store.save_run_config(None, &"third", "test", HashMap::new()).await?;
 
         let first_page = store.list_run_configs_page(2, 0).await?;
         assert_eq!(vec![run_id_3, run_id_2], first_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
@@ -4491,10 +4464,10 @@ mod store_tests {
     async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
 
-        let root_run_id = store.save_run_config(None, &"root", "root", "", HashMap::new()).await?;
-        let select_run_id = store.save_run_config(Some(&[root_run_id]), &"SelectMotifsRunConfig", "alpha motif selection", "", HashMap::new()).await?;
-        let child_run_id = store.save_run_config(Some(&[select_run_id]), &"TrainMotifsNetsRunConfig", "child", "", HashMap::new()).await?;
-        let _other_run_id = store.save_run_config(None, &"OtherRunConfig", "beta", "", HashMap::new()).await?;
+        let root_run_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
+        let select_run_id = store.save_run_config(Some(&[root_run_id]), &"SelectMotifsRunConfig", "alpha motif selection", HashMap::new()).await?;
+        let child_run_id = store.save_run_config(Some(&[select_run_id]), &"TrainMotifsNetsRunConfig", "child", HashMap::new()).await?;
+        let _other_run_id = store.save_run_config(None, &"OtherRunConfig", "beta", HashMap::new()).await?;
 
         let by_id = store.list_run_configs_filtered(RunConfigFilter {
             id: Some(select_run_id),
@@ -4532,25 +4505,23 @@ mod store_tests {
     async fn test_get_prev_run_id() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
 
-        let input_run_id = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new()).await?;
+        let input_run_id = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
         let run_id =
-            store.save_run_config(Some(&[input_run_id]), &"aaa", "test 1", "", HashMap::new()).await?;
+            store.save_run_config(Some(&[input_run_id]), &"aaa", "test 1", HashMap::new()).await?;
 
         assert_eq!(store.get_input_run_ids(run_id, None).await?[0], input_run_id);
 
-        let input_run_id_0 = store.save_run_config(None, &"aaa", "test 0", "", HashMap::new()).await?;
+        let input_run_id_0 = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
         let input_run_id_1 = store.save_run_config(
             Some(&[input_run_id_0]),
             &"bbb",
             "test 1",
-            "",
             HashMap::new(),
         ).await?;
         let run_id = store.save_run_config(
             Some(&[input_run_id_1]),
             &"ccc",
             "test 1",
-            "",
             HashMap::new(),
         ).await?;
 
@@ -4566,7 +4537,7 @@ mod store_tests {
     async fn test_list_input_run_ids_reads_large_sets_in_chunks() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
 
-        let input_run_id = store.save_run_config(None, &"root", "root", "", HashMap::new()).await?;
+        let input_run_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
         let mut run_ids = Vec::with_capacity(1001);
         for idx in 0..1001 {
             run_ids.push(
@@ -4575,7 +4546,6 @@ mod store_tests {
                         Some(&[input_run_id]),
                         &format!("task-{idx}"),
                         "chunked",
-                        "",
                         HashMap::new(),
                     )
                     .await?,
@@ -4602,9 +4572,9 @@ mod store_tests {
 
         let mut parent_run_ids = Vec::with_capacity(1001);
         for idx in 0..1001 {
-            let parent_run_id = store.save_run_config(None, &format!("parent-{idx}"), "parent", "", HashMap::new()).await?;
+            let parent_run_id = store.save_run_config(None, &format!("parent-{idx}"), "parent", HashMap::new()).await?;
             if idx % 2 == 0 {
-                store.save_run_config(Some(&[parent_run_id]), &format!("child-{idx}"), "child", "", HashMap::new()).await?;
+                store.save_run_config(Some(&[parent_run_id]), &format!("child-{idx}"), "child", HashMap::new()).await?;
             }
             parent_run_ids.push(parent_run_id);
         }
@@ -4680,7 +4650,7 @@ mod store_tests {
 
         create_resources(&store, &[("res_a", 2048), ("res_b", 2048)]).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "random test", "", HashMap::new()).await?;
+        let run_id = store.save_run_config(None, &"find_motifs", "random test", HashMap::new()).await?;
         let channel_id = 3i64;
 
         let res_a = fetch_resource_id(&store, "res_a")?;
@@ -4744,7 +4714,7 @@ mod store_tests {
         create_resources(&store, &[("res_main", 4096)]).await?;
 
         let run_id =
-            store.save_run_config(None, &"find_motifs", "random spacing", "", HashMap::new()).await?;
+            store.save_run_config(None, &"find_motifs", "random spacing", HashMap::new()).await?;
         let channel_id = 5i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
@@ -4789,7 +4759,7 @@ mod store_tests {
 
         create_resources(&store, &[("res_main", 2000)]).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", "", HashMap::new()).await?;
+        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", HashMap::new()).await?;
         let channel_id = 6i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
@@ -4825,7 +4795,7 @@ mod store_tests {
 
         create_resources(&store, (0..100).map(|i| (&*format!("res_{i}").leak(), 2000u32)).collect::<Vec<_>>().as_slice()).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", "", HashMap::new()).await?;
+        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", HashMap::new()).await?;
         let channel_id = 6i64;
         let res_0 = fetch_resource_id(&store, "res_0")?;
         let res_10 = fetch_resource_id(&store, "res_1")?;
@@ -4858,7 +4828,7 @@ mod store_tests {
 
         create_resources(&store, &[("res_main", 220), ("res_other", 500)]).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "fallback negatives", "", HashMap::new()).await?;
+        let run_id = store.save_run_config(None, &"find_motifs", "fallback negatives", HashMap::new()).await?;
         let channel_id = 7i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
         let res_other = fetch_resource_id(&store, "res_other")?;
@@ -5038,13 +5008,13 @@ impl MockStoreBuilder {
         properties_vals: HashMap<String, Val>,
         result: Result<RunId, ThoError>,
     ) -> Self {
-        self.store.expect_save_run_config().returning(move |p_input_run_id, p_run_config_type, p_descr, p_keys, p_properties_vals| {
+        self.store.expect_save_run_config().returning(move |p_input_run_id, p_run_config_type, p_descr, p_properties_vals| {
             let p_input_run_id = p_input_run_id.map(|ids| ids.to_vec());
-            if p_input_run_id == input_run_id && p_run_config_type == run_config_type && p_descr == descr && p_keys == keys && p_properties_vals == properties_vals {
+            if p_input_run_id == input_run_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
                 result.clone()
             } else {
                 Err(ThoError::new(format!(
-                    "mock is not configured to save_run_config for input_run_id={p_input_run_id:?} run_config_type={p_run_config_type} descr={p_descr} keys={p_keys} properties_vals={p_properties_vals:?}"
+                    "mock is not configured to save_run_config for input_run_id={p_input_run_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}"
                 )))
             }
         });

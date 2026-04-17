@@ -1648,7 +1648,6 @@ mod tests {
             None,
             &"find_motifs",
             "test_cross_clc",
-            "",
             HashMap::new(),
         ).await?;
         let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);

@@ -311,7 +311,7 @@ where
 
             let merge_run_id = self
                 .store
-                .save_run_config(Some(run_ids.as_slice()), "MergeMotifs", "MergeMotifs", "run_ids", HashMap::new())
+                .save_run_config(Some(run_ids.as_slice()), "MergeMotifs", "MergeMotifs", HashMap::new())
                 .await?;
 
             let candidates_by_channel = self.load_candidates_by_channel(run_ids.as_slice()).await?;

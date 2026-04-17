@@ -3777,8 +3777,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_apply_search_from_popup_filters_visible_rows() {
         let store = SqlStore::in_mem().await.unwrap();
-        let alpha_run_id = store.save_run_config(None, "select_motifs", "first alpha", "", HashMap::new()).await.unwrap();
-        let _beta_run_id = store.save_run_config(None, "train_motif_nets", "second beta", "", HashMap::new()).await.unwrap();
+        let alpha_run_id = store.save_run_config(None, "select_motifs", "first alpha", HashMap::new()).await.unwrap();
+        let _beta_run_id = store.save_run_config(None, "train_motif_nets", "second beta", HashMap::new()).await.unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.selected_area = SelectedArea::SearchPopup;
