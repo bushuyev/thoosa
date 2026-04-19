@@ -1601,6 +1601,8 @@ where
     }
 
     let labeled_resources_map = labeled_resources()?;
+    debug!("import_resources_with_pure_sets: labeled_resources_map={labeled_resources_map:?}");
+
     let ws_guard = ws.write();
     let import_descr = format!("Import on {}", cdt());
     let import_id = SqlStore::save_import(import_descr.as_str(), &t)?;
