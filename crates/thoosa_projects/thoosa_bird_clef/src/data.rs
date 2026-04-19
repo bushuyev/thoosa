@@ -64,8 +64,8 @@ pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, ThoError> {
     Ok(serial_numbers.len())
 }
 
-pub fn labeled_resourses<P: Into<PathBuf>>(
-    _path: P,
+pub fn labeled_resourses(
+    path: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
     /*let df_csv = CsvReadOptions::default()
         .with_ignore_errors(true)
@@ -79,7 +79,7 @@ pub fn labeled_resourses<P: Into<PathBuf>>(
 
     let mut map = HashMap::new();
     let train_audio_dir =
-        PathBuf::from("/home/bu/dvl/data/kaggle/BirdCLEF_2025").join("train_audio"); //<P>::into(/*path*/
+        path.as_ref().join("train_audio"); //<P>::into(/*path*/
     debug!("train_audio_dir={train_audio_dir:?}");
 
     for label_dir in read_dir(train_audio_dir)? {
@@ -161,7 +161,7 @@ mod tests {
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
     use thoosa_shared::resource::{Resource, ResourceStore};
-    use thoosa_shared::test_utils::{are_close, init_test_logging, set_panic_hook};
+    use thoosa_shared::test_utils::{are_close, init_test_logging};
     use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files};
     use thoosa_store::SqlStore;
 
@@ -170,14 +170,14 @@ mod tests {
         init_test_logging();
     }
 
-    // #[test]
+    #[test]
     pub fn test_read_oog() -> Result<(), ThoError> {
         use lewton::inside_ogg::OggStreamReader;
         use std::fs::File;
         use std::io::BufReader;
 
         let file =
-            File::open("/home/bu/dvl/data/kaggle/BirdCLEF_2025/train_audio/65349/iNat109039.ogg")?;
+            File::open("/home/bu/dvl/data/kaggle/birdclef-2026/train_audio/555123/iNat336366.ogg")?;
         let reader = BufReader::new(file);
 
         let mut ogg_reader = OggStreamReader::new(reader)?;
@@ -214,9 +214,9 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
+    #[test]
     pub fn test_all() -> Result<(), ThoError> {
-        let files = recurse_files(&"/home/bu/dvl/data/kaggle/BirdCLEF_2025/", &|path| {
+        let files = recurse_files(&"/home/bu/dvl/data/kaggle/birdclef-2026", &|path| {
             path.extension().map(|v| v.eq("ogg")).unwrap_or(false)
         })?;
         let files_cnt = files.len();
@@ -344,11 +344,11 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
+    #[test]
     fn test_labeled_resourses() -> Result<(), ThoError> {
         let resourses = labeled_resourses("test_data/")?;
 
-        assert_eq!(28564, resourses.len());
+        assert_eq!(4, resourses.len());
 
         Ok(())
     }

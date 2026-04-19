@@ -11,8 +11,7 @@ use thoosa_shims::context::ThoCudaContext;
 mod data;
 mod labels;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 32)]
-async fn main() -> Result<(), ThoError>{
+fn main() -> Result<(), ThoError>{
     kick_register_cuda_hooks();
 
     let t1 = Instant::now();
@@ -37,7 +36,7 @@ async fn main() -> Result<(), ThoError>{
 
     let run_result = rt.block_on(async move {
         run_cli(
-            |source_path| data::labeled_resourses(source_path.as_ref().join("train.csv")),
+            |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
             &LABELS,
             1,
