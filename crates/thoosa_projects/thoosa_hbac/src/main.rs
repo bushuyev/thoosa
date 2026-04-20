@@ -11,11 +11,12 @@ use tch::Device::Cpu;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{run_cli, AllConfigs, RunAllArgs};
+use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shared::ThoError;
 use thoosa_store::Store;
+use crate::run_all::{run_all, run_all_config_0};
 
 fn main() -> Result<(), ThoError> {
     kick_register_cuda_hooks();
@@ -66,12 +67,13 @@ fn main() -> Result<(), ThoError> {
                 ws: &Arc<RwLock<Box<dyn Workspace>>>,
                 store: &Arc<Box<dyn Store>>,
                 loader: &Arc<RawTensorLoader<RunCtxImpl>>,
-                mut root_ctx: RunCtxImpl,
+                root_ctx: RunCtxImpl,
                 run_all_args: &RunAllArgs,
-                all_config:AllConfigs
             |{
 
-                Ok(())
+                let all_configs = run_all_config_0(run_all_args);
+
+                run_all(ws, store, loader, root_ctx, run_all_args, all_configs).await
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,

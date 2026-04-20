@@ -265,7 +265,7 @@ impl FindAndSelectMotifsStage {
                 vec![run_config.select_motifs_run_config.clone()],
                 vec![find_run_id],
                 max_chunk_size,
-                #[cfg(test)]
+                // #[cfg(test)]
                 None,
             )
             .await?,

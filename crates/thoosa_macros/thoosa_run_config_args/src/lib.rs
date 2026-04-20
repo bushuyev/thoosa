@@ -1,4 +1,6 @@
+use std::sync::Arc;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
+use thoosa_shared::run_configs::GridRunConfigs;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::ThoError;
 
@@ -21,4 +23,13 @@ pub trait GridRunConfigSource {
     fn grid_run_configs(
         &self,
     ) -> Result<thoosa_shared::run_configs::GridRunConfigs<Vec<NamedVal<Self::P>>, Vec<NamedRange<Self::P>>>, ThoError>;
+}
+
+
+impl <G:GridRunConfigSource> GridRunConfigSource for Arc<G> {
+    type P = G::P;
+
+    fn grid_run_configs(&self) -> Result<GridRunConfigs<Vec<NamedVal<Self::P>>, Vec<NamedRange<Self::P>>>, ThoError> {
+        self.as_ref().grid_run_configs()
+    }
 }

@@ -245,7 +245,7 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clon
 }
 
 impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
-    pub(crate) async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
+    pub async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
         self.resources_config.check(store).await?;
 
         Ok(self)

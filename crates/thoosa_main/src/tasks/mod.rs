@@ -1,4 +1,4 @@
-mod cross_batch_clc;
+pub mod cross_batch_clc;
 pub mod cross_dims;
 pub mod cross_loader;
 mod dists_tracker;
