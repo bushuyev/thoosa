@@ -2,7 +2,14 @@ cargo run --release --bin thoosa_bird_clef -- --term-logger-level=INFO --write-l
 
 
 cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef  find-motifs --resources="set:47158son01/10" --run-config-cnt="{step:'1000',window:'32000','slices_filter':{'Accumulate':{'aggr':{'Mean':{'k':'0.02'}}}}, 'similarity_metric':{'EucDist':{'z_normalize':'true'}}}" --max-chunk-size=100000
+cargo run --release --bin thoosa_bird_clef -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef  find-motifs --resources="set:all_116570" --run-config-cnt="{step:'100',window:'1000..10000:1000,0','slices_filter':{'Precalculate':{'aggr':{'Mean':{'k':'1.0'}}, 'slices':'1000'}}, 'similarity_metric':{'EucDist':{'z_normalize':'true'}}}" --max-chunk-size=100000
 
+
+cargo run --release  --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: [{'metric': {'NormThickness': {'eps':'0.00000001'}}, 'min':'0.0'}]}"
+
+cargo run --release  --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/  train-motifs-nets --select-motifs-run-ids=128  --run-config-cnt="{ 'common_training_args': { 'epochs' : '10', 'batch_size': '10', 'lr': '0.00001..0.001', 'patience':'10', 'min_delta':'0.0001'}, 'net': {CosineNet:{'a':'1.0..10.0', 'b':'0.0..1.0'}}}" --epoch-size=5 --opt-max-evals=10 --opt-num-init=3
+
+cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/  train-label-nets --train-motif-nets-run-ids=191144  --train-resource-group="pure group 100" --valid-resource-group="pure group 50"  --run-config-cnt="{ 'common_training_args': { 'epochs' : '100', 'batch_size': '10', 'lr': '0.00001..0.001', 'patience':'20', 'min_delta':'0.0001', 'optimizer':{AdamW:{'beta1':'0.8..0.9','beta2':'0.99..0.999','wd':'0.01','amsgrad':'true'}}}, 'net': {SelfAttentionNet:{'head_size':'64..256','n_heads':'4..16','ff_mult':'2','dropout':'0.01..0.2'}}}" --max-motif-net-loss=0.03 --motif-slices-step=10 --opt-max-evals=100 --opt-num-init=10 --labels=rubthr1
 
 cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/  run-all --find-resources="group:group 1 labels/100/0-100" --select-resources="group:group 1 labels/100/0-100" --train-resource-group="group 1 labels/100/0-100" --valid-resource-group="group 1 labels/100/100-200" --motif-slices-step=10 --max-motif-net-loss=0.05 --with-plots --max-chunk-size=50000
 

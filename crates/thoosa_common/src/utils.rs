@@ -36,6 +36,7 @@ use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use sha2::{Digest, Sha256};
+use thoosa_shared::run_configs::RunId;
 use crate::copy_ctx::CopyCtx;
 
 #[macro_export]
@@ -1689,6 +1690,29 @@ pub fn stretch<T: AsRef<Tensor>>(
 
     let index = Tensor::f_from_slice(&idx)?.f_to_device(t.device())?;
     Ok(t.f_index_select(dim as i64, &index)?)
+}
+
+pub fn parse_run_ids_vec(payload: &str) -> Result<Vec<RunId>, String> {
+    payload
+        .trim()
+        .trim_matches(|ch| ch == '\'' || ch == '"')
+        .split(',')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            part
+                .trim()
+                .trim_matches(|ch| ch == '\'' || ch == '"')
+                .replace(" ", "")
+                .parse::<RunId>()
+                .map_err(|e| format!("can't parse {part:?}: {e}"))
+        })
+        .collect()
+}
+
+pub fn parse_run_ids(s: &str) -> Result<u32, String> {
+    s.trim()
+        .parse::<u32>()
+        .map_err(|e| format!("invalid integer '{s}': {e}"))
 }
 
 

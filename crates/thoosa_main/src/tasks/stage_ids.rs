@@ -8,3 +8,4 @@ pub const MOTIF_LOADER: u32 = 7;
 pub const MOTIF_LOADER_SYNC_STAGE: u32 = 8;
 pub const APPLY_MOTIF_NET: u32 = 9;
 pub const MERGE_SELECTED_MOTIFS: u32 = 10;
+pub const SELECT_MOTIFS: u32 = 11;
