@@ -265,9 +265,10 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-pub async fn run_cli<F, R>(
+pub async fn run_cli<F, R, A>(
     labeled_resources: F,
     resource_to_tensor: R,
+    run_all:A,
     labels: &[&str],
     channels: u32,
     max_input: u32,
@@ -276,6 +277,14 @@ pub async fn run_cli<F, R>(
 where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(&dyn AsRef<Path>, &str) -> Result<Tensor, ThoError> + Sync + Send,
+    A: AsyncFn(
+        &Arc<RwLock<Box<dyn Workspace>>>,
+        &Arc<Box<dyn Store>>,
+        &Arc<RawTensorLoader<RunCtxImpl>>,
+        RunCtxImpl,
+        &RunAllArgs,
+        AllConfigs
+    ) -> Result<(), ThoError>
 {
     // console_subscriber::init();
     if log::log_enabled!(log::Level::Trace) {
@@ -1014,7 +1023,7 @@ enum FindAndSelect {
     }
 }
 
-struct AllConfigs {
+pub struct AllConfigs {
     find_and_select: FindAndSelect,
 
 

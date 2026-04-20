@@ -1,15 +1,22 @@
+use std::sync::Arc;
 use crate::data::resource_to_tensor;
 use crate::labels::LABELS;
 use log::{debug, error, info};
 use std::time::Instant;
+use parking_lot::RwLock;
 use tch::Device::Cpu;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::utils::kick_register_cuda_hooks;
-use thoosa_main::cli::run_cli;
+use thoosa_common::ws::Workspace;
+use thoosa_main::cli::{run_cli, AllConfigs, RunAllArgs};
+use thoosa_main::RawTensorLoader;
 use thoosa_shared::ThoError;
 use thoosa_shims::context::ThoCudaContext;
+use thoosa_store::Store;
 
 mod data;
 mod labels;
+mod run_all;
 
 fn main() -> Result<(), ThoError>{
     debug!("bird_clef main");
@@ -39,6 +46,17 @@ fn main() -> Result<(), ThoError>{
         run_cli(
             |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
+            async |
+                ws: &Arc<RwLock<Box<dyn Workspace>>>,
+                store: &Arc<Box<dyn Store>>,
+                loader: &Arc<RawTensorLoader<RunCtxImpl>>,
+                mut root_ctx: RunCtxImpl,
+                run_all_args: &RunAllArgs,
+                all_config:AllConfigs
+            |{
+
+                Ok(())
+            },
             &LABELS,
             1,
             u32::MAX,
