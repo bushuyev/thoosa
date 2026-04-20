@@ -1,6 +1,6 @@
 use crate::data::resource_to_tensor;
 use crate::labels::LABELS;
-use log::{error, info};
+use log::{debug, error, info};
 use std::time::Instant;
 use tch::Device::Cpu;
 use thoosa_common::utils::kick_register_cuda_hooks;
@@ -12,6 +12,7 @@ mod data;
 mod labels;
 
 fn main() -> Result<(), ThoError>{
+    debug!("bird_clef main");
     kick_register_cuda_hooks();
 
     let t1 = Instant::now();

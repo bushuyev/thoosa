@@ -6,6 +6,7 @@ use std::fmt::Debug;
 use std::fs::{File, read_dir};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use tch::Kind::{Float, Half};
 use tch::Tensor;
 use thoosa_shared::ThoError;
 
@@ -34,12 +35,12 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
     let tensor = Tensor::stack(
         &channels
             .into_iter()
-            .map(|channel| Tensor::from_slice(channel.as_slice()))
+            .map(|channel| Tensor::from_slice(channel.as_slice()).totype(Half))
             .collect::<Vec<Tensor>>(),
         0,
     );
 
-    debug!("ogg_to_tensor: tensor.size={:?}", tensor.size());
+    debug!("ogg_to_tensor: tensor={:?}", tensor);
 
     Ok(tensor)
 }

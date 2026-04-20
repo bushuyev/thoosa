@@ -533,6 +533,8 @@ impl Debug for SqlMotifTrackerStore {
     }
 }
 
+
+//TODO move all prepared statements into init
 #[derive(Debug)]
 pub struct SqlStore {
     #[cfg(test)]
@@ -3047,13 +3049,7 @@ impl SqlStore {
         for (labels_cnt, labels_resources) in labels_cnt_labels_resources {
             let max_labels_resources = labels_resources.values().map(|r| r.len()).sum::<usize>();
 
-            debug!(
-                "save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}",
-                labels_cnt,
-                max_labels_resources,
-                max_resources_in_set,
-                max_labels_resources / max_resources_in_set
-            );
+            debug!("save_groups_by_label_cnt: labels_cnt={} max_labels_resources={}, max_resources_in_set={}, max_labels_resources/max_resources_in_set={}",labels_cnt,max_labels_resources,max_resources_in_set,max_labels_resources / max_resources_in_set);
 
             let num_groups = max(1, max_labels_resources / max_resources_in_set).ilog2();
             let groups_max_resources = (0..num_groups)
@@ -3142,9 +3138,10 @@ impl SqlStore {
         while let Some(label_row) = rows.next()? {
             debug!("row={:?}", label_row);
             let label_id = label_row.get::<usize, usize>(0)?;
+            let label = label_row.get::<usize, String>(1)?;
             t.execute(
                 "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
-                params![format!("{}/{}", label_row.get::<usize, String>(1)?, max_len), group_id, label_id],
+                params![format!("{label}/{max_len}"), group_id, label_id],
             )?;
 
             let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
@@ -3154,6 +3151,32 @@ impl SqlStore {
 
         Ok(())
     }
+
+    pub fn save_all_sets(t: &Transaction) -> Result<(), ThoError> {
+        let all_group_id = Self::save_resource_set_group("all group".into(), t)?;
+
+        let mut resource_resources_set_all_stmt = t.prepare("INSERT INTO resource_resources_set (resource_id, set_id) SELECT  lr.resource_id, ? FROM labeled_resources lr WHERE lr.label_id=?")?;
+
+        let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
+        let mut rows = stmt.query(())?;
+        while let Some(label_row) = rows.next()? {
+            debug!("row={:?}", label_row);
+            let label_id = label_row.get::<usize, usize>(0)?;
+            let label = label_row.get::<usize, String>(1)?;
+
+
+            t.execute(
+                "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
+                params![format!("all_{label}"), all_group_id, label_id],
+            )?;
+
+            let resource_set_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get::<usize, usize>(0))?;
+            resource_resources_set_all_stmt.execute(params![resource_set_id, label_id])?;
+        }
+
+        Ok(())
+    }
+
 
     pub fn save_pure_balanced_sets(
         prefix: &str,
