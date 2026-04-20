@@ -13,7 +13,7 @@ pub mod cli;
 pub mod data;
 mod buffer_limits;
 mod progress_socket;
-mod tasks;
+pub mod tasks;
 pub mod version;
 
 //TODO use directly?
