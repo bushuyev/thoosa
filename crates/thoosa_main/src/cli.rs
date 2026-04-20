@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, InputFilter};
+use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, InputFilter, DotProductConfigRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -88,6 +88,7 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_hook, SyncMakeWriter, PERF};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
@@ -314,7 +315,9 @@ where
     install_panic_hook(SyncMakeWriter::new(OpenOptions::new()
         .create(true)
         .append(true)
-        .open(&format!("thoosa_panic_{}.log", cdt_for_dir))?));
+        .open( ws.read()
+            .log_path()
+            .join(format!("thoosa_panic_{}.log", cdt_for_dir)))?));
 
 
     let _logging_guards = init_tracing(
@@ -1143,11 +1146,12 @@ where
             //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
-        similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+        // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+        similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue { _path_pd: Default::default() }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
         //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
         //         // q: RangeOrValue::Range { range: 0.0..0.5, step: None },
-        //         q: RangeOrValue::Value (0.1),
+        //         q: RangeOrValue::Value (2.0),
         //     }),
         // }),
         slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
@@ -1601,12 +1605,15 @@ where
     }
 
     let labeled_resources_map = labeled_resources()?;
+    let total_count = labeled_resources_map.iter().map(|e|e.1.len()).sum::<usize>();
     debug!("import_resources_with_pure_sets: labeled_resources_map={labeled_resources_map:?}");
 
     let ws_guard = ws.write();
     let import_descr = format!("Import on {}", cdt());
     let import_id = SqlStore::save_import(import_descr.as_str(), &t)?;
 
+    let import_eta_guard = CollectEtaInvocationGuard::new("import", total_count, 1);
+    let import_eta_guard_id = import_eta_guard.id();
     let (imported_tensors_stats, failed_tensors): (
         HashMap<String, (ResourceStats, Vec<(String, f32)>)>,
         Vec<String>,
@@ -1633,6 +1640,7 @@ where
                         a.1.push(resource_key.clone());
                     }
                 }
+                collect_eta_record_completion(import_eta_guard_id);
 
                 a
             },
@@ -1666,6 +1674,8 @@ where
             SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
         }
     }
+
+    SqlStore::save_all_sets(&t)?;
 
     let min_pure_resources = SqlStore::min_pure_resources(&t)?;
     if min_pure_resources >= 10 {

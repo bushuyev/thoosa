@@ -1,4 +1,9 @@
-export LD_LIBRARY_PATH=$LIBTORCH/lib/ && cargo run --bin thoosa_bird_clef  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/tmp/ws_clef" import-resources --source-path=/home/bu/dvl/data/kaggle/BirdCLEF_2025
+cargo run --release --bin thoosa_bird_clef -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_clef" import-resources --source-path=/home/bu/dvl/data/kaggle/birdclef-2026/
+
+
+cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef  find-motifs --resources="set:47158son01/10" --run-config-cnt="{step:'1000',window:'32000','slices_filter':{'Accumulate':{'aggr':{'Mean':{'k':'0.02'}}}}, 'similarity_metric':{'EucDist':{'z_normalize':'true'}}}" --max-chunk-size=100000
 
 
 cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/  run-all --find-resources="group:group 1 labels/100/0-100" --select-resources="group:group 1 labels/100/0-100" --train-resource-group="group 1 labels/100/0-100" --valid-resource-group="group 1 labels/100/100-200" --motif-slices-step=10 --max-motif-net-loss=0.05 --with-plots --max-chunk-size=50000
+
+cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/ plot-data --data-by=run_id:59791
