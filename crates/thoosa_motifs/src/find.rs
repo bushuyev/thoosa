@@ -245,7 +245,7 @@ pub struct SelectMotifsParams {
 
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsArgs {
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_ids)]
     pub find_motifs_run_ids: Vec<RunId>,
 
     #[arg(long)]
@@ -257,7 +257,7 @@ pub struct SelectMotifsArgs {
 
 impl SelectMotifsArgs {
     pub fn resource_config(&self) -> Simple {
-        Simple::new(ResourceType::NotInGroup(self.resources_group.clone()))
+        Simple::new(ResourceType::Group(self.resources_group.clone()))
     }
 }
 

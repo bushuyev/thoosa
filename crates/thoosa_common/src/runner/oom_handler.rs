@@ -818,7 +818,7 @@ where
                                     }
                                 } else {
                                     warn!(
-                                        "OOMHandler::run, inner error: ctx_id={ctx_id:?} task={:?} os_thread_id={} unexpected error",
+                                        "OOMHandler::run, inner error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",
                                         task.as_ref().expect("run_with_runner_impl: missing task"),
                                         os_thread_id(),
                                     );
@@ -830,7 +830,7 @@ where
                 }
             } else {
                 warn!(
-                    "OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} unexpected error: {te:?}",
+                    "OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",
                     task.as_ref().expect("run_with_runner_impl: missing task"),
                     os_thread_id(),
                 );

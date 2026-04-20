@@ -6,6 +6,8 @@ use std::fmt::Debug;
 use std::fs::{File, read_dir};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::ptr::eq;
+use polars::prelude::{col, lit, CsvParseOptions, CsvReadOptions, IntoLazy, SerReader};
 use tch::Kind::{Float, Half};
 use tch::Tensor;
 use thoosa_shared::ThoError;
@@ -68,25 +70,26 @@ pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, ThoError> {
 pub fn labeled_resourses(
     path: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
-    /*let df_csv = CsvReadOptions::default()
+    let df_csv = CsvReadOptions::default()
         .with_ignore_errors(true)
         .with_has_header(true)
         .with_parse_options(CsvParseOptions::default().with_try_parse_dates(true))
-        .try_into_reader_with_file_path(Some(<P>::into(path).join("train.csv")))?
-        .finish()?;
-    debug!("{}", df_csv);
+        .try_into_reader_with_file_path(Some(path.as_ref().join("train.csv")))?
+        .finish()?
+        .lazy();
 
-    // debug!("df={:#?}", df.collect());*/
+
+    debug!("df={:?}", df_csv.clone().limit(10).collect()?);
 
     let mut map = HashMap::new();
     let train_audio_dir =
         path.as_ref().join("train_audio"); //<P>::into(/*path*/
-    debug!("train_audio_dir={train_audio_dir:?}");
+    debug!("clef/labeled_resourses: train_audio_dir={train_audio_dir:?}");
 
+    let df_csv_ref = &df_csv;
     for label_dir in read_dir(train_audio_dir)? {
-        debug!("label_dir={label_dir:?}");
+
         let label_dir = label_dir?;
-        let _meta = label_dir.metadata()?;
         let label = label_dir
             .path()
             .file_stem()
@@ -95,21 +98,38 @@ pub fn labeled_resourses(
             .expect("label")
             .to_string();
 
+        debug!("label_dir={label_dir:?} label={:?}", label);
+
         for file in read_dir(label_dir.path())? {
-            let file = file?;
-            debug!("    file={file:?}");
+            let path_buf = file?.path();
+            let file = path_buf.file_name().expect("file_name").to_str().expect("file");
+
+            let key = format!("{label}/{file}");
+
+            let secondary_labels = df_csv_ref
+                .clone()
+                .filter(col("filename").eq(lit(key.as_str())))
+                .select([col("secondary_labels")])
+                .collect()?;
+
+            let secondary_labels: Vec<String> = match secondary_labels
+                .column("secondary_labels")?
+                .str()?
+                .get(0) {
+                Some(s) => parse_secondary_labels(s),
+                None => Vec::new(),
+            };
+
+            let labels = if secondary_labels.is_empty() {
+                vec![(label.clone(), 1.0)]
+            } else {
+                vec![(label.clone(), 1.0)]
+            };
+
+            debug!("clef/labeled_resourses: file={file:?} key={key} secondary_labels={secondary_labels:?}");
 
             map.insert(
-                format!(
-                    "{}_{}", //TODO train_audio?
-                    label.clone(),
-                    file.path()
-                        .file_name()
-                        .expect("zzz")
-                        .to_str()
-                        .expect("path")
-                        .to_string(),
-                ),
+                key,
                 vec![(label.clone(), 1.0)],
             );
         }
@@ -118,6 +138,23 @@ pub fn labeled_resourses(
     debug!("map={map:?}");
 
     Ok(map)
+}
+
+fn parse_secondary_labels(s: &str) -> Vec<String> {
+    let inner = s
+        .trim()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+
+    if inner.is_empty() {
+        return Vec::new();
+    }
+
+    inner
+        .split(',')
+        .map(|x| x.trim().trim_matches('\'').trim_matches('"').to_string())
+        .filter(|x| !x.is_empty())
+        .collect()
 }
 
 pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Tensor, ThoError> {
@@ -347,17 +384,24 @@ mod tests {
 
     #[test]
     fn test_labeled_resourses() -> Result<(), ThoError> {
+        unsafe {
+            std::env::set_var("POLARS_FMT_STR_LEN", "1000");
+            std::env::set_var("POLARS_FMT_TABLE_WIDTH", "-1");
+            std::env::set_var("POLARS_FMT_MAX_COLS", "-1");
+            std::env::set_var("POLARS_FMT_MAX_ROWS", "-1");
+        }
+
         let resourses = labeled_resourses("test_data/")?;
 
-        assert_eq!(4, resourses.len());
+        assert_eq!(5, resourses.len());
 
         Ok(())
     }
 
-    // #[test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_plot_resource() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
-            "/tmp/ws_test_clef",
+            "/tmp/ws_clef",
             1,
             999,
             32000,

@@ -1115,7 +1115,7 @@ pub fn apply_motif_net_forward(
     let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
     debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
-    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
+    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices.totype(Float));
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
