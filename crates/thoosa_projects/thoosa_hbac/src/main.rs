@@ -1,15 +1,21 @@
 #![recursion_limit = "256"]
 
 mod data;
+mod run_all;
 
+use std::sync::Arc;
 use log::{error, info};
 use std::time::Instant;
+use parking_lot::RwLock;
 use tch::Device::Cpu;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::utils::kick_register_cuda_hooks;
-use thoosa_main::cli::run_cli;
+use thoosa_common::ws::Workspace;
+use thoosa_main::cli::{run_cli, AllConfigs, RunAllArgs};
+use thoosa_main::RawTensorLoader;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shared::ThoError;
-
+use thoosa_store::Store;
 
 fn main() -> Result<(), ThoError> {
     kick_register_cuda_hooks();
@@ -55,6 +61,17 @@ fn main() -> Result<(), ThoError> {
                         .join(format!("{}.parquet", key)),
                     Cpu,
                 )
+            },
+            async |
+                ws: &Arc<RwLock<Box<dyn Workspace>>>,
+                store: &Arc<Box<dyn Store>>,
+                loader: &Arc<RawTensorLoader<RunCtxImpl>>,
+                mut root_ctx: RunCtxImpl,
+                run_all_args: &RunAllArgs,
+                all_config:AllConfigs
+            |{
+
+                Ok(())
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,
