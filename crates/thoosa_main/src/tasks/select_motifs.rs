@@ -794,7 +794,7 @@ where
         run_configs:Vec<SelectMotifsRunConfig>,
         find_motifs_run_ids:Vec<RunId>,
         max_batch: i64,
-        #[cfg(test)]
+        // #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
     ) -> Result<Self, ThoError> {
 

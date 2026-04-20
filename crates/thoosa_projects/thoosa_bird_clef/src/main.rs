@@ -8,11 +8,12 @@ use tch::Device::Cpu;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{run_cli, AllConfigs, RunAllArgs};
+use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
-use thoosa_shared::ThoError;
+use thoosa_shared::{collect_futures_with_progress, StreamBuffering, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::Store;
+use crate::run_all::run_all;
 
 mod data;
 mod labels;
@@ -51,9 +52,17 @@ fn main() -> Result<(), ThoError>{
                 store: &Arc<Box<dyn Store>>,
                 loader: &Arc<RawTensorLoader<RunCtxImpl>>,
                 mut root_ctx: RunCtxImpl,
-                run_all_args: &RunAllArgs,
-                all_config:AllConfigs
+                run_all_args: &RunAllArgs
             |{
+                debug!("bird_clef run all");
+
+               run_all(
+                   ws,
+                   store,
+                   loader,
+                   root_ctx,
+                   run_all_args
+               ).await?;
 
                 Ok(())
             },
@@ -79,3 +88,4 @@ fn main() -> Result<(), ThoError>{
 
     Ok(())
 }
+
