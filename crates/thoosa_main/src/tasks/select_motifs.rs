@@ -67,8 +67,7 @@ use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourc
 
 pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
-
-
+use crate::tasks::stage_ids::SELECT_MOTIFS;
 //The overall logic in Find and Select Motifs Stages is as following:
 // Find Motifs - either
 //  * accumulate distance statistics into threshold distance while iterating through slices
@@ -799,8 +798,6 @@ where
         fail_if_size_bigger_than:Option<usize>
     ) -> Result<Self, ThoError> {
 
-
-
         let clc_dist = Arc::new(MotifStats::new(
             Arc::clone(store),
             Arc::clone(&loader),
@@ -820,9 +817,8 @@ where
         )
         .channels() as usize;
 
-
         Ok(Self {
-            id: SynKey::new([mono_key!("SelectMotifsStage", "stage")]),
+            id: SynKey::new([mono_key!(SELECT_MOTIFS, "stage")]),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,
@@ -1484,6 +1480,8 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        debug!("SelectMotifsStage::run: input={input:?}");
+
         let (resources, output_mode) = self.load_resources_for_selection(&input, ctx.branch("load_resources_for_selection".into(), false)).await?;
 
         debug!("SelectMotifsStage::run: resources={resources:?}");

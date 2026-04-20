@@ -65,29 +65,13 @@ pub enum DataBy {
 }
 
 impl DataBy {
-    fn parse_run_ids(payload: &str, run_id_name: &str) -> Result<Vec<RunId>, String> {
-        payload
-            .trim()
-            .trim_matches(|ch| ch == '\'' || ch == '"')
-            .split(',')
-            .filter(|part| !part.is_empty())
-            .map(|part| {
-                part
-                    .trim()
-                    .trim_matches(|ch| ch == '\'' || ch == '"')
-                    .replace(" ", "")
-                    .parse::<RunId>()
-                    .map_err(|e| format!("can't parse {part:?} to {run_id_name}: {e}"))
-            })
-            .collect()
-    }
 
     fn parse_select_motifs_run_ids(payload: &str) -> Result<Vec<RunId>, String> {
-        Self::parse_run_ids(payload, "select_motifs_run_id")
+        parse_run_ids_vec(payload)
     }
 
     fn parse_find_motifs_run_ids(payload: &str) -> Result<Vec<RunId>, String> {
-        let find_motifs_run_ids = Self::parse_run_ids(payload, "find_motifs_run_id")?;
+        let find_motifs_run_ids = parse_run_ids_vec(payload)?;
         if find_motifs_run_ids.is_empty() {
             return Err("find_motifs_run_id payload is empty".to_string());
         }
