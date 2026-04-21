@@ -90,6 +90,7 @@ use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_h
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
+use thoosa_store::rusqlite::Transaction;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
@@ -265,9 +266,10 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-pub async fn run_cli<F, R, A>(
+pub async fn run_cli<F, R, A, S>(
     labeled_resources: F,
     resource_to_tensor: R,
+    init_data:S,
     run_all:A,
     labels: &[&str],
     channels: u32,
@@ -283,7 +285,8 @@ where
         &Arc<RawTensorLoader<RunCtxImpl>>,
         RunCtxImpl,
         &RunAllArgs,
-    ) -> Result<(), ThoError>
+    ) -> Result<(), ThoError>,
+    S: FnOnce(&Transaction) -> Result<(), ThoError>
 {
     // console_subscriber::init();
     if log::log_enabled!(log::Level::Trace) {
@@ -461,7 +464,7 @@ where
                 },
                 freq_filter,
                 true,
-                true,
+                init_data
             ).await?;
 
             info!("ImportResources done");
@@ -891,7 +894,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     Ok(run_ids)
 }
 
-pub async fn import_resources<F, R>(
+pub async fn import_resources<F, R, S>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     labels: &[&str],
@@ -899,30 +902,15 @@ pub async fn import_resources<F, R>(
     resource_to_tensor: R, //None for tests - do not import parquet files
     freq_filter: Option<Arc<FreqFilter<RunCtxImpl>>>,
     insert_label: bool,
-    save_pure_sets: bool,
+    init_data:S,
 ) -> Result<Vec<ResourceId>, ThoError>
 where
     F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
     R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
+    S: FnOnce(&Transaction) -> Result<(), ThoError>
 {
-    import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, freq_filter, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
-}
-
-pub async fn import_resources_with_pure_sets<F, R>(
-    ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    _store: &Arc<Box<dyn Store>>,
-    labels: &[&str],
-    labeled_resources: F,
-    resource_to_tensor: R, //None for tests - do not import parquet files
-    freq_filter: Option<Arc<FreqFilter<RunCtxImpl>>>,
-    insert_label: bool,
-    pure_sets_lens: Option<&[(usize, bool)]>,
-) -> Result<Vec<ResourceId>, ThoError>
-where
-    F: Fn() -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
-    R: Fn(String) -> Result<Tensor, ThoError> + Sync + Send,
-{
-    let mut conn = _store.open_external_writer_conn()?;
+    // import_resources_with_pure_sets(ws, store, labels, labeled_resources, resource_to_tensor, freq_filter, insert_label, Some(&[(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)])).await
+    let mut conn = store.open_external_writer_conn()?;
     let t = conn.transaction()?;
 
     if insert_label {
@@ -996,45 +984,14 @@ where
         failed_tensors.len()
     );
 
-    if let Some(pure_sets_lens) = pure_sets_lens {
-        for pure_sets_len in pure_sets_lens {
-            SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
-        }
-    }
+    init_data(&t)?;
 
-    SqlStore::save_all_sets(&t)?;
 
-    let min_pure_resources = SqlStore::min_pure_resources(&t)?;
-    if min_pure_resources >= 10 {
-        SqlStore::save_data_sets("A10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("B10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("C10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-    }
-    if min_pure_resources >= 20 {
-        SqlStore::save_data_sets("A20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("B20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("C20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("D20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("E20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("F20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("G20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
-    }
-    if min_pure_resources >= 100 {
-        SqlStore::save_data_sets("A100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("B100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
-        SqlStore::save_data_sets("C100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
-    }
-    if min_pure_resources > 0 {
-        SqlStore::save_data_sets("All", None, 0.6, 0.2, 1.0, false, &t)?;
-    }
-
-    SqlStore::save_groups_by_label_cnt(100, &t)?;
     t.commit()?;
 
-    trace!("import_resources: resource_ids={resource_ids:?}, failed_tensors={failed_tensors:?}");
-
-    Ok(resource_ids) //for tests
+    Ok(resource_ids)
 }
+
 
 fn apply_import_freq_filter(
     freq_filter: Option<&FreqFilter<RunCtxImpl>>,
@@ -1896,7 +1853,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, import_resources_with_pure_sets, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
+    use crate::cli::{import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};
@@ -1965,6 +1922,7 @@ mod cli_tests {
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
+    use thoosa_store::rusqlite::Transaction;
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, Metrics};
     use crate::tasks::cross_dims::ChannelsData2;
@@ -2181,7 +2139,9 @@ mod cli_tests {
             |_: String| Ok(Tensor::from_slice(&[0., 1., 2., 0., 10., 20.]).view((2, -1))),
             None,
             true,
-            false,
+            |t: &Transaction|{
+                Ok(())
+            },
         ).await?;
 
         let imported_resources: Vec<Resource> = store.list_resources_by_ids(&imported_ids).await?;
@@ -2222,7 +2182,9 @@ mod cli_tests {
             |_: String| Ok(Tensor::from_slice(&[0., 100., 0.]).view((1, -1))),
             Some(freq_filter),
             true,
-            false,
+            |t: &Transaction|{
+                Ok(())
+            }
         ).await?;
 
         let imported_resources: Vec<Resource> = store.list_resources_by_ids(&imported_ids).await?;

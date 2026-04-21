@@ -838,6 +838,7 @@ mod tests {
     use thoosa_shared::{cdt_for_dir, ThoError};
     use thoosa_store::{MockStoreBuilder, SqlStore};
     use thoosa_shared::mono_key;
+    use thoosa_store::rusqlite::Transaction;
 
     #[ctor::ctor]
     fn init() {
@@ -1014,7 +1015,9 @@ mod tests {
             },
             None,
             true,
-            false,
+            |t: &Transaction|{
+                Ok(())
+            },
         ).await?;
 
         let labels = store.list_labels().await?;
@@ -1278,6 +1281,7 @@ mod tests {
             None,
             None,
             1,
+            None
         ).await?);
 
         let out = Arc::clone(&apply_motif_nets).run(

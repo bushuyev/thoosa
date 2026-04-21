@@ -3256,16 +3256,11 @@ impl SqlStore {
         let target_count = limit.map(|limit_val| min(limit_val, min_resources)).unwrap_or(min_resources);
         let split_counts = Self::balanced_split_counts(target_count, train_coeff, valid_coeff);
 
-        debug!(
-            "save_data_sets: prefix={prefix} target_count={target_count} train_count={} valid_count={} test_count={} min_p={min_p} allow_leaky_split={allow_leaky_split}",
-            split_counts[0],
-            split_counts[2],
-            split_counts[1],
-        );
+        debug!("save_data_sets: prefix={prefix} target_count={target_count} train_count={} valid_count={} test_count={} min_p={min_p} allow_leaky_split={allow_leaky_split}",split_counts[0],split_counts[2],split_counts[1]);
 
-        let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), t)?;
-        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_valid"), t)?;
-        let test_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_test"), t)?;
+        let train_group_id = Self::save_resource_set_group(format!("{prefix}_train"), t)?;
+        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_valid"), t)?;
+        let test_group_id = Self::save_resource_set_group(format!("{prefix}_test"), t)?;
 
         let labels_cnt = labels.len();
         let mut rng = rand::rng();
@@ -3273,14 +3268,18 @@ impl SqlStore {
         for (label_id, label) in labels {
             let mut resources = resources_by_label.remove(&label_id).unwrap_or_default();
             resources.shuffle(&mut rng);
+
             let selected = resources.into_iter().take(target_count).collect::<Vec<usize>>();
             let mut offset = 0;
+
             let train_end = offset + min(split_counts[0], selected.len().saturating_sub(offset));
             let mut train_resources = selected[offset..train_end].to_vec();
+
             offset = train_end;
             let test_end = offset + min(split_counts[1], selected.len().saturating_sub(offset));
             let mut test_resources = selected[offset..test_end].to_vec();
             offset = test_end;
+
             let valid_end = offset + min(split_counts[2], selected.len().saturating_sub(offset));
             let mut valid_resources = selected[offset..valid_end].to_vec();
 
@@ -3288,9 +3287,9 @@ impl SqlStore {
                 Self::fill_leaky_balanced_split(&mut train_resources, &mut test_resources, &mut valid_resources, train_coeff, valid_coeff);
             }
 
-            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), train_resources.as_slice())?;
-            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), valid_resources.as_slice())?;
-            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), test_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_{label}"), Some(&label_id), train_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_{label}"), Some(&label_id), valid_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_{label}"), Some(&label_id), test_resources.as_slice())?;
         }
 
         Ok(())
@@ -4095,7 +4094,7 @@ mod store_tests {
         store.save_data_sets("L", Some(10), 0.6, 0.2, 1.0, true).await?;
 
         let mut train_sets_resources = HashMap::new();
-        for (set_id, descr) in store.list_resource_set_group_sets("L_balanced_group_train").await? {
+        for (set_id, descr) in store.list_resource_set_group_sets("L_train").await? {
             train_sets_resources.insert(
                 descr,
                 store
@@ -4107,7 +4106,7 @@ mod store_tests {
         }
 
         let mut valid_sets_resources = HashMap::new();
-        for (set_id, descr) in store.list_resource_set_group_sets("L_balanced_group_valid").await? {
+        for (set_id, descr) in store.list_resource_set_group_sets("L_valid").await? {
             valid_sets_resources.insert(
                 descr,
                 store
@@ -4119,7 +4118,7 @@ mod store_tests {
         }
 
         let mut test_sets_resources = HashMap::new();
-        for (set_id, descr) in store.list_resource_set_group_sets("L_balanced_group_test").await? {
+        for (set_id, descr) in store.list_resource_set_group_sets("L_test").await? {
             test_sets_resources.insert(
                 descr,
                 store
@@ -4130,12 +4129,17 @@ mod store_tests {
             );
         }
 
-        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L_balanced_set_aaa"]);
-        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L_balanced_set_aaa"]);
-        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L_balanced_set_aaa"]);
-        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L_balanced_set_bbb"]);
-        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L_balanced_set_bbb"]);
-        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L_balanced_set_bbb"]);
+        debug!("train_sets_resources={train_sets_resources:?}");
+        debug!("valid_sets_resources={valid_sets_resources:?}");
+        debug!("test_sets_resources={test_sets_resources:?}");
+
+        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L_aaa"]);
+        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L_aaa"]);
+        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L_aaa"]);
+
+        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L_bbb"]);
+        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L_bbb"]);
+        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L_bbb"]);
 
         Ok(())
     }

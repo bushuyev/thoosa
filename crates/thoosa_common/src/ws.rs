@@ -4,7 +4,7 @@ use crate::dims::{
 use crate::train_nets::{
     FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, final_net,
 };
-use log::{debug, info, trace};
+use log::{debug, error, info, trace};
 use mockall::automock;
 use rayon::iter::ParallelIterator;
 use rayon::iter::IntoParallelIterator;
@@ -297,7 +297,10 @@ impl Workspace for FsWorkspace {
         let path = self.tensors_path.join(format!("{import_id}_{key}.pt"));
         trace!("Workspace:import_tensor {path:?} t.size={:?}", t.size());
         t.save(&path)
-            .map_err(|e| ThoError::from_error(format!("save tensor to {path:?}"), e))?;
+            .map_err(|e| {
+                error!("import_tensor, save tensor error {e}");
+                ThoError::from_error(format!("save tensor to {path:?}"), e)
+            })?;
 
         Ok(ResourceStats::new(
             t.size().into_iter().map(|v| v as u32).collect::<Vec<_>>(),
