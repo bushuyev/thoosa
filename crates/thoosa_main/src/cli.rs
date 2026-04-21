@@ -976,6 +976,11 @@ where
         &t,
     )?;
 
+    init_data(&t)?;
+
+
+    t.commit()?;
+
     info!(
         "Import id: {}, imported {} tensors to {:?}, failed {}",
         import_id,
@@ -983,11 +988,6 @@ where
         ws_guard.tensors_path(),
         failed_tensors.len()
     );
-
-    init_data(&t)?;
-
-
-    t.commit()?;
 
     Ok(resource_ids)
 }
