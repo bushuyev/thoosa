@@ -163,12 +163,14 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         max_len: usize,
         only_unused: bool,
     ) -> Result<(), ThoError>;
-    async fn save_pure_balanced_sets(
+    async fn save_data_sets(
         &self,
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
+        min_p: f32,
+        allow_leaky_split: bool,
     ) -> Result<(), ThoError>;
     async fn save_set_by_labels(
         &self,
@@ -184,6 +186,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         &self,
         file_stem: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError>;
+    async fn resources_by_label(
+        &self,
+        min_p: f32,
+    ) -> Result<HashMap<String, Vec<Resource>>, ThoError>;
     async fn list_resource_random_not_labeled(
         &self,
         label: &str,
@@ -323,12 +329,14 @@ mock! {
             max_len: usize,
             only_unused: bool,
         ) -> Result<(), ThoError>;
-        async fn save_pure_balanced_sets(
+        async fn save_data_sets(
             &self,
             prefix: &str,
             limit: Option<usize>,
             train_coeff: f32,
             valid_coeff: f32,
+            min_p: f32,
+            allow_leaky_split: bool,
         ) -> Result<(), ThoError>;
         async fn save_set_by_labels(
             &self,
@@ -344,6 +352,10 @@ mock! {
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoError>;
+        async fn resources_by_label(
+            &self,
+            min_p: f32,
+        ) -> Result<HashMap<String, Vec<Resource>>, ThoError>;
         async fn list_resource_random_not_labeled(
             &self,
             label: &str,
@@ -1099,17 +1111,19 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn save_pure_balanced_sets(
+    async fn save_data_sets(
         &self,
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
+        min_p: f32,
+        allow_leaky_split: bool,
     ) -> Result<(), ThoError> {
         let prefix = prefix.to_string();
-        self.with_writer_conn("save_pure_balanced_sets", move |conn| {
+        self.with_writer_conn("save_data_sets", move |conn| {
             let t = conn.transaction()?;
-            Self::save_pure_balanced_sets(prefix.as_str(), limit, train_coeff, valid_coeff, &t)?;
+            Self::save_data_sets(prefix.as_str(), limit, train_coeff, valid_coeff, min_p, allow_leaky_split, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -1178,6 +1192,40 @@ impl Store for SqlStore {
             };
 
             Ok(resources)
+        })
+        .await
+    }
+
+    async fn resources_by_label(
+        &self,
+        min_p: f32,
+    ) -> Result<HashMap<String, Vec<Resource>>, ThoError> {
+        Self::validate_min_probability(min_p)?;
+        self.with_reader_conn("resources_by_label", move |conn| {
+            let labels = Self::list_labels(conn)?;
+            let mut resources_by_label =
+                labels.iter().map(|(_, label)| (label.clone(), Vec::new())).collect::<HashMap<String, Vec<Resource>>>();
+            let mut stmt = conn.prepare(
+                "SELECT l.label, r.id, r.import_id, r.key, r.length FROM labeled_resources lr \
+                JOIN labels l ON l.id = lr.label_id \
+                JOIN resources r ON r.id = lr.resource_id \
+                WHERE lr.p >= ? \
+                ORDER BY l.id, lr.resource_id",
+            )?;
+            let mut rows = stmt.query(params![min_p])?;
+
+            while let Some(row) = rows.next()? {
+                let label = row.get::<usize, String>(0)?;
+                let resource = Resource::new(
+                    row.get::<usize, u32>(1)?,
+                    row.get::<usize, u32>(2)?,
+                    row.get::<usize, String>(3)?,
+                    row.get::<usize, u32>(4)?,
+                );
+                resources_by_label.entry(label).or_insert_with(Vec::new).push(resource);
+            }
+
+            Ok(resources_by_label)
         })
         .await
     }
@@ -3179,11 +3227,13 @@ impl SqlStore {
 
 
     /// builds train/validation/tests resources sets for 'pure' resources
-    pub fn save_pure_balanced_sets(
+    pub fn save_data_sets(
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
+        min_p: f32,
+        allow_leaky_split: bool,
         t: &Transaction,
     ) -> Result<(), ThoError> {
         if train_coeff < 0.0 || valid_coeff < 0.0 {
@@ -3194,25 +3244,24 @@ impl SqlStore {
             return Err(ThoError::new(format!("train_coeff + valid_coeff must be <= 1.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
 
-        let (labels, mut resources_by_label) = Self::pure_resources_by_label(t)?;
-        let min_pure_resources = labels
+        Self::validate_min_probability(min_p)?;
+
+        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t)?;
+        let min_resources = labels
             .iter()
             .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
             .min()
             .unwrap_or(0);
 
-        if let Some(limit_val) = limit {
-            if limit_val > min_pure_resources {
-                return Err(ThoError::new(format!("limit {limit_val} exceeds smallest number of pure resources {min_pure_resources}")));
-            }
-        }
+        let target_count = limit.map(|limit_val| min(limit_val, min_resources)).unwrap_or(min_resources);
+        let split_counts = Self::balanced_split_counts(target_count, train_coeff, valid_coeff);
 
-        let target_count = limit.unwrap_or(min_pure_resources);
-        let train_count = ((target_count as f64) * (train_coeff as f64)).floor() as usize;
-        let valid_count = ((target_count as f64) * (valid_coeff as f64)).floor() as usize;
-        let test_count = target_count.saturating_sub(train_count + valid_count);
-
-        debug!("save_pure_balanced_sets: prefix={prefix} target_count={target_count} train_count={train_count} valid_count={valid_count} test_count={test_count}");
+        debug!(
+            "save_data_sets: prefix={prefix} target_count={target_count} train_count={} valid_count={} test_count={} min_p={min_p} allow_leaky_split={allow_leaky_split}",
+            split_counts[0],
+            split_counts[2],
+            split_counts[1],
+        );
 
         let train_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_train"), t)?;
         let valid_group_id = Self::save_resource_set_group(format!("{prefix}_balanced_group_valid"), t)?;
@@ -3225,20 +3274,30 @@ impl SqlStore {
             let mut resources = resources_by_label.remove(&label_id).unwrap_or_default();
             resources.shuffle(&mut rng);
             let selected = resources.into_iter().take(target_count).collect::<Vec<usize>>();
+            let mut offset = 0;
+            let train_end = offset + min(split_counts[0], selected.len().saturating_sub(offset));
+            let mut train_resources = selected[offset..train_end].to_vec();
+            offset = train_end;
+            let test_end = offset + min(split_counts[1], selected.len().saturating_sub(offset));
+            let mut test_resources = selected[offset..test_end].to_vec();
+            offset = test_end;
+            let valid_end = offset + min(split_counts[2], selected.len().saturating_sub(offset));
+            let mut valid_resources = selected[offset..valid_end].to_vec();
 
-            let (train_resources, rest) = selected.split_at(min(train_count, selected.len()));
-            let (valid_resources, test_resources) = rest.split_at(min(valid_count, rest.len()));
+            if allow_leaky_split {
+                Self::fill_leaky_balanced_split(&mut train_resources, &mut test_resources, &mut valid_resources, train_coeff, valid_coeff);
+            }
 
-            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), train_resources)?;
-            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), valid_resources)?;
-            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), test_resources)?;
+            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), train_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), valid_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_balanced_set_{label}"), Some(&label_id), test_resources.as_slice())?;
         }
 
         Ok(())
     }
 
     pub fn min_pure_resources(t: &Transaction) -> Result<usize, ThoError> {
-        let (labels, resources_by_label) = Self::pure_resources_by_label(t)?;
+        let (labels, resources_by_label) = Self::resource_ids_by_label(1.0, t)?;
         let min_pure_resources = labels
             .iter()
             .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
@@ -3247,16 +3306,18 @@ impl SqlStore {
         Ok(min_pure_resources)
     }
 
-    fn pure_resources_by_label(
+    fn resource_ids_by_label(
+        min_p: f32,
         t: &Transaction,
     ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
+        Self::validate_min_probability(min_p)?;
         let labels = Self::list_labels(t)?;
         let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, Vec::new())).collect::<HashMap<usize, Vec<usize>>>();
 
         let mut stmt = t.prepare(
-            "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr GROUP BY lr.resource_id HAVING count(*)=1 ORDER BY lr.label_id, lr.resource_id",
+            "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr WHERE lr.p >= ? ORDER BY lr.label_id, lr.resource_id",
         )?;
-        let mut rows = stmt.query(())?;
+        let mut rows = stmt.query(params![min_p])?;
         while let Some(row) = rows.next()? {
             let label_id = row.get::<usize, usize>(0)?;
             let resource_id = row.get::<usize, usize>(1)?;
@@ -3264,6 +3325,107 @@ impl SqlStore {
         }
 
         Ok((labels, resources_by_label))
+    }
+
+    fn validate_min_probability(min_p: f32) -> Result<(), ThoError> {
+        if !(0.0..=1.0).contains(&min_p) {
+            return Err(ThoError::new(format!("min_p must be in range [0.0, 1.0] (min_p={min_p})")));
+        }
+        Ok(())
+    }
+
+    fn balanced_split_counts(
+        target_count: usize,
+        train_coeff: f32,
+        valid_coeff: f32,
+    ) -> [usize; 3] {
+        if target_count == 0 {
+            return [0, 0, 0];
+        }
+
+        let test_coeff = (1.0 - train_coeff - valid_coeff).max(0.0);
+        let coeffs = [train_coeff as f64, test_coeff as f64, valid_coeff as f64];
+        let active = coeffs
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, coeff)| if *coeff > 0.0 { Some(idx) } else { None })
+            .collect::<Vec<usize>>();
+
+        if active.is_empty() {
+            return [0, 0, 0];
+        }
+
+        let total_coeff = active.iter().map(|idx| coeffs[*idx]).sum::<f64>();
+        let mut counts = [0usize; 3];
+        let mut remainders = Vec::with_capacity(active.len());
+        let mut assigned = 0usize;
+
+        for idx in active.iter().copied() {
+            let quota = (target_count as f64) * coeffs[idx] / total_coeff;
+            let floor = quota.floor() as usize;
+            counts[idx] = floor;
+            assigned += floor;
+            remainders.push((idx, quota - (floor as f64)));
+        }
+
+        remainders.sort_by(|(left_idx, left_remainder), (right_idx, right_remainder)| {
+            right_remainder
+                .partial_cmp(left_remainder)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| left_idx.cmp(right_idx))
+        });
+
+        for (idx, _) in remainders.into_iter().take(target_count.saturating_sub(assigned)) {
+            counts[idx] += 1;
+        }
+
+        if target_count >= active.len() {
+            for idx in active.iter().copied() {
+                if counts[idx] > 0 {
+                    continue;
+                }
+
+                if let Some(donor_idx) = active
+                    .iter()
+                    .copied()
+                    .filter(|donor_idx| counts[*donor_idx] > 1)
+                    .max_by(|left_idx, right_idx| counts[*left_idx].cmp(&counts[*right_idx]).then_with(|| right_idx.cmp(left_idx)))
+                {
+                    counts[donor_idx] -= 1;
+                    counts[idx] += 1;
+                }
+            }
+        }
+
+        counts
+    }
+
+    fn fill_leaky_balanced_split(
+        train_resources: &mut Vec<usize>,
+        test_resources: &mut Vec<usize>,
+        valid_resources: &mut Vec<usize>,
+        train_coeff: f32,
+        valid_coeff: f32,
+    ) {
+        let test_coeff = 1.0 - train_coeff - valid_coeff;
+
+        if train_coeff > 0.0 && train_resources.is_empty() {
+            if let Some(resource_id) = test_resources.first().copied().or_else(|| valid_resources.first().copied()) {
+                train_resources.push(resource_id);
+            }
+        }
+
+        if test_coeff > 0.0 && test_resources.is_empty() {
+            if let Some(resource_id) = valid_resources.first().copied().or_else(|| train_resources.first().copied()) {
+                test_resources.push(resource_id);
+            }
+        }
+
+        if valid_coeff > 0.0 && valid_resources.is_empty() {
+            if let Some(resource_id) = test_resources.first().copied().or_else(|| train_resources.first().copied()) {
+                valid_resources.push(resource_id);
+            }
+        }
     }
 
     fn save_param_value(
@@ -3889,7 +4051,7 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_pure_balanced_sets_group_created() -> Result<(), ThoError> {
+    async fn test_save_data_sets_group_created() -> Result<(), ThoError> {
         let mut store = Arc::new(SqlStore::in_mem().await?);
 
         init_test_store(&store).await?;
@@ -3905,6 +4067,75 @@ mod store_tests {
         assert!(train_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
         assert!(valid_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
         assert!(test_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_save_data_sets_allow_leaky_split_reuses_resources() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+        let import_id = store.save_import("test".to_string()).await?;
+        store.save_label("aaa").await?;
+        store.save_label("bbb").await?;
+
+        store.save_resources_labels(
+            &HashMap::from([
+                (
+                    "aaa_only".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("aaa".into(), 1.0)]),
+                ),
+                (
+                    "bbb_only".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("bbb".into(), 1.0)]),
+                ),
+            ]),
+            import_id,
+        ).await?;
+
+        store.save_data_sets("L", Some(10), 0.6, 0.2, 1.0, true).await?;
+
+        let mut train_sets_resources = HashMap::new();
+        for (set_id, descr) in store.list_resource_set_group_sets("L_balanced_group_train").await? {
+            train_sets_resources.insert(
+                descr,
+                store
+                    .list_resource_set_resources(set_id).await?
+                    .into_iter()
+                    .map(|resource| resource.file_stem().to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let mut valid_sets_resources = HashMap::new();
+        for (set_id, descr) in store.list_resource_set_group_sets("L_balanced_group_valid").await? {
+            valid_sets_resources.insert(
+                descr,
+                store
+                    .list_resource_set_resources(set_id).await?
+                    .into_iter()
+                    .map(|resource| resource.file_stem().to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let mut test_sets_resources = HashMap::new();
+        for (set_id, descr) in store.list_resource_set_group_sets("L_balanced_group_test").await? {
+            test_sets_resources.insert(
+                descr,
+                store
+                    .list_resource_set_resources(set_id).await?
+                    .into_iter()
+                    .map(|resource| resource.file_stem().to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L_balanced_set_aaa"]);
+        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L_balanced_set_aaa"]);
+        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L_balanced_set_aaa"]);
+        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L_balanced_set_bbb"]);
+        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L_balanced_set_bbb"]);
+        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L_balanced_set_bbb"]);
 
         Ok(())
     }
@@ -4394,7 +4625,7 @@ mod store_tests {
         debug!("resource_ids={resource_ids:?}");
 
         store_guard.save_pure_sets(10, false).await?;
-        store_guard.save_pure_balanced_sets("A", None, 0.6, 0.2).await?;
+        store_guard.save_data_sets("A", None, 0.6, 0.2, 1.0, false).await?;
         Ok(resource_ids)
     }
 
@@ -4664,6 +4895,69 @@ mod store_tests {
                 .map(|r| r.file_stem().to_string())
                 .collect::<Vec<String>>()
         );
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_resources_by_label_filters_by_min_probability() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+        let import_id = store.save_import("test".to_string()).await?;
+        store.save_label("aaa").await?;
+        store.save_label("bbb").await?;
+
+        store.save_resources_labels(
+            &HashMap::from([
+                (
+                    "aaa_only".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("aaa".into(), 1.0)]),
+                ),
+                (
+                    "mostly_aaa".to_string(),
+                    (
+                        ResourceStats::new(vec![1, 100]),
+                        vec![("aaa".into(), 0.7), ("bbb".into(), 0.3)],
+                    ),
+                ),
+                (
+                    "mostly_bbb".to_string(),
+                    (
+                        ResourceStats::new(vec![1, 100]),
+                        vec![("aaa".into(), 0.4), ("bbb".into(), 0.6)],
+                    ),
+                ),
+            ]),
+            import_id,
+        ).await?;
+
+        let mut resources_by_label = store.resources_by_label(0.6).await?;
+        let mut aaa_resources = resources_by_label
+            .remove("aaa")
+            .unwrap()
+            .into_iter()
+            .map(|resource| resource.file_stem().to_string())
+            .collect::<Vec<_>>();
+        aaa_resources.sort();
+        let mut bbb_resources = resources_by_label
+            .remove("bbb")
+            .unwrap()
+            .into_iter()
+            .map(|resource| resource.file_stem().to_string())
+            .collect::<Vec<_>>();
+        bbb_resources.sort();
+
+        assert_eq!(vec!["aaa_only".to_string(), "mostly_aaa".to_string()], aaa_resources);
+        assert_eq!(vec!["mostly_bbb".to_string()], bbb_resources);
+
+        let resources_by_label = store.resources_by_label(1.0).await?;
+        assert_eq!(
+            vec!["aaa_only".to_string()],
+            resources_by_label["aaa"]
+                .iter()
+                .map(|resource| resource.file_stem().to_string())
+                .collect::<Vec<_>>()
+        );
+        assert!(resources_by_label["bbb"].is_empty());
 
         Ok(())
     }
