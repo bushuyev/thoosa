@@ -102,9 +102,9 @@ pub fn labeled_resourses(
 
         for file in read_dir(label_dir.path())? {
             let path_buf = file?.path();
-            let file = path_buf.file_name().expect("file_name").to_str().expect("file");
+            let file = path_buf.file_stem().expect("file_name").to_str().expect("file");
 
-            let key = format!("{label}/{file}");
+            let key = format!("{label}_{file}");
 
             let secondary_labels = df_csv_ref
                 .clone()

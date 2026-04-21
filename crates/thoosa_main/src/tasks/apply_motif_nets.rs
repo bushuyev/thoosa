@@ -272,7 +272,7 @@ where
         max_loss: Option<f32>,
         selected_nets_limit: Option<usize>,
         slice_step: u32,
-        #[cfg(test)]
+        // #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
     ) -> Result<Self, ThoError>
     where
@@ -1410,7 +1410,7 @@ pub(crate) mod tests {
             Some(0.3),
             None,
             slice_step,
-            trigger_oom_len
+            trigger_oom_len,
         ).await?);
 
         let channels_patterns = vec![
