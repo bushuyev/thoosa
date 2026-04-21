@@ -13,7 +13,7 @@ use thoosa_main::RawTensorLoader;
 use thoosa_shared::{collect_futures_with_progress, StreamBuffering, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::Store;
-use crate::run_all::run_all;
+use crate::run_all::{run_all, run_all_config_0};
 
 mod data;
 mod labels;
@@ -55,13 +55,15 @@ fn main() -> Result<(), ThoError>{
                 run_all_args: &RunAllArgs
             |{
                 debug!("bird_clef run all");
+                let all_configs = run_all_config_0(run_all_args);
 
                run_all(
                    ws,
                    store,
                    loader,
                    root_ctx,
-                   run_all_args
+                   run_all_args,
+                   all_configs
                ).await?;
 
                 Ok(())

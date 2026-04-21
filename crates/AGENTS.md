@@ -2,9 +2,11 @@
 ## General info
 The app asynchronously executes a series of tensor-related tasks (Stages) on GPU devices and handles OutOfMemory errors (see OOMHandler in crates/thoosa_shared/src/runner/oom_handler.rs) by throttling GPU access, processing data in chunks, or otherwise reducing GPU memory usage (see the Adjuster trait in crates/thoosa_shared/src/runner/oom_handler.rs:33 and its implementations).
 It's important to keep big tensors (or big number of small tensors) between async awaits either in Arc<DevicesWrap<..>> obtained from SomeStage::run_cached (crates/thoosa_common/src/runner/common/cachable.rs) or in TmpCached (crates/thoosa_common/src/runner/tmp_cache.rs) so that GlobalCtx::dump_all_to_cpu (crates/thoosa_common/src/runner/global_ctx.rs) could dump them to CPU when handling OOM.
-The app’s entry point is run_cli (crates/thoosa_main/src/cli.rs), which is invoked from the sample project (crates/thoosa_projects/thoosa_hbac/src/main.rs).
+The app’s entry point is run_cli (crates/thoosa_main/src/cli.rs), which is invoked from the sample projects (crates/thoosa_projects/thoosa_hbac/src/main.rs and thoosa_projects/thoosa_hbac/src/main.rs).
 Currently, the only implemented workflow is time series classification, located in crates/thoosa_main/src/tasks.
 async engine is Tokio, rayon is used to parallel sync functions. 
+Data (run  resources, labels, configuration parameters etc) is kept in sqlite database, schema can be found in SqlStore::create_tables (crates/thoosa_store/src/lib.rs:2737).
+
 
 ## Important Agent Rules
 - **Never run `cargo fmt` or any other bulk formatter.** Make only the minimal manual edits required for the task at hand.

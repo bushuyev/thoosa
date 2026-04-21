@@ -119,18 +119,21 @@ pub fn labeled_resourses(
                 Some(s) => parse_secondary_labels(s),
                 None => Vec::new(),
             };
+            debug!("clef/labeled_resourses: file={file:?} key={key} secondary_labels={secondary_labels:?}");
 
             let labels = if secondary_labels.is_empty() {
                 vec![(label.clone(), 1.0)]
             } else {
-                vec![(label.clone(), 1.0)]
+                let secondary_p = 0.1/secondary_labels.len() as f32;
+                //train.cvs doesn't contain probabilities of the secondary labels
+                std::iter::once((label.clone(), 0.9)).chain(secondary_labels.into_iter().map(|label|(label, secondary_p))).collect()
             };
 
-            debug!("clef/labeled_resourses: file={file:?} key={key} secondary_labels={secondary_labels:?}");
+            debug!("clef/labeled_resourses: file={file:?} key={key} labels={labels:?}");
 
             map.insert(
                 key,
-                vec![(label.clone(), 1.0)],
+                labels,
             );
         }
     }
