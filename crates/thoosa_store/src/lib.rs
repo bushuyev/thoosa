@@ -810,7 +810,7 @@ impl Store for SqlStore {
         .await
     }
 
-    //TODO resources - save serialized resources config - run_resources is getting to big
+    //TODO resources - save serialized resources config - run_resources is getting too big
     async fn save_run_config<'a, 'b, 'c>(
         &self,
         input_run_id: Option<&'a [RunId]>,
@@ -3178,6 +3178,7 @@ impl SqlStore {
     }
 
 
+    /// builds train/validation/tests resources sets for 'pure' resources
     pub fn save_pure_balanced_sets(
         prefix: &str,
         limit: Option<usize>,
