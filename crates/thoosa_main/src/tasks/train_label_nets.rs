@@ -105,7 +105,7 @@ where
         max_loss,
         selected_motif_nets_limit,
         slices_step,
-        #[cfg(test)]
+        // #[cfg(test)]
         None
     ).await?);
 

@@ -63,6 +63,8 @@ pub(crate) async fn run_all(
     let train_label_nets_run_config_range_or_value = Arc::new(all_config.train_label_nets_run_config_range_or_value);
     let labels_filter = run_all_args.labels_filter();
     let labels_filter_ref = labels_filter.as_ref();
+    let find_resources = run_all_args.find_resources.clone();
+    let select_resources = run_all_args.select_resources.clone();
 
     let futures = labels.iter().filter(|label|
         {
@@ -81,9 +83,11 @@ pub(crate) async fn run_all(
         let train_motif_nets_run_config_range_or_value = Arc::clone(&train_motif_nets_run_config_range_or_value);
         let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
         let labels_filter = labels_filter.clone();
+        let find_resources = find_resources.clone();
+        let select_resources = select_resources.clone();
         async move {
 
-            let find_motifs_input= Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{label}/3"))))));
+            let find_motifs_input= Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}"))))));
             let find_motifs_run_config_rov = Arc::clone(&find_motifs_run_config);
 
             let fixed_find_motif_config = fixed_find_motif_config.clone();
@@ -115,7 +119,7 @@ pub(crate) async fn run_all(
             info!("run_all: label={label} find_motifs_run_ids={find_motifs_run_ids:?}");
             let select_motifs_run_config = Arc::new(select_motifs_run_config);
 
-            let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{label}/3")))))));
+            let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{select_resources}_{label}")))))));
 
             //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
             let mut select_motifs_run_ids = vec![];

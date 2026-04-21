@@ -75,8 +75,8 @@ where
         }
 
         let apply_motif_nets = Arc::new({
-            #[cfg(test)]
-            {
+            // #[cfg(test)]
+            // {
                 ApplyMotifNets::new(
                     ws,
                     store,
@@ -88,20 +88,20 @@ where
                     None,
                 )
                 .await?
-            }
-            #[cfg(not(test))]
-            {
-                ApplyMotifNets::new(
-                    ws,
-                    store,
-                    train_motif_nets_run_ids.clone(),
-                    stage_ctx,
-                    Some(0.3),//TODO
-                    selected_motif_nets_limit,
-                    slices_step,
-                )
-                .await?
-            }
+            // }
+            // #[cfg(not(test))]
+            // {
+            //     ApplyMotifNets::new(
+            //         ws,
+            //         store,
+            //         train_motif_nets_run_ids.clone(),
+            //         stage_ctx,
+            //         Some(0.3),//TODO
+            //         selected_motif_nets_limit,
+            //         slices_step,
+            //     )
+            //     .await?
+            // }
         });
 
         let label_net_run_ids = {

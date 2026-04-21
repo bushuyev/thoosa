@@ -12,7 +12,8 @@ use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_shared::{collect_futures_with_progress, StreamBuffering, ThoError};
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_store::Store;
+use thoosa_store::rusqlite::Transaction;
+use thoosa_store::{SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0};
 
 mod data;
@@ -47,6 +48,16 @@ fn main() -> Result<(), ThoError>{
         run_cli(
             |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
+            |t: &Transaction|{
+                SqlStore::save_all_sets(&t)?;
+
+                SqlStore::save_data_sets("A1", Some(1), 0.6, 0.2, 1.0, true, &t)?;
+                SqlStore::save_data_sets("A3", Some(3), 0.6, 0.2, 1.0, true, &t)?;
+                SqlStore::save_data_sets("A10", Some(10), 0.6, 0.2, 1.0, true, &t)?;
+                SqlStore::save_data_sets("AA", None, 0.6, 0.2, 0.9, true, &t)?;
+
+                Ok(())
+            },
             async |
                 ws: &Arc<RwLock<Box<dyn Workspace>>>,
                 store: &Arc<Box<dyn Store>>,
@@ -72,8 +83,7 @@ fn main() -> Result<(), ThoError>{
             1,
             u32::MAX,
             32000,
-        )
-            .await
+        ).await
     });
 
 

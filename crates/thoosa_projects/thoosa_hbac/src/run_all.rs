@@ -561,7 +561,7 @@ mod tests {
     use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::ws::FsWorkspace;
-    use thoosa_main::cli::{import_resources_with_pure_sets, FindAndSelect, RunAllArgs};
+    use thoosa_main::cli::{import_resources, FindAndSelect, RunAllArgs};
     use thoosa_main::RawTensorLoader;
     use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
@@ -571,6 +571,7 @@ mod tests {
     use thoosa_shared::hyperparameter::FieldName;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::test_utils::MotifKind;
+    use thoosa_store::rusqlite::Transaction;
     use thoosa_store::SqlStore;
     use crate::run_all::{run_all, AllConfigs};
 
@@ -669,7 +670,7 @@ mod tests {
 
         debug!("test_run_all: import_hash={import_hash:?}");
 
-        let imported_ids = import_resources_with_pure_sets(
+        let imported_ids = import_resources(
             &ws,
             &store,
             &["label_0", "label_1"],
@@ -683,7 +684,10 @@ mod tests {
             },
             None,
             true,
-            Some(&[(20, true), (10, true)])
+            |t: &Transaction|{
+                Ok(())
+            },
+            // Some(&[(20, true), (10, true)])
         ).await?;
 
         let resources = store.list_resources_by_ids(&imported_ids).await?;

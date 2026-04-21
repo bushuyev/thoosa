@@ -15,7 +15,8 @@ use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shared::ThoError;
-use thoosa_store::Store;
+use thoosa_store::rusqlite::Transaction;
+use thoosa_store::{SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0};
 
 fn main() -> Result<(), ThoError> {
@@ -63,6 +64,40 @@ fn main() -> Result<(), ThoError> {
                     Cpu,
                 )
             },
+            |t: &Transaction|{
+
+                for pure_sets_len in [(3, true), (10, true), (50, true), (100, true), (150, true), (10000, false)] {
+                    SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
+                }
+
+                let min_pure_resources = SqlStore::min_pure_resources(&t)?;
+                if min_pure_resources >= 10 {
+                    SqlStore::save_data_sets("A10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("B10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("C10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                }
+                if min_pure_resources >= 20 {
+                    SqlStore::save_data_sets("A20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("B20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("C20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("D20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("E20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("F20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("G20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+                }
+                if min_pure_resources >= 100 {
+                    SqlStore::save_data_sets("A100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("B100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
+                    SqlStore::save_data_sets("C100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
+                }
+                if min_pure_resources > 0 {
+                    SqlStore::save_data_sets("All", None, 0.6, 0.2, 1.0, false, &t)?;
+                }
+
+                SqlStore::save_groups_by_label_cnt(100, &t)?;
+
+                Ok(())
+            },
             async |
                 ws: &Arc<RwLock<Box<dyn Workspace>>>,
                 store: &Arc<Box<dyn Store>>,
@@ -75,6 +110,7 @@ fn main() -> Result<(), ThoError> {
 
                 run_all(ws, store, loader, root_ctx, run_all_args, all_configs).await
             },
+
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,
             684400,
