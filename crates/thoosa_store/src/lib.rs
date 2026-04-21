@@ -2705,8 +2705,13 @@ impl SqlStore {
         if params.len() > 0 {
             q.pop();
             let q_str = q.into_iter().collect::<String>();
-            t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))
-                .unwrap();
+            match t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))
+            {
+                Ok(_) => {}
+                Err(e) => {
+                    panic!("save_resources_labels_insert_labels: q_str={q_str:?} e={e}");
+                }
+            };
         }
     }
 
@@ -3044,7 +3049,16 @@ impl SqlStore {
         import_id: u32,
         t: &Transaction,
     ) -> Result<Vec<ResourceId>, ThoError> {
-        debug!("save_resources_labels: resource_labels_probs.len()={}", resource_stats_labels_probs.len());
+        debug!("save_resources_labels: resource_labels_probs={resource_stats_labels_probs:?}");
+        let mut counts = HashMap::new();
+        for e in resource_stats_labels_probs.iter() {
+            *counts.entry(e.0.clone()).or_insert(0) +=1;
+        }
+        for e in counts {
+            if e.1 > 1 {
+                warn!("key {} has {} entries", e.0, e.1);
+            }
+        }
 
         let resources_len = resource_stats_labels_probs.len();
         let mut resource_labels_iter = resource_stats_labels_probs.into_iter().array_chunks::<500>();

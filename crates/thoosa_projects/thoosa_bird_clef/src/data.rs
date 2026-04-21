@@ -1,5 +1,5 @@
 use lewton::inside_ogg::OggStreamReader;
-use log::debug;
+use log::{debug, warn};
 use ogg::reading::PacketReader;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -85,7 +85,7 @@ pub fn labeled_resourses(
     let train_audio_dir =
         path.as_ref().join("train_audio"); //<P>::into(/*path*/
     debug!("clef/labeled_resourses: train_audio_dir={train_audio_dir:?}");
-
+    let mut counts = HashMap::new();
     let df_csv_ref = &df_csv;
     for label_dir in read_dir(train_audio_dir)? {
 
@@ -100,41 +100,63 @@ pub fn labeled_resourses(
 
         debug!("label_dir={label_dir:?} label={:?}", label);
 
+
         for file in read_dir(label_dir.path())? {
             let path_buf = file?.path();
             let file = path_buf.file_stem().expect("file_name").to_str().expect("file");
+            let file_name = path_buf.file_name().expect("file_name").to_str().expect("file_name").to_string();
+            let csv_filename = format!("{label}/{file_name}");
 
-            let key = format!("{label}_{file}");
+            let key = format!("{label}_{file_name}");
 
             let secondary_labels = df_csv_ref
                 .clone()
-                .filter(col("filename").eq(lit(key.as_str())))
+                .filter(col("filename").eq(lit(csv_filename.as_str())))
                 .select([col("secondary_labels")])
                 .collect()?;
 
             let secondary_labels: Vec<String> = match secondary_labels
                 .column("secondary_labels")?
                 .str()?
-                .get(0) {
+                .into_iter()
+                .next()
+                .flatten() {
                 Some(s) => parse_secondary_labels(s),
                 None => Vec::new(),
             };
-            debug!("clef/labeled_resourses: file={file:?} key={key} secondary_labels={secondary_labels:?}");
+            debug!("clef/labeled_resourses: file={file:?} csv_filename={csv_filename} key={key} secondary_labels={secondary_labels:?}");
+            let secondary_labels = secondary_labels.into_iter().filter(|secondary_label|{
+                let r = !secondary_label.eq(&label);
+                if !r {
+                    warn!("clef/labeled_resourses: secondary_label={secondary_label} eq {label}");
+                }
+                r
+            }).collect::<Vec<_>>();
 
             let labels = if secondary_labels.is_empty() {
                 vec![(label.clone(), 1.0)]
             } else {
+                let secondary_labels = secondary_labels.into_iter().filter(|secondary_label|!secondary_label.eq(&label)).collect::<Vec<_>>();
                 let secondary_p = 0.1/secondary_labels.len() as f32;
                 //train.cvs doesn't contain probabilities of the secondary labels
-                std::iter::once((label.clone(), 0.9)).chain(secondary_labels.into_iter().map(|label|(label, secondary_p))).collect()
+                std::iter::once((label.clone(), 0.9)).chain(secondary_labels.into_iter().map(|secondary_label|{
+                    (secondary_label, secondary_p)
+                })).collect()
             };
 
             debug!("clef/labeled_resourses: file={file:?} key={key} labels={labels:?}");
+
+            *counts.entry(key.clone()).or_insert(0) +=1;
 
             map.insert(
                 key,
                 labels,
             );
+        }
+    }
+    for e in counts {
+        if e.1 > 1 {
+            warn!("key {} has {} entries", e.0, e.1);
         }
     }
 
@@ -396,7 +418,18 @@ mod tests {
 
         let resourses = labeled_resourses("test_data/")?;
 
+        debug!("resourses={resourses:?}");
+
         assert_eq!(5, resourses.len());
+        assert_eq!(Some(&vec![("555123".to_string(), 1.0)]), resourses.get("555123_iNat336366.ogg"));
+        assert_eq!(
+            Some(&vec![
+                ("24279".to_string(), 0.9),
+                ("326272".to_string(), 0.05),
+                ("67107".to_string(), 0.05),
+            ]),
+            resourses.get("24279_XC1039628.ogg"),
+        );
 
         Ok(())
     }
