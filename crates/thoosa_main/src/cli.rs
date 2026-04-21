@@ -1006,26 +1006,26 @@ where
 
     let min_pure_resources = SqlStore::min_pure_resources(&t)?;
     if min_pure_resources >= 10 {
-        SqlStore::save_pure_balanced_sets("A10", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("B10", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("C10", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_data_sets("A10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("B10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("C10", Some(10), 0.6, 0.2, 1.0, false, &t)?;
     }
     if min_pure_resources >= 20 {
-        SqlStore::save_pure_balanced_sets("A20", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("B20", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("C20", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("D20", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("E20", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("F20", Some(10), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("G20", Some(10), 0.6, 0.2, &t)?;
+        SqlStore::save_data_sets("A20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("B20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("C20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("D20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("E20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("F20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("G20", Some(10), 0.6, 0.2, 1.0, false, &t)?;
     }
     if min_pure_resources >= 100 {
-        SqlStore::save_pure_balanced_sets("A100", Some(100), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("B100", Some(100), 0.6, 0.2, &t)?;
-        SqlStore::save_pure_balanced_sets("C100", Some(100), 0.6, 0.2, &t)?;
+        SqlStore::save_data_sets("A100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("B100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
+        SqlStore::save_data_sets("C100", Some(100), 0.6, 0.2, 1.0, false, &t)?;
     }
     if min_pure_resources > 0 {
-        SqlStore::save_pure_balanced_sets("All", None, 0.6, 0.2, &t)?;
+        SqlStore::save_data_sets("All", None, 0.6, 0.2, 1.0, false, &t)?;
     }
 
     SqlStore::save_groups_by_label_cnt(100, &t)?;
