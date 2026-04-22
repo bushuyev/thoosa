@@ -877,7 +877,7 @@ where
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
     let device_idx = ctx.device_idx();
-    debug!("load_random_slices: slices={slices:?} descr={descr}");
+    debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} slices={slices:?} descr={descr}");
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
         find_motifs_run_id,
@@ -913,7 +913,7 @@ where
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
     let mut slice_i: i64 = 0;
     for (resource_id, slices) in resource_ids_slices {
-        debug!("load_random_slices: resource_id={resource_id} slices={slices:?}");
+        debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");
 
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource));
@@ -921,6 +921,7 @@ where
             .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
             .await?;
         let size = raw_tensor.size();
+        debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
         with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false), raw_tensor, motif_t; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>, motif_tt:&ThoTensor<AnyDims, DataId>| {
             for slice in slices {
@@ -936,13 +937,21 @@ where
                 }
             }
 
+            debug!("load_random_slices: resource_id={resource_id} with_data_done");
+
             Ok::<_, ThoError>(())
         })?;
     }
+    debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} done_0");
+
     //chop if there were skipped slices
-    with_data!(ctx.branch(Some("motif_"), false), motif_t; |_ctx, motif_tt:&ThoTensor<AnyDims, DataId>|{
+    let r= with_data!(ctx.branch(Some("motif_"), false), motif_t; |_ctx, motif_tt:&ThoTensor<AnyDims, DataId>|{
         ThoTensor::new((motif_tt.id().0, "motif").into(), motif_tt.t.f_i((.., 0..slice_i, ..))?)
-    }).map(|v| (window, v))
+    }).map(|v| (window, v));
+
+    debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} done_1");
+
+    r
 }
 
 #[cfg(test)]

@@ -3,6 +3,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use log::{debug, info};
 use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SimilarityMetricRangeOrValue, SlicesFilterRangeOrValue};
+use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::RunCtx;
@@ -11,9 +12,9 @@ use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, FindAndSelect, RunAllArgs};
+use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, median_window_from_find_motifs, median_window_from_find_motifs_grid, run_grid, run_opt, FindAndSelect, RunAllArgs};
 use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsRunConfigFields::SelectMotifsRunConfig;
@@ -84,7 +85,9 @@ pub(crate) async fn run_all(
         let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
         let train_motif_nets_run_config_range_or_value = Arc::clone(&train_motif_nets_run_config_range_or_value);
         let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
-        let labels_filter = labels_filter.clone();
+        let train_labels_opt_config = Arc::clone(&all_config.train_labels_opt_config);
+        let train_motifs_opt_config = Arc::clone(&all_config.train_motifs_opt_config);
+
         let find_resources = find_resources.clone();
         let select_resources = select_resources.clone();
         async move {
@@ -155,7 +158,7 @@ pub(crate) async fn run_all(
             }
 
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, Arc::new(OptConfig::new(50, 10)))));
+            let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, train_motifs_opt_config)));
 
             //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
             let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
@@ -196,6 +199,7 @@ pub(crate) async fn run_all(
                 &ws,
                 &store,
                 async move |run_configs| {
+
                     new_train_label_nets(
                         train_motif_nets_run_ids,
                         Arc::clone(&loader),
@@ -203,7 +207,7 @@ pub(crate) async fn run_all(
                         &ws_in_train_labels,
                         &store_in_train_labels,
                         init_ctx_train_labels,
-                        Arc::new(OptConfig::new(50, 10)),
+                        train_labels_opt_config,
                         Some(vec![label.clone()]),
                         Some(run_all_args.max_motif_net_loss), //to RunAll args,
                         run_all_args.selected_motif_nets_limit,
@@ -223,7 +227,7 @@ pub(crate) async fn run_all(
     let _ = collect_futures_with_progress(
         futures,
         labels.len(),
-        1,
+        8,
         StreamBuffering::Unordered,
         "bird_clef_labels",
     ).await;
@@ -247,6 +251,12 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             window: RangeOrValue::Range{ range: Range {start: 2000, end: 32000}, step: Some((4000, 0)) },
             // window: RangeOrValue::Value(1000),
             freq_filter: None,
+            // freq_filter: Some(vec![
+            //     AverageFilter(AverageFilterParamsRangeOrValue {
+            //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
+            //         step: RangeOrValue::Value(1),
+            //     }),
+            // ]),
             // freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
             //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
             //     band_hz: RangeOrValue::Value(2.),
@@ -383,8 +393,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
-        train_motifs_opt_config: Arc::new(OptConfig::new(50, 10)),
-        train_labels_opt_config: Arc::new(OptConfig::new(100, 10)),
+        train_motifs_opt_config: Arc::new(OptConfig::new(30, 10)),
+        train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
         train_final_opt_config: Arc::new(OptConfig::new(30, 10))
     }
 }
