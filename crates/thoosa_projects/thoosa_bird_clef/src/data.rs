@@ -37,8 +37,11 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
     let tensor = Tensor::stack(
         &channels
             .into_iter()
-            .map(|channel| Tensor::from_slice(channel.as_slice()).totype(Half))
-            .collect::<Vec<Tensor>>(),
+            .map(|channel| Ok(
+                Tensor::f_from_slice(channel.as_slice())?
+                       .f_totype(Half)?
+            ))
+            .collect::<Result<Vec<Tensor>, ThoError>>()?,
         0,
     );
 

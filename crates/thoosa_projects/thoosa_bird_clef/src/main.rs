@@ -35,8 +35,8 @@ fn main() -> Result<(), ThoError>{
                 panic!("Failed to create context: {err:?}"); //TODO device
             }
         })
-        .worker_threads(cpu_num)
-        .max_blocking_threads(cpu_num)
+        .worker_threads(cpu_num/2)
+        .max_blocking_threads(cpu_num/2)
         .enable_all()
         .build()
         .map_err(|err| {

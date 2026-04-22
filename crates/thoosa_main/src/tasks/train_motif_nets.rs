@@ -265,7 +265,7 @@ where
                     |pred_y: &Tensor, target: &Tensor| {
 
                         // let loss = pred_y.binary_cross_entropy::<Tensor>(&target.totype(Float), None, Reduction::Mean).set_requires_grad(true);
-                        let loss = pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.totype(Float), None, None, Reduction::Mean)?;
+                        let loss = pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?;
                         debug!("TrainMotifNets::run, loss_fn: pred_y ={pred_y} target={target} loss={loss}");
 
                         Ok(loss)
