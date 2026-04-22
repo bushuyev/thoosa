@@ -181,7 +181,7 @@ where
         mut init_ctx:C
     ) -> Result<Self, ThoError> {
         
-        debug!("FindMotifsStage::new: fixed_config={fixed_config:?}");
+        debug!("FindMotifsStage::new: fixed_config={fixed_config:?} init_ctx.id={:?}", init_ctx.id());
 
         let random_stats = Arc::new(MotifStats::new(
             Arc::clone(&store),
@@ -203,7 +203,8 @@ where
                 let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_id}")), false);
 
                 async move {
-                    debug!("FindMotifsStage::new: run_config={run_config:?}");
+                    let ctx_id = ctx.id().clone();
+                    debug!("FindMotifsStage::new: run_config={run_config:?} ctx.id={:?}", ctx.id());
                     let channels = thoosa_shared::with_perf_log(
                         || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels(),
                         "FindMotifsStage::new/ws_read_channels",
@@ -221,8 +222,12 @@ where
                             }
                         }
                         SlicesFilter::Precalculate(v) => {
+                            debug!("FindMotifsStage::new: SlicesFilter::Precalculate ctx.id={:?}", ctx_id);
+
                             let comparison_metric = Metrics::from_similarity_metric(run_config.similarity_metric, to_stats_aggr(v.aggr));
                             let motif_stats = random_stats_arc.run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()], None))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+
+                            debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
                             let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
                                 let metric_val = t.channels_motifs_dists(&comparison_metric)?;
@@ -244,6 +249,8 @@ where
                         }
                     };
                     let radius = run_config.step() as u64 * 2;
+
+                    debug!("FindMotifsStage::new: masks_ctx done  ctx.id={:?}", ctx_id);
 
                     let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
                         Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
@@ -294,12 +301,12 @@ where
 
                             //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
                             let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask( //stream is set in CrossInputSelectorWrap/with_[select]_data_ref + with_data
-                                                                                                     &t_0,
-                                                                                                     &t_1,
-                                                                                                     run_config.similarity_metric,
-                                                                                                     fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
-                                                                                                     &mut mask_makers,
-                                )?;
+                                     &t_0,
+                                     &t_1,
+                                     run_config.similarity_metric,
+                                     fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
+                                     &mut mask_makers,
+                            )?;
 
 
                             trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
@@ -315,12 +322,16 @@ where
                         masks_ctx,
                         UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
                     ));
+                    debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
 
                     let configured_loader = config_to_stage(&loader, &run_config, ws)?;
                     let run_config_clone = run_config.clone();
                     let step = cross_unfold_clc.as_ref().unfold_params.step();
 
                     let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
+
+                    debug!("FindMotifsStage::new: ctx.id={:?} done", ctx_id);
+
                     FindMotifsStages::new(
                         run_config,
                         Arc::new(CrossLoader::new(
@@ -367,6 +378,7 @@ where
                 }
 
             });
+        debug!("FindMotifsStage::new: fixed_config={fixed_config:?} futures_done");
 
         let cross_loaders = collect_futures_with_progress(
             futures,

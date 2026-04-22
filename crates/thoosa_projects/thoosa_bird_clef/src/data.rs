@@ -85,8 +85,9 @@ pub fn labeled_resourses(
     debug!("df={:?}", df_csv.clone().limit(10).collect()?);
 
     let mut map = HashMap::new();
-    let train_audio_dir =
-        path.as_ref().join("train_audio"); //<P>::into(/*path*/
+
+    let train_audio_dir = path.as_ref().join("train_audio");
+
     debug!("clef/labeled_resourses: train_audio_dir={train_audio_dir:?}");
     let mut counts = HashMap::new();
     let df_csv_ref = &df_csv;
