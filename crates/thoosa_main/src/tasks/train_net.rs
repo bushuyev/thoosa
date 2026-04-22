@@ -328,7 +328,7 @@ where
                             bad_epochs = 0;
                             {
                                 let mut vs_guard = thoosa_shared::with_perf_log(|| vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "TrainNet/run_inner/lock_vs");
-                                vs_guard.save(&best_checkpoint_path)?;
+                                panic_to_err!(vs_guard.save(&best_checkpoint_path));//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
                             }
                             saved_best = true;
                         } else {

@@ -73,6 +73,8 @@ pub(crate) async fn run_all(
                 .unwrap_or(true)
         }
     ).map(|label|{
+        debug!("run_all: label={label}");
+
         let fixed_find_motif_config = fixed_find_motifs_config.clone();
 
         let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
@@ -87,7 +89,7 @@ pub(crate) async fn run_all(
         let select_resources = select_resources.clone();
         async move {
 
-            let find_motifs_input= Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}"))))));
+            let find_motifs_input= Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
             let find_motifs_run_config_rov = Arc::clone(&find_motifs_run_config);
 
             let fixed_find_motif_config = fixed_find_motif_config.clone();
@@ -119,7 +121,7 @@ pub(crate) async fn run_all(
             info!("run_all: label={label} find_motifs_run_ids={find_motifs_run_ids:?}");
             let select_motifs_run_config = Arc::new(select_motifs_run_config);
 
-            let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{select_resources}_{label}")))))));
+            let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
 
             //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
             let mut select_motifs_run_ids = vec![];
@@ -184,7 +186,7 @@ pub(crate) async fn run_all(
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
                    run_all_args.train_resource_config()
-            ).check(&store).await?));
+            )/*.check(&store).await?*/));
 
             //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
             let train_label_nets_run_ids = run_opt::< _, _, TrainLabelNetsRunConfig, _, _>(
@@ -202,7 +204,7 @@ pub(crate) async fn run_all(
                         &store_in_train_labels,
                         init_ctx_train_labels,
                         Arc::new(OptConfig::new(50, 10)),
-                        labels_filter.clone(),
+                        Some(vec![label.clone()]),
                         Some(run_all_args.max_motif_net_loss), //to RunAll args,
                         run_all_args.selected_motif_nets_limit,
                         run_all_args.motif_slices_step
@@ -221,7 +223,7 @@ pub(crate) async fn run_all(
     let _ = collect_futures_with_progress(
         futures,
         labels.len(),
-        16,
+        1,
         StreamBuffering::Unordered,
         "bird_clef_labels",
     ).await;
@@ -241,8 +243,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_and_select =  FindAndSelect::GridOnly {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
-            step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 1000, end: 16000}, step: Some((1000, 0)) },
+            step: RangeOrValue::Value(2000),
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 32000}, step: Some((4000, 0)) },
             // window: RangeOrValue::Value(1000),
             freq_filter: None,
             // freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
@@ -255,7 +257,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ _path_pd: Default::default() }),
             slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(0.1) }),
+                aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(5.0) }),
                 // aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
                 slices: RangeOrValue::Value(1000),
             }),
@@ -321,7 +323,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(10),
+            batch_size: RangeOrValue::Value(2),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
@@ -361,7 +363,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(10),
+            batch_size: RangeOrValue::Value(2),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
             min_delta: RangeOrValue::Value(1e-4_f32),
