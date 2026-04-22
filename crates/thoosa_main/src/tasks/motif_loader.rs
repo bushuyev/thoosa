@@ -871,7 +871,7 @@ pub(crate) async fn load_random_slices<L, C>(
     mut ctx: C,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     descr: &str
-) -> Result<(u32, ThoTensor<ChannelsMotifsSlices, SynKey>), ThoError>
+) -> Result<(u32, TmpCached<ThoTensor<ChannelsMotifsSlices, SynKey>>), ThoError>
 where
     C: 'static + RunCtx,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
@@ -903,15 +903,9 @@ where
 
     debug!("load_random_slices:  find_motifs_run_config={find_motifs_run_config:?} device_idx={device_idx} channels={channels}");
 
-    //it won't be dumped to cpu - add to TmpCache
-    let motif_t = Arc::new(DevicesWrap::wrap(ThoTensor::<AnyDims, DataId>::zeros(
-        DataId(0),
-        [channels, resource_ids_slices.values().map(|v| v.len()).sum::<usize>() as i64, window as i64],
-        (Float, ThoDevice::from(ctx.device_idx()).into()),
-    )?));
+    let tmp_cache = TmpCached::new(&format!("tmp_random_slices_{descr}")).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
-    let mut slice_i: i64 = 0;
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");
 
@@ -923,7 +917,15 @@ where
         let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false), raw_tensor, motif_t; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>, motif_tt:&ThoTensor<AnyDims, DataId>| {
+        let resource_slices = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
+            let resource_id = resource_id;
+            let resource_slice_count = slices.len() as i64;
+            let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
+                DataId(resource_id),
+                [channels, resource_slice_count, window as i64],
+                (Float, ThoDevice::from(ctx.device_idx()).into()),
+            )?;
+            let mut slice_i: i64 = 0;
             for slice in slices {
                 let in_range = MonoMetrics::<1,2>::from([channels, (slice + window) as i64]) <= *size;
                 if !in_range {
@@ -931,7 +933,7 @@ where
                 } else {
                     debug!("load_random_slices:  slice_i={slice_i} slice={slice:?} size={size:?}");
                     let src = raw_tt.t.f_i((0..channels, slice as i64..(slice + window) as i64))?;
-                    let mut dst = motif_tt.t.f_i((0..channels, slice_i, ..))?;
+                    let mut dst = motif_t.t.f_i((0..channels, slice_i, ..))?;
                     dst.f_copy_(&src)?;
                     slice_i += 1;
                 }
@@ -939,19 +941,24 @@ where
 
             debug!("load_random_slices: resource_id={resource_id} with_data_done");
 
-            Ok::<_, ThoError>(())
+            if slice_i == 0 {
+                Ok::<_, ThoError>(None)
+            } else {
+                Ok::<_, ThoError>(Some(ThoTensor::new(
+                    mono_key!(resource_id, format!("random_slices_resource_id={resource_id}")).into(),
+                    motif_t.t.f_i((.., 0..slice_i, ..))?,
+                )?))
+            }
         })?;
+
+        if let Some(resource_slices) = resource_slices {
+            tmp_cache.insert(resource_slices);
+        }
     }
     debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} done_0");
-
-    //chop if there were skipped slices
-    let r= with_data!(ctx.branch(Some("motif_"), false), motif_t; |_ctx, motif_tt:&ThoTensor<AnyDims, DataId>|{
-        ThoTensor::new((motif_tt.id().0, "motif").into(), motif_tt.t.f_i((.., 0..slice_i, ..))?)
-    }).map(|v| (window, v));
-
     debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} done_1");
 
-    r
+    Ok((window, tmp_cache))
 }
 
 #[cfg(test)]
