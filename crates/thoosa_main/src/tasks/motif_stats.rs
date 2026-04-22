@@ -468,6 +468,8 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsSyncStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("MotifStatsSyncStage::do_run: input.id={:?}", input.id);
+
         let channels_motifs_slices = input.channels_motifs_slices().t_ref();
 
         let size = channels_motifs_slices.size();
@@ -660,6 +662,8 @@ where
                 Arc::new(ThoTensor::new(input_id.clone(), channels_3d)?)
             }
             MotifStatsSource::Random { max_slices, find_motifs_run_id } => {
+                debug!("MotifStats::run: MotifStatsSource::Random  max_slices={max_slices:?} find_motifs_run_id={find_motifs_run_id}");
+
                 if max_slices < 2 {
                     return Err(ThoError::new(format!("MotifStats::run: max_slices must be >= 2, got {max_slices}")));
                 }
@@ -684,9 +688,13 @@ where
                 )
                 .await?;
 
+                debug!("MotifStats::run: MotifStatsSource::Random  channels_slices={channels_slices:?}");
+
                 Arc::new(channels_slices)
             }
         };
+
+        debug!("MotifStats::run: input_id={input_id:?} channels_motifs_slices={channels_motifs_slices:?}");
 
         let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsCalcInput::new(input_id.clone(), channels_motifs_slices, metrics, quantiles)));
         let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();

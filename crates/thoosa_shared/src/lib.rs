@@ -188,6 +188,7 @@ async fn collect_stream_with_progress<T, S>(
     descr: &str,
     invocation_id: Option<u64>,
 ) where
+    T:Debug,
     S: futures::stream::Stream<Item = Result<T, ThoError>> + Unpin,
 {
 
@@ -203,6 +204,8 @@ async fn collect_stream_with_progress<T, S>(
             }
             next = stream.next() => {
                 let Some(r) = next else {
+                    warn!("collect_stream_with_progress: {descr}: next_error={next:?}");
+
                     break;
                 };
 
@@ -213,21 +216,23 @@ async fn collect_stream_with_progress<T, S>(
                 match r {
                     Ok(item) => {
                         *ok += 1;
-                        debug!("done {} ({}/{}) out of {} in {descr}", *ok + *err, *ok, *err, total);
+                        debug!("collect_stream_with_progress: {descr} done {} ({}/{}) out of {}", *ok + *err, *ok, *err, total);
                         results.push(item);
                     }
                     Err(e) => {
                         *err += 1;
                         if e.is_oom {
-                            trace!("{descr}: {e:?}");
+                            trace!("collect_stream_with_progress: {descr}: {e:?}");
                         } else {
-                            warn!("{descr}: {e:?}");
+                            warn!("collect_stream_with_progress: {descr}: {e:?}");
                         }
                     }
                 }
             }
         }
     }
+
+    debug!("collect_stream_with_progress: {descr} all done ");
 }
 
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
@@ -271,8 +276,11 @@ pub async fn collect_futures_with_progress<T, F>(
     descr: &str,
 ) -> Vec<T>
 where
+    T:Debug,
     F: Future<Output = Result<T, ThoError>>,
 {
+    debug!("collect_futures_with_progress: descr={descr} len={len}");
+
     let mut results = Vec::with_capacity(len);
     let (mut ok, mut err) = (0usize, 0usize);
     let total = len;

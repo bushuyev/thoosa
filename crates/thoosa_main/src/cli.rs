@@ -793,9 +793,27 @@ fn resolve_median_window<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], w
     }
 }
 
+fn resolve_median_window_grid<P: FieldName + PartialEq>(named_vals: &[NamedVal<P>], window_path: &P) -> RangeOrValue<u32> {
+    match named_vals.iter().find(|field| field.path() == window_path) {
+        None => RangeOrValue::Value(100),
+        Some(value) => {
+            let window = value.val().to_i64(0) as u32;
+            info!("Window: window={window}");
+            // RangeOrValue::Value(window)
+            RangeOrValue::Range{ range: Range { start: window/2, end: window * 2 }, step: Some((window/4, 0)) }
+        }
+    }
+}
+
+
 pub fn median_window_from_find_motifs(named_vals: &[NamedVal<FindMotifsRunConfigFields>]) -> RangeOrValue<u32> {
     resolve_median_window(named_vals, &FindMotifsRunConfigFields::Window)
 }
+
+pub fn median_window_from_find_motifs_grid(named_vals: &[NamedVal<FindMotifsRunConfigFields>]) -> RangeOrValue<u32> {
+    resolve_median_window_grid(named_vals, &FindMotifsRunConfigFields::Window)
+}
+
 
 pub fn median_window_from_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>]) -> RangeOrValue<u32> {
     resolve_median_window(
