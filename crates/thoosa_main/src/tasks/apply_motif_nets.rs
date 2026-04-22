@@ -360,7 +360,9 @@ where
         }
 
         //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
-        let motif_width = motif_widths.iter().copied().max().expect("no motif_width");
+        let Some(motif_width) = motif_widths.iter().copied().max() else {
+            return  Err(ThoError::new("no motif_width"));
+        };
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
@@ -1115,7 +1117,7 @@ pub fn apply_motif_net_forward(
     let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
     debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
-    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices.totype(Float));
+    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices.f_totype(Float)?);
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 

@@ -3250,6 +3250,8 @@ impl SqlStore {
         allow_leaky_split: bool,
         t: &Transaction,
     ) -> Result<(), ThoError> {
+
+
         if train_coeff < 0.0 || valid_coeff < 0.0 {
             return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
         }
@@ -3261,16 +3263,6 @@ impl SqlStore {
         Self::validate_min_probability(min_p)?;
 
         let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t)?;
-        let min_resources = labels
-            .iter()
-            .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
-            .min()
-            .unwrap_or(0);
-
-        let target_count = limit.map(|limit_val| min(limit_val, min_resources)).unwrap_or(min_resources);
-        let split_counts = Self::balanced_split_counts(target_count, train_coeff, valid_coeff);
-
-        debug!("save_data_sets: prefix={prefix} target_count={target_count} train_count={} valid_count={} test_count={} min_p={min_p} allow_leaky_split={allow_leaky_split}",split_counts[0],split_counts[2],split_counts[1]);
 
         let train_group_id = Self::save_resource_set_group(format!("{prefix}_train"), t)?;
         let valid_group_id = Self::save_resource_set_group(format!("{prefix}_valid"), t)?;
@@ -3280,30 +3272,44 @@ impl SqlStore {
         let mut rng = rand::rng();
 
         for (label_id, label) in labels {
-            let mut resources = resources_by_label.remove(&label_id).unwrap_or_default();
-            resources.shuffle(&mut rng);
-
-            let selected = resources.into_iter().take(target_count).collect::<Vec<usize>>();
-            let mut offset = 0;
-
-            let train_end = offset + min(split_counts[0], selected.len().saturating_sub(offset));
-            let mut train_resources = selected[offset..train_end].to_vec();
-
-            offset = train_end;
-            let test_end = offset + min(split_counts[1], selected.len().saturating_sub(offset));
-            let mut test_resources = selected[offset..test_end].to_vec();
-            offset = test_end;
-
-            let valid_end = offset + min(split_counts[2], selected.len().saturating_sub(offset));
-            let mut valid_resources = selected[offset..valid_end].to_vec();
-
-            if allow_leaky_split {
-                Self::fill_leaky_balanced_split(&mut train_resources, &mut test_resources, &mut valid_resources, train_coeff, valid_coeff);
+            let mut resources = resources_by_label.remove(&label_id).expect(&format!("no resources for {label}"));
+            debug!("save_data_sets: label={label} train_resources={resources:?}");
+            if resources.is_empty() {
+                warn!("no resources for {label}");
+                continue;
             }
 
-            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_{label}"), Some(&label_id), train_resources.as_slice())?;
-            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_{label}"), Some(&label_id), valid_resources.as_slice())?;
-            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_{label}"), Some(&label_id), test_resources.as_slice())?;
+            resources.shuffle(&mut rng);
+
+            let available = limit.unwrap_or(resources.len()).min(resources.len());
+            let selected = &resources[..available];
+            
+            let train_len = (available as f32 * train_coeff).floor() as usize;
+            let valid_len = (available as f32 * valid_coeff).floor() as usize;
+            let test_len = available.saturating_sub(train_len + valid_len);
+
+            let (train_resources, valid_resources, test_resources) = match available {
+                1=> {
+                    (selected.to_vec(), selected.to_vec(), selected.to_vec())
+                },
+                2=> {
+                    (selected[..1].to_vec(), selected[1..].to_vec(), selected[1..].to_vec())
+                },
+                3=> {
+                    (selected[..1].to_vec(), selected[1..2].to_vec(), selected[2..3].to_vec())
+                },
+                _ => {
+                    (selected[..train_len].to_vec(), selected[train_len..train_len+valid_len].to_vec(), selected[train_len+valid_len..train_len+valid_len+test_len].to_vec())
+                }
+            };
+
+            debug!("save_data_sets: prefix={prefix} label={label} train_resources={train_resources:?}");
+            debug!("save_data_sets: prefix={prefix} label={label} valid_resources={valid_resources:?}");
+            debug!("save_data_sets: prefix={prefix} label={label} test_resources={test_resources:?}");
+
+            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_{label}_train"), Some(&label_id), train_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_{label}_valid"), Some(&label_id), valid_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_{label}_test"), Some(&label_id), test_resources.as_slice())?;
         }
 
         Ok(())
@@ -4090,6 +4096,7 @@ mod store_tests {
         let import_id = store.save_import("test".to_string()).await?;
         store.save_label("aaa").await?;
         store.save_label("bbb").await?;
+        store.save_label("ccc").await?;
 
         store.save_resources_labels(
             &HashMap::from([
@@ -4147,13 +4154,13 @@ mod store_tests {
         debug!("valid_sets_resources={valid_sets_resources:?}");
         debug!("test_sets_resources={test_sets_resources:?}");
 
-        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L_aaa"]);
-        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L_aaa"]);
-        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L_aaa"]);
+        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L_aaa_train"]);
+        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L_aaa_valid"]);
+        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L_aaa_test"]);
 
-        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L_bbb"]);
-        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L_bbb"]);
-        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L_bbb"]);
+        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L_bbb_train"]);
+        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L_bbb_valid"]);
+        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L_bbb_test"]);
 
         Ok(())
     }
