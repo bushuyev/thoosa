@@ -222,7 +222,7 @@ async fn collect_stream_with_progress<T, S>(
                     Err(e) => {
                         *err += 1;
                         if e.is_oom {
-                            trace!("collect_stream_with_progress: {descr}: {e:?}");
+                            debug!("collect_stream_with_progress: {descr}: {e:?}");
                         } else {
                             warn!("collect_stream_with_progress: {descr}: {e:?}");
                         }
@@ -236,7 +236,7 @@ async fn collect_stream_with_progress<T, S>(
 }
 
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
-pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(24);
+pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(240);//TODO should depend on future
 
 
 struct AggPerf<'a>(&'a str, &'a str);

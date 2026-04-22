@@ -391,6 +391,8 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
+        debug!("FindMotifsStage::new: cross_loaders={cross_loaders:?}");
+
         Ok(Self {
             run_config_stages: cross_loaders,
             pd: Default::default(),

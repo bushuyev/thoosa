@@ -1713,11 +1713,11 @@ where
     debug!("run_all_grid_step: rcrv={rcrv:?}");
 
     let grid_run_configs = rcrv.grid_run_configs()?;
-    debug!("run_all_grid_step: grid_run_configs={grid_run_configs:?}");
+    debug!("run_grid: grid_run_configs={grid_run_configs:?}");
 
     let mut run_configs: Vec<RC> = grid_run_configs.to_run_configs();
-    info!("run_all_grid_step: run_configs.len={} ", run_configs.len());
-    debug!("run_all_grid_step: run_configs={run_configs:?}");
+    info!("run_grid: run_configs.len={} ", run_configs.len());
+    debug!("run_grid: run_configs={run_configs:?}");
 
     let mut run_ids = save_run_configs(
         input_run_ids.as_ref().map(|v| v.as_slice()),
@@ -1728,7 +1728,11 @@ where
 
     let stage = f(run_configs).await;
 
+    debug!("run_grid: stage={stage:?}");
+
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("top level stage should not have more than one reference").take_data(0).await?;
+
+    debug!("run_grid: savable={savable:?}");
 
     savable.save(store, ws).await?;
 
