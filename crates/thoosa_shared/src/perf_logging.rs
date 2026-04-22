@@ -7,7 +7,7 @@ use std::{io, panic};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use log::{debug, LevelFilter, Log};
@@ -281,17 +281,32 @@ impl<W> SyncMakeWriter<W> {
 
 }
 
-pub struct SyncWriterGuard<'a, W> {
+pub struct SyncWriterGuard<'a, W>
+where
+    W:Write
+{
     guard: MutexGuard<'a, W>,
 }
 
-impl<'a, W: Write> Write for SyncWriterGuard<'a, W> {
+impl<'a, W> Write for SyncWriterGuard<'a, W>
+where
+    W:Write
+{
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         self.guard.write(buf)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         self.guard.flush()
+    }
+}
+
+impl<'a, W> Drop for SyncWriterGuard<'a, W>
+where
+    W:Write
+{
+    fn drop(&mut self) {
+        let _ = self.guard.flush();
     }
 }
 
@@ -307,12 +322,22 @@ where
         }
     }
 }
+static TRACING_INIT: OnceLock<()> = OnceLock::new();
 
-/// No non_blocking workers anymore, so guards are no longer needed for flushing.
-/// You can keep this type if other code expects it.
-pub struct TracingGuards {}
 
-/// Initialize tracing logging for stdout, log file, and perf output, synchronously.
+fn open_new_log_file(path: &Path) -> Result<File, ThoError> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|e| {
+            ThoError::from_error(
+                format!("refusing to open existing log file: {}", path.display()),
+                e,
+            )
+        })
+}
+
 pub fn init_tracing(
     term_level: LevelFilter,
     term_extra_fields: bool,
@@ -321,15 +346,18 @@ pub fn init_tracing(
     log_file: PathBuf,
     perf_filter: &str,
     perf_file: Option<PathBuf>,
-) -> Result<TracingGuards, ThoError> {
+) -> Result<(), ThoError> {
+    if TRACING_INIT.get().is_some() {
+        panic!("init_tracing() called more than once in the same process");
+    }
+
     let max_level = max(term_level, file_level);
 
     set_perf_log_level(perf_filter)?;
 
-    let timer = tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
+    let timer =
+        tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
 
-    // stdout is already synchronized internally, but wrapping it here also ensures
-    // each event is emitted while holding a single lock from tracing's point of view.
     let stdout_writer = SyncMakeWriter::new(std::io::stdout());
     let stdout_layer = fmt::layer()
         .with_ansi(true)
@@ -337,7 +365,7 @@ pub fn init_tracing(
         .event_format(SimplelogLikeEvent::new(timer.clone(), true, term_extra_fields))
         .with_filter(EnvFilter::new(level_filter_string(term_level)));
 
-    let log_file_handle = File::create(log_file)?;
+    let log_file_handle = open_new_log_file(&log_file)?;
     let log_writer = SyncMakeWriter::new(log_file_handle);
     let file_layer = fmt::layer()
         .with_ansi(false)
@@ -350,7 +378,7 @@ pub fn init_tracing(
         .with_filter(EnvFilter::new(level_filter_string(file_level)));
 
     let perf_layer = if let Some(perf_path) = perf_file {
-        let perf_file_handle = File::create(perf_path)?;
+        let perf_file_handle = open_new_log_file(&perf_path)?;
         let perf_writer = SyncMakeWriter::new(perf_file_handle);
 
         Some(
@@ -376,12 +404,14 @@ pub fn init_tracing(
 
     tracing::subscriber::set_global_default(subscriber).map_err(|e| {
         error!("Init tracing logging failed: {e:?}");
-        e
+        ThoError::from_error("set global tracing subscriber", e)
     })?;
 
     init_log_tracer(max_level);
 
-    Ok(TracingGuards {})
+    let _ = TRACING_INIT.set(());
+
+    Ok(())
 }
 
 #[derive(Debug)]
