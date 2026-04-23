@@ -1123,7 +1123,7 @@ impl Store for SqlStore {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_data_sets", move |conn| {
             let t = conn.transaction()?;
-            Self::save_data_sets(prefix.as_str(), limit, train_coeff, valid_coeff, min_p, allow_leaky_split, &t)?;
+            Self::sav_leaky_data_sets(prefix.as_str(), limit, train_coeff, valid_coeff, min_p, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -2231,6 +2231,7 @@ fn init_sqlite_writer(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.pragma_update(None, "case_sensitive_like", "ON")?;
 
     // conn.trace_v2(
     //     TraceEventCodes::SQLITE_TRACE_STMT
@@ -3175,6 +3176,7 @@ impl SqlStore {
         Ok(())
     }
 
+    ///used in hbac
     pub fn save_pure_sets(
         max_len: usize,
         only_unused: bool,
@@ -3240,17 +3242,24 @@ impl SqlStore {
     }
 
 
-    /// builds train/validation/tests resources sets for 'pure' resources
-    pub fn save_data_sets(
+    /// builds train/validation/tests resources sets copying same resource in all sets if not enough resources available
+    pub fn sav_leaky_data_sets(
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
         valid_coeff: f32,
         min_p: f32,
-        allow_leaky_split: bool,
         t: &Transaction,
     ) -> Result<(), ThoError> {
 
+        let num_prefix = match limit {
+            None => {
+                format!("X_{prefix}")
+            }
+            Some(n) => {
+                format!("{prefix}{n}")
+            }
+        };
 
         if train_coeff < 0.0 || valid_coeff < 0.0 {
             return Err(ThoError::new(format!("train_coeff and valid_coeff must be >= 0.0 (train_coeff={train_coeff} valid_coeff={valid_coeff})")));
@@ -3262,7 +3271,7 @@ impl SqlStore {
 
         Self::validate_min_probability(min_p)?;
 
-        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t)?;
+        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| prefix))?;
 
         let train_group_id = Self::save_resource_set_group(format!("{prefix}_train"), t)?;
         let valid_group_id = Self::save_resource_set_group(format!("{prefix}_valid"), t)?;
@@ -3279,7 +3288,9 @@ impl SqlStore {
                 continue;
             }
 
-            resources.shuffle(&mut rng);
+            if limit.is_none(){
+                resources.shuffle(&mut rng); //TODO add param. The resources are order by length in resource_ids_by_label
+            }
 
             let available = limit.unwrap_or(resources.len()).min(resources.len());
             let selected = &resources[..available];
@@ -3315,28 +3326,28 @@ impl SqlStore {
         Ok(())
     }
 
-    pub fn min_pure_resources(t: &Transaction) -> Result<usize, ThoError> {
-        let (labels, resources_by_label) = Self::resource_ids_by_label(1.0, t)?;
-        let min_pure_resources = labels
-            .iter()
-            .map(|(label_id, _)| resources_by_label.get(label_id).map(|resources| resources.len()).unwrap_or(0))
-            .min()
-            .unwrap_or(0);
-        Ok(min_pure_resources)
-    }
-
     fn resource_ids_by_label(
         min_p: f32,
         t: &Transaction,
+        not_in_prefix: Option<&str>,
     ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
         Self::validate_min_probability(min_p)?;
         let labels = Self::list_labels(t)?;
         let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, Vec::new())).collect::<HashMap<usize, Vec<usize>>>();
 
         let mut stmt = t.prepare(
-            "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr LEFT JOIN  resources r on r.id=lr.resource_id WHERE lr.p >= ? ORDER BY lr.label_id, r.length",//TODO order by r.length
+            &["SELECT lr.label_id, lr.resource_id FROM labeled_resources lr LEFT JOIN  resources r on r.id=lr.resource_id \
+                WHERE lr.p >= ? ",
+                not_in_prefix.as_ref().map(|_|"AND lr.resource_id NOT IN (select rrs.resource_id from resource_resources_set rrs left join resource_set rs on rs.id=rrs.set_id where rs.descr like ?) ").unwrap_or(""),
+                "ORDER BY lr.label_id, r.length",//TODO order by r.length"
+            ].join("")
         )?;
-        let mut rows = stmt.query(params![min_p])?;
+
+        let mut rows = match not_in_prefix {
+            Some(not_in_prefix) => stmt.query(params![min_p, format!("{not_in_prefix}%")])?,
+            None => stmt.query(params![min_p])?,
+        };
+
         while let Some(row) = rows.next()? {
             let label_id = row.get::<usize, usize>(0)?;
             let resource_id = row.get::<usize, usize>(1)?;
@@ -3417,34 +3428,6 @@ impl SqlStore {
         }
 
         counts
-    }
-
-    fn fill_leaky_balanced_split(
-        train_resources: &mut Vec<usize>,
-        test_resources: &mut Vec<usize>,
-        valid_resources: &mut Vec<usize>,
-        train_coeff: f32,
-        valid_coeff: f32,
-    ) {
-        let test_coeff = 1.0 - train_coeff - valid_coeff;
-
-        if train_coeff > 0.0 && train_resources.is_empty() {
-            if let Some(resource_id) = test_resources.first().copied().or_else(|| valid_resources.first().copied()) {
-                train_resources.push(resource_id);
-            }
-        }
-
-        if test_coeff > 0.0 && test_resources.is_empty() {
-            if let Some(resource_id) = valid_resources.first().copied().or_else(|| train_resources.first().copied()) {
-                test_resources.push(resource_id);
-            }
-        }
-
-        if valid_coeff > 0.0 && valid_resources.is_empty() {
-            if let Some(resource_id) = test_resources.first().copied().or_else(|| train_resources.first().copied()) {
-                valid_resources.push(resource_id);
-            }
-        }
     }
 
     fn save_param_value(
@@ -4076,16 +4059,16 @@ mod store_tests {
         init_test_store(&store).await?;
 
         let labels_count = store.list_labels().await?.len();
-        let train_sets = store.list_resource_set_group_sets("A_balanced_group_train").await?;
-        let valid_sets = store.list_resource_set_group_sets("A_balanced_group_valid").await?;
-        let test_sets = store.list_resource_set_group_sets("A_balanced_group_test").await?;
+        let train_sets = store.list_resource_set_group_sets("A_train").await?;
+        let valid_sets = store.list_resource_set_group_sets("A_valid").await?;
+        let test_sets = store.list_resource_set_group_sets("A_test").await?;
 
-        assert_eq!(labels_count, train_sets.len());
-        assert_eq!(labels_count, valid_sets.len());
-        assert_eq!(labels_count, test_sets.len());
-        assert!(train_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
-        assert!(valid_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
-        assert!(test_sets.iter().all(|(_, descr)| descr.starts_with("A_balanced_set_")));
+        assert_eq!(labels_count-1, train_sets.len());  //C label has no resources
+        assert_eq!(labels_count-1, valid_sets.len());
+        assert_eq!(labels_count-1, test_sets.len());
+        assert!(train_sets.iter().all(|(_, descr)| descr.starts_with("A_")));
+        assert!(valid_sets.iter().all(|(_, descr)| descr.starts_with("A_")));
+        assert!(test_sets.iter().all(|(_, descr)| descr.starts_with("A_")));
 
         Ok(())
     }
@@ -4621,7 +4604,7 @@ mod store_tests {
 
         let _aaa_id = store_guard.save_label("aaa").await?;
         let _bbb_id = store_guard.save_label("bbb").await?;
-        let _ccc_id = store_guard.save_label("ccc").await?;
+        let _ccc_id = store_guard.save_label("ccc").await?;//no resources
 
         let resource_ids = store_guard.save_resources_labels(
             &HashMap::from([
