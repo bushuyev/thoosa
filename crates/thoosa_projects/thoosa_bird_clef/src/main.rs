@@ -53,11 +53,23 @@ fn main() -> Result<(), ThoError>{
             |t: &Transaction|{
                 SqlStore::save_all_sets(&t)?;
 
-                SqlStore::save_data_sets("A1", Some(1), 0.6, 0.2, 1.0, true, &t)?;
-                SqlStore::save_data_sets("A3", Some(3), 0.6, 0.2, 1.0, true, &t)?;
-                SqlStore::save_data_sets("A6", Some(6), 0.6, 0.2, 1.0, true, &t)?;
-                SqlStore::save_data_sets("A10", Some(10), 0.6, 0.2, 1.0, true, &t)?;
-                SqlStore::save_data_sets("AA", None, 0.6, 0.2, 0.9, true, &t)?;
+               //resources used in previous N-set not included
+                SqlStore::sav_leaky_data_sets("A", Some(1), 0.6, 0.2, 1.0, &t)?;
+                SqlStore::sav_leaky_data_sets("A", Some(3), 0.6, 0.2, 1.0, &t)?;
+                SqlStore::sav_leaky_data_sets("A", Some(10), 0.6, 0.2, 1.0, &t)?;
+
+                SqlStore::sav_leaky_data_sets("B", Some(3), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::sav_leaky_data_sets("B", Some(6), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::sav_leaky_data_sets("B", Some(12), 0.6, 0.2, 0.9, &t)?;
+
+                SqlStore::sav_leaky_data_sets("C", Some(10), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::sav_leaky_data_sets("C", Some(20), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::sav_leaky_data_sets("C", Some(30), 0.6, 0.2, 0.9, &t)?;
+
+                ///shuffles randomly
+                SqlStore::sav_leaky_data_sets("X", None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::sav_leaky_data_sets("Y", None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::sav_leaky_data_sets("Z", None, 0.6, 0.2, 0.9, &t)?;
 
                 Ok(())
             },
