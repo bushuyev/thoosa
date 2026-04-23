@@ -5,7 +5,7 @@ use crate::traits::Data;
 pub trait CopyMode {}
 
 #[derive(Debug)]
-pub struct CpuOnly<O>
+pub struct CpuOnly<O>//TODO rename to MonoDevice - it's used also for structs having refs to  Tensors like CrossInput
 {
     pd:PhantomData<O>
 }
@@ -25,7 +25,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct CpuOrGpu<O>
+pub struct CpuOrGpu<O>//TODO rename to PolyDevice - can be copied between devices
 {
     pd:PhantomData<O>
 }
