@@ -20,6 +20,9 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+
+use mockall_double::double;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;

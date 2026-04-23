@@ -1,6 +1,9 @@
 use crate::tasks::cross_dims::ChannelsData2;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
+
+use mockall_double::double;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};

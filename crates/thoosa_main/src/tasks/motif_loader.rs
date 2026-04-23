@@ -16,6 +16,9 @@ use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+
+use mockall_double::double;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
@@ -33,6 +36,7 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, ChannelsMotifsSli
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
+
 use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;

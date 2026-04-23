@@ -24,6 +24,9 @@ use thoosa_shared::resource::{build_resource_maps, Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use crate::tasks::cross_dims::ChannelsData2;
 use thoosa_common::runner::common::{OutId, RunCtx};
+
+use mockall_double::double;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_common::tho_device::ThoDevice;
