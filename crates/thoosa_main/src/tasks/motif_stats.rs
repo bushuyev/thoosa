@@ -87,6 +87,9 @@ impl MotifStatsInput {
         if let Some(quantiles) = quantiles.as_ref() {
             id = &id + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"));
         }
+
+        debug!("MotifStatsInput::from_random: id={id:?}");
+
         Self {
             id,
             source: MotifStatsSource::Random { max_slices, find_motifs_run_id },
@@ -906,12 +909,17 @@ where
                         )
                         .await?;
 
-                    let (tensor_copy, meta) = with_data!(ctx.branch(Some("motif_stats_merged_motif_to_channels"), false), motif; |_ctx, motif: &thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
+                    let meta = with_data!(ctx.branch(Some("motif_stats_merged_motif_to_channels"), false), motif; |_ctx, motif: &thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>| {
                         let src = motif.data().t_ref();
                         let mut dst = src.f_zeros_like()?;
                         dst.f_copy_(&src)?;
                         let tensor_id = &motif.data().id().clone() + mono_key!(idx, format!("merged_motif_idx={idx}"));
-                        Ok::<_, ThoError>((ThoTensor::new(tensor_id, dst)?, motif.extra().clone()))
+                        let tensor_copy = ThoTensor::new(tensor_id, dst)?; //(ThoTensor::new(tensor_id, dst)?, motif.extra().clone());
+                        let meta = motif.extra();
+                        debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, tensor_copy.size());
+                        motif_tensors.insert(tensor_copy);
+
+                        Ok::<_, ThoError>(meta.clone())
                     })?;
 
                     match expected_channel {
@@ -929,8 +937,7 @@ where
                         _ => {}
                     }
 
-                    debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, tensor_copy.size());
-                    motif_tensors.insert(tensor_copy);
+
                 }
 
                 let tmp_cache_name = motif_tensors.registered_name();

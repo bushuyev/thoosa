@@ -183,7 +183,7 @@ where
         
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?} init_ctx.id={:?}", init_ctx.id());
 
-        let random_stats = Arc::new(MotifStats::new(
+        let motif_stats = Arc::new(MotifStats::new(
             Arc::clone(&store),
             Arc::clone(&loader),
             Arc::clone(ws),
@@ -198,7 +198,7 @@ where
             .map( |run_config| {
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
-                let random_stats_arc = Arc::clone(&random_stats);
+                let motif_stats = Arc::clone(&motif_stats);
                 let run_id = run_config.id.expect("should be pre saved");
                 let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_id}")), false);
 
@@ -225,7 +225,8 @@ where
                             debug!("FindMotifsStage::new: SlicesFilter::Precalculate ctx.id={:?}", ctx_id);
 
                             let comparison_metric = Metrics::from_similarity_metric(run_config.similarity_metric, to_stats_aggr(v.aggr));
-                            let motif_stats = random_stats_arc.run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()], None))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+                            //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
+                            let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()], None))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
 
                             debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 

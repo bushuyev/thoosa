@@ -729,15 +729,20 @@ impl DynamicTaskExecutor {
                                     cmd_tx: cmd_tx_for_tasks,
                                 },
                                 async move {
+                                    debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job {job_id}");
+
                                     job.run().await
                                 },
                             ).await {
                             IsOOM::Yes => {
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: IsOOM::Yes running job {job_id}, global_limit={global_limit:?}");
                                 if global_limit.load(Relaxed) > 6 {//TODO config
                                     global_limit.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             IsOOM::No => {
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: IsOOM::No running job {job_id}, global_limit={global_limit:?}");
+
                                 if global_limit.load(Relaxed)  < 32 {//TODO config
                                     global_limit.fetch_add(1, Ordering::SeqCst);
                                 }

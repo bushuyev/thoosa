@@ -1,3 +1,5 @@
+#![recursion_limit = "1024"] //for deep async future type - to avoid "error: queries overflow the depth limit"
+
 use std::sync::Arc;
 use crate::data::resource_to_tensor;
 use crate::labels::LABELS;
@@ -53,6 +55,7 @@ fn main() -> Result<(), ThoError>{
 
                 SqlStore::save_data_sets("A1", Some(1), 0.6, 0.2, 1.0, true, &t)?;
                 SqlStore::save_data_sets("A3", Some(3), 0.6, 0.2, 1.0, true, &t)?;
+                SqlStore::save_data_sets("A6", Some(6), 0.6, 0.2, 1.0, true, &t)?;
                 SqlStore::save_data_sets("A10", Some(10), 0.6, 0.2, 1.0, true, &t)?;
                 SqlStore::save_data_sets("AA", None, 0.6, 0.2, 0.9, true, &t)?;
 
@@ -100,4 +103,3 @@ fn main() -> Result<(), ThoError>{
 
     Ok(())
 }
-
