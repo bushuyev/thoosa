@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -24,12 +24,14 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
+use thoosa_common::copy_ctx;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
@@ -208,7 +210,6 @@ pub struct MotifStatsCalcInput<'a> {
 enum MotifStatsCalcInputData<'a> {
     Managed(&'a LoadedMotif),
     Motifs(Vec<&'a LoadedMotif>),
-    ChannelsRefs(Vec<&'a ThoTensor<ChannelsMotifsSlices, SynKey>>),
 }
 
 impl<'a> MotifStatsCalcInput<'a> {
@@ -218,15 +219,6 @@ impl<'a> MotifStatsCalcInput<'a> {
 
     fn from_motifs(id: SynKey, motifs: Vec<&'a LoadedMotif>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
         Self { id, data: MotifStatsCalcInputData::Motifs(motifs), metrics, quantiles }
-    }
-
-    fn from_channels_refs(
-        id: SynKey,
-        channels_motifs_slices: Vec<&'a ThoTensor<ChannelsMotifsSlices, SynKey>>,
-        metrics: Vec<Metrics>,
-        quantiles: Option<Vec<f32>>,
-    ) -> Self {
-        Self { id, data: MotifStatsCalcInputData::ChannelsRefs(channels_motifs_slices), metrics, quantiles }
     }
 
     fn data(&self) -> &MotifStatsCalcInputData<'a> {
@@ -255,13 +247,6 @@ impl<'a> MotifStatsCalcInput<'a> {
         [1, num_slices, window].into()
     }
 
-    fn channels_refs_size(channels_motifs_slices: &[&ThoTensor<ChannelsMotifsSlices, SynKey>]) -> <ThoTensor<ChannelsMotifsSlices, SynKey> as Data>::Metrics {
-        let channels = channels_motifs_slices.first().map(|slices| slices.t_ref().size()[0]).unwrap_or(0);
-        let num_slices = channels_motifs_slices.iter().map(|slices| slices.t_ref().size()[1]).sum::<i64>();
-        let window = channels_motifs_slices.first().map(|slices| slices.t_ref().size()[2]).unwrap_or(0);
-        [channels, num_slices, window].into()
-    }
-
 }
 
 impl Input for MotifStatsCalcInput<'_> {}
@@ -282,7 +267,6 @@ impl Data for MotifStatsCalcInput<'_> {
         match self.data() {
             MotifStatsCalcInputData::Managed(motif) => Self::channels_size_from_tensor(motif.data().size().as_slice()),
             MotifStatsCalcInputData::Motifs(motifs) => Self::motifs_size(motifs.as_slice()),
-            MotifStatsCalcInputData::ChannelsRefs(channels_motifs_slices) => Self::channels_refs_size(channels_motifs_slices.as_slice()),
         }
     }
 
@@ -290,7 +274,6 @@ impl Data for MotifStatsCalcInput<'_> {
         match self.data() {
             MotifStatsCalcInputData::Managed(motif) => motif.data().device(),
             MotifStatsCalcInputData::Motifs(motifs) => motifs.first().map(|motif| motif.data().device()).unwrap_or(0),
-            MotifStatsCalcInputData::ChannelsRefs(channels_motifs_slices) => channels_motifs_slices.first().map(|slices| slices.device()).unwrap_or(0),
         }
     }
 
@@ -298,7 +281,6 @@ impl Data for MotifStatsCalcInput<'_> {
         match self.data() {
             MotifStatsCalcInputData::Managed(motif) => motif.data().mem_size(),
             MotifStatsCalcInputData::Motifs(motifs) => motifs.iter().map(|motif| motif.data().mem_size()).sum(),
-            MotifStatsCalcInputData::ChannelsRefs(channels_motifs_slices) => channels_motifs_slices.iter().map(|slices| slices.mem_size()).sum(),
         }
     }
 }
@@ -307,7 +289,6 @@ impl Data for MotifStatsCalcInput<'_> {
 enum MotifStatsCalcInputDataWrapper {
     Managed(Arc<DevicesWrap<LoadedMotif>>),
     Motifs(Vec<Arc<DevicesWrap<LoadedMotif>>>),
-    Channels(Vec<Arc<DevicesWrap<ThoTensor<ChannelsMotifsSlices, SynKey>>>>),
 }
 
 #[derive(Debug)]
@@ -325,15 +306,6 @@ impl MotifStatsCalcInputWrapper {
 
     fn from_motifs(id: SynKey, motifs: Vec<Arc<DevicesWrap<LoadedMotif>>>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
         Self { id, data: MotifStatsCalcInputDataWrapper::Motifs(motifs), metrics, quantiles }
-    }
-
-    fn from_channels(
-        id: SynKey,
-        channels_motifs_slices: Vec<Arc<DevicesWrap<ThoTensor<ChannelsMotifsSlices, SynKey>>>>,
-        metrics: Vec<Metrics>,
-        quantiles: Option<Vec<f32>>,
-    ) -> Self {
-        Self { id, data: MotifStatsCalcInputDataWrapper::Channels(channels_motifs_slices), metrics, quantiles }
     }
 
     async fn with_calc_input<R, F, P>(&self, permits_ctx: P, do_run: F) -> Result<R, ThoError>
@@ -355,12 +327,6 @@ impl MotifStatsCalcInputWrapper {
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
                 with_data!(permits_ctx, [motifs]; move |ctx: P, motifs: &[&LoadedMotif]| {
                     let input = MotifStatsCalcInput::from_motifs(id, motifs.to_vec(), metrics, quantiles);
-                    do_run(&input, &ctx)
-                })
-            }
-            MotifStatsCalcInputDataWrapper::Channels(channels_motifs_slices) => {
-                with_data!(permits_ctx, [channels_motifs_slices]; move |ctx: P, channels_motifs_slices: &[&ThoTensor<ChannelsMotifsSlices, SynKey>]| {
-                    let input = MotifStatsCalcInput::from_channels_refs(id, channels_motifs_slices.to_vec(), metrics, quantiles);
                     do_run(&input, &ctx)
                 })
             }
@@ -391,7 +357,6 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
         match &self.data {
             MotifStatsCalcInputDataWrapper::Managed(motif) => motif.mem_size(),
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => motifs.iter().map(|motif| motif.mem_size()).sum(),
-            MotifStatsCalcInputDataWrapper::Channels(channels_motifs_slices) => channels_motifs_slices.iter().map(|slices| slices.mem_size()).sum(),
         }
     }
 }
@@ -441,6 +406,232 @@ impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<()> for Moti
         let _ = trace_ctx;
         async move { self.with_calc_input(permits_ctx, do_run).await }
     }
+}
+
+#[derive(Debug)]
+struct MotifStatsLoadedChannelsInput {
+    id: SynKey,
+    channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
+    metrics: Vec<Metrics>,
+    quantiles: Option<Vec<f32>>,
+}
+
+impl MotifStatsLoadedChannelsInput {
+    fn new(
+        id: SynKey,
+        channels_motifs_slices: Vec<ThoTensor<ChannelsMotifsSlices, SynKey>>,
+        metrics: Vec<Metrics>,
+        quantiles: Option<Vec<f32>>,
+    ) -> Self {
+        Self { id, channels_motifs_slices, metrics, quantiles }
+    }
+
+    fn channels_motifs_slices(&self) -> &[ThoTensor<ChannelsMotifsSlices, SynKey>] {
+        self.channels_motifs_slices.as_slice()
+    }
+
+    fn metrics(&self) -> &Vec<Metrics> {
+        &self.metrics
+    }
+
+    fn quantiles(&self) -> Option<&[f32]> {
+        self.quantiles.as_deref()
+    }
+}
+
+impl Input for MotifStatsLoadedChannelsInput {}
+
+impl WithId for MotifStatsLoadedChannelsInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for MotifStatsLoadedChannelsInput {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOrGpu<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        1usize.into()
+    }
+
+    fn device(&self) -> usize {
+        self.channels_motifs_slices.first().map(|tensor| tensor.device()).unwrap_or(0)
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.channels_motifs_slices.iter().map(|tensor| tensor.mem_size()).sum()
+    }
+}
+
+#[async_trait]
+impl CopyToDevice for MotifStatsLoadedChannelsInput {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+        let mut channels_motifs_slices = Vec::with_capacity(self.channels_motifs_slices.len());
+        for channels in &self.channels_motifs_slices {
+            channels_motifs_slices.push(channels.copy_to_device(dst_device).await?);
+        }
+        Ok(Self {
+            id: self.id.clone(),
+            channels_motifs_slices,
+            metrics: self.metrics.clone(),
+            quantiles: self.quantiles.clone(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct MotifStatsTmpCachedChannelsInput {
+    id: SynKey,
+    channels_motifs_slices: TmpCached<ThoTensor<ChannelsMotifsSlices, SynKey>>,
+    metrics: Vec<Metrics>,
+    quantiles: Option<Vec<f32>>,
+}
+
+impl MotifStatsTmpCachedChannelsInput {
+    fn new(
+        id: SynKey,
+        channels_motifs_slices: TmpCached<ThoTensor<ChannelsMotifsSlices, SynKey>>,
+        metrics: Vec<Metrics>,
+        quantiles: Option<Vec<f32>>,
+    ) -> Self {
+        Self { id, channels_motifs_slices, metrics, quantiles }
+    }
+}
+
+impl WithId for MotifStatsTmpCachedChannelsInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl ConsumeData for MotifStatsTmpCachedChannelsInput {
+    type O = MotifStatsLoadedChannelsInput;
+
+    fn consume<R, F, P>(
+        self,
+        to_device_idx: usize,
+        ctx: P,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
+    where
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
+        P: RunCtx,
+    {
+        async move {
+            let MotifStatsTmpCachedChannelsInput {
+                id,
+                channels_motifs_slices,
+                metrics,
+                quantiles,
+            } = self;
+
+            let channels_motifs_slices = match channels_motifs_slices.take_all_recovering(to_device_idx).await {
+                Ok(channels_motifs_slices) => channels_motifs_slices,
+                Err(err) => {
+                    return ConsumeResult::Failed {
+                        input: MotifStatsLoadedChannelsInput::new(id, err.data, metrics, quantiles),
+                        error: err.error,
+                    };
+                }
+            };
+
+            let input = MotifStatsLoadedChannelsInput::new(id, channels_motifs_slices, metrics, quantiles);
+
+            if to_device_idx == 0 {
+                do_run(input, ctx)
+            } else {
+                let stream = copy_ctx::CopyCtx::instance(to_device_idx).acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
+                let r = do_run(input, ctx);
+                stream.synchronize().unwrap();
+                r
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsTmpCachedChannelsInput::burp"))]
+    fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
+        async move {
+            let cache = TmpCached::new("tmp_motif_stats_channels_burp").await;
+            for channels_motifs_slices in o.channels_motifs_slices {
+                cache.insert(channels_motifs_slices);
+            }
+            MotifStatsTmpCachedChannelsInput::new(o.id, cache, o.metrics, o.quantiles)
+        }
+    }
+}
+
+fn motif_stats_stage_id() -> SynKey {
+    (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into()
+}
+
+fn merged_motifs_tensor(input_id: &SynKey, motifs: &[&LoadedMotif]) -> Result<ThoTensor<ChannelsMotifsSlices, SynKey>, ThoError> {
+    if motifs.is_empty() {
+        return Err(ThoError::new("MotifStatsSyncStage::merged_motifs_tensor: empty motifs"));
+    }
+
+    let motifs_refs = motifs.iter().map(|motif| motif.data().t_ref()).collect::<Vec<_>>();
+    ThoTensor::new(input_id.clone(), Tensor::f_cat(motifs_refs.as_slice(), 0)?)
+}
+
+fn merged_channels_tensor(
+    input_id: &SynKey,
+    channels_motifs_slices: &[ThoTensor<ChannelsMotifsSlices, SynKey>],
+) -> Result<ThoTensor<ChannelsMotifsSlices, SynKey>, ThoError> {
+    if channels_motifs_slices.is_empty() {
+        return Err(ThoError::new("MotifStatsSyncStage::merged_channels_tensor: empty channels_motifs_slices"));
+    }
+
+    let channels_motifs_slices_refs = channels_motifs_slices.iter().map(|slices| slices.t_ref()).collect::<Vec<_>>();
+    ThoTensor::new(input_id.clone(), Tensor::f_cat(channels_motifs_slices_refs.as_slice(), 1)?)
+}
+
+fn calc_metrics(
+    out_id: SynKey,
+    input_id: &SynKey,
+    metrics: &[Metrics],
+    quantiles: Option<&[f32]>,
+    channels_motifs_slices: &Tensor,
+) -> Result<MotifStatsOutput, ThoError> {
+    let size = channels_motifs_slices.size();
+    let (channels, num_slices, is_flat_motif) = match size.as_slice() {
+        [num_slices, _window] => (1i64, *num_slices, true),
+        [channels, num_slices, _window] => (*channels, *num_slices, false),
+        _ => {
+            return Err(ThoError::new(format!(
+                "MotifStatsSyncStage::calc_metrics: expected [slices x window] or [channels x slices x window], got {:?}",
+                size
+            )));
+        }
+    };
+
+    let mut channels_values = Vec::with_capacity(metrics.len());
+
+    for metric in metrics {
+        let mut metric_channels_values = Vec::with_capacity(channels as usize);
+        for channel_idx in 0..channels as usize {
+            let motif_slices = if is_flat_motif {
+                channels_motifs_slices.f_i((.., ..))?
+            } else {
+                channels_motifs_slices.f_get(channel_idx as i64)?
+            };
+            let value = metric_scalar_for_motif(input_id, &motif_slices, metric)?;
+            let quantiles = match quantiles {
+                Some(quantiles) => metric_quantiles_for_motif(&motif_slices, metric, quantiles)?,
+                None => None,
+            };
+            metric_channels_values.push(MetricValue::new(value, quantiles));
+        }
+        channels_values.push(MetricsValue::new(metric.clone(), metric_channels_values));
+    }
+
+    Ok(MotifStatsOutput::new(out_id, channels_values, num_slices as u32))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -590,80 +781,15 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn new() -> Self {
-        Self {
-            id: (MOTIF_STATS_SYNC_STAGE, "MotifStatsSyncStage").into(),
-            _ctx: PhantomData,
-        }
-    }
-
-    fn merged_motifs_tensor(&self, input: &MotifStatsCalcInput<'_>, motifs: &[&LoadedMotif]) -> Result<ThoTensor<ChannelsMotifsSlices, SynKey>, ThoError> {
-        if motifs.is_empty() {
-            return Err(ThoError::new("MotifStatsSyncStage::merged_motifs_tensor: empty motifs"));
-        }
-
-        let motifs_refs = motifs.iter().map(|motif| motif.data().t_ref()).collect::<Vec<_>>();
-        ThoTensor::new(input.id().clone(), Tensor::f_cat(motifs_refs.as_slice(), 0)?)
-    }
-
-    fn merged_channels_refs_tensor(
-        &self,
-        input: &MotifStatsCalcInput<'_>,
-        channels_motifs_slices: &[&ThoTensor<ChannelsMotifsSlices, SynKey>],
-    ) -> Result<ThoTensor<ChannelsMotifsSlices, SynKey>, ThoError> {
-        if channels_motifs_slices.is_empty() {
-            return Err(ThoError::new("MotifStatsSyncStage::merged_channels_refs_tensor: empty channels_motifs_slices"));
-        }
-
-        let channels_motifs_slices_refs = channels_motifs_slices.iter().map(|slices| slices.t_ref()).collect::<Vec<_>>();
-        ThoTensor::new(input.id().clone(), Tensor::f_cat(channels_motifs_slices_refs.as_slice(), 1)?)
-    }
-
-    fn calc_metrics(&self, input: &MotifStatsCalcInput<'_>, channels_motifs_slices: &Tensor) -> Result<MotifStatsOutput, ThoError> {
-        let size = channels_motifs_slices.size();
-        let (channels, num_slices, is_flat_motif) = match size.as_slice() {
-            [num_slices, _window] => (1i64, *num_slices, true),
-            [channels, num_slices, _window] => (*channels, *num_slices, false),
-            _ => {
-                return Err(ThoError::new(format!(
-                    "MotifStatsSyncStage::calc_metrics: expected [slices x window] or [channels x slices x window], got {:?}",
-                    size
-                )));
-            }
-        };
-
-        let mut channels_values = Vec::with_capacity(input.metrics().len());
-
-        for metric in input.metrics() {
-            let mut metric_channels_values = Vec::with_capacity(channels as usize);
-            for channel_idx in 0..channels as usize {
-                let motif_slices = if is_flat_motif {
-                    channels_motifs_slices.f_i((.., ..))?
-                } else {
-                    channels_motifs_slices.f_get(channel_idx as i64)?
-                };
-                let value = metric_scalar_for_motif(input.id(), &motif_slices, metric)?;
-                let quantiles = match input.quantiles() {
-                    Some(quantiles) => metric_quantiles_for_motif(&motif_slices, metric, quantiles)?,
-                    None => None,
-                };
-                metric_channels_values.push(MetricValue::new(value, quantiles));
-            }
-            channels_values.push(MetricsValue::new(metric.clone(), metric_channels_values));
-        }
-
-        Ok(MotifStatsOutput::new(self.out_id(input.id()), channels_values, num_slices as u32))
+        Self { id: motif_stats_stage_id(), _ctx: PhantomData }
     }
 
     fn run_input(&self, input: &MotifStatsCalcInput<'_>) -> Result<MotifStatsOutput, ThoError> {
         match input.data() {
-            MotifStatsCalcInputData::Managed(motif) => self.calc_metrics(input, motif.data().t_ref()),
+            MotifStatsCalcInputData::Managed(motif) => calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), motif.data().t_ref()),
             MotifStatsCalcInputData::Motifs(motifs) => {
-                let channels_motifs_slices = self.merged_motifs_tensor(input, motifs.as_slice())?;
-                self.calc_metrics(input, channels_motifs_slices.t_ref())
-            }
-            MotifStatsCalcInputData::ChannelsRefs(channels_motifs_slices) => {
-                let channels_motifs_slices = self.merged_channels_refs_tensor(input, channels_motifs_slices.as_slice())?;
-                self.calc_metrics(input, channels_motifs_slices.t_ref())
+                let channels_motifs_slices = merged_motifs_tensor(input.id(), motifs.as_slice())?;
+                calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
             }
         }
     }
@@ -709,11 +835,71 @@ where
         debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
         Ok(output)
     }
+}
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsSyncStage::consume"))]
+#[derive(Debug, Named)]
+struct MotifStatsConsumeStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    _ctx: PhantomData<C>,
+}
+
+impl<C> MotifStatsConsumeStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new() -> Self {
+        Self { id: motif_stats_stage_id(), _ctx: PhantomData }
+    }
+
+    fn run_input(&self, input: &MotifStatsLoadedChannelsInput) -> Result<MotifStatsOutput, ThoError> {
+        let channels_motifs_slices = merged_channels_tensor(input.id(), input.channels_motifs_slices())?;
+        calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
+    }
+}
+
+impl<C> Default for MotifStatsConsumeStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<C> Adjustable for MotifStatsConsumeStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for MotifStatsConsumeStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl<C> Stage for MotifStatsConsumeStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = MotifStatsLoadedChannelsInput;
+    type Out = MotifStatsOutput;
+}
+
+impl<C> SyncStage for MotifStatsConsumeStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsConsumeStage::consume"))]
     fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
         match self.run_input(&input) {
-            Ok(output) => ConsumeResult::Ok(output),
+            Ok(output) => {
+                debug!("MotifStatsConsumeStage::consume: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
+                ConsumeResult::Ok(output)
+            }
             Err(error) => ConsumeResult::Failed { input, error },
         }
     }
@@ -731,7 +917,8 @@ where
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pub motif_loader: Arc<ML>,
-    clc_stats: Arc<MotifStatsSyncStage<C>>,
+    clc_stats_run: Arc<MotifStatsSyncStage<C>>,
+    clc_stats_consume: Arc<MotifStatsConsumeStage<C>>,
     _ctx: PhantomData<C>,
 }
 
@@ -764,7 +951,8 @@ where
             loader,
             ws,
             motif_loader,
-            clc_stats: Arc::new(MotifStatsSyncStage::default()),
+            clc_stats_run: Arc::new(MotifStatsSyncStage::default()),
+            clc_stats_consume: Arc::new(MotifStatsConsumeStage::default()),
             _ctx: PhantomData,
         }
     }
@@ -828,7 +1016,7 @@ where
                     None,
                 );
                 oom_handler.run(
-                    &self.clc_stats,
+                    &self.clc_stats_run,
                     clc_input,
                     ctx.branch(Some("motif_stats_sync"), false),
                     Contexts::new(
@@ -893,7 +1081,7 @@ where
                     None,
                 );
                 oom_handler.run(
-                    &self.clc_stats,
+                    &self.clc_stats_run,
                     clc_input,
                     ctx.branch(Some("motif_stats_sync"), false),
                     Contexts::new(
@@ -935,13 +1123,10 @@ where
                 .await?;
 
                 debug!("MotifStats::run: MotifStatsSource::Random  channels_slices={channels_slices:?}");
-                let channel_tensors = channels_slices.take_all(ctx.device_idx()).await?;
-                let channel_wraps = channel_tensors
-                    .into_iter()
-                    .map(|tensor| Arc::new(DevicesWrap::wrap(tensor)))
-                    .collect::<Vec<_>>();
-                let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_channels(input_id.clone(), channel_wraps, metrics.clone(), quantiles.clone()));
-                let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
+                let tmp_cache_name = channels_slices.registered_name();
+                let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
+                let required_tmp_cache_ids = HashSet::<&dyn thoosa_shared::traits::CachableIdTr>::new();
+                let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
                 let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
@@ -949,8 +1134,8 @@ where
                     ],
                     None,
                 );
-                oom_handler.run(
-                    &self.clc_stats,
+                oom_handler.consume(
+                    &self.clc_stats_consume,
                     clc_input,
                     ctx.branch(Some("motif_stats_sync"), false),
                     Contexts::new(
