@@ -777,7 +777,7 @@ async fn load_motif_resource_tensors<L, C>(
     descr: &str,
 ) -> Result<TmpCached<LoadedMotifResource>, ThoError>
 where
-    C: 'static + RunCtx,
+    C: 'static + RunCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
     let loaded_resources = TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}")).await;
@@ -877,7 +877,7 @@ pub(crate) async fn load_random_slices<L, C>(
     descr: &str
 ) -> Result<(u32, TmpCached<ThoTensor<ChannelsMotifsSlices, SynKey>>), ThoError>
 where
-    C: 'static + RunCtx,
+    C: 'static + RunCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
     let device_idx = ctx.device_idx();

@@ -248,22 +248,22 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 26000}, step: Some((4000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 32000}, step: Some((4000, 0)) },
             // window: RangeOrValue::Value(1000),
-            freq_filter: None,
+            // freq_filter: None,
             // freq_filter: Some(vec![
             //     AverageFilter(AverageFilterParamsRangeOrValue {
             //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
             //         step: RangeOrValue::Value(1),
             //     }),
             // ]),
-            // freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
-            //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
-            //     band_hz: RangeOrValue::Value(2.),
-            //     kernel_size: RangeOrValue::Value(10),
-            //     stride: RangeOrValue::Value(1),
-            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-            // })]),
+            freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
+                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 32000. }, step: Some((1000., 1)) },
+                band_hz: RangeOrValue::Value(2.),
+                kernel_size: RangeOrValue::Value(1000),
+                stride: RangeOrValue::Value(10),
+                padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            })]),
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ _path_pd: Default::default() }),
             slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
