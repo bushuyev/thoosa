@@ -54,7 +54,7 @@ pub enum MaskMaker<'a> {
     Diagonal,
     Tril,
     Le {
-        v: Tensor,
+        v: &'a Tensor,
     }, //channels x thresholds
     Gt {
         v: Tensor,
