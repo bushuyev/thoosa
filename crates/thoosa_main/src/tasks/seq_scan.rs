@@ -71,6 +71,9 @@ struct SeqScanBucketEntry {
     score: f32,
 }
 
+type SeqScanBucketsByChannel = Vec<SeqScanBuckets>;
+type SeqScanChannelScores = Vec<Vec<f32>>;
+
 #[derive(Debug)]
 struct SeqScanBuckets {
     buckets: Vec<Vec<SeqScanBucketEntry>>,
@@ -94,6 +97,14 @@ impl SeqScanBuckets {
     fn counts(&self) -> Vec<usize> {
         self.buckets.iter().map(Vec::len).collect()
     }
+}
+
+fn ensure_channel_buckets(buckets_by_channel: &mut SeqScanBucketsByChannel, channels_count: usize, buckets_count: u32) -> Result<(), ThoError> {
+    while buckets_by_channel.len() < channels_count {
+        buckets_by_channel.push(SeqScanBuckets::new(buckets_count)?);
+    }
+
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -198,7 +209,7 @@ where
         let resources = resources_config.to_resources(&self.store).await?;
 
         for configured_stage in &self.run_config_stages {
-            let mut buckets = SeqScanBuckets::new(configured_stage.run_config.buckets_count)?;
+            let mut buckets: SeqScanBucketsByChannel = Vec::new();
             let mut batch_resources: Vec<Resource> = Vec::new();
             let mut batch_tensors: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = Vec::new();
             let mut batch_len = 0i64;
@@ -259,11 +270,11 @@ where
             ).await?;
 
             info!(
-                "SeqScanStage::run: run_config_id={:?} metric={:?} chunk_size={} bucket_sizes={:?}",
+                "SeqScanStage::run: run_config_id={:?} metric={:?} chunk_size={} channel_bucket_sizes={:?}",
                 configured_stage.run_config.id,
                 configured_stage.run_config.metric,
                 self.chunk_size,
-                buckets.counts()
+                buckets.iter().map(SeqScanBuckets::counts).collect::<Vec<_>>()
             );
         }
 
@@ -275,7 +286,7 @@ async fn flush_batch_to_buckets<C>(
     batch_resources: &[Resource],
     batch_tensors: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
     run_config: &SeqScanRunConfig,
-    buckets: &mut SeqScanBuckets,
+    buckets: &mut SeqScanBucketsByChannel,
     ctx: C,
 ) -> Result<(), ThoError>
 where
@@ -299,7 +310,7 @@ fn assign_resource_to_buckets(
     resource: &Resource,
     resource_t: &Tensor,
     run_config: &SeqScanRunConfig,
-    buckets: &mut SeqScanBuckets,
+    buckets: &mut SeqScanBucketsByChannel,
 ) -> Result<(), ThoError> {
     assign_resource_to_buckets_chunked(resource, resource_t, run_config, i64::MAX, buckets)
 }
@@ -309,7 +320,7 @@ fn assign_resource_to_buckets_chunked(
     resource_t: &Tensor,
     run_config: &SeqScanRunConfig,
     max_chunk_len: i64,
-    buckets: &mut SeqScanBuckets,
+    buckets: &mut SeqScanBucketsByChannel,
 ) -> Result<(), ThoError> {
     let chunk_scores = score_resource_in_chunks(resource, resource_t, run_config, max_chunk_len)?;
 
@@ -317,31 +328,68 @@ fn assign_resource_to_buckets_chunked(
         return Ok(());
     }
 
-    let min_score = chunk_scores
-        .iter()
-        .flat_map(|(_, _, score_values)| score_values.iter().copied())
-        .fold(f32::INFINITY, f32::min);
-    let max_score = chunk_scores
-        .iter()
-        .flat_map(|(_, _, score_values)| score_values.iter().copied())
-        .fold(f32::NEG_INFINITY, f32::max);
+    let channels_count = chunk_scores
+        .first()
+        .map(|(_, _, score_values)| score_values.len())
+        .unwrap_or(0);
+    ensure_channel_buckets(buckets, channels_count, run_config.buckets_count)?;
     let buckets_count = usize::try_from(run_config.buckets_count).map_err(|_| ThoError::new(format!("assign_resource_to_buckets_chunked: invalid buckets_count={}", run_config.buckets_count)))?;
+    let channel_ranges = (0..channels_count)
+        .map(|channel_idx| {
+            let mut min_score = f32::INFINITY;
+            let mut max_score = f32::NEG_INFINITY;
+
+            for (_, _, score_values) in &chunk_scores {
+                let channel_scores = score_values.get(channel_idx).ok_or_else(|| {
+                    ThoError::new(format!(
+                        "assign_resource_to_buckets_chunked: inconsistent channels_count for resource={} expected at least {} channels",
+                        resource.id(),
+                        channel_idx + 1
+                    ))
+                })?;
+
+                for score in channel_scores {
+                    min_score = min_score.min(*score);
+                    max_score = max_score.max(*score);
+                }
+            }
+
+            Ok::<_, ThoError>((min_score, max_score))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     for (first_slice_idx, first_slice_start, score_values) in chunk_scores {
-        for (local_slice_idx, score) in score_values.into_iter().enumerate() {
-            let bucket_idx = bucket_idx(score, min_score, max_score, buckets_count);
-            let slice_start_offset = u32::try_from(local_slice_idx)
-                .map_err(|_| ThoError::new(format!("assign_resource_to_buckets_chunked: local_slice_idx={local_slice_idx} does not fit into u32")))?
-                .saturating_mul(run_config.step);
-            buckets.push(
-                bucket_idx,
-                SeqScanBucketEntry {
-                    resource: resource.clone(),
-                    slice_idx: first_slice_idx + local_slice_idx,
-                    slice_start: first_slice_start.saturating_add(slice_start_offset),
-                    score,
-                },
-            )?;
+        if score_values.len() != channels_count {
+            return Err(ThoError::new(format!(
+                "assign_resource_to_buckets_chunked: inconsistent channels_count for resource={} expected={} got={}",
+                resource.id(),
+                channels_count,
+                score_values.len()
+            )));
+        }
+
+        for (channel_idx, channel_scores) in score_values.into_iter().enumerate() {
+            let (min_score, max_score) = channel_ranges[channel_idx];
+
+            for (local_slice_idx, score) in channel_scores.into_iter().enumerate() {
+                let bucket_idx = bucket_idx(score, min_score, max_score, buckets_count);
+                let slice_start_offset = u32::try_from(local_slice_idx)
+                    .map_err(|_| ThoError::new(format!("assign_resource_to_buckets_chunked: local_slice_idx={local_slice_idx} does not fit into u32")))?
+                    .saturating_mul(run_config.step);
+
+                buckets
+                    .get_mut(channel_idx)
+                    .ok_or_else(|| ThoError::new(format!("assign_resource_to_buckets_chunked: missing channel_idx={channel_idx}")))?    
+                    .push(
+                        bucket_idx,
+                        SeqScanBucketEntry {
+                            resource: resource.clone(),
+                            slice_idx: first_slice_idx + local_slice_idx,
+                            slice_start: first_slice_start.saturating_add(slice_start_offset),
+                            score,
+                        },
+                    )?;
+            }
         }
     }
 
@@ -353,7 +401,7 @@ fn score_resource_in_chunks(
     resource_t: &Tensor,
     run_config: &SeqScanRunConfig,
     max_chunk_len: i64,
-) -> Result<Vec<(usize, u32, Vec<f32>)>, ThoError> {
+) -> Result<Vec<(usize, u32, SeqScanChannelScores)>, ThoError> {
     let size = resource_t.size();
     let resource_len = *size.get(1).ok_or_else(|| ThoError::new(format!("score_resource_in_chunks: expected [channels, seq], got size={size:?}")))?;
     let window = i64::from(run_config.window);
@@ -387,24 +435,33 @@ fn score_resource_in_chunks(
         let chunk_t = resource_t.f_slice(1, next_slice_start, chunk_end, 1)?;
         let slices = chunk_t.f_unfold(1, window, step)?;
         let score_values = score_slices_to_vec(&run_config.metric, &slices)?;
+        let channels_count = score_values.len();
+        let chunk_len = score_values.first().map(Vec::len).unwrap_or(0);
 
         debug!(
-            "score_resource_in_chunks: resource_id={} next_slice_start={} last_slice_start_in_chunk={} chunk_end={} chunk_scores={}",
+            "score_resource_in_chunks: resource_id={} next_slice_start={} last_slice_start_in_chunk={} chunk_end={} channels_count={} chunk_slices={}",
             resource.id(),
             next_slice_start,
             last_slice_start_in_chunk,
             chunk_end,
-            score_values.len()
+            channels_count,
+            chunk_len
         );
 
-        if score_values.is_empty() {
+        if channels_count == 0 || chunk_len == 0 {
             return Err(ThoError::new(format!(
-                "score_resource_in_chunks: resource={} produced no scores for next_slice_start={next_slice_start} chunk_end={chunk_end}",
+                "score_resource_in_chunks: resource={} produced no channel scores for next_slice_start={next_slice_start} chunk_end={chunk_end}",
                 resource.id()
             )));
         }
 
-        let chunk_len = score_values.len();
+        if score_values.iter().any(|channel_scores| channel_scores.len() != chunk_len) {
+            return Err(ThoError::new(format!(
+                "score_resource_in_chunks: inconsistent per-channel slice counts for resource={} next_slice_start={next_slice_start} chunk_end={chunk_end}",
+                resource.id()
+            )));
+        }
+
         chunk_scores.push((
             first_slice_idx,
             u32::try_from(next_slice_start).map_err(|_| ThoError::new(format!("score_resource_in_chunks: next_slice_start={next_slice_start} does not fit into u32")))?,
@@ -436,12 +493,23 @@ fn score_slices(metric: &SeqScanMetric, slices: &Tensor) -> Result<Tensor, ThoEr
     }
 }
 
-fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<Vec<f32>, ThoError> {
+fn score_slices_to_vec(metric: &SeqScanMetric, slices: &Tensor) -> Result<SeqScanChannelScores, ThoError> {
     let scores = score_slices(metric, slices)?;
     let scores_cpu = scores.f_to_device(Cpu)?;
-    let scores_flat = scores_cpu.f_reshape([-1])?;
+    let size = scores_cpu.size();
+    let channels_count = usize::try_from(*size.first().ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
+        .map_err(|_| ThoError::new(format!("score_slices_to_vec: invalid channels_count in size={size:?}")))?;
+    let slices_count = usize::try_from(*size.get(1).ok_or_else(|| ThoError::new(format!("score_slices_to_vec: expected [channels, slices], got size={size:?}")))?)
+        .map_err(|_| ThoError::new(format!("score_slices_to_vec: invalid slices_count in size={size:?}")))?;
+    let mut per_channel_scores = Vec::with_capacity(channels_count);
 
-    Ok(Vec::<f32>::try_from(&scores_flat)?)
+    for channel_idx in 0..channels_count {
+        let channel_scores = scores_cpu.f_get(channel_idx as i64)?;
+        let channel_scores_flat = channel_scores.f_reshape([slices_count as i64])?;
+        per_channel_scores.push(Vec::<f32>::try_from(&channel_scores_flat)?);
+    }
+
+    Ok(per_channel_scores)
 }
 
 fn score_mean_abs(slices: &Tensor, config: &MeanAbsSeqScanMetricConfig) -> Result<Tensor, ThoError> {
@@ -469,9 +537,8 @@ fn score_mean_power(slices: &Tensor, config: &MeanPowerSeqScanMetricConfig) -> R
 
 fn reduce_slice_scores(values: &Tensor) -> Result<Tensor, ThoError> {
     let per_channel = values.f_mean_dim([2].as_slice(), false, Kind::Float)?;
-    let per_slice = per_channel.f_mean_dim([0].as_slice(), false, Kind::Float)?;
 
-    Ok(per_slice)
+    Ok(per_channel)
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "seq_scan_config_to_stage"))]
@@ -499,7 +566,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::seq_scan::{assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx, SeqScanBuckets, SeqScanOutput, SeqScanStage};
+    use crate::tasks::seq_scan::{assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx, SeqScanOutput, SeqScanStage};
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use parking_lot::RwLock;
     use std::sync::Arc;
@@ -542,19 +609,73 @@ mod tests {
             metric: SeqScanMetric::MeanAbs(MeanAbsSeqScanMetricConfig::default()),
             buckets_count: 3,
         };
-        let mut buckets = SeqScanBuckets::new(run_config.buckets_count)?;
+        let mut buckets = Vec::new();
 
         assign_resource_to_buckets(&resource, &resource_t, &run_config, &mut buckets)?;
 
-        assert_eq!(vec![1, 1, 1], buckets.counts());
+        assert_eq!(1, buckets.len());
+        assert_eq!(vec![1, 1, 1], buckets[0].counts());
 
         Ok(())
     }
 
     #[test]
-    fn test_assign_resource_to_buckets_chunked_matches_full_scan() -> Result<(), ThoError> {
+    fn test_assign_resource_to_buckets_separates_channels() -> Result<(), ThoError> {
+        let resource = Resource::new(1, 1, "r0", 6);
+        let resource_t = Tensor::from_slice(&[
+            1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0,
+            4.0, 4.0, 2.0, 2.0, 1.0, 1.0,
+        ])
+        .view([2, 6]);
+        let run_config = SeqScanRunConfig {
+            id: Some(6),
+            step: 2,
+            window: 2,
+            freq_filter: None,
+            metric: SeqScanMetric::MeanAbs(MeanAbsSeqScanMetricConfig::default()),
+            buckets_count: 3,
+        };
+        let mut buckets = Vec::new();
+
+        assign_resource_to_buckets(&resource, &resource_t, &run_config, &mut buckets)?;
+
+        assert_eq!(2, buckets.len());
+        assert_eq!(
+            vec![
+                vec![(resource.id(), 0usize, 0u32, 1.0f32)],
+                vec![(resource.id(), 1usize, 2u32, 2.0f32)],
+                vec![(resource.id(), 2usize, 4u32, 4.0f32)],
+            ],
+            buckets[0]
+                .buckets
+                .iter()
+                .map(|bucket| bucket.iter().map(|entry| (entry.resource.id(), entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            vec![
+                vec![(resource.id(), 2usize, 4u32, 1.0f32)],
+                vec![(resource.id(), 1usize, 2u32, 2.0f32)],
+                vec![(resource.id(), 0usize, 0u32, 4.0f32)],
+            ],
+            buckets[1]
+                .buckets
+                .iter()
+                .map(|bucket| bucket.iter().map(|entry| (entry.resource.id(), entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_assign_resource_to_buckets_chunked_matches_full_scan_per_channel() -> Result<(), ThoError> {
         let resource = Resource::new(1, 1, "r0", 10);
-        let resource_t = Tensor::from_slice(&[1.0f32, 3.0, 2.0, 6.0, 4.0, 9.0, 5.0, 7.0, 8.0, 10.0]).view([1, 10]);
+        let resource_t = Tensor::from_slice(&[
+            1.0f32, 3.0, 2.0, 6.0, 4.0, 9.0, 5.0, 7.0, 8.0, 10.0,
+            10.0, 8.0, 7.0, 5.0, 9.0, 4.0, 6.0, 2.0, 3.0, 1.0,
+        ])
+        .view([2, 10]);
         let run_config = SeqScanRunConfig {
             id: Some(7),
             step: 2,
@@ -563,21 +684,31 @@ mod tests {
             metric: SeqScanMetric::MeanPower(MeanPowerSeqScanMetricConfig { power: 2.0, center: false }),
             buckets_count: 3,
         };
-        let mut full_scan_buckets = SeqScanBuckets::new(run_config.buckets_count)?;
-        let mut chunked_buckets = SeqScanBuckets::new(run_config.buckets_count)?;
+        let mut full_scan_buckets = Vec::new();
+        let mut chunked_buckets = Vec::new();
 
         assign_resource_to_buckets(&resource, &resource_t, &run_config, &mut full_scan_buckets)?;
         assign_resource_to_buckets_chunked(&resource, &resource_t, &run_config, 5, &mut chunked_buckets)?;
 
         let full_scan_entries = full_scan_buckets
-            .buckets
             .iter()
-            .map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
+            .map(|channel_buckets| {
+                channel_buckets
+                    .buckets
+                    .iter()
+                    .map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
         let chunked_entries = chunked_buckets
-            .buckets
             .iter()
-            .map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
+            .map(|channel_buckets| {
+                channel_buckets
+                    .buckets
+                    .iter()
+                    .map(|bucket| bucket.iter().map(|entry| (entry.slice_idx, entry.slice_start, entry.score)).collect::<Vec<_>>())
+                    .collect::<Vec<_>>()
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(full_scan_entries, chunked_entries);
@@ -602,8 +733,22 @@ mod tests {
             mock_tensor_loader::build()
                 .with_out_id()
                 .with_run_cached([
-                    (resources[0].clone(), Tensor::from_slice(&[1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0]).view([1, 6])),
-                    (resources[1].clone(), Tensor::from_slice(&[0.0f32, 0.0, 1.0, 1.0, 3.0, 3.0]).view([1, 6])),
+                    (
+                        resources[0].clone(),
+                        Tensor::from_slice(&[
+                            1.0f32, 1.0, 2.0, 2.0, 4.0, 4.0,
+                            4.0, 4.0, 2.0, 2.0, 1.0, 1.0,
+                        ])
+                        .view([2, 6]),
+                    ),
+                    (
+                        resources[1].clone(),
+                        Tensor::from_slice(&[
+                            0.0f32, 0.0, 1.0, 1.0, 3.0, 3.0,
+                            3.0, 3.0, 1.0, 1.0, 0.0, 0.0,
+                        ])
+                        .view([2, 6]),
+                    ),
                 ])
                 .finish(),
         );
