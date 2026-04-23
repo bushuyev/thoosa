@@ -291,7 +291,7 @@ where
                                         LocalMin { dim: 1, radius },
                                         // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
                                         Le {
-                                            v: dists.t.shallow_clone(),
+                                            v: &dists.t,
                                         }
                                     ]
                                 }

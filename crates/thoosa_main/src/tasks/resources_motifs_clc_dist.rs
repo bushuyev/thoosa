@@ -133,18 +133,19 @@ where
 
         let resources_iter = SlicesIter::new_with_offsets(unfold_params.step() as usize, resource_ids_sizes);
 
+        let tensor = input
+            .motifs_stats
+            .t_ref()
+            .f_unsqueeze(-1)?
+            .f_expand(
+                [-1, -1, batch_1_t.data().size()[1]],
+                false,
+            )?;
         let mut mask_makers = vec![
             // dim 1 are motifs - local minimums would be differences between motifs, we're interested in miniums within motifs
             LocalMin { dim: 2, radius: unfold_params.size() as u64  /2 },
             Le {
-                v: input
-                    .motifs_stats
-                    .t_ref()
-                    .f_unsqueeze(-1)?
-                    .f_expand(
-                        [-1, -1, batch_1_t.data().size()[1]],
-                        false,
-                    )?,
+                v: &tensor,
             },
         ];
 
