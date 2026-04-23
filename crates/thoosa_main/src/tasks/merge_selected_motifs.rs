@@ -240,7 +240,7 @@ where
 
     async fn metric_for_candidate(&self, candidate: &SelectedMotifCandidate, ctx: C) -> Result<f32, ThoError> {
         self.run_metric(
-            MotifStatsInput::from_motif_input(candidate.key.motif_loader_input(), vec![candidate.comparison.metric.clone()], None),
+            MotifStatsInput::from_motif_input(candidate.key.motif_loader_input(), vec![candidate.comparison.metric.clone()]),
             candidate.comparison.metric.clone(),
             ctx,
         )
@@ -252,7 +252,6 @@ where
             MotifStatsInput::from_merged_motif_inputs(
                 vec![left.key.motif_loader_input(), right.key.motif_loader_input()],
                 vec![left.comparison.metric.clone()],
-                None,
             )?,
             left.comparison.metric.clone(),
             ctx,
