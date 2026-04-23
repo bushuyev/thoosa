@@ -172,7 +172,7 @@ where
                 fut.await.map(|v| {
                     #[cfg(any(debug_assertions, tho_debug))]
                     debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}");
-                    // v.add_cache_area(cache_area);
+
                     v
                 })
             }
