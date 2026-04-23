@@ -245,6 +245,9 @@ pub struct SeqScanArgs {
 
     #[arg(long)]
     pub run_config_cnt: String,
+
+    #[arg(long, default_value_t = 10_000)]
+    pub max_chunk_size: usize, //max number of entries in tensor batches
 }
 
 impl SeqScanArgs {
@@ -545,11 +548,12 @@ where
                 &ws,
                 &store,
                 |run_configs| async {
-                    Arc::new(SeqScanStage::<Simple, RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
+                    Arc::new(SeqScanStage::<Simple, RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new_with_chunk_size(
                         &ws,
                         &store,
                         loader,
                         run_configs,
+                        seq_scan_args.max_chunk_size
                     ).expect("SeqScanStage::new failed"))
                 },
                 || root_ctx.branch(Some("seq scan"), true),
