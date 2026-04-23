@@ -14,7 +14,7 @@ use crate::val::{GridValueSet, NamedRange, NamedVal, PendingOptField, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
-use log::{debug, trace, warn};
+use log::{debug, error, trace, warn};
 use num_traits::PrimInt;
 use rand::{Rng, RngExt};
 use regex::Regex;
@@ -204,7 +204,7 @@ async fn collect_stream_with_progress<T, S>(
             }
             next = stream.next() => {
                 let Some(r) = next else {
-                    warn!("collect_stream_with_progress: {descr}: next_error={next:?}");
+                    trace!("collect_stream_with_progress: {descr}: next={next:?}");
 
                     break;
                 };
@@ -222,9 +222,9 @@ async fn collect_stream_with_progress<T, S>(
                     Err(e) => {
                         *err += 1;
                         if e.is_oom {
-                            debug!("collect_stream_with_progress: {descr}: {e:?}");
+                            warn!("collect_stream_with_progress: {descr}: got oom {e:?}");
                         } else {
-                            warn!("collect_stream_with_progress: {descr}: {e:?}");
+                            error!("collect_stream_with_progress: {descr}: {e:?}");
                         }
                     }
                 }
