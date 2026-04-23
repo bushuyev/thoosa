@@ -1361,7 +1361,7 @@ mod distance_tests {
         debug!("thresholds_t_broadcasted=\n{thresholds_t_broadcasted}");
 
         let mask = Le {
-            v: thresholds_t_broadcasted,
+            v: &thresholds_t_broadcasted,
         }
         .make_mask(None, &dists_t).unwrap();
 

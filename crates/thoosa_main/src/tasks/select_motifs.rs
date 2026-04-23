@@ -1036,7 +1036,7 @@ where
                 async move {
                     let result = (async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
-                        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()], None)));
+                        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()])));
                         let motif_stat: f32 = load_and_clc_dist
                             .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false))
                             .await?
@@ -1403,7 +1403,6 @@ where
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_id])),
                             criteria_metrics.clone(),
-                            None,
                         ))),
                         ctx.branch(Some("select_motifs_filter_motif_stats"), false),
                     )

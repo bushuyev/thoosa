@@ -230,7 +230,7 @@ where
 
                             let comparison_metric = Metrics::from_similarity_metric(run_config.similarity_metric, to_stats_aggr(v.aggr));
                             //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                            let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()], None))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+                            let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()]))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
 
                             debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 

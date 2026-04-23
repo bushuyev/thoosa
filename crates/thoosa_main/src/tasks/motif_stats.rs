@@ -54,30 +54,23 @@ pub struct MotifStatsInput {
     id: SynKey,
     source: MotifStatsSource,
     metrics: Vec<Metrics>,
-    quantiles: Option<Vec<f32>>,
 }
 
 impl MotifStatsInput {
     pub fn from_motif_input(
         motif_loader_input: MotifLoaderInput,
         metrics: Vec<Metrics>,
-        quantiles: Option<Vec<f32>>,
     ) -> Self {
         let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
-        let id = if let Some(quantiles) = quantiles.as_ref() {
-            &(&motif_loader_input.id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"))
-        } else {
-            &motif_loader_input.id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))
-        };
+
         Self {
-            id,
+            id: &motif_loader_input.id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
             source: MotifStatsSource::Motif(motif_loader_input),
             metrics,
-            quantiles,
         }
     }
 
-    pub fn from_random(max_slices: u32, find_motifs_run_id: RunId, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
+    pub fn from_random(max_slices: u32, find_motifs_run_id: RunId, metrics: Vec<Metrics>) -> Self {
         let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
         let mut id = SynKey::new([
             mono_key!("MotifStatsInput", "stage"),
@@ -85,9 +78,7 @@ impl MotifStatsInput {
             mono_key!(max_slices, format!("max_slices={max_slices}")),
             mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
         ]);
-        if let Some(quantiles) = quantiles.as_ref() {
-            id = &id + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"));
-        }
+
 
         debug!("MotifStatsInput::from_random: id={id:?}");
 
@@ -95,14 +86,12 @@ impl MotifStatsInput {
             id,
             source: MotifStatsSource::Random { max_slices, find_motifs_run_id },
             metrics,
-            quantiles,
         }
     }
 
     pub fn from_merged_motif_inputs(
         motif_loader_inputs: Vec<MotifLoaderInput>,
         metrics: Vec<Metrics>,
-        quantiles: Option<Vec<f32>>,
     ) -> Result<Self, ThoError> {
         if motif_loader_inputs.is_empty() {
             return Err(ThoError::new("MotifStatsInput::from_merged_motif_inputs: empty motif_loader_inputs"));
@@ -113,17 +102,10 @@ impl MotifStatsInput {
             &acc + motif_loader_input.id()
         });
 
-        let id = if let Some(quantiles) = quantiles.as_ref() {
-            &(&id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))) + mono_key!(format!("{quantiles:?}"), format!("quantiles={quantiles:?}"))
-        } else {
-            &id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}"))
-        };
-
         Ok(Self {
-            id,
+            id: &id + mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
             source: MotifStatsSource::MergedMotifs(motif_loader_inputs),
             metrics,
-            quantiles,
         })
     }
 
@@ -136,9 +118,6 @@ impl MotifStatsInput {
         &self.metrics
     }
 
-    pub fn quantiles(&self) -> Option<&[f32]> {
-        self.quantiles.as_deref()
-    }
 }
 
 impl Input for MotifStatsInput {}
@@ -191,7 +170,6 @@ impl CopyToDevice for MotifStatsInput {
             id: self.id.clone(),
             source,
             metrics: self.metrics.clone(),
-            quantiles: self.quantiles.clone(),
         })
     }
 }
@@ -993,7 +971,7 @@ where
     {
         let input_id = input.id().clone();
         let (source, metrics, quantiles) = with_data!(ctx.branch(Some("motif_stats_input"), false), input; |_ctx, input: &MotifStatsInput| {
-            Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), input.quantiles().map(|v| v.to_vec())))
+            Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), None))
         })?;
         let stats = match source {
             MotifStatsSource::Motif(motif_loader_input) => {
@@ -1329,7 +1307,7 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
         let metric = Metrics::default();
-        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_id, vec![metric.clone()], None)));
+        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_id, vec![metric.clone()])));
 
         let output = Arc::clone(&stage)
             .run(
@@ -1399,7 +1377,6 @@ mod tests {
         let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_merged_motif_inputs(
             vec![motif_input_0, motif_input_1],
             vec![metric.clone()],
-            None,
         )?));
 
         let output = Arc::clone(&stage)
