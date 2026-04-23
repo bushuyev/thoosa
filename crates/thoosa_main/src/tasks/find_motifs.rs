@@ -471,7 +471,7 @@ where
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="config_to_stage"))]
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
-    C: 'static + RunCtx,
+    C: 'static + RunCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_deref() {
