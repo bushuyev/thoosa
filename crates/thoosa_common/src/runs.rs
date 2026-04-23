@@ -35,19 +35,16 @@ impl ResourcesConfig for Simple {
         Ok(match self.resources() {
             ResourceType::List(list) => store
                 .list_resources_by_file_stems(&list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>())
-                .await
-                .expect("list_resources_by_file_stems"),
+                .await?,
             ResourceType::Set(set) => store
                 .list_resource_set_resources_by_descr(set)
-                .await
-                .expect("list_resource_set_resources"),
+                .await?,
             ResourceType::Group(group) => {
                 let store_guard = store;
                 let mut resources = Vec::new();
                 for (_, resource_set) in store_guard
                     .list_resource_set_group_sets(group)
-                    .await
-                    .expect("list_resource_set_group_sets")
+                    .await?
                 {
                     resources.extend(
                         store_guard
@@ -60,8 +57,7 @@ impl ResourcesConfig for Simple {
             }
             ResourceType::NotInGroup(descr) => store
                 .list_resources_not_in_group(descr, 1000)
-                .await
-                .expect("list_resource_set_resources"), //TODO limit
+                .await?, //TODO limit
         })
     }
 

@@ -3334,7 +3334,7 @@ impl SqlStore {
         let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, Vec::new())).collect::<HashMap<usize, Vec<usize>>>();
 
         let mut stmt = t.prepare(
-            "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr WHERE lr.p >= ? ORDER BY lr.label_id, lr.resource_id",
+            "SELECT lr.label_id, lr.resource_id FROM labeled_resources lr LEFT JOIN  resources r on r.id=lr.resource_id WHERE lr.p >= ? ORDER BY lr.label_id, r.length",//TODO order by r.length
         )?;
         let mut rows = stmt.query(params![min_p])?;
         while let Some(row) = rows.next()? {
