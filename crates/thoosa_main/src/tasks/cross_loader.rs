@@ -200,7 +200,7 @@ where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
-    R: Debug + Send + Sync + 'static,
+    R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
@@ -234,6 +234,142 @@ where
             pd: Default::default(),
             step
         }
+    }
+
+    async fn run_loaded_batch(
+        &self,
+        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        t_0_batch_resources: Vec<Arc<Resource>>,
+        t_1_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        t_1_batch_resources: Vec<Arc<Resource>>,
+        mut ctx: C,
+        receiver: Arc<RSV>,
+    ) -> Result<(), ThoError> {
+        debug!("CrossLoader::run_loaded_batch: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
+        let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
+        let batch_1_slice_lengths = t_1_batch
+            .iter()
+            .map(|t| t.size().dim_1())
+            .collect::<Vec<_>>();
+
+        let input = CrossInputSelectorWrap::new(
+            mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(),
+            t_0_batch,
+            t_1_batch,
+            t_0_batch_resources,
+            t_1_batch_resources.clone(),
+            CacheArea::default()
+        );
+        let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        match OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                    MAX_PARALLEL,
+                    *MaxParallelStep::FIFTY,
+                ))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("cross_unfold_clc"))),
+                Adjusters::Input(Box::new(CrossLoaderAdjuster::new())),
+            ],
+            None,
+        ).run(
+            &cross_unfold_clc,
+            Arc::new(input),
+            ctx.branch("batch_clc_ctx".into(), false),
+            Contexts::new(
+                CrossSplitterContext::new(t_1_batch_resources.len() as i64, batch_1_slice_lengths),
+                NoopRunnableContext {},
+                MaxParallelAndDumpToCpuAdjustableContex::new(
+                    MaxParallelAdjustContextImpl::new(),
+                    DumpToCpuContextImpl::new(&required_ids),
+                ),
+            ),
+        ).await {
+            Ok(mut cross_clc_output) => {
+                let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
+                let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false);
+
+                tokio::task::spawn_blocking(move || {
+                    receiver.consume(cross_clc_output, receiver_ctx);
+                    Ok::<_, ThoError>(())
+                }).await??;
+            }
+            Err(e) => {
+                warn!("CrossLoader::run: got error  find_motifs_run_config_id={} {e:?}", self.find_motifs_run_config_id);
+            }
+        };
+
+        Ok(())
+    }
+
+    async fn run_inner_batches(
+        &self,
+        resources: &[Arc<Resource>],
+        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        t_0_batch_resources: Vec<Arc<Resource>>,
+        outer_batch_last_i: usize,
+        skip_0_i: usize,
+        max_batch: i64,
+        receiver: Arc<RSV>,
+        mut ctx: C,
+    ) -> Result<(), ThoError> {
+        let mut t_1_batch: Vec<_> = vec![];
+        let mut t_1_batch_resources: Vec<_> = vec![];
+        let mut t_1_batch_len = 0;
+        let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
+
+        for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
+            let t_1 = Arc::clone(&self.configured_loader)
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(Some("cross_loader_t_1"), false))
+                .await?;
+            let t_1_len = t_1.size().dim_1();
+
+            if t_1_len > max_batch {
+                if !t_1_batch.is_empty() {
+                    self.run_loaded_batch(
+                        t_0_batch.clone(),
+                        t_0_batch_resources.clone(),
+                        std::mem::take(&mut t_1_batch),
+                        std::mem::take(&mut t_1_batch_resources),
+                        ctx.branch(Some("cross_loader_t_1_batch_before_large"), false),
+                        Arc::clone(&receiver),
+                    ).await?;
+                    t_1_batch_len = 0;
+                    collect_eta_record_completion(cross_loader_inner.id());
+                }
+
+                self.run_loaded_batch(
+                    t_0_batch.clone(),
+                    t_0_batch_resources.clone(),
+                    vec![t_1],
+                    vec![Arc::clone(resource_1)],
+                    ctx.branch(Some("cross_loader_t_1_batch_large_resource"), false),
+                    Arc::clone(&receiver),
+                ).await?;
+                collect_eta_record_completion(cross_loader_inner.id());
+                continue;
+            }
+
+            t_1_batch_len += t_1_len;
+            t_1_batch.push(t_1);
+            t_1_batch_resources.push(Arc::clone(resource_1));
+
+            if t_1_batch_len < max_batch && i_1 < resources.len() - 1 {
+                continue;
+            }
+
+            self.run_loaded_batch(
+                t_0_batch.clone(),
+                t_0_batch_resources.clone(),
+                std::mem::take(&mut t_1_batch),
+                std::mem::take(&mut t_1_batch_resources),
+                ctx.branch(Some("cross_loader_t_1_batch"), false),
+                Arc::clone(&receiver),
+            ).await?;
+            t_1_batch_len = 0;
+            collect_eta_record_completion(cross_loader_inner.id());
+        }
+
+        Ok(())
     }
 }
 
@@ -316,8 +452,6 @@ where
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
-        let device_idx = ctx.device_idx();
-        let output_merge_mode = self.output_merge_mode;
 
         let resources_config = input
             .with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
@@ -338,8 +472,8 @@ where
 
         let mut t_0_batch: Vec<_> = vec![];
         let mut t_0_batch_resources: Vec<_> = vec![];
-        let mut t_0_batch_offsets: Vec<u32> = vec![];
         let mut t_0_batch_len = 0;
+        let mut t_0_batch_last_i: Option<usize> = None;
 
         let mut skip_0_i = 0;
 
@@ -350,119 +484,65 @@ where
             let t_0 = Arc::clone(&self.configured_loader)
                 .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(Some("cross_loader_t_0"), false))
                 .await?;
+            let t_0_len = t_0.size().dim_1();
 
-            t_0_batch_len += t_0.size().dim_1();
+            if t_0_len > max_batch {
+                if !t_0_batch.is_empty() {
+                    let pending_last_i = t_0_batch_last_i.expect("CrossLoader::run: missing t_0_batch_last_i for pending batch");
+                    self.run_inner_batches(
+                        resources.as_slice(),
+                        std::mem::take(&mut t_0_batch),
+                        std::mem::take(&mut t_0_batch_resources),
+                        pending_last_i,
+                        skip_0_i,
+                        max_batch,
+                        Arc::clone(&receiver),
+                        ctx.branch(Some("cross_loader_t_0_batch_before_large"), false),
+                    ).await?;
+                    skip_0_i = pending_last_i;
+                    t_0_batch_len = 0;
+                    t_0_batch_last_i = None;
+                    collect_eta_record_completion(cross_loader_outer.id());
+                }
+
+                self.run_inner_batches(
+                    resources.as_slice(),
+                    vec![t_0],
+                    vec![Arc::clone(resource_0)],
+                    i_0,
+                    skip_0_i,
+                    max_batch,
+                    Arc::clone(&receiver),
+                    ctx.branch(Some("cross_loader_t_0_batch_large_resource"), false),
+                ).await?;
+                skip_0_i = i_0;
+                collect_eta_record_completion(cross_loader_outer.id());
+                continue;
+            }
+
+            t_0_batch_len += t_0_len;
             t_0_batch.push(t_0);
             t_0_batch_resources.push(Arc::clone(resource_0));
-            t_0_batch_offsets.push(0);
+            t_0_batch_last_i = Some(i_0);
 
             if t_0_batch_len < max_batch && i_0 < resources.len() - 1 {
                 continue;
             }
 
-            let mut t_1_batch: Vec<_> = vec![];
-            let mut t_1_batch_resources: Vec<_> = vec![];
-            let mut t_1_batch_offsets: Vec<u32> = vec![];
-            let mut t_1_batch_len = 0;
-
-            let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_id={} i_0={i_0}", self.find_motifs_run_config_id), resources.len(), 1);
-            for (i_1, resource_1) in resources
-                .iter()
-                .enumerate()
-                .skip(skip_0_i)//skipping lower triangle
-            {
-                let t_1 = Arc::clone(&self.configured_loader)
-                    .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(Some("cross_loader_t_1"), false))
-                    .await?;
-
-                t_1_batch_len += t_1.size().dim_1();
-                t_1_batch.push(t_1);
-                t_1_batch_resources.push(Arc::clone(resource_1));
-                t_1_batch_offsets.push(0);
-
-                if t_1_batch_len < max_batch && i_1 < resources.len() - 1 {
-                    continue;
-                }
-
-                debug!("CrossLoader::run: find_motifs_run_config_id={} t_0_batch={t_0_batch:?} t_1_batch={t_1_batch:?}", self.find_motifs_run_config_id);
-                let batches_concated = [t_0_batch.clone(), t_1_batch.clone()].concat();
-                let cross_unfold_clc = Arc::clone(&self.cross_unfold_clc);
-
-
-                let t_0_batch_resources_cloned = t_0_batch_resources.clone();
-                let t_0_batch_resources_cloned_1 = t_0_batch_resources.clone();
-                let t_1_batch_resources_cloned = t_1_batch_resources.clone();
-                let t_1_batch_resources_cloned_1 = t_1_batch_resources.clone();
-
-                let batch_1_slice_lengths = t_1_batch
-                    .iter()
-                    .map(|t| t.size().dim_1())
-                    .collect::<Vec<_>>();
-
-                let input = CrossInputSelectorWrap::new(
-                    mono_key!(self.find_motifs_run_config_id, "find_motifs_run_config_id").into(),//TODO
-                    t_0_batch.clone(),
-                    t_1_batch.clone(),
-                    t_0_batch_resources_cloned.clone(),
-                    t_1_batch_resources_cloned.clone(),
-                    CacheArea::default()
-                );
-                let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-                match OOMHandler::new(
-                    vec![
-                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
-                            MAX_PARALLEL,
-                            *MaxParallelStep::FIFTY,
-                        ))),
-                        Adjusters::RunContext(Box::new(DumpToCpu::new("cross_unfold_clc"))),
-                        Adjusters::Input(Box::new(CrossLoaderAdjuster::new())),
-
-                    ],
-                    None,
-                ).run(
-                    &cross_unfold_clc,
-                    Arc::new(input),
-                    ctx.branch("batch_clc_ctx".into(), false),
-                    Contexts::new(
-                            CrossSplitterContext::new(t_1_batch_resources_cloned.len() as i64, batch_1_slice_lengths),
-                            NoopRunnableContext {},
-                            MaxParallelAndDumpToCpuAdjustableContex::new(
-                                MaxParallelAdjustContextImpl::new(),
-                                DumpToCpuContextImpl::new(&required_ids),
-                            ),
-                        ),
-                ).await {
-                    Ok( mut cross_clc_output  ) => {
-                        let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
-
-                        let receiver_arc = Arc::clone(&receiver);
-                        let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false);
-
-                        tokio::task::spawn_blocking(move || {
-                            receiver_arc.consume(cross_clc_output, receiver_ctx);//TODO ConsumeResult
-
-                            Ok::<_, ThoError>(())
-                        }).await??;
-
-                    }
-                    Err(e) => {
-                        warn!("CrossLoader::run: got error  find_motifs_run_config_id={} {e:?}", self.find_motifs_run_config_id);
-                    }
-                };
-
-                t_1_batch = vec![];
-                t_1_batch_resources = vec![];
-                t_1_batch_offsets = vec![];
-                t_1_batch_len = 0;
-
-                collect_eta_record_completion(cross_loader_inner.id());
-            }
+            self.run_inner_batches(
+                resources.as_slice(),
+                std::mem::take(&mut t_0_batch),
+                std::mem::take(&mut t_0_batch_resources),
+                i_0,
+                skip_0_i,
+                max_batch,
+                Arc::clone(&receiver),
+                ctx.branch(Some("cross_loader_t_0_batch"), false),
+            ).await?;
 
             skip_0_i = i_0;
-            t_0_batch.clear();
-            t_0_batch_resources.clear();
-            t_0_batch_offsets.clear();
             t_0_batch_len = 0;
+            t_0_batch_last_i = None;
 
             collect_eta_record_completion(cross_loader_outer.id());
         }
@@ -1976,6 +2056,124 @@ mod tests {
 
         assert_eq!(produced, expected_outputs);
         assert_eq!(produced, received);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_cross_loader_flushes_before_large_resource() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+
+        let resource_small: Resource = (1, 1, "resource_small", 2).into();
+        let resource_large: Resource = (2, 1, "resource_large", 8).into();
+        let resources = vec![resource_small.clone(), resource_large.clone()];
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_run_cached([
+                    (resource_small.clone(), Tensor::from_slice(&[1.0, 2.0]).view((1, 2))),
+                    (resource_large.clone(), Tensor::arange(8, (Kind::Float, Device::Cpu)).view((1, 8))),
+                ])
+                .finish(),
+        );
+
+        let observations = Arc::new(Mutex::new(Vec::<Observation<SynKey>>::new()));
+        let batch_observations = Arc::clone(&observations);
+
+        let batch_clc = Arc::new(
+            mock_cross_loader_clc::build::<TestBatchOutput, MockRunCtx>()
+                .with_run_batch_fn(move |input, _ctx| {
+                    batch_observations.lock().unwrap().push(Observation {
+                        tensor_ids: input.tensors().iter().map(|t| t.id().clone()).collect::<Vec<_>>(),
+                        batch_0_ids: input.batch_0().iter().map(|r| r.as_ref().id()).collect(),
+                        batch_1_ids: input.batch_1().iter().map(|r| r.as_ref().id()).collect(),
+                    });
+
+                    Ok(CrossUnfoldClcOutput::new(
+                        TestBatchOutput::new(0),
+                        SlicesIter::new(1, vec![]),
+                        SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into(),
+                    ))
+                })
+                .finish(),
+        );
+
+        let receiver = Arc::new(
+            mock_cross_loader_receiver::build::<CrossUnfoldClcOutput<TestBatchOutput>, MockRunCtx>()
+                .with_receive_fn(|_out, _ctx| ConsumeResult::Ok(()))
+                .finish(),
+        );
+
+        let mut ctx = mock_run_ctx::default(1);
+
+        let mut mocked_store = Arc::new(
+            MockStoreBuilder::new()
+                .with_list_resources_by_file_stems(
+                    vec!["resource_small".to_string(), "resource_large".to_string()],
+                    Ok(resources.clone()),
+                )
+                .build() as Box<dyn Store>,
+        );
+
+        let cross_loader = Arc::new(CrossLoader::new(
+            1,
+            loader,
+            &mocked_store,
+            batch_clc,
+            move |_resources: &[Arc<Resource>]| Arc::clone(&receiver),
+            3,
+            |batch| async { Ok(batch) }.boxed(),
+            |_receiver| async {
+                Ok(())
+            }.boxed(),
+            CrossUnfoldClcOutputMergeMode::GpuMerge,
+            0,
+        ));
+
+        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+            "resource_small".to_string(),
+            "resource_large".to_string(),
+        ])))));
+
+        let _ = cross_loader.run(input, ctx.branch(Some("cross_loader_run"), false)).await?;
+
+        let observed = observations.lock().unwrap().clone();
+        let expected = vec![
+            Observation {
+                tensor_ids: vec![
+                    SynKey::new([mono_key!("resource_small", "resource_small")]),
+                    SynKey::new([mono_key!("resource_small", "resource_small")]),
+                ],
+                batch_0_ids: vec![resource_small.id()],
+                batch_1_ids: vec![resource_small.id()],
+            },
+            Observation {
+                tensor_ids: vec![
+                    SynKey::new([mono_key!("resource_small", "resource_small")]),
+                    SynKey::new([mono_key!("resource_large", "resource_large")]),
+                ],
+                batch_0_ids: vec![resource_small.id()],
+                batch_1_ids: vec![resource_large.id()],
+            },
+            Observation {
+                tensor_ids: vec![
+                    SynKey::new([mono_key!("resource_large", "resource_large")]),
+                    SynKey::new([mono_key!("resource_small", "resource_small")]),
+                ],
+                batch_0_ids: vec![resource_large.id()],
+                batch_1_ids: vec![resource_small.id()],
+            },
+            Observation {
+                tensor_ids: vec![
+                    SynKey::new([mono_key!("resource_large", "resource_large")]),
+                    SynKey::new([mono_key!("resource_large", "resource_large")]),
+                ],
+                batch_0_ids: vec![resource_large.id()],
+                batch_1_ids: vec![resource_large.id()],
+            },
+        ];
+
+        assert_eq!(observed, expected);
 
         Ok(())
     }
