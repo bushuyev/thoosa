@@ -1,43 +1,60 @@
+use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
-use mockall_double::double;
 use parking_lot::RwLock;
-use tch::{Device, IndexOp, Tensor};
+use tch::{Device, Tensor};
 use tch::Device::{Cpu, Cuda};
+use tch::Kind::Float;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
-use thoosa_common::debug_plot;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterContext, SplitsAdjusterContextImpl};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::OutId;
 use thoosa_common::runner::common::RunCtx;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
 use thoosa_common::dims::{AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
-use thoosa_shared::{mono_key, ThoError};
-use thoosa_shared::traits::{CachableIdTr, WithId};
+use thoosa_shared::{mono_key, CopyToDevice, ThoError};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::math::sg_smoothing_coeffs;
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
 
 impl Dims for BandPassDims {
     type Metrics = AnyMetrics;//TODO
+}
+
+#[derive(Debug)]
+struct SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    freq_filter: Arc<FreqFilter<C>>,
+}
+
+impl<C> SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new(freq_filter: Arc<FreqFilter<C>>) -> Self {
+        Self { freq_filter }
+    }
 }
 
 #[derive(Debug)]
@@ -66,7 +83,7 @@ enum PreparedFilter {
 #[derive(Debug, Cached, Named)]
 pub struct FreqFilter<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
     filters: Vec<PreparedFilter>,
@@ -77,7 +94,7 @@ where
 //repalce with two config - band pass and band notch
 impl<C> FreqFilter<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunId) -> Result<Self, ThoError> {
         let (num_channels, sample_rate)  = {
@@ -212,7 +229,7 @@ where
     }
 
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData2, SynKey>) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> {
-        let mut filtered_t = input_tensor.t_ref().shallow_clone();
+        let mut filtered_t = input_tensor.t_ref().totype(Float);
         for filter in self.filters.iter() {
             match filter {
                 PreparedFilter::NotchBand { low_hz, high_hz } => {
@@ -224,13 +241,11 @@ where
                     // debug_plot!(&filtered_t, "{}_NotchBand", input_tensor.id())?;
                 }
                 PreparedFilter::BandPass { kernel, stride, padding } => {
-
                     let input_t = filtered_t.as_ref().f_unsqueeze(0)?;
 
-                    let output = self.run_conv_with_padding(*stride, padding, &kernel.as_ref(), &input_t);//TODO conf stride?
-                    debug!("FreqFilter::apply_tho_tensor, BandPass: id={} kernel.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel.size(), input_t.size(), output.as_ref().map(|v|v.size()));
-                    filtered_t = output?
-
+                    let output = self.run_conv_with_padding(*stride, padding, &kernel.as_ref(), &input_t);
+                    debug!("FreqFilter::apply_tho_tensor, BandPass: id={} kernel.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), kernel.size(), input_t.size(), output.as_ref().map(|v| v.size()));
+                    filtered_t = output?;
 
                     // debug_plot!(&filtered_t, "{}_BandPass", input_tensor.id())?;
                 }
@@ -242,11 +257,9 @@ where
 
                     let input_t = filtered_t.as_ref().f_unsqueeze(0)?;
 
-
                     let output = self.run_conv_with_padding(*stride, padding, &weights.as_ref(), &input_t);
-                    debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights.size(), input_t.size(), output.as_ref().map(|v|v.size()));
-                    filtered_t = output?
-
+                    debug!("FreqFilter::apply_tho_tensor, SavGol: id={} weights.size={:?} input.size={:?} output.size={:?}", input_tensor.id(), weights.size(), input_t.size(), output.as_ref().map(|v| v.size()));
+                    filtered_t = output?;
                 }
                 PreparedFilter::Median { window } => {
                     let filtered_t_out = median(&filtered_t, *window)?;
@@ -292,11 +305,214 @@ where
 
         Ok(output_3d.f_view((self.num_channels, -1))?)
     }
+
+    fn effective_output_stride(&self) -> Result<i64, ThoError> {
+        self.filters.iter().try_fold(1_i64, |effective_stride, filter| {
+            let stage_stride = match filter {
+                PreparedFilter::BandPass { stride, .. } | PreparedFilter::SavGol { stride, .. } => *stride as i64,
+                PreparedFilter::MovingAverage { step, .. } => *step as i64,
+                PreparedFilter::NotchBand { .. } | PreparedFilter::Median { .. } => 1,
+            };
+
+            effective_stride
+                .checked_mul(stage_stride)
+                .ok_or_else(|| ThoError::new(format!("FreqFilter::effective_output_stride overflow: effective_stride={effective_stride} stage_stride={stage_stride}")))
+        })
+    }
+
+    fn min_input_split_len(&self) -> Result<i64, ThoError> {
+        self.filters.iter().rev().try_fold(1_i64, |required_len, filter| {
+            match filter {
+                PreparedFilter::NotchBand { .. } | PreparedFilter::Median { .. } => Ok(required_len.max(1)),
+                PreparedFilter::MovingAverage { step, .. } => Self::expand_required_len(required_len, *step as i64, 1),
+                PreparedFilter::BandPass { kernel, stride, padding } => {
+                    let local_min = match padding {
+                        Padding::Reflect(_) => (kernel.size()[2] / 2) + 1,
+                        Padding::Zero(_) | Padding::Replicate(_) => 1,
+                    };
+                    Self::expand_required_len(required_len, *stride as i64, local_min)
+                }
+                PreparedFilter::SavGol { window_len, stride, .. } => Self::expand_required_len(required_len, *stride as i64, *window_len),
+            }
+        })
+    }
+
+    fn expand_required_len(required_len: i64, stride: i64, local_min: i64) -> Result<i64, ThoError> {
+        if stride <= 0 {
+            return Err(ThoError::new(format!("FreqFilter::expand_required_len requires stride > 0, got {stride}")));
+        }
+
+        let expanded = if required_len <= 1 {
+            1
+        } else {
+            (required_len - 1)
+                .checked_mul(stride)
+                .and_then(|v| v.checked_add(1))
+                .ok_or_else(|| ThoError::new(format!("FreqFilter::expand_required_len overflow: required_len={required_len} stride={stride}")))?
+        };
+
+        Ok(expanded.max(local_min).max(1))
+    }
+}
+
+#[derive(Debug)]
+struct FreqFilterOutputBuilder {
+    output_id: SynKey,
+    partials: Vec<ThoTensor<ChannelsData2, SynKey>>,
+    error: Option<ThoError>,
+}
+
+impl FreqFilterOutputBuilder {
+    fn new(output_id: SynKey) -> Self {
+        Self {
+            output_id,
+            partials: vec![],
+            error: None,
+        }
+    }
+}
+
+impl OutputBuilder for FreqFilterOutputBuilder {
+    type O = ThoTensor<ChannelsData2, SynKey>;
+
+    async fn add_partial_output(&mut self, partial: Self::O) {
+        if self.error.is_some() {
+            return;
+        }
+
+        let partial = if partial.device() == 0 {
+            partial
+        } else {
+            match partial.copy_to_device(0).await {
+                Ok(partial) => partial,
+                Err(error) => {
+                    self.error = Some(error);
+                    return;
+                }
+            }
+        };
+
+        self.partials.push(partial);
+    }
+
+    async fn build(self) -> Result<Self::O, ThoError> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+
+        let mut partials = self.partials.into_iter();
+        let first = partials.next().ok_or_else(|| ThoError::new("FreqFilterOutputBuilder: no partial outputs"))?;
+        let mut tensors = vec![first.t];
+        tensors.extend(partials.map(|partial| partial.t));
+        let tensor_refs = tensors.iter().collect::<Vec<_>>();
+
+        ThoTensor::new(self.output_id, Tensor::f_cat(tensor_refs.as_slice(), 1)?)
+    }
+}
+
+#[derive(Debug)]
+struct FreqFilterSplitsAdjuster {
+    min_split_len: MonoMetrics<1, 2>,
+    alignment: i64,
+}
+
+impl FreqFilterSplitsAdjuster {
+    fn new(min_split_len: MonoMetrics<1, 2>, alignment: i64) -> Self {
+        Self {
+            min_split_len,
+            alignment: alignment.max(1),
+        }
+    }
+
+    fn align_split_len(&self, split_len: &mut MonoMetrics<1, 2>) {
+        let prev_len = split_len.dim::<1>();
+        let min_len = self.min_split_len.dim::<1>();
+        let mut aligned_len = prev_len;
+
+        if aligned_len > min_len && self.alignment > 1 {
+            aligned_len = (aligned_len / self.alignment) * self.alignment;
+            if aligned_len < min_len {
+                aligned_len = min_len;
+            }
+        }
+
+        if aligned_len != prev_len {
+            *split_len = [split_len.dim::<0>(), aligned_len].into();
+        }
+    }
+}
+
+#[async_trait]
+impl<AC> Adjuster<AC> for FreqFilterSplitsAdjuster
+where
+    AC: SplitsAdjusterContext<Metrics = MonoMetrics<1, 2>> + Send + Sync,
+{
+    type A = ChannelsData2Selector;
+
+    async fn adjust(
+        &self,
+        _adjustable: Self::A,
+        adjust_context: &mut AC,
+    ) -> Result<Self::A, AdjusterError<Self::A>> {
+        let split_start = adjust_context.done_to();
+        let mut split_end = split_start.clone();
+        split_end += adjust_context.split_len().clone();
+        adjust_context.input_len().cap(&mut split_end);
+
+        debug!("FreqFilterSplitsAdjuster::adjust: split_start={split_start:?} split_end={split_end:?} input_len={:?}", adjust_context.input_len());
+
+        Ok((split_start.clone()..split_end).into())
+    }
+
+    fn degrade(&self, adjust_context: &mut AC) -> bool {
+        let prev_len = adjust_context.split_len().dim::<1>();
+        (*adjust_context.split_len_mut()) /= 2;
+        self.align_split_len(adjust_context.split_len_mut());
+        let next_len = adjust_context.split_len().dim::<1>();
+        let can_degrade = next_len >= self.min_split_len.dim::<1>() && next_len < prev_len;
+
+        debug!("FreqFilterSplitsAdjuster::degrade: prev_len={prev_len} next_len={next_len} min_split_len={:?} alignment={} can_degrade={can_degrade}", self.min_split_len, self.alignment);
+
+        can_degrade
+    }
+}
+
+impl<C> Adjustable for SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+}
+
+impl<C> OutId for SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.freq_filter.out_id(input_id)
+    }
+}
+
+impl<C> Stage for SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = ThoTensor<ChannelsData2, SynKey>;
+    type Out = ThoTensor<ChannelsData2, SynKey>;
+}
+
+impl<C> SyncStage for SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        self.freq_filter.apply_tho_tensor(input_tensor)
+    }
 }
 
 impl<C> OutId for FreqFilter<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -305,7 +521,7 @@ where
 
 impl<C> Stage for FreqFilter<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData2, SynKey>;
@@ -315,7 +531,7 @@ where
 // #[async_trait]
 impl<C> AsyncStage for FreqFilter<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + Adjustable + 'static,
 {
 
     async fn run(
@@ -323,29 +539,31 @@ where
         input: Arc<DevicesWrap<Self::In<'static>>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        let out_id = self.out_id(input.id());
+        let input_size = input.size().clone();
+        let min_split_len = [input_size.dim::<0>(), self.min_input_split_len()?].into();
+        let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+        let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self)));
 
-        let device_idx = ctx.device_idx();
-        let out_key = {
-            let out_id = self.out_id(input.id());
-            Arc::new(out_id) as Arc<dyn CachableIdTr>
-        };
-
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-        let num_devices = GlobalCtx::global().device_count();
-        let mut ctx_for_data = ctx.branch(Some("freq_filter_data"), false);
-
-        let filtered = input
-            .with_data_ref(
-                device_idx,
-               ctx_for_data, None, |input_tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-
-               let r= self.apply_tho_tensor(input_tensor);
-                debug!("FreqFilter::run, with_data_ref: r={r:?} done");
-                r
-           })
-            .await?;
+        let filtered = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("freq_filter"))),
+                Adjusters::Input(Box::new(FreqFilterSplitsAdjuster::new(min_split_len, self.effective_output_stride()?))),
+            ],
+            None,
+        )
+        .run(
+            &sync_freq_filter,
+            input,
+            ctx.branch(Some("freq_filter"), true),
+            Contexts::new(
+                SplitsAdjusterContextImpl::new(input_size, FreqFilterOutputBuilder::new(out_id)),
+                NoopRunnableContext {},
+                MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
+            ),
+        )
+        .await?;
 
         debug!("FreqFilter::run: filtered={filtered:?} done");
 
@@ -362,8 +580,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::common::runnable::{AsyncStage, SyncStage};
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
     use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, AverageFilterParams, Padding, SavGolFilterParams};
     use thoosa_shared::ThoError;
@@ -374,7 +591,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::transforms::smoothing::{median, moving_average};
-    use crate::tasks::transforms::freq_filter::FreqFilter;
+    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter};
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -426,11 +643,11 @@ mod tests {
     #[test]
     fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = FreqFilter::<RunCtxImpl>::new(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], &ws, 0)?;
+        let freq_filter = Arc::new(FreqFilter::<RunCtxImpl>::new(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], &ws, 0)?);
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
-        let output = freq_filter.apply_tho_tensor(&input)?;
+        let output = Arc::new(SyncFreqFilter::new(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
         let expected = median(input.as_ref(), 5)?;
         let output_flat = output.as_ref().f_view([-1])?;
         let expected_flat = expected.f_view([-1])?;
@@ -443,11 +660,11 @@ mod tests {
     #[test]
     fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = FreqFilter::<RunCtxImpl>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], &ws, 0)?;
+        let freq_filter = Arc::new(FreqFilter::<RunCtxImpl>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], &ws, 0)?);
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
-        let output = freq_filter.apply_tho_tensor(&input)?;
+        let output = Arc::new(SyncFreqFilter::new(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
         let expected = moving_average(input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));
