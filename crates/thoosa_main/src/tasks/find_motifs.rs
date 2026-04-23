@@ -8,6 +8,9 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use thoosa_common::runner::common::{OutId, RunCtx};
+
+use mockall_double::double;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use futures_util::FutureExt;
@@ -17,6 +20,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+
 use tch::Kind::{Bool, Float};
 use tch::{Device, Kind, Tensor};
 use tch::Device::Cpu;
@@ -500,7 +504,8 @@ mod tests {
     use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use log::{debug, set_max_level};
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -561,8 +566,10 @@ mod tests {
 
     async fn setup_find_motifs(find_motifs_run_config: FindMotifsRunConfig) -> Result<(), ThoError> {
         // set_max_level(Trace);
-        GlobalCtx::init_devices(2);
         // reset_print_options();
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
         let find_motifs_run_id = 1;

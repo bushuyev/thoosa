@@ -359,7 +359,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 
 
 #[derive(Debug)]
-pub struct ClcResourcesMotifsDistInput<'a> {
+pub struct ClcResourcesMotifsDistInput<'a> {//TODO remove unused
     id: SynKey,
     batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
     resource_ids: Vec<ResourceId>,
