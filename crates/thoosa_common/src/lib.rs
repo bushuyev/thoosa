@@ -16,6 +16,7 @@ pub mod copy_ctx;
 pub mod cuda_utils;
 pub mod dims;
 pub mod find_motifs_run_config;
+pub mod seq_scan_run_config;
 mod gaussian;
 pub mod input_probs;
 pub mod loader;

@@ -1,6 +1,6 @@
 use crate::cli::Commands::{
     FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, RunAll, SayHello,
-    SelectMotifs, TrainFinalNet, TrainMotifsNets,
+    SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
@@ -46,6 +46,7 @@ use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRan
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
+use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::utils::{cuda_mem, from, lin_t, list_devices, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
@@ -100,6 +101,7 @@ use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMoti
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use crate::tasks::seq_scan::SeqScanStage;
 use crate::tasks::train_final_net::new_train_final_net;
 use crate::tasks::train_label_nets::{new_train_label_nets, TrainLabelNets, TrainLabelNetsInput};
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
@@ -236,10 +238,26 @@ pub struct ImportResourcesArgs {
 #[derive(Debug, Args, Clone)]
 pub struct SayHelloArgs {}
 
+#[derive(Debug, Args, Clone)]
+pub struct SeqScanArgs {
+    #[arg(long, value_parser=parse_resources)]
+    pub resources: ResourceType,
+
+    #[arg(long)]
+    pub run_config_cnt: String,
+}
+
+impl SeqScanArgs {
+    pub fn resource_config(&self) -> Simple {
+        Simple::new(self.resources.clone())
+    }
+}
+
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
     ImportResources(ImportResourcesArgs),
     FindMotifs(FindMotifsArgs),
+    SeqScan(SeqScanArgs),
     PlotData(PlotDataArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
@@ -510,6 +528,34 @@ where
 
             info!("FindMotifs done, run_ids={run_ids:?}");
 
+        }
+
+        Some(SeqScan(seq_scan_args)) => {
+            debug!("SeqScan: seq_scan_args={seq_scan_args:?}");
+
+            let seq_scan_run_config_range_or_value: SeqScanRunConfigRangeOrValue =
+                serde_json5::from_str(&seq_scan_args.run_config_cnt).expect("SeqScanRunConfig");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(seq_scan_args.resource_config())));
+
+            let run_ids = run_grid(
+                None,
+                seq_scan_run_config_range_or_value,
+                input_wrapper,
+                &ws,
+                &store,
+                |run_configs| async {
+                    Arc::new(SeqScanStage::<Simple, RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
+                        &ws,
+                        &store,
+                        loader,
+                        run_configs,
+                    ).expect("SeqScanStage::new failed"))
+                },
+                || root_ctx.branch(Some("seq scan"), true),
+            ).await?;
+
+            info!("SeqScan done, run_ids={run_ids:?}");
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
@@ -2031,6 +2077,24 @@ mod cli_tests {
                         InputFilter::AverageFilter(AverageFilterParams { window: 7, step: 1 }),
                     ],
                 );
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_seq_scan_command_parses() {
+        let cli = Cli::parse_from([
+            "thoosa_main",
+            "seq-scan",
+            "--resources", "group:find",
+            "--run-config-cnt", "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}",
+        ]);
+
+        match cli.command {
+            Some(crate::cli::Commands::SeqScan(args)) => {
+                assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
+                assert_eq!(args.run_config_cnt, "{step:10,window:100,metric:{MeanAbs:{center:false}},buckets_count:4}");
             }
             other => panic!("unexpected command: {other:?}"),
         }
