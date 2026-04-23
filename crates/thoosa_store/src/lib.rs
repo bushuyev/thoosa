@@ -163,7 +163,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         max_len: usize,
         only_unused: bool,
     ) -> Result<(), ThoError>;
-    async fn save_data_sets(
+    async fn save_leaky_data_sets(
         &self,
         prefix: &str,
         limit: Option<usize>,
@@ -329,7 +329,7 @@ mock! {
             max_len: usize,
             only_unused: bool,
         ) -> Result<(), ThoError>;
-        async fn save_data_sets(
+        async fn save_leaky_data_sets(
             &self,
             prefix: &str,
             limit: Option<usize>,
@@ -575,7 +575,8 @@ impl ResourceStore for SqlStore {
         descr: &str,
     ) -> Result<Vec<Resource>, ThoError> {
         let descr = descr.to_string();
-        self.with_reader_conn("list_resource_set_resources_by_descr", move |conn| {
+        let descr_for_err = descr.to_string();
+        self.with_reader_conn("list_resource_set_resources_by_descr",  move|conn| {
             let r = Self::list_resource_set_resources(
                 conn.query_row("SELECT id FROM resource_set WHERE descr=?", [descr.as_str()], |row| row.get(0))?,
                 conn,
@@ -583,7 +584,10 @@ impl ResourceStore for SqlStore {
             debug!("list_resource_set_resources_by_descr: descr={descr} r={r:?}");
             Ok(r)
         })
-        .await
+        .await.map_err(|e|{
+            error!("list_resource_set_resources_by_descr: descr={descr_for_err} got error {e:?}");
+            e
+        })
     }
     async fn list_resources_by_file_stems<'a>(
         &self,
@@ -642,6 +646,8 @@ impl ResourceStore for SqlStore {
                 .map(|v| v.unwrap())
                 .collect()
             };
+
+            debug!("list_resource_set_group_sets: group_descr={group_descr:?} group_sets={group_sets:?}");
 
             Ok(group_sets)
         })
@@ -1111,7 +1117,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn save_data_sets(
+    async fn save_leaky_data_sets(
         &self,
         prefix: &str,
         limit: Option<usize>,
@@ -3007,6 +3013,7 @@ impl SqlStore {
 
             vec
         };
+        debug!("list_resource_set_resources: set_id={set_id} set_resources={set_resources:?}");
         Ok(set_resources)
     }
 
@@ -3254,7 +3261,7 @@ impl SqlStore {
 
         let num_prefix = match limit {
             None => {
-                format!("X_{prefix}")
+                format!("{prefix}")
             }
             Some(n) => {
                 format!("{prefix}{n}")
@@ -3273,9 +3280,9 @@ impl SqlStore {
 
         let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| prefix))?;
 
-        let train_group_id = Self::save_resource_set_group(format!("{prefix}_train"), t)?;
-        let valid_group_id = Self::save_resource_set_group(format!("{prefix}_valid"), t)?;
-        let test_group_id = Self::save_resource_set_group(format!("{prefix}_test"), t)?;
+        let train_group_id = Self::save_resource_set_group(format!("{num_prefix}_train"), t)?;
+        let valid_group_id = Self::save_resource_set_group(format!("{num_prefix}_valid"), t)?;
+        let test_group_id = Self::save_resource_set_group(format!("{num_prefix}_test"), t)?;
 
         let labels_cnt = labels.len();
         let mut rng = rand::rng();
@@ -3314,13 +3321,13 @@ impl SqlStore {
                 }
             };
 
-            debug!("save_data_sets: prefix={prefix} label={label} train_resources={train_resources:?}");
-            debug!("save_data_sets: prefix={prefix} label={label} valid_resources={valid_resources:?}");
-            debug!("save_data_sets: prefix={prefix} label={label} test_resources={test_resources:?}");
+            debug!("save_data_sets: num_prefix={num_prefix} label={label} train_resources={train_resources:?}");
+            debug!("save_data_sets: num_prefix={num_prefix} label={label} valid_resources={valid_resources:?}");
+            debug!("save_data_sets: num_prefix={num_prefix} label={label} test_resources={test_resources:?}");
 
-            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{prefix}_{label}_train"), Some(&label_id), train_resources.as_slice())?;
-            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{prefix}_{label}_valid"), Some(&label_id), valid_resources.as_slice())?;
-            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{prefix}_{label}_test"), Some(&label_id), test_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{num_prefix}_{label}_train"), Some(&label_id), train_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{num_prefix}_{label}_valid"), Some(&label_id), valid_resources.as_slice())?;
+            Self::insert_resource_set_resources(t, labels_cnt, test_group_id, format!("{num_prefix}_{label}_test"), Some(&label_id), test_resources.as_slice())?;
         }
 
         Ok(())
@@ -3344,7 +3351,7 @@ impl SqlStore {
         )?;
 
         let mut rows = match not_in_prefix {
-            Some(not_in_prefix) => stmt.query(params![min_p, format!("{not_in_prefix}%")])?,
+            Some(not_in_prefix) => stmt.query(params![min_p, format!("{not_in_prefix}\\_%")])?,
             None => stmt.query(params![min_p])?,
         };
 
@@ -3481,6 +3488,9 @@ impl SqlStore {
         label_id: Option<&usize>,
         resources: &[usize],
     ) -> Result<(), ThoError> {
+
+        debug!("insert_resource_set_resources: group_id={group_id} descr={descr} label_id={label_id:?} resources={resources:?}");
+
         t.execute(
             "INSERT INTO resource_set (descr, group_id, label_id) VALUES (?, ?, ?)",
             params![descr, group_id, label_id], //labels?
@@ -4095,10 +4105,10 @@ mod store_tests {
             import_id,
         ).await?;
 
-        store.save_data_sets("L", Some(10), 0.6, 0.2, 1.0, true).await?;
+        store.save_leaky_data_sets("L", Some(10), 0.6, 0.2, 1.0, true).await?;
 
         let mut train_sets_resources = HashMap::new();
-        for (set_id, descr) in store.list_resource_set_group_sets("L_train").await? {
+        for (set_id, descr) in store.list_resource_set_group_sets("L10_train").await? {
             train_sets_resources.insert(
                 descr,
                 store
@@ -4110,7 +4120,7 @@ mod store_tests {
         }
 
         let mut valid_sets_resources = HashMap::new();
-        for (set_id, descr) in store.list_resource_set_group_sets("L_valid").await? {
+        for (set_id, descr) in store.list_resource_set_group_sets("L10_valid").await? {
             valid_sets_resources.insert(
                 descr,
                 store
@@ -4122,7 +4132,7 @@ mod store_tests {
         }
 
         let mut test_sets_resources = HashMap::new();
-        for (set_id, descr) in store.list_resource_set_group_sets("L_test").await? {
+        for (set_id, descr) in store.list_resource_set_group_sets("L10_test").await? {
             test_sets_resources.insert(
                 descr,
                 store
@@ -4137,13 +4147,13 @@ mod store_tests {
         debug!("valid_sets_resources={valid_sets_resources:?}");
         debug!("test_sets_resources={test_sets_resources:?}");
 
-        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L_aaa_train"]);
-        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L_aaa_valid"]);
-        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L_aaa_test"]);
+        assert_eq!(vec!["aaa_only".to_string()], train_sets_resources["L10_aaa_train"]);
+        assert_eq!(vec!["aaa_only".to_string()], valid_sets_resources["L10_aaa_valid"]);
+        assert_eq!(vec!["aaa_only".to_string()], test_sets_resources["L10_aaa_test"]);
 
-        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L_bbb_train"]);
-        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L_bbb_valid"]);
-        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L_bbb_test"]);
+        assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L10_bbb_train"]);
+        assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L10_bbb_valid"]);
+        assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L10_bbb_test"]);
 
         Ok(())
     }
@@ -4633,7 +4643,7 @@ mod store_tests {
         debug!("resource_ids={resource_ids:?}");
 
         store_guard.save_pure_sets(10, false).await?;
-        store_guard.save_data_sets("A", None, 0.6, 0.2, 1.0, false).await?;
+        store_guard.save_leaky_data_sets("A", None, 0.6, 0.2, 1.0, false).await?;
         Ok(resource_ids)
     }
 
