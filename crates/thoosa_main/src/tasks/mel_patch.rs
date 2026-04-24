@@ -7,29 +7,31 @@ use std::io::{BufReader, BufWriter, Read, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use async_trait::async_trait;
 use parking_lot::RwLock;
 use log::{debug, info, warn};
 use tch::Tensor;
+use serde::Deserialize;
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, patch_sample_ranges_flat, LogMelPatchConfig};
 use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runs::SavableResult;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
-use thoosa_named_derive::Named;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{TensorIdSliceIdx, ThoError, LOCK_TIMEOUT};
-use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
+use thoosa_named_derive::Named;
 
-const DEFAULT_MEL_PATCH_BUCKET_COUNT: i64 = 256;
-const MEL_PATCH_MIN_SLICES: usize = 10;
-const MEL_PATCH_MAX_SLICES: usize = 100;
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOMELP1";
 
 #[derive(Debug, Clone)]
@@ -93,32 +95,24 @@ impl<RC> Input for MelPatchResourcesInput<RC> where RC: ResourcesConfig + Debug 
 
 #[derive(Debug, Clone)]
 pub struct MelPatchOutput {
-    run_id: RunId,
-    groups_by_channel: Vec<usize>,
+    groups_by_run: Vec<(RunId, Vec<usize>)>,
 }
 
 impl MelPatchOutput {
-    fn new(run_id: RunId, groups_by_channel: Vec<usize>) -> Self {
-        Self {
-            run_id,
-            groups_by_channel,
-        }
+    fn new(groups_by_run: Vec<(RunId, Vec<usize>)>) -> Self {
+        Self { groups_by_run }
     }
 
-    pub fn run_id(&self) -> RunId {
-        self.run_id
-    }
-
-    pub fn groups_by_channel(&self) -> &[usize] {
-        &self.groups_by_channel
+    pub fn groups_by_run(&self) -> &[(RunId, Vec<usize>)] {
+        &self.groups_by_run
     }
 }
 
 impl WithId for MelPatchOutput {
-    type ID = RunId;
+    type ID = ();
 
     fn id(&self) -> &Self::ID {
-        &self.run_id
+        &()
     }
 }
 
@@ -140,6 +134,17 @@ impl Data for MelPatchOutput {
 }
 
 impl Output for MelPatchOutput {}
+
+#[async_trait]
+impl SavableResult for MelPatchOutput {
+    async fn save(
+        &mut self,
+        _store: &Arc<Box<dyn Store>>,
+        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ) -> Result<u32, ThoError> {
+        Ok(0)
+    }
+}
 
 #[derive(Debug)]
 pub struct MelPatchTempStore {
@@ -227,9 +232,7 @@ where
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
-    run_id: RunId,
-    mel_config: LogMelPatchConfig,
-    bucket_count: i64,
+    run_configs: Vec<MelPatchRunConfig>,
     pd: PhantomData<(RC, D, Id, C)>,
 }
 
@@ -245,32 +248,30 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
-        run_id: RunId,
+        run_configs: Vec<MelPatchRunConfig>,
     ) -> Result<Self, ThoError> {
-        Self::new_with_bucket_count(ws, store, loader, run_id, DEFAULT_MEL_PATCH_BUCKET_COUNT)
-    }
-
-    pub fn new_with_bucket_count(
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &Arc<Box<dyn Store>>,
-        loader: Arc<L>,
-        run_id: RunId,
-        bucket_count: i64,
-    ) -> Result<Self, ThoError> {
-        if bucket_count <= 0 {
-            return Err(ThoError::new(format!("MelPatchStage::new_with_bucket_count: bucket_count must be positive, got {bucket_count}")));
+        if run_configs.is_empty() {
+            return Err(ThoError::new("MelPatchStage::new: run_configs should not be empty"));
         }
-        if bucket_count > u16::MAX as i64 + 1 {
-            return Err(ThoError::new(format!("MelPatchStage::new_with_bucket_count: bucket_count={bucket_count} exceeds u16 group ord capacity")));
+
+        for run_config in &run_configs {
+            run_config.run_id()?;
+            if run_config.bucket_count == 0 {
+                return Err(ThoError::new("MelPatchStage::new: bucket_count must be positive"));
+            }
+            if run_config.bucket_count > u16::MAX as u32 + 1 {
+                return Err(ThoError::new(format!("MelPatchStage::new: bucket_count={} exceeds u16 group ord capacity", run_config.bucket_count)));
+            }
+            if run_config.min_slices > run_config.max_slices {
+                return Err(ThoError::new(format!("MelPatchStage::new: min_slices={} exceeds max_slices={}", run_config.min_slices, run_config.max_slices)));
+            }
         }
 
         Ok(Self {
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             loader,
-            run_id,
-            mel_config: LogMelPatchConfig::default(),
-            bucket_count,
+            run_configs,
             pd: PhantomData,
         })
     }
@@ -281,16 +282,18 @@ where
         audio: &Tensor,
         tmp_path: &Path,
         temp_stores: &mut Vec<MelPatchTempStore>,
+        run_config: &MelPatchRunConfig,
     ) -> Result<(), ThoError> {
-        let patches = audio_to_log_mel_patches(audio, &self.mel_config)?;
-        let patch_ranges = patch_sample_ranges_flat(&patches, &self.mel_config)?;
-        let bucket_ids = assign_lsh_buckets_per_channel(&patches, self.bucket_count)?;
+        let mel_config = run_config.mel_config();
+        let patches = audio_to_log_mel_patches(audio, &mel_config)?;
+        let patch_ranges = patch_sample_ranges_flat(&patches, &mel_config)?;
+        let bucket_ids = assign_lsh_buckets_per_channel(&patches, run_config.bucket_count_i64())?;
 
         if patch_ranges.len() != bucket_ids.len() {
             return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), bucket_ids.len())));
         }
 
-        ensure_mel_patch_temp_stores(temp_stores, tmp_path, self.run_id, bucket_ids.len())?;
+        ensure_mel_patch_temp_stores(temp_stores, tmp_path, run_config.run_id()?, bucket_ids.len())?;
 
         for channel in 0..bucket_ids.len() {
             if patch_ranges[channel].len() != bucket_ids[channel].len() {
@@ -347,7 +350,7 @@ where
             "MelPatchStage::run/read_ws_tmp_path",
         );
 
-        let mut temp_stores: Vec<MelPatchTempStore> = Vec::new();
+        let mut temp_stores_by_run: Vec<Vec<MelPatchTempStore>> = self.run_configs.iter().map(|_| Vec::new()).collect();
         for resource in &resources {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(
@@ -357,22 +360,30 @@ where
                 .await?;
 
             with_data!(ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false), loaded; |_ctx, tensor: &ThoTensor<D, Id>| {
-                self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, &mut temp_stores)
+                for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.iter_mut()) {
+                    self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config)?;
+                }
+                Ok::<_, ThoError>(())
             })?;
         }
 
-        let mut groups_by_channel = Vec::with_capacity(temp_stores.len());
-        for (channel, mut temp_store) in temp_stores.into_iter().enumerate() {
-            let groups = filter_mel_patch_groups(temp_store.load_groups()?);
-            let groups_len = groups.len();
-            self.store.save_groups_as_motifs(self.run_id, channel as i64, groups).await?;
-            temp_store.remove()?;
-            groups_by_channel.push(groups_len);
+        let mut groups_by_run = Vec::with_capacity(self.run_configs.len());
+        for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.into_iter()) {
+            let run_id = run_config.run_id()?;
+            let mut groups_by_channel = Vec::with_capacity(temp_stores.len());
+            for (channel, mut temp_store) in temp_stores.into_iter().enumerate() {
+                let groups = filter_mel_patch_groups(temp_store.load_groups()?, run_config.min_slices_usize(), run_config.max_slices_usize());
+                let groups_len = groups.len();
+                self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
+                temp_store.remove()?;
+                groups_by_channel.push(groups_len);
+            }
+
+            info!("MelPatchStage::run: run_id={run_id} resources={} groups_by_channel={groups_by_channel:?}", resources.len());
+            groups_by_run.push((run_id, groups_by_channel));
         }
 
-        info!("MelPatchStage::run: run_id={} resources={} groups_by_channel={groups_by_channel:?}", self.run_id, resources.len());
-
-        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new(self.run_id, groups_by_channel))))
+        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new(groups_by_run))))
     }
 }
 
@@ -389,12 +400,12 @@ fn ensure_mel_patch_temp_stores(
     Ok(())
 }
 
-pub fn filter_mel_patch_groups(groups: HashMap<u16, HashSet<IdSlice>>) -> HashMap<u16, HashSet<IdSlice>> {
+pub fn filter_mel_patch_groups(groups: HashMap<u16, HashSet<IdSlice>>, min_slices: usize, max_slices: usize) -> HashMap<u16, HashSet<IdSlice>> {
     groups
         .into_iter()
         .filter_map(|(group, slices)| {
             let len = slices.len();
-            if (MEL_PATCH_MIN_SLICES..=MEL_PATCH_MAX_SLICES).contains(&len) {
+            if (min_slices..=max_slices).contains(&len) {
                 Some((group, slices))
             } else {
                 warn!("MelPatchStage: skipping group={group} with {len} slices");
@@ -405,11 +416,68 @@ pub fn filter_mel_patch_groups(groups: HashMap<u16, HashSet<IdSlice>>) -> HashMa
 }
 
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_grid]
+pub struct MelPatchRunConfig {
+    #[in_map]
+    pub id: Option<RunId>,
+
+    #[run_config]
+    #[in_map]
+    pub bucket_count: u32,
+
+    #[run_config]
+    #[in_map]
+    pub min_slices: u32,
+
+    #[run_config]
+    #[in_map]
+    pub max_slices: u32,
+}
+
+impl MelPatchRunConfig {
+    pub fn run_id(&self) -> Result<RunId, ThoError> {
+        self.id.ok_or_else(|| ThoError::new("MelPatchRunConfig::run_id: missing run id"))
+    }
+
+    pub fn bucket_count_i64(&self) -> i64 {
+        i64::from(self.bucket_count)
+    }
+
+    pub fn min_slices_usize(&self) -> usize {
+        self.min_slices as usize
+    }
+
+    pub fn max_slices_usize(&self) -> usize {
+        self.max_slices as usize
+    }
+
+    pub fn mel_config(&self) -> LogMelPatchConfig {
+        LogMelPatchConfig::default()
+    }
+}
+
+impl Default for MelPatchRunConfig {
+    fn default() -> Self {
+        Self {
+            id: None,
+            bucket_count: 256,
+            min_slices: 10,
+            max_slices: 100,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::{HashMap, HashSet};
+    use std::fs;
+    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use super::{filter_mel_patch_groups, MelPatchTempStore};
+    use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue};
+    use thoosa_run_config_args::GridRunConfigSource;
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
+    use thoosa_store::IdSlice;
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -443,7 +511,7 @@ mod tests {
     }
 
     #[test]
-    fn filter_mel_patch_groups_keeps_only_groups_between_ten_and_one_hundred_slices() {
+    fn filter_mel_patch_groups_keeps_only_groups_in_configured_slice_range() {
         let groups = [
             (1u16, 9usize),
             (2u16, 10usize),
@@ -459,7 +527,25 @@ mod tests {
             })
             .collect::<HashMap<_, _>>();
 
-        let filtered = filter_mel_patch_groups(groups);
+        let filtered = filter_mel_patch_groups(groups, 10, 100);
         assert_eq!(filtered.keys().copied().collect::<HashSet<_>>(), [2u16, 3u16].into_iter().collect::<HashSet<_>>());
+    }
+
+    #[test]
+    fn mel_patch_run_config_grid_uses_slice_and_bucket_parameters() {
+        let rc = MelPatchRunConfigRangeOrValue {
+            id: None,
+            bucket_count: 256u32.into(),
+            min_slices: 10u32.into(),
+            max_slices: 100u32.into(),
+        };
+
+        let grid = rc.grid_run_configs().expect("MelPatchRunConfigRangeOrValue::grid_run_configs should not fail");
+        let run_configs: Vec<MelPatchRunConfig> = grid.to_run_configs();
+
+        assert_eq!(1, run_configs.len());
+        assert_eq!(256, run_configs[0].bucket_count);
+        assert_eq!(10, run_configs[0].min_slices);
+        assert_eq!(100, run_configs[0].max_slices);
     }
 }
