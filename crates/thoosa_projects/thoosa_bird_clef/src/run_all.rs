@@ -51,7 +51,7 @@ pub(crate) async fn run_all(
 ) -> Result<(), ThoError> {
     debug!("run_all");
 
-    let labels = store.list_labels().await?;
+    let labels = store.list_labels(true).await?;
     debug!("run_all: labels={labels:?}");
 
 
