@@ -983,7 +983,7 @@ where
 
     if insert_label {
         for label in labels {
-            SqlStore::save_label(label, &t)?; //TODO merge with save_resources_labels
+            SqlStore::save_label(label, &t)?; //TODO not all labels may have resources, still save all labels?
         }
     }
 
@@ -1073,9 +1073,9 @@ fn apply_import_freq_filter(
                     SynKey::new([mono_key!(resource_key.to_string(), format!("resource_key={resource_key}"))]),
                     tensor,
                 )?
-                .to_device(freq_filter.input_device())?,
+                // .to_device(freq_filter.input_device())?,
             )?
-            .to_device(Cpu)?
+            // .to_device(Cpu)?
             .t()),
         None => Ok(tensor),
     }

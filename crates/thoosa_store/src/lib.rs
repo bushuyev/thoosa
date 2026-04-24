@@ -1129,7 +1129,7 @@ impl Store for SqlStore {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_data_sets", move |conn| {
             let t = conn.transaction()?;
-            Self::sav_leaky_data_sets(prefix.as_str(), limit, train_coeff, valid_coeff, min_p, &t)?;
+            Self::save_leaky_data_sets(prefix.as_str(), limit, train_coeff, valid_coeff, min_p, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -3250,7 +3250,7 @@ impl SqlStore {
 
 
     /// builds train/validation/tests resources sets copying same resource in all sets if not enough resources available
-    pub fn sav_leaky_data_sets(
+    pub fn save_leaky_data_sets(
         prefix: &str,
         limit: Option<usize>,
         train_coeff: f32,
