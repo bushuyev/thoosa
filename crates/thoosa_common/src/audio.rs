@@ -1,62 +1,208 @@
-use anyhow::{anyhow, bail, Context, Result};
-use tch::{Device, Kind, Tensor};
+use log::debug;
+use tch::{Device, Kind, TchError, Tensor};
+use thoosa_shared::ThoError;
 
-#[derive(Debug)]
-pub struct AudioFeatures {
-    /// Raw STFT output from tch.
-    /// In this binding it is expected to be real-valued with trailing size 2:
-    /// either [B, F, N, 2] or [B, N, F, 2].
-    pub stft_raw: Tensor,
+#[derive(Debug, Clone)]
+pub struct LogMelPatchConfig {
+    pub sample_rate: f64,
 
-    /// Canonicalized magnitude spectrogram [B, F, N].
-    pub stft_magnitude: Tensor,
+    /// FFT/window size in samples, e.g. 1024.
+    pub n_fft: i64,
 
-    /// log(stft_magnitude + eps), shape [B, F, N].
-    pub log_magnitude: Tensor,
+    /// STFT hop in samples, e.g. 320 for 20 ms at 16 kHz.
+    pub hop_length: i64,
 
-    /// Mel spectrogram [B, M, N].
-    pub mel_spectrogram: Tensor,
+    /// Number of mel bands, e.g. 64 or 128.
+    pub n_mels: i64,
 
-    /// log(mel_spectrogram + eps), shape [B, M, N].
-    pub log_mel_spectrogram: Tensor,
+    /// Lowest mel frequency.
+    pub f_min: f64,
+
+    /// Highest mel frequency. If <= 0.0, sample_rate / 2.0 is used.
+    pub f_max: f64,
+
+    /// Number of STFT frames per output patch.
+    pub patch_frames: i64,
+
+    /// Step between patches in STFT frames.
+    pub patch_step: i64,
+
+    /// Small value before log().
+    pub log_eps: f64,
 }
 
-fn hz_to_mel(hz: f64) -> f64 {
-    2595.0 * (1.0 + hz / 700.0).log10()
+impl Default for LogMelPatchConfig {
+    fn default() -> Self {
+        Self {
+            sample_rate: 32_000.0,
+            n_fft: 1024,
+            hop_length: 320,
+            n_mels: 128,
+            f_min: 20.0,
+            f_max: 16_000.0,
+            patch_frames: 64,
+            patch_step: 32,
+            log_eps: 1e-6,
+        }
+    }
 }
 
-fn mel_to_hz(mel: f64) -> f64 {
-    700.0 * (10f64.powf(mel / 2595.0) - 1.0)
+/// Convert audio `[channels, samples]` into log-mel patches:
+///
+/// Output shape:
+///
+/// `[channels, patches, n_mels, patch_frames]`
+pub fn audio_to_log_mel_patches(
+    audio: &Tensor,
+    cfg: &LogMelPatchConfig,
+) -> Result<Tensor, ThoError> {
+    debug!("audio={audio:?}");
+
+    let size = audio.size();
+
+    if size.len() != 2 {
+        return Err(ThoError::new(format!(
+            "expected audio shape [channels, samples], got {size:?}"
+        )));
+    }
+
+    let channels = size[0];
+    let samples = size[1];
+
+    if samples < cfg.n_fft {
+        return Err(ThoError::new(format!(
+            "audio too short: samples={samples}, n_fft={}",
+            cfg.n_fft
+        )));
+    }
+
+    if cfg.n_fft <= 0 || cfg.hop_length <= 0 || cfg.n_mels <= 0 {
+        return Err(ThoError::new(format!(
+            "invalid config: n_fft={}, hop_length={}, n_mels={}",
+            cfg.n_fft, cfg.hop_length, cfg.n_mels
+        )));
+    }
+
+    if cfg.patch_frames <= 0 || cfg.patch_step <= 0 {
+        return Err(ThoError::new(format!(
+            "invalid patch config: patch_frames={}, patch_step={}",
+            cfg.patch_frames, cfg.patch_step
+        )));
+    }
+
+    let device = audio.device();
+
+    // Work in float.
+    let audio = audio.f_to_kind(Kind::Float)?;
+
+    // ---------------------------------------------------------------------
+    // 1. Frame audio with unfold.
+    //
+    // audio:  [C, samples]
+    // frames: [C, frames, n_fft]
+    // ---------------------------------------------------------------------
+    let frames = audio.f_unfold(1, cfg.n_fft, cfg.hop_length)?;
+    debug!("frames={frames:?}");
+    // ---------------------------------------------------------------------
+    // 2. Apply Hann window.
+    //
+    // window: [n_fft]
+    // frames: [C, frames, n_fft]
+    // ---------------------------------------------------------------------
+    let hann = Tensor::hann_window(cfg.n_fft, (Kind::Float, device));
+    debug!("hann={hann:?}");
+
+    let frames = frames.f_mul(&hann.f_view([1, 1, cfg.n_fft])?)?;
+    debug!("frames x hann={frames:?}");
+
+    // ---------------------------------------------------------------------
+    // 3. RFFT over the last dimension.
+    //
+    // spectrum: [C, frames, freq_bins] complex
+    // power:    [C, frames, freq_bins] real
+    // ---------------------------------------------------------------------
+    let spectrum = frames.f_fft_rfft(None, -1, "backward")?;
+    debug!("spectrum={spectrum:?}");
+
+    let power = spectrum.f_abs()?.f_pow_tensor_scalar(2.0)?;
+
+    let freq_bins = cfg.n_fft / 2 + 1;
+
+    // ---------------------------------------------------------------------
+    // 4. Mel projection.
+    //
+    // power:        [C, frames, F]
+    // mel_fb:       [M, F]
+    // power_flat:   [C * frames, F]
+    // mel_flat:     [C * frames, M]
+    // mel:          [C, M, frames]
+    // ---------------------------------------------------------------------
+    //TODO move out
+    let mel_fb = build_mel_filterbank(
+        cfg.sample_rate,
+        cfg.n_fft,
+        cfg.n_mels,
+        cfg.f_min,
+        cfg.f_max,
+        device,
+    )?;
+
+    let n_frames = power.size()[1];
+
+    let power_flat = power.f_view([channels * n_frames, freq_bins])?;
+    let mel_flat = power_flat.f_matmul(&mel_fb.f_transpose(0, 1)?)?;
+
+    let mel = mel_flat
+        .f_view([channels, n_frames, cfg.n_mels])?
+        .f_transpose(1, 2)?; // [C, M, frames]
+
+    // ---------------------------------------------------------------------
+    // 5. Log compression.
+    //
+    // log_mel: [C, M, frames]
+    // ---------------------------------------------------------------------
+    let log_mel = mel.f_clamp_min(cfg.log_eps)?.f_log()?;
+
+    // ---------------------------------------------------------------------
+    // 6. Slice time axis into patches.
+    //
+    // log_mel: [C, M, frames]
+    // patches: [C, M, patches, patch_frames]
+    // output:  [C, patches, M, patch_frames]
+    // ---------------------------------------------------------------------
+    if log_mel.size()[2] < cfg.patch_frames {
+        return Err(ThoError::new(format!(
+            "not enough STFT frames for one patch: frames={}, patch_frames={}",
+            log_mel.size()[2],
+            cfg.patch_frames
+        )));
+    }
+
+    let patches = log_mel.f_unfold(2, cfg.patch_frames, cfg.patch_step)?;
+        let patches = patches.f_permute(&[0, 2, 1, 3])?;
+
+    Ok(patches)
 }
 
-fn make_mel_filterbank(
-    sample_rate: i64,
-    n_freq: i64,
+fn build_mel_filterbank(
+    sample_rate: f64,
+    n_fft: i64,
     n_mels: i64,
     f_min: f64,
     f_max: f64,
     device: Device,
-) -> Result<Tensor> {
-    if n_freq <= 0 {
-        bail!("n_freq must be > 0, got {n_freq}");
-    }
-    if n_mels <= 0 {
-        bail!("n_mels must be > 0, got {n_mels}");
-    }
-    if !(0.0..=sample_rate as f64 / 2.0).contains(&f_min) {
-        bail!(
-            "f_min must be in [0, sr/2], got f_min={} sr={}",
-            f_min,
-            sample_rate
-        );
-    }
-    if !(f_min..=sample_rate as f64 / 2.0).contains(&f_max) {
-        bail!(
-            "f_max must be in [f_min, sr/2], got f_min={} f_max={} sr={}",
-            f_min,
-            f_max,
-            sample_rate
-        );
+) -> Result<Tensor, ThoError> {
+    let freq_bins = n_fft / 2 + 1;
+    let f_max = if f_max > 0.0 {
+        f_max
+    } else {
+        sample_rate / 2.0
+    };
+
+    if f_min < 0.0 || f_max <= f_min || f_max > sample_rate / 2.0 {
+        return Err(ThoError::new(format!(
+            "invalid mel frequency range: f_min={f_min}, f_max={f_max}, sample_rate={sample_rate}"
+        )));
     }
 
     let mel_min = hz_to_mel(f_min);
@@ -65,263 +211,385 @@ fn make_mel_filterbank(
     let mut mel_points = Vec::with_capacity((n_mels + 2) as usize);
     for i in 0..(n_mels + 2) {
         let t = i as f64 / (n_mels + 1) as f64;
-        mel_points.push(mel_min + t * (mel_max - mel_min));
+        let mel = mel_min + t * (mel_max - mel_min);
+        mel_points.push(mel_to_hz(mel));
     }
 
-    let hz_points: Vec<f64> = mel_points.into_iter().map(mel_to_hz).collect();
+    let mut bins = Vec::with_capacity((n_mels + 2) as usize);
+    for hz in mel_points {
+        let bin = ((n_fft as f64 + 1.0) * hz / sample_rate).floor() as i64;
+        bins.push(bin.clamp(0, freq_bins - 1));
+    }
 
-    // We assume n_freq bins span [0, sr/2].
-    // For onesided STFT this is exact.
-    // If the original STFT was two-sided, we will already have narrowed it to the positive half.
-    let denom = (n_freq - 1).max(1) as f64;
-    let fft_bin_hz: Vec<f64> = (0..n_freq)
-        .map(|k| k as f64 * (sample_rate as f64 / 2.0) / denom)
-        .collect();
-
-    let mut fb = vec![0f32; (n_mels * n_freq) as usize];
+    let mut fb = vec![0.0f32; (n_mels * freq_bins) as usize];
 
     for m in 0..n_mels {
-        let left = hz_points[m as usize];
-        let center = hz_points[(m + 1) as usize];
-        let right = hz_points[(m + 2) as usize];
+        let left = bins[m as usize];
+        let center = bins[(m + 1) as usize];
+        let right = bins[(m + 2) as usize];
 
-        for k in 0..n_freq {
-            let f = fft_bin_hz[k as usize];
-            let val = if f < left || f > right {
-                0.0
-            } else if f <= center {
-                let denom = (center - left).max(1e-12);
-                ((f - left) / denom).max(0.0)
-            } else {
-                let denom = (right - center).max(1e-12);
-                ((right - f) / denom).max(0.0)
-            };
+        if center <= left || right <= center {
+            continue;
+        }
 
-            fb[(m * n_freq + k) as usize] = val as f32;
+        for k in left..center {
+            let value = (k - left) as f32 / (center - left) as f32;
+            fb[(m * freq_bins + k) as usize] = value;
+        }
+
+        for k in center..right {
+            let value = (right - k) as f32 / (right - center) as f32;
+            fb[(m * freq_bins + k) as usize] = value;
         }
     }
 
-    Ok(Tensor::f_from_slice(&fb)?
-        .f_reshape([n_mels, n_freq])?
-        .f_to_device(device)?)
+    Ok(Tensor::from_slice(&fb)
+        .f_view([n_mels, freq_bins])?
+        .to_device(device))
 }
 
-/// Convert raw STFT output into canonical magnitude shape [B, F, N].
-///
-/// Handles:
-/// - [B, F, N, 2]
-/// - [B, N, F, 2]
-///
-/// Also handles two-sided spectra:
-/// - if F == n_fft, keeps only bins [0 .. n_fft/2] inclusive, so final F becomes n_fft/2 + 1.
-fn canonicalize_stft_magnitude(stft_raw: &Tensor, n_fft: i64) -> Result<Tensor> {
-    let sz = stft_raw.size();
-    if sz.len() != 4 {
-        bail!("Expected raw STFT rank 4, got shape {:?}", sz);
-    }
-    if sz[3] != 2 {
-        bail!(
-            "Expected raw STFT trailing complex-pair dimension of size 2, got shape {:?}",
-            sz
-        );
-    }
-
-    let d1 = sz[1];
-    let d2 = sz[2];
-    let onesided = n_fft / 2 + 1;
-
-    // Compute magnitude from real/imag.
-    let real = stft_raw.f_select(-1, 0)?;
-    let imag = stft_raw.f_select(-1, 1)?;
-    let mag = real
-        .f_mul(&real)?
-        .f_add(&imag.f_mul(&imag)?)?
-        .f_sqrt()?;
-
-    // Decide whether mag is [B, F, N] already or [B, N, F].
-    let mag_bfn = if d1 == n_fft || d1 == onesided {
-        mag
-    } else if d2 == n_fft || d2 == onesided {
-        mag.f_transpose(1, 2)?
-    } else {
-        bail!(
-            "Could not identify frequency axis in STFT shape {:?}; expected one axis to be n_fft={} or n_fft/2+1={}",
-            sz,
-            n_fft,
-            onesided
-        );
-    };
-
-    let sz2 = mag_bfn.size();
-    if sz2.len() != 3 {
-        bail!("Expected canonical magnitude rank 3, got {:?}", sz2);
-    }
-
-    let f = sz2[1];
-
-    // If full two-sided spectrum is present, keep only nonnegative frequencies.
-    if f == n_fft {
-        Ok(mag_bfn.f_narrow(1, 0, onesided)?)
-    } else if f == onesided {
-        Ok(mag_bfn)
-    } else {
-        bail!(
-            "Unexpected frequency dimension after canonicalization: got F={}, expected {} or {}",
-            f,
-            n_fft,
-            onesided
-        );
-    }
+fn hz_to_mel(hz: f64) -> f64 {
+    // HTK-style mel scale.
+    2595.0 * (1.0 + hz / 700.0).log10()
 }
 
-pub fn audio_features(
-    waveform: &Tensor, // [T] or [B, T]
-    sample_rate: i64,
-    n_fft: i64,
-    win_length: i64,
-    hop_length: i64,
-    n_mels: i64,
-    f_min: f64,
-    f_max: Option<f64>,
-    eps: f64,
-) -> Result<AudioFeatures> {
-    if sample_rate <= 0 {
-        bail!("sample_rate must be > 0, got {sample_rate}");
-    }
-    if n_fft <= 0 || win_length <= 0 || hop_length <= 0 {
-        bail!(
-            "n_fft, win_length, hop_length must be > 0, got n_fft={} win_length={} hop_length={}",
-            n_fft,
-            win_length,
-            hop_length
-        );
-    }
-    if win_length > n_fft {
-        bail!("win_length must be <= n_fft, got win_length={} n_fft={}", win_length, n_fft);
-    }
-    if eps <= 0.0 {
-        bail!("eps must be > 0, got {eps}");
+fn mel_to_hz(mel: f64) -> f64 {
+    700.0 * (10f64.powf(mel / 2595.0) - 1.0)
+}
+//---buckets
+/// Assign log-mel-like patches to buckets, keeping channels separate.
+///
+/// Input shape:
+///
+///     [channels, patches, n_mels, patch_frames]
+///
+/// Output shape:
+///
+///     [channels, patches]
+///
+/// Each value is in:
+///
+///     0 .. n_buckets - 1
+///
+/// Important:
+///
+/// Bucket ids are local to each channel. So:
+///
+///     output[0, p] = 5
+///     output[1, q] = 5
+///
+/// do not necessarily mean the same bucket semantically. They are both
+/// bucket 5 inside their own channel namespace.
+pub fn assign_lsh_buckets_per_channel(
+    patches: &Tensor,
+    n_buckets: i64,
+) -> Result<Vec<Vec<usize>>, TchError> {
+    if n_buckets <= 0 {
+        return Err(TchError::Shape(format!(
+            "n_buckets must be positive, got {n_buckets}"
+        )));
     }
 
-    let device = waveform.device();
-    let f_max = f_max.unwrap_or(sample_rate as f64 / 2.0);
+    let size = patches.size();
+    if size.len() != 4 {
+        return Err(TchError::Shape(format!(
+            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
+        )));
+    }
 
-    let waveform = match waveform.dim() {
-        1 => waveform.f_unsqueeze(0)?,
-        2 => waveform.shallow_clone(),
-        d => bail!("Expected waveform [T] or [B, T], got dim={d} shape={:?}", waveform.size()),
-    };
+    let channels = size[0];
+    let n_patches = size[1];
 
-    let window = Tensor::f_hann_window(win_length, (Kind::Float, device))?;
+    assert!(channels > 0, "unexpected channels={channels}");
+    assert!(n_patches > 0, "unexpected n_patches={n_patches}");
 
-    // Important:
-    // tch/libtorch bindings vary. In your environment this returns a real tensor
-    // with trailing dimension 2, not a native complex tensor.
+
+    let n_bits = hash_bits_for_bucket_count(n_buckets);
+
+    assign_lsh_buckets_per_channel_with_bits(patches, n_buckets, n_bits)
+}
+
+/// Same as `assign_lsh_buckets_per_channel`, but lets you control the hash size.
+///
+/// Reasonable values: 12..32.
+pub fn assign_lsh_buckets_per_channel_with_bits(
+    patches: &Tensor,
+    n_buckets: i64,
+    n_bits: i64,
+) -> Result<Vec<Vec<usize>>, TchError> {
+    if n_buckets <= 0 {
+        return Err(TchError::Shape(format!(
+            "n_buckets must be positive, got {n_buckets}"
+        )));
+    }
+
+    if n_bits <= 0 || n_bits > 63 {
+        return Err(TchError::Shape(format!(
+            "n_bits must be in 1..=63, got {n_bits}"
+        )));
+    }
+
+    let size = patches.size();
+    if size.len() != 4 {
+        return Err(TchError::Shape(format!(
+            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
+        )));
+    }
+
+    let channels = size[0];
+    let n_patches = size[1];
+    let n_mels = size[2];
+    let patch_frames = size[3];
+
+    assert!(channels > 0, "unexpected channels={channels}");
+    assert!(n_patches > 0, "unexpected n_patches={n_patches}");
+
+    let device = patches.device();
+    let input_dim = n_mels * patch_frames;
+
+    // ---------------------------------------------------------------------
+    // Flatten each patch independently:
     //
-    // We do not rely on the exact boolean semantics here; instead we canonicalize
-    // the result afterward and, if necessary, drop the negative-frequency half.
-    let stft_raw = waveform.f_stft(
-        n_fft,
-        Some(hop_length),
-        Some(win_length),
-        Some(&window),
-        true,
-        false,
-        false,
-        false,
-    )?;
+    // [C, P, M, T] -> [C, P, M * T]
+    // ---------------------------------------------------------------------
+    debug!("patches.size={:?} channels={channels}, n_patches={n_patches}, input_dim={input_dim}", patches.size());
+    let x = patches
+        .f_to_kind(Kind::Float)?
+        .f_reshape([channels, n_patches, input_dim])?;
 
-    let stft_magnitude =
-        canonicalize_stft_magnitude(&stft_raw, n_fft).context("failed to canonicalize STFT output")?;
+    // ---------------------------------------------------------------------
+    // Per-patch normalization.
+    //
+    // Normalize over [M * T], independently for every [channel, patch].
+    // This keeps the hash mostly shape/spectrum-based rather than pure
+    // loudness-based.
+    // ---------------------------------------------------------------------
+    let mean = x.f_mean_dim(&[2i64][..], true, Kind::Float)?;
+    let centered = x.f_sub(&mean)?;
 
-    let log_magnitude = stft_magnitude.f_add_scalar(eps)?.f_log()?;
-    let power_spectrogram = stft_magnitude.f_mul(&stft_magnitude)?;
+    let var = centered
+        .f_pow_tensor_scalar(2.0)?
+        .f_mean_dim(&[2i64][..], true, Kind::Float)?;
 
-    let power_sz = power_spectrogram.size();
-    if power_sz.len() != 3 {
-        bail!("Expected power spectrogram [B, F, N], got {:?}", power_sz);
+    let std = var.f_add_scalar(1e-6)?.f_sqrt()?;
+    let x_norm = centered.f_div(&std)?;
+
+    // ---------------------------------------------------------------------
+    // Deterministic projection:
+    //
+    // [input_dim, n_bits]
+    //
+    // Shared projection across channels. Channels remain separate because
+    // we do not flatten C into P for the output.
+    // ---------------------------------------------------------------------
+    let proj = deterministic_projection(input_dim, n_bits, device)?;
+
+    // ---------------------------------------------------------------------
+    // Project:
+    //
+    // [C, P, D] @ [D, n_bits] -> [C, P, n_bits]
+    // ---------------------------------------------------------------------
+    let scores = x_norm.f_matmul(&proj)?;
+
+    let bits = scores
+        .f_gt(0.0)?
+        .f_to_kind(Kind::Int64)?
+        .to_device(Device::Cpu)
+        .f_contiguous()?;
+
+    debug!("assign_lsh_buckets_per_channel_with_bits: bits={bits:?}");
+    let bits_vec = Vec::<i64>::try_from(&bits.f_reshape([-1])?.f_contiguous()?)?;
+    debug!("assign_lsh_buckets_per_channel_with_bits: bits_vec={bits_vec:?}");
+
+    let mut bucket_ids = vec![Vec::with_capacity(n_patches as usize); channels as usize];
+
+    for c in 0..channels {
+        for p in 0..n_patches {
+            let row_start = ((c * n_patches + p) * n_bits) as usize;
+            let row_end = row_start + n_bits as usize;
+            let row = &bits_vec[row_start..row_end];
+
+            // Include the channel id in the hash salt so that channels get
+            // independent bucket partitioning even if their patch values are
+            // identical.
+            let hash = hash_bit_row_with_channel_salt(row, c as u64);
+            let bucket = (hash % n_buckets as u64) as usize;
+
+            bucket_ids[c as usize].push(bucket);
+        }
     }
+    debug!("assign_lsh_buckets_per_channel_with_bits: bucket_ids={bucket_ids:?}, channels={channels}, n_patches={n_patches}");
 
-    let actual_n_freq = power_sz[1];
 
-    let mel_fb = make_mel_filterbank(
-        sample_rate,
-        actual_n_freq,
-        n_mels,
-        f_min,
-        f_max,
-        device,
-    )?; // [M, F]
-
-    let mel_fb_sz = mel_fb.size();
-    if mel_fb_sz != vec![n_mels, actual_n_freq] {
-        bail!(
-            "Unexpected mel filterbank shape {:?}, expected [{}, {}]",
-            mel_fb_sz,
-            n_mels,
-            actual_n_freq
-        );
-    }
-
-    // [B, F, N] -> [B, N, F]
-    // [M, F] -> [F, M]
-    // result [B, N, M] -> [B, M, N]
-    let mel_spectrogram = power_spectrogram
-        .f_transpose(1, 2)?                // [B, N, F]
-        .f_matmul(&mel_fb.f_transpose(0, 1)?)? // [B, N, M]
-        .f_transpose(1, 2)?;               // [B, M, N]
-
-    let log_mel_spectrogram = mel_spectrogram.f_add_scalar(eps)?.f_log()?;
-
-    Ok(AudioFeatures {
-        stft_raw,
-        stft_magnitude,
-        log_magnitude,
-        mel_spectrogram,
-        log_mel_spectrogram,
-    })
+    Ok(bucket_ids)
 }
 
-#[test]
-fn test_audio_features() -> Result<()> {
-    let device = Device::Cpu;
-    let sample_rate = 32_000;
-    let seconds = 5;
-    let t = sample_rate * seconds;
+fn hash_bits_for_bucket_count(n_buckets: i64) -> i64 {
+    let mut bits = 0i64;
+    let mut x = 1i64;
 
-    let waveform = Tensor::f_randn([t], (Kind::Float, device))?;
+    while x < n_buckets {
+        x <<= 1;
+        bits += 1;
+    }
 
-    let feats = audio_features(
-        &waveform,
-        sample_rate,
-        1024,  // n_fft
-        1024,  // win_length
-        320,   // hop_length
-        128,   // n_mels
-        0.0,   // f_min
-        None,  // f_max
-        1e-8,  // eps
-    )?;
+    // Extra bits reduce collisions and modulo bias.
+    (bits + 4).clamp(8, 32)
+}
 
-    println!("stft_raw             {:?}", feats.stft_raw.size());
-    println!("stft_magnitude       {:?}", feats.stft_magnitude.size());
-    println!("log_magnitude        {:?}", feats.log_magnitude.size());
-    println!("mel_spectrogram      {:?}", feats.mel_spectrogram.size());
-    println!("log_mel_spectrogram  {:?}", feats.log_mel_spectrogram.size());
+fn deterministic_projection(
+    input_dim: i64,
+    n_bits: i64,
+    device: Device,
+) -> Result<Tensor, TchError> {
+    let i = Tensor::arange(input_dim, (Kind::Float, device))
+        .f_view([input_dim, 1])?;
 
-    let stft_mag_sz = feats.stft_magnitude.size();
-    let mel_sz = feats.mel_spectrogram.size();
-    let log_mel_sz = feats.log_mel_spectrogram.size();
+    let j = Tensor::arange(n_bits, (Kind::Float, device))
+        .f_view([1, n_bits])?;
 
-    assert_eq!(stft_mag_sz.len(), 3);
-    assert_eq!(stft_mag_sz[0], 1);
-    assert_eq!(stft_mag_sz[1], 1024 / 2 + 1);
+    // Cheap deterministic pseudo-random-ish values in [-1, 1].
+    //
+    // Shape:
+    //
+    //     [input_dim, n_bits]
+    let proj = i
+        .f_mul_scalar(12.9898)?
+        .f_add(&j.f_mul_scalar(78.233)?)?
+        .f_sin()?
+        .f_mul_scalar(43_758.5453)?
+        .f_sin()?;
 
-    assert_eq!(mel_sz.len(), 3);
-    assert_eq!(mel_sz[0], 1);
-    assert_eq!(mel_sz[1], 128);
+    Ok(proj)
+}
 
-    assert_eq!(log_mel_sz, mel_sz);
+fn hash_bit_row_with_channel_salt(bits: &[i64], channel: u64) -> u64 {
+    // FNV-like mixing with a per-channel salt.
+    let mut h = 0xcbf29ce484222325u64;
 
-    Ok(())
+    h ^= channel.wrapping_mul(0x9e3779b97f4a7c15);
+    h = h.wrapping_mul(0x100000001b3);
+
+    for (i, &bit) in bits.iter().enumerate() {
+        if bit != 0 {
+            let v = (i as u64).wrapping_mul(0x9e3779b97f4a7c15);
+            h ^= v;
+            h = h.wrapping_mul(0x100000001b3);
+        } else {
+            h ^= 0x517cc1b727220a95u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+    }
+
+    h
+}
+
+/// For patches shaped [channels, patches, n_mels, patch_frames],
+/// return [channels * patches, 4].
+///
+/// Each row:
+///     [channel_index, patch_index, sample_start, sample_end]
+pub fn patch_sample_ranges_flat(
+    patches: &Tensor,
+    cfg: &LogMelPatchConfig,
+) -> Result<Vec<Vec<(usize, usize)>>, TchError> {
+    let size = patches.size();
+
+    if size.len() != 4 {
+        return Err(TchError::Shape(format!(
+            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
+        )));
+    }
+
+    let channels = size[0];
+    let n_patches = size[1];
+
+    // let mut values = Vec::<i64>::with_capacity((channels * n_patches * 4) as usize);
+    let mut values = vec![vec![]; channels as usize];
+
+    for c in 0..channels {
+        for p in 0..n_patches {
+            let first_frame = p * cfg.patch_step;
+            let last_frame = first_frame + cfg.patch_frames - 1;
+
+            let sample_start = first_frame * cfg.hop_length;
+            let sample_end = last_frame * cfg.hop_length + cfg.n_fft;
+
+
+            values[c as usize].push((sample_start as usize, sample_end as usize))
+        }
+    }
+
+    Ok(values)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use cudarc::driver::HostSlice;
+    use log::debug;
+    use tch::kind::FLOAT_CPU;
+    use tch::{Device, IndexOp, Kind, Tensor};
+    use thoosa_shared::ThoError;
+    use crate::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, patch_sample_ranges_flat, LogMelPatchConfig};
+    use crate::debug_plot;
+    use crate::utils::{debug_plot_impl, debug_plot_impl_wh};
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_0() -> Result<(), ThoError>{
+
+        // plot_t(&resource_t, &format!("resource_{i}"))?;
+        // debug_plot_impl(&Tensor::rand([1, 1000], FLOAT_CPU), "test", 0)?;
+        let tensor = Tensor::load("/home/bu/tmp/ws_clef/tensors/1_hyamac1_XC497685.ogg.pt")?;
+        debug_plot_impl_wh(&tensor, "test", 0, ((tensor.size()[1] as u32).min(40_000), 1000))?;
+
+        let cfg = LogMelPatchConfig {
+            sample_rate: 32_000.0,
+            n_fft: 1024,
+            hop_length: 320,
+            n_mels: 128,
+            patch_frames: 64,
+            patch_step: 32,
+            ..Default::default()
+        };
+
+        // Example: mono audio, 10 seconds at 32 kHz.
+
+        let patches = audio_to_log_mel_patches(&tensor, &cfg)?;
+
+
+        debug!("patches shape = {:?}", patches.size());
+        let patches_indexes = patch_sample_ranges_flat(&patches, &cfg)?;
+        debug!("patches indexes len={} patches_indexes{patches_indexes:?}", patches_indexes[0].len());
+
+
+        let bucket_ids = assign_lsh_buckets_per_channel(&patches, 256)?;
+
+        debug!("bucket_ids.len={} bucket_ids={bucket_ids:?}", bucket_ids[0].len());
+
+        for channel in 0..bucket_ids.len() {
+            let mut motifs = HashMap::<usize, Vec<(usize, usize)>>::new();
+
+            for (patch, bucket) in patches_indexes[channel].iter().zip(bucket_ids[channel].iter()) {
+                let bucket_slices = motifs.entry(*bucket).or_insert(vec![]);
+                bucket_slices.push(*patch);
+            }
+
+            debug!("motifs.len={}", motifs.len());
+
+            for (id, motif_slices) in motifs {
+                debug!("id={id} motif_slices={motif_slices:?}");
+                let num_slices = motif_slices.len();
+                let motif_t = Tensor::stack( motif_slices.into_iter().map(|(from, to)|tensor.i((channel as i64, from as i64..to as i64))).collect::<Vec<_>>().as_slice(), 0);
+                debug!("motif_t={motif_t:?}");
+                debug_plot_impl_wh(&motif_t, &format!("bucket_{id}, {} slices", num_slices), 0, ((tensor.size()[1] as u32).min(40_000), 2000))?;
+            }
+
+
+        }
+
+
+        Ok(())
+    }
 }

@@ -388,8 +388,14 @@ fn shorten_path_for_fs_limits(path: &Path) -> PathBuf {
     }
 }
 
+
 #[doc(hidden)]
 pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(), ThoError> {
+    debug_plot_impl_wh(t_0, label, plot_repeats, (2000, 1000))
+}
+
+#[doc(hidden)]
+pub fn debug_plot_impl_wh(t_0: &Tensor, label: &str, plot_repeats: u64, w_h: (u32, u32),) -> Result<(), ThoError> {
     let file_stem = sanitize_debug_plot_label(label);
     let file_name = {
         let mut counts = DEBUG_PLOT_LABEL_COUNTS
@@ -429,7 +435,7 @@ pub fn debug_plot_impl(t_0: &Tensor, label: &str, plot_repeats: u64) -> Result<(
             })
             .collect(),
         label,
-        (2000, 1000),
+        w_h,
         &path,
     )?;
     Ok(())
