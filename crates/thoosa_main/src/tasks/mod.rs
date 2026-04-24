@@ -26,3 +26,4 @@ pub mod train_label_nets;
 pub mod train_final_net;
 pub mod train_net;
 mod stage_ids;
+mod mal_patch;

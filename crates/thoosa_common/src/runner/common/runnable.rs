@@ -1,10 +1,20 @@
+use crate::dims::Dims;
+use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
+use crate::runner::common::{OutId, RunCtx};
+use crate::ws::Workspace;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::fs::{self};
+use std::hash::Hash;
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Data, WithId};
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
-use crate::runner::common::RunCtx;
+use thoosa_shared::resource::ResourcesConfig;
+use thoosa_shared::traits::{Data, Named, WithId};
+use thoosa_shared::TensorIdSliceIdx;
+use thoosa_store::{IdSlice, Store};
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 
 pub trait Stage: Debug {
