@@ -188,7 +188,7 @@ pub(crate) async fn run_all(
 
 
             let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
-                   run_all_args.train_resource_config()
+               run_all_args.train_resource_config()
             )/*.check(&store).await?*/));
 
             //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.

@@ -3284,7 +3284,7 @@ impl SqlStore {
 
         Self::validate_min_probability(min_p)?;
 
-        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| prefix))?;
+        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| num_prefix.as_str()))?;
 
         let train_group_id = Self::save_resource_set_group(format!("{num_prefix}_train"), t)?;
         let valid_group_id = Self::save_resource_set_group(format!("{num_prefix}_valid"), t)?;
@@ -3312,7 +3312,9 @@ impl SqlStore {
             let valid_len = (available as f32 * valid_coeff).floor() as usize;
             let test_len = available.saturating_sub(train_len + valid_len);
 
-            let (train_resources, valid_resources, test_resources) = match available {
+            debug!("save_leaky_data_sets: label={label} train_len={train_len} valid_len={valid_len} test_len={test_len}");
+
+            let (train_resources, mut valid_resources, mut test_resources) = match available {
                 1=> {
                     (selected.to_vec(), selected.to_vec(), selected.to_vec())
                 },
@@ -3326,10 +3328,22 @@ impl SqlStore {
                     (selected[..train_len].to_vec(), selected[train_len..train_len+valid_len].to_vec(), selected[train_len+valid_len..train_len+valid_len+test_len].to_vec())
                 }
             };
+            debug_assert!(!train_resources.is_empty());
+            if valid_resources.is_empty() {
+                valid_resources.push(train_resources[0].clone());
+            }
 
-            debug!("save_data_sets: num_prefix={num_prefix} label={label} train_resources={train_resources:?}");
-            debug!("save_data_sets: num_prefix={num_prefix} label={label} valid_resources={valid_resources:?}");
-            debug!("save_data_sets: num_prefix={num_prefix} label={label} test_resources={test_resources:?}");
+            if test_resources.is_empty() {
+                test_resources.push(valid_resources[0].clone());
+            }
+
+            debug!("save_leaky_data_sets: label={label} train_resources={train_resources:?}");
+            debug!("save_leaky_data_sets: label={label} valid_resources={valid_resources:?}");
+            debug!("save_leaky_data_sets: label={label} test_resources={test_resources:?}");
+
+
+            debug_assert!(!valid_resources.is_empty());
+            debug_assert!(!test_resources.is_empty());
 
             Self::insert_resource_set_resources(t, labels_cnt, train_group_id, format!("{num_prefix}_{label}_train"), Some(&label_id), train_resources.as_slice())?;
             Self::insert_resource_set_resources(t, labels_cnt, valid_group_id, format!("{num_prefix}_{label}_valid"), Some(&label_id), valid_resources.as_slice())?;
@@ -4096,6 +4110,7 @@ mod store_tests {
         store.save_label("aaa").await?;
         store.save_label("bbb").await?;
         store.save_label("ccc").await?;
+        store.save_label("ddd").await?;
 
         store.save_resources_labels(
             &HashMap::from([
@@ -4106,6 +4121,22 @@ mod store_tests {
                 (
                     "bbb_only".to_string(),
                     (ResourceStats::new(vec![1, 100]), vec![("bbb".into(), 1.0)]),
+                ),
+                (
+                    "ccc_only_0".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("ccc".into(), 1.0)]),
+                ),
+                (
+                    "ccc_only_1".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("ccc".into(), 1.0)]),
+                ),
+                (
+                    "ccc_only_2".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("ccc".into(), 1.0)]),
+                ),
+                (
+                    "ccc_only_3".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("ccc".into(), 1.0)]),
                 ),
             ]),
             import_id,
@@ -4160,6 +4191,10 @@ mod store_tests {
         assert_eq!(vec!["bbb_only".to_string()], train_sets_resources["L10_bbb_train"]);
         assert_eq!(vec!["bbb_only".to_string()], valid_sets_resources["L10_bbb_valid"]);
         assert_eq!(vec!["bbb_only".to_string()], test_sets_resources["L10_bbb_test"]);
+
+        // assert_eq!(vec!["ccc_only_0", "ccc_only_2"], train_sets_resources["L10_ccc_train"]);
+        // assert_eq!(vec!["ccc_only_0"],               valid_sets_resources["L10_ccc_valid"]);
+        // assert_eq!(vec!["ccc_only_1", "ccc_only_3"], test_sets_resources["L10_ccc_test"]);
 
         Ok(())
     }
