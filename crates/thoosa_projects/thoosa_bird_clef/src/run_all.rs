@@ -227,7 +227,7 @@ pub(crate) async fn run_all(
     let _ = collect_futures_with_progress(
         futures,
         labels.len(),
-        8,
+        4,
         StreamBuffering::Unordered,
         "bird_clef_labels",
     ).await;
