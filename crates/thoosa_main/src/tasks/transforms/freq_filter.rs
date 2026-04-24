@@ -52,6 +52,7 @@ impl<C> SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+    //TODO remove freq_filter: Arc<FreqFilter<C>> param: move apply_tho_tensor and out_id to SyncFreqFilter and keep AsyncStage->SyncStage
     fn new(freq_filter: Arc<FreqFilter<C>>) -> Self {
         Self { freq_filter }
     }
@@ -91,7 +92,7 @@ where
     num_channels:i64,
     sample_rate:f64
 }
-//repalce with two config - band pass and band notch
+
 impl<C> FreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
