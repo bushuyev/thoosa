@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
@@ -315,6 +315,27 @@ where
                 Ok::<_, ThoError>(input.resources_config().clone())
             })?;
             let (train_labels_resource_keys, valid_label_resource_keys) = resources_config.to_resources(&self.store).await?;
+
+            let train_labels_resource_keys =  train_labels_resource_keys.into_iter().filter(|(label, resources)|{
+                let is_empty = !resources.is_empty();
+                warn!("no resources for {label} in train resources");
+                is_empty
+            }).collect::<Vec<_>>();
+            if train_labels_resource_keys.is_empty() {
+                warn!("No resources in resources_config={resources_config:?}");
+                return Err(ThoError::new(format!("No resources in resources_config={resources_config:?}")));
+            }
+            //TODO util validate_resources function
+            let valid_label_resource_keys =  valid_label_resource_keys.into_iter().filter(|(label, resources)|{
+                let is_empty = !resources.is_empty();
+                warn!("no resources for {label} in valid resources");
+                is_empty
+            }).collect::<Vec<_>>();
+            if valid_label_resource_keys.is_empty() {
+                warn!("No resources in resources_config={resources_config:?}");
+                return Err(ThoError::new(format!("No resources in resources_config={resources_config:?}")));
+            }
+
 
             let (labels_train_and_valid_sets, labels_others_train_valid_resources) = build_resource_maps(train_labels_resource_keys, valid_label_resource_keys);
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
