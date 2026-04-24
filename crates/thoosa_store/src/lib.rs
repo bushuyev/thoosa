@@ -198,7 +198,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_label(&self, label: &str) -> Result<u32, ThoError>;
 
-    async fn list_labels(&self) -> Result<Vec<String>, ThoError>;
+    async fn list_labels(&self, only_with_resources: bool) -> Result<Vec<String>, ThoError>;
 
     async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_id: RunId, label: Option<&'a str>) -> Result<(), ThoError>;
     async fn save_slices(&self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
@@ -362,7 +362,7 @@ mock! {
             limit: u32,
         ) -> Result<Vec<Resource>, ThoError>;
         async fn save_label(&self, label: &str) -> Result<u32, ThoError>;
-        async fn list_labels(&self) -> Result<Vec<String>, ThoError>;
+        async fn list_labels(&self, only_with_resources:bool) -> Result<Vec<String>, ThoError>;
         async fn save_params_value<'a>(
             &self,
             params: HashMap<String, Val>,
@@ -695,7 +695,7 @@ impl ResourceStore for SqlStore {
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
         let group_descr = group_descr.to_string();
         self.with_reader_conn("list_resource_random_in_group", move |conn| {
-            let labels = Self::list_labels(conn)?;
+            let labels = Self::list_labels(conn, true)?;
             debug!("list_resource_random_in_group: group_descr={:?} labels={:?}", group_descr, labels);
 
             let r: Vec<(Resource, Vec<f32>)> = conn.prepare(
@@ -1011,9 +1011,9 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_labels(&self) -> Result<Vec<String>, ThoError> {
+    async fn list_labels(&self, only_with_resources: bool) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_labels", move |conn| {
-            let labels = Self::list_labels(conn).map(|v| v.into_iter().map(|id_label| id_label.1).collect())?;
+            let labels = Self::list_labels(conn, only_with_resources).map(|v| v.into_iter().map(|id_label| id_label.1).collect())?;
             Ok(labels)
         })
         .await
@@ -1208,7 +1208,7 @@ impl Store for SqlStore {
     ) -> Result<HashMap<String, Vec<Resource>>, ThoError> {
         Self::validate_min_probability(min_p)?;
         self.with_reader_conn("resources_by_label", move |conn| {
-            let labels = Self::list_labels(conn)?;
+            let labels = Self::list_labels(conn, true)?;
             let mut resources_by_label =
                 labels.iter().map(|(_, label)| (label.clone(), Vec::new())).collect::<HashMap<String, Vec<Resource>>>();
             let mut stmt = conn.prepare(
@@ -2874,6 +2874,8 @@ impl SqlStore {
                 (),
             )?;
 
+            t.execute("CREATE INDEX IF NOT EXISTS idx_labeled_resources_label_id ON labeled_resources(label_id)", ())?;
+
             //descr - dist, dist etc
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_configs (
@@ -3020,9 +3022,13 @@ impl SqlStore {
     /**
     defines global label order
     */
-    fn list_labels(conn: &Connection) -> Result<Vec<(usize, String)>, ThoError> {
+    fn list_labels(conn: &Connection, only_with_resources: bool) -> Result<Vec<(usize, String)>, ThoError> {
         let set_resources = {
-            let mut stmt = conn.prepare("SELECT id, label FROM labels ORDER BY id")?;
+            let mut stmt = if only_with_resources {
+                conn.prepare("SELECT id, label FROM labels  l where exists (select 1 from labeled_resources where label_id=l.id) ORDER BY id;")?
+            } else {
+                conn.prepare("SELECT id, label FROM labels ORDER BY id")?
+            };
 
             let vec = stmt
                 .query_map([], |row| {
@@ -3111,7 +3117,7 @@ impl SqlStore {
         debug!("save_groups_by_label_cnt: labels_cnt_labels_resources.len={:?}", labels_cnt_labels_resources.len());
         let mut rng = rand::rng();
 
-        let labels_ids: HashMap<String, usize> = Self::list_labels(t)?.into_iter().fold(HashMap::new(), |mut a, v| {
+        let labels_ids: HashMap<String, usize> = Self::list_labels(t, true)?.into_iter().fold(HashMap::new(), |mut a, v| {
             a.insert(v.1, v.0);
             a
         });
@@ -3339,7 +3345,7 @@ impl SqlStore {
         not_in_prefix: Option<&str>,
     ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
         Self::validate_min_probability(min_p)?;
-        let labels = Self::list_labels(t)?;
+        let labels = Self::list_labels(t, true)?;
         let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, Vec::new())).collect::<HashMap<usize, Vec<usize>>>();
 
         let mut stmt = t.prepare(
@@ -4068,7 +4074,7 @@ mod store_tests {
 
         init_test_store(&store).await?;
 
-        let labels_count = store.list_labels().await?.len();
+        let labels_count = store.list_labels(true).await?.len();
         let train_sets = store.list_resource_set_group_sets("A_train").await?;
         let valid_sets = store.list_resource_set_group_sets("A_valid").await?;
         let test_sets = store.list_resource_set_group_sets("A_test").await?;

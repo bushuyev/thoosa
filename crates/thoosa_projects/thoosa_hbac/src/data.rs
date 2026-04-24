@@ -1020,7 +1020,7 @@ mod tests {
             },
         ).await?;
 
-        let labels = store.list_labels().await?;
+        let labels = store.list_labels(true).await?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],
