@@ -317,9 +317,11 @@ where
             let (train_labels_resource_keys, valid_label_resource_keys) = resources_config.to_resources(&self.store).await?;
 
             let train_labels_resource_keys =  train_labels_resource_keys.into_iter().filter(|(label, resources)|{
-                let is_empty = !resources.is_empty();
-                warn!("no resources for {label} in train resources");
-                is_empty
+                let is_empty = resources.is_empty();
+                if is_empty {
+                    warn!("no resources for {label} in train resources");
+                }
+                !is_empty
             }).collect::<Vec<_>>();
             if train_labels_resource_keys.is_empty() {
                 warn!("No resources in resources_config={resources_config:?}");
@@ -327,9 +329,11 @@ where
             }
             //TODO util validate_resources function
             let valid_label_resource_keys =  valid_label_resource_keys.into_iter().filter(|(label, resources)|{
-                let is_empty = !resources.is_empty();
-                warn!("no resources for {label} in valid resources");
-                is_empty
+                let is_empty = resources.is_empty();
+                if is_empty {
+                    warn!("no resources for {label} in valid resources");
+                }
+                !is_empty
             }).collect::<Vec<_>>();
             if valid_label_resource_keys.is_empty() {
                 warn!("No resources in resources_config={resources_config:?}");

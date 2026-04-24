@@ -169,7 +169,7 @@ fn build_resource_maps_with_rng<R: rand::Rng + ?Sized>(
     valid_label_resource_keys: Vec<(String, Vec<Resource>)>,
     rng: &mut R,
 ) -> (HashMap<String, (Vec<Resource>, Vec<Resource>)>, Arc<HashMap<String, (Vec<Resource>, Vec<Resource>)>>) {
-    assert_eq!(train_labels_resource_keys.len(), valid_label_resource_keys.len());
+    assert_eq!(train_labels_resource_keys.len(), valid_label_resource_keys.len(), "train_labels_resource_keys={train_labels_resource_keys:?} valid_label_resource_keys={valid_label_resource_keys:?}");
 
     let mut labels_others_train_valid_resources: HashMap<String, (Vec<&Resource>, Vec<&Resource>)> =
         train_labels_resource_keys.iter().fold(HashMap::new(), |mut acc, entry| {
