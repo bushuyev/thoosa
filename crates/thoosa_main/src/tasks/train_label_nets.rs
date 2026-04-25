@@ -829,10 +829,12 @@ mod tests {
         let (mut resources_map, _motif_intervals) = resources_a.iter().zip(resources_b.iter().zip(resources_c.iter().zip(resources_x.iter()))).try_fold((HashMap::new(), vec![]), |mut a, (r_a, (r_b, (r_c, r_x)))| {
 
             let (t, intervals) = resource_tensor(r_a.length() as usize, &[
-                vec![(3, motif_width, MotifKind::Pulse)],
-                vec![(1, motif_width, MotifKind::Sin)],
-                vec![]
-            ], 100, 10.0)?;
+                            vec![(3, motif_width, MotifKind::Pulse)],
+                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![]
+                        ], 100, 10.0,
+                                                 true,
+                                                 true)?;
 
             a.0.insert(r_a.clone(), t);
 
@@ -840,10 +842,12 @@ mod tests {
 
 
             let (t, intervals) = resource_tensor(r_b.length() as usize, &[
-                vec![(3, motif_width, MotifKind::Triangle)],
-                vec![(1, motif_width, MotifKind::Sin)],
-                vec![]
-            ], 100, 10.0)?;
+                            vec![(3, motif_width, MotifKind::Triangle)],
+                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![]
+                        ], 100, 10.0,
+                                                 true,
+                                                 true)?;
 
             a.0.insert(r_b.clone(), t);
 
@@ -851,10 +855,12 @@ mod tests {
 
 
             let (t, intervals) = resource_tensor(r_c.length() as usize, &[
-                vec![(3, motif_width, MotifKind::Sin)],
-                vec![(1, motif_width, MotifKind::Sin)],
-                vec![]
-            ], 100, 10.0)?;
+                            vec![(3, motif_width, MotifKind::Sin)],
+                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![]
+                        ], 100, 10.0,
+                                                 true,
+                                                 true)?;
 
             a.0.insert(r_b.clone(), t);
 
@@ -862,10 +868,12 @@ mod tests {
 
 
             let (t, intervals) = resource_tensor(r_x.length() as usize, &[
-                vec![],
-                vec![],
-                vec![]
-            ], 100, 10.0)?;
+                            vec![],
+                            vec![],
+                            vec![]
+                        ], 100, 10.0,
+                                                 true,
+                                                 true)?;
 
             a.0.insert(r_c.clone(), t);
 

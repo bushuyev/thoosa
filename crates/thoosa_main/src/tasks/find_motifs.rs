@@ -523,8 +523,8 @@ mod tests {
     use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Labeled, Simple};
-    use thoosa_common::tch_test_utils;
-    use thoosa_common::utils::{lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};
+    use thoosa_common::{debug_plot, tch_test_utils};
+    use thoosa_common::utils::{debug_plot_impl, lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
     use thoosa_shared::applicables_runner::Input;
@@ -534,7 +534,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoError};
-    use thoosa_store::{MockStoreBuilder, SqlStore};
+    use thoosa_store::{CheckGroups, MockStoreBuilder, SqlStore};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
@@ -559,7 +559,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_find_motifs_max_dist() -> Result<(), ThoError> {
-        setup_find_motifs(FindMotifsRunConfig::new_with_max_dist(Some(1), 10, 100, None, 0.5, 1000)).await?;
+        setup_find_motifs(FindMotifsRunConfig::new_with_precalculate_stats(Some(1), 10, 100, None, 0.1, 70)).await?;
 
         Ok(())
     }
@@ -581,13 +581,13 @@ mod tests {
 
 
             let (resource_t, resource_intervals) = tch_test_utils::resource_tensor(resource.length() as usize, &[
-                vec![(size as usize, 100, MotifKind::Pulse)],
-                vec![(size as usize, 100, MotifKind::Sin)],
-                vec![(size as usize, 100, MotifKind::Triangle)]
-            ], 100, 10.0)?;
+                            vec![(size as usize, 100, MotifKind::Pulse)],
+                            vec![(size as usize, 100, MotifKind::Sin)],
+                            vec![(size as usize, 100, MotifKind::Triangle)]
+                        ], 100, 10.0, true, true)?;
 
 
-            // plot_t(&resource_t, &format!("resource_{i}"))?;
+            debug_plot_impl(&resource_t, &format!("resource_{i}"), 0)?;
 
             Ok((resource, resource_t, resource_intervals))
         }).collect::<Result<Vec<_>, ThoError>>()?;
@@ -618,7 +618,7 @@ mod tests {
                     resource.clone()
                 }).collect()))])
                 .with_list_random_resources([(None, Ok(resources.iter().map(|r|r.0.clone()).collect::<Vec<_>>()))])
-                .with_save_groups_as_motifs() //TODO check if resource_intervals are in found groups
+                .with_save_groups_as_motifs(vec![CheckGroups::MinGroups(1), CheckGroups::MinGroups(1), CheckGroups::MinGroups(1)]) //<-assert TODO check if too many groups
                 .build());
 
         let loader = Arc::new(
@@ -652,6 +652,8 @@ mod tests {
             debug!("result={result:?}");
             Ok::<_, ThoError>(())
         })?;
+
+
         Ok(())
     }
 }

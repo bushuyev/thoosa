@@ -156,7 +156,7 @@ impl<'a> MaskMaker<'a> {
     t_0, t_1 - channels x slices x slice_len
 */
 /// returns bool mask and, if with_distances is true, distances
-fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> Result<Tensor, ThoError> {
+pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: SimilarityMetric) -> Result<Tensor, ThoError> {
     match similarity_metric {
         SimilarityMetric::EucDist(config) => {
             if config.z_normalize {

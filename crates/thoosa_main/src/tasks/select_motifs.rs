@@ -1672,7 +1672,7 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, MotifKind::Pulse)]], 100, 10.0f32)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(30, 100, MotifKind::Pulse)]], 100, 10.0f32, true, true)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals)];
 
         let mut store = Arc::new(
@@ -1748,8 +1748,8 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(3, 100, MotifKind::Pulse)]], 100, 10.0f32)?;
-        let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, MotifKind::Pulse)]], 200, 10.0f32)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(3, 100, MotifKind::Pulse)]], 100, 10.0f32, true, true)?;
+        let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[vec![(2, 100, MotifKind::Pulse)]], 200, 10.0f32, true, true)?;
         let resources_channels_intervals = [(&resource_a, &[channel_0_motifs_ids.as_slice()][..], &resource_a_intervals), (&resource_b, &[channel_0_motifs_ids.as_slice()][..],  &resource_b_intervals)];
 
         let mut store = Arc::new(
@@ -1825,7 +1825,7 @@ pub mod tests {
 
         let resources_group = "group";
 
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)]], 300, 10.0f32)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[vec![(1, 100, MotifKind::Pulse), (1, 100, MotifKind::Triangle)]], 300, 10.0f32, true, true)?;
 
         let resources_channels_intervals = [(&resource_a, &[motifs_ids.as_slice()][..], &resource_a_intervals)];
 
@@ -1935,20 +1935,26 @@ pub mod tests {
         let resources_group = "group";
 
         let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor(resource_a.length() as usize, &[
-            vec![(3, 100, MotifKind::Pulse)],
-            vec![(2, 100, MotifKind::Sin)],
-            vec![]
-        ], 100, 10.0f32)?;
+                    vec![(3, 100, MotifKind::Pulse)],
+                    vec![(2, 100, MotifKind::Sin)],
+                    vec![]
+                ], 100, 10.0f32,
+                                                                                   true,
+                                                                                   true)?;
         let (resource_b_t, resource_b_intervals) = tch_test_utils::resource_tensor(resource_b.length() as usize, &[
-            vec![(2, 100, MotifKind::Pulse)],
-            vec![(1, 100, MotifKind::Sin)],
-            vec![]
-        ], 100, 10.0f32)?;
+                    vec![(2, 100, MotifKind::Pulse)],
+                    vec![(1, 100, MotifKind::Sin)],
+                    vec![]
+                ], 100, 10.0f32,
+                                                                                   true,
+                                                                                   true)?;
         let (resource_c_t, resource_c_intervals) = tch_test_utils::resource_tensor(resource_c.length() as usize, &[
-            vec![(2, 100, MotifKind::Triangle)],
-            vec![(1, 100, MotifKind::Sin)],
-            vec![]
-        ], 100, 10.0f32)?;
+                    vec![(2, 100, MotifKind::Triangle)],
+                    vec![(1, 100, MotifKind::Sin)],
+                    vec![]
+                ], 100, 10.0f32,
+                                                                                   true,
+                                                                                   true)?;
 
         let resource_ab_channel_0_motifs = [channel_0_motif_0];
         let resource_c_channel_0_motifs = [channel_0_motif_1];
@@ -2307,6 +2313,8 @@ pub mod tests {
         let (tensor, intervals) = tch_test_utils::resource_tensor(
             1000,
             &[vec![(1, 50, MotifKind::Pulse), (1, 60, MotifKind::Sin)], vec![(2, 80, MotifKind::Triangle)]], 300, 10.0f32,
+            true,
+            true,
         )?;
 
         assert_eq!(tensor.size()[0], 2i64);
@@ -2328,6 +2336,8 @@ pub mod tests {
         let (_, intervals) = tch_test_utils::resource_tensor(
             1200,
             &[vec![(1, 100, MotifKind::Pulse)], vec![(1, 120, MotifKind::Triangle)]], 300, 10.0f32,
+            true,
+            true,
         )?;
 
         assert_eq!(intervals.len(), 2);
@@ -2837,10 +2847,12 @@ pub mod tests {
                     resources_label_0.iter().chain(resources_label_1.iter()).map(|resouce|{
                         (resouce.clone(),
                             tch_test_utils::resource_tensor(resource_len as usize, &[
-                                vec![(3, 100, MotifKind::Pulse)],
-                                vec![(3, 100, MotifKind::Sin)],
-                                vec![]
-                            ], 100, 10.0f32).unwrap().0
+                                                            vec![(3, 100, MotifKind::Pulse)],
+                                                            vec![(3, 100, MotifKind::Sin)],
+                                                            vec![]
+                                                        ], 100, 10.0f32,
+                                                            true,
+                                                            true).unwrap().0
                         )
                     })
                 )

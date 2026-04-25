@@ -527,10 +527,12 @@ mod tests {
         let (resources_map, motif_intervals) = resources.iter().try_fold((HashMap::new(), vec![]), |mut a, r| {
 
             let (t, intervals) = resource_tensor(r.length() as usize, &[
-                vec![(3, motif_width, MotifKind::Pulse)],
-                vec![(1, motif_width, MotifKind::Sin)],
-                vec![]
-            ], 100, 10.0)?;
+                            vec![(3, motif_width, MotifKind::Pulse)],
+                            vec![(1, motif_width, MotifKind::Sin)],
+                            vec![]
+                        ], 100, 10.0,
+                                                 true,
+                                                 true)?;
 
             a.0.insert(r.clone(), t);
 
@@ -607,8 +609,10 @@ mod tests {
             let net = params.motif_net(None)?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
 
             let (t, intervals) = tch_test_utils::resource_tensor(1000usize, &[
-                vec![(2, 100, MotifKind::Pulse)],
-            ], 100, 10.0)?;
+                            vec![(2, 100, MotifKind::Pulse)],
+                        ], 100, 10.0,
+                                                                 true,
+                                                                 true)?;
 
             debug!("intervals={intervals:?} t.size={:?}", t.size());
             debug_plot!(&t, "channel_0")?;

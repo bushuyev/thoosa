@@ -35,6 +35,7 @@ use thoosa_common::copy_ctx;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
+use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
 use crate::tasks::slices_stats::{metric_quantiles_for_motif, metric_scalar_for_motif};
@@ -1079,6 +1080,7 @@ where
                 if max_slices < 2 {
                     return Err(ThoError::new(format!("MotifStats::run: max_slices must be >= 2, got {max_slices}")));
                 }
+
 
                 let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
                     find_motifs_run_id,
