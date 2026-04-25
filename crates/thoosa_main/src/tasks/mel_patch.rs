@@ -504,7 +504,7 @@ mod tests {
     use tch::Device::Cuda;
     use thoosa_common::audio::{LogMelPatchConfig, LogMelPatchConfigRangeOrValue};
     use thoosa_common::dims::MotifSlices;
-    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, DotProductConfig, EucDistConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
+    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, EucDistConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
@@ -652,24 +652,27 @@ mod tests {
             },
             |key: String| {
                 debug!("key={key}");
-                let num_motifs = random_range(5..9);
+                let num_motifs = random_range(5usize..9usize);
+                let motif_len = 64usize;
+                let motif_gap = 64usize;
+                let resource_len = num_motifs * motif_len + (num_motifs - 1) * motif_gap;
 
                 if key.starts_with("t_0") {
 
-                    let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
-                        vec![(num_motifs as usize, 64, MotifKind::ChirpUp)],
-                        vec![(num_motifs as usize, 64, MotifKind::ChirpDown)],
-                        vec![(num_motifs as usize, 64, MotifKind::HarmonicStack)]
-                    ], 100, 10.0, false, false)?;
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
+                        vec![(num_motifs, motif_len, MotifKind::ChirpUp)],
+                        vec![(num_motifs, motif_len, MotifKind::ChirpDown)],
+                        vec![(num_motifs, motif_len, MotifKind::HarmonicStack)]
+                    ], motif_gap, 10.0, false, true)?;//TODO set motif_from_zero to false and z-normalize
 
                     Ok(resource_t)
                 } else if key.starts_with("t_1") {
 
-                    let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
-                        vec![(num_motifs as usize, 64, MotifKind::ChirpDown)],
-                        vec![(num_motifs as usize, 64, MotifKind::ChirpUp)],
-                        vec![(num_motifs as usize, 64, MotifKind::Trill)]
-                    ], 100, 10.0, false, false)?;
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
+                        vec![(num_motifs, motif_len, MotifKind::ChirpDown)],
+                        vec![(num_motifs, motif_len, MotifKind::ChirpUp)],
+                        vec![(num_motifs, motif_len, MotifKind::Trill)]
+                    ], motif_gap, 10.0, false, true)?;
 
                     Ok(resource_t)
                 } else {
@@ -702,12 +705,16 @@ mod tests {
         let mut patch_run_config = MelPatchRunConfig {
             id: None,
 
-            bucket_count: 32,
-            min_slices: 0,
-            max_slices: u32::MAX,
+            bucket_count: 16,
+            min_slices: 10,
+            max_slices: 100,
 
             mel_config: LogMelPatchConfig {
-                hop_length: 32,
+                n_fft: 32,
+                hop_length: 4,
+                n_mels: 16,
+                patch_frames: 9,
+                patch_step: 32,
                 ..LogMelPatchConfig::default()
             }
         };
@@ -716,15 +723,15 @@ mod tests {
             None,
             &FindMotifsRunConfig::type_name(),
             "FindMotifsRunConfig",
-            FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::DotProduct(DotProductConfig{}), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+            FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
         ).await?;
 
 
         let id = store.save_run_config(
-                Some(&[find_motifs_run_id]),
-                &MelPatchRunConfig::type_name(),
-                "MelPatchRunConfig",
-                patch_run_config.to_properties_iter(None).collect(),
+            Some(&[find_motifs_run_id]),
+            &MelPatchRunConfig::type_name(),
+            "MelPatchRunConfig",
+            patch_run_config.to_properties_iter(None).collect(),
         ).await?;
 
         patch_run_config.id = Some(id);
@@ -754,7 +761,7 @@ mod tests {
         ));
 
         //it's slow, uncomment if raw tensors data is needed
-        /*for resource in Simple::new(ResourceType::Group("all group".into())).to_resources(&store).await? {
+        for resource in Simple::new(ResourceType::Group("all group".into())).to_resources(&store).await? {
             // resource
 
             plot_resource(
@@ -769,19 +776,20 @@ mod tests {
                 ctx.branch("plot".into(), false)
             ).await?
 
-        }*/
+        }
 
         let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
+        let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
-                for ref_motif in &all_motifs {
+                for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().as_ref().unsqueeze(0);
                     debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
-                    // let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
-                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::DotProduct(DotProductConfig{}))?;
+                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
+                    best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(distance.f_min()?.f_double_value(&[])?);
                     debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
                 }
                 Ok::<_, ThoError>(())
@@ -808,6 +816,8 @@ mod tests {
         }
 
         assert!(!motifs.is_empty());
+        debug!("heavy_run_mel_path: best_reference_distances={best_reference_distances:?}");
+        assert!(best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2, "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}");
 
         Ok(())
     }
