@@ -1,33 +1,54 @@
 use log::debug;
+use serde::Deserialize;
 use tch::{Device, Kind, TchError, Tensor};
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoError;
 
-#[derive(Debug, Clone)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct LogMelPatchConfig {
+    #[run_config]
+    #[in_map]
     pub sample_rate: f64,
 
     /// FFT/window size in samples, e.g. 1024.
+    #[run_config]
+    #[in_map]
     pub n_fft: i64,
 
     /// STFT hop in samples, e.g. 320 for 20 ms at 16 kHz.
+    #[run_config]
+    #[in_map]
     pub hop_length: i64,
 
     /// Number of mel bands, e.g. 64 or 128.
+    #[run_config]
+    #[in_map]
     pub n_mels: i64,
 
     /// Lowest mel frequency.
+    #[run_config]
+    #[in_map]
     pub f_min: f64,
 
     /// Highest mel frequency. If <= 0.0, sample_rate / 2.0 is used.
+    #[run_config]
+    #[in_map]
     pub f_max: f64,
 
     /// Number of STFT frames per output patch.
+    #[run_config]
+    #[in_map]
     pub patch_frames: i64,
 
     /// Step between patches in STFT frames.
+    #[run_config]
+    #[in_map]
     pub patch_step: i64,
 
     /// Small value before log().
+    #[run_config]
+    #[in_map]
     pub log_eps: f64,
 }
 
@@ -56,38 +77,27 @@ pub fn audio_to_log_mel_patches(
     audio: &Tensor,
     cfg: &LogMelPatchConfig,
 ) -> Result<Tensor, ThoError> {
-    debug!("audio={audio:?}");
+    debug!("audio_to_log_mel_patches: audio={audio:?} cfg={cfg:?}");
 
     let size = audio.size();
 
     if size.len() != 2 {
-        return Err(ThoError::new(format!(
-            "expected audio shape [channels, samples], got {size:?}"
-        )));
+        return Err(ThoError::new(format!("expected audio shape [channels, samples], got {size:?}")));
     }
 
     let channels = size[0];
     let samples = size[1];
 
     if samples < cfg.n_fft {
-        return Err(ThoError::new(format!(
-            "audio too short: samples={samples}, n_fft={}",
-            cfg.n_fft
-        )));
+        return Err(ThoError::new(format!("audio too short: samples={samples}, n_fft={}", cfg.n_fft)));
     }
 
     if cfg.n_fft <= 0 || cfg.hop_length <= 0 || cfg.n_mels <= 0 {
-        return Err(ThoError::new(format!(
-            "invalid config: n_fft={}, hop_length={}, n_mels={}",
-            cfg.n_fft, cfg.hop_length, cfg.n_mels
-        )));
+        return Err(ThoError::new(format!("invalid config: n_fft={}, hop_length={}, n_mels={}", cfg.n_fft, cfg.hop_length, cfg.n_mels)));
     }
 
     if cfg.patch_frames <= 0 || cfg.patch_step <= 0 {
-        return Err(ThoError::new(format!(
-            "invalid patch config: patch_frames={}, patch_step={}",
-            cfg.patch_frames, cfg.patch_step
-        )));
+        return Err(ThoError::new(format!("invalid patch config: patch_frames={}, patch_step={}", cfg.patch_frames, cfg.patch_step)));
     }
 
     let device = audio.device();
@@ -102,7 +112,7 @@ pub fn audio_to_log_mel_patches(
     // frames: [C, frames, n_fft]
     // ---------------------------------------------------------------------
     let frames = audio.f_unfold(1, cfg.n_fft, cfg.hop_length)?;
-    debug!("frames={frames:?}");
+    debug!("audio_to_log_mel_patches: frames={frames:?}");
     // ---------------------------------------------------------------------
     // 2. Apply Hann window.
     //
@@ -110,10 +120,10 @@ pub fn audio_to_log_mel_patches(
     // frames: [C, frames, n_fft]
     // ---------------------------------------------------------------------
     let hann = Tensor::hann_window(cfg.n_fft, (Kind::Float, device));
-    debug!("hann={hann:?}");
+    debug!("audio_to_log_mel_patches: hann={hann:?}");
 
     let frames = frames.f_mul(&hann.f_view([1, 1, cfg.n_fft])?)?;
-    debug!("frames x hann={frames:?}");
+    debug!("audio_to_log_mel_patches: frames x hann={frames:?}");
 
     // ---------------------------------------------------------------------
     // 3. RFFT over the last dimension.
@@ -122,7 +132,7 @@ pub fn audio_to_log_mel_patches(
     // power:    [C, frames, freq_bins] real
     // ---------------------------------------------------------------------
     let spectrum = frames.f_fft_rfft(None, -1, "backward")?;
-    debug!("spectrum={spectrum:?}");
+    debug!("audio_to_log_mel_patches: spectrum={spectrum:?}");
 
     let power = spectrum.f_abs()?.f_pow_tensor_scalar(2.0)?;
 
@@ -137,7 +147,7 @@ pub fn audio_to_log_mel_patches(
     // mel_flat:     [C * frames, M]
     // mel:          [C, M, frames]
     // ---------------------------------------------------------------------
-    //TODO move out
+    //called once per RunConfig
     let mel_fb = build_mel_filterbank(
         cfg.sample_rate,
         cfg.n_fft,
@@ -171,11 +181,7 @@ pub fn audio_to_log_mel_patches(
     // output:  [C, patches, M, patch_frames]
     // ---------------------------------------------------------------------
     if log_mel.size()[2] < cfg.patch_frames {
-        return Err(ThoError::new(format!(
-            "not enough STFT frames for one patch: frames={}, patch_frames={}",
-            log_mel.size()[2],
-            cfg.patch_frames
-        )));
+        return Err(ThoError::new(format!("not enough STFT frames for one patch: frames={}, patch_frames={}", log_mel.size()[2], cfg.patch_frames)));
     }
 
     let patches = log_mel.f_unfold(2, cfg.patch_frames, cfg.patch_step)?;
@@ -317,6 +323,7 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
     n_buckets: i64,
     n_bits: i64,
 ) -> Result<Vec<Vec<usize>>, TchError> {
+    debug!("assign_lsh_buckets_per_channel_with_bits: patches={patches:?} n_buckets={n_buckets} n_bits={n_bits}");
     if n_buckets <= 0 {
         return Err(TchError::Shape(format!(
             "n_buckets must be positive, got {n_buckets}"

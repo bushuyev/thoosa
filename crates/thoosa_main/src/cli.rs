@@ -1575,7 +1575,7 @@ fn plot_single_line_tensor(
     Ok(())
 }
 
-async fn plot_resource<C>(
+pub async fn plot_resource<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     loader: &Arc<RawTensorLoader<C>>,
@@ -1705,7 +1705,7 @@ where
     Ok(())
 }
 
-async fn plot_motif<C>(
+pub async fn plot_motif<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     mut ctx: C,
     motif_id: usize,
@@ -1743,7 +1743,8 @@ where
                     .collect::<Result<Vec<_>, ThoError>>()
             },
         )
-        .await?;
+        .await.unwrap_or(vec![]);
+
     let metrics_for_plot = Arc::new(metrics_for_plot);
 
 
