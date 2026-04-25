@@ -70,6 +70,9 @@ pub fn motifs_tensor_fixed(motif_len: usize, num_slices: usize, motif_kind: Moti
         MotifKind::Pulse => (0, width),
         MotifKind::Triangle => (motif_len / 3, (motif_len / 3 + width).min(motif_len)),
         MotifKind::Sin => (2 * motif_len / 3, (2 * motif_len / 3 + width).min(motif_len)),
+        _ => {
+            todo!()
+        }
     };
     for (v, motif_v) in motif.iter_mut().take(end).skip(start).zip(gen_motif(end-start, &motif_kind)) {
         *v = motif_v;
@@ -100,6 +103,7 @@ fn normal_step(rng: &mut impl Rng, sigma: f32) -> f32 {
     sigma * r * theta.cos()
 }
 
+//TODO remove? use resource_tensor?
 pub fn generate_series_with_motif(
     len: usize,
     motif_len: usize,
@@ -329,7 +333,13 @@ pub fn generate_motifs_with_avg_distance(
 
 ///channels_motif_kinds -  channels x [(how many times motif should appear in the sequence, motif length , MotifKind)]
 ///returns Tensor [channels x resource_len] + channels[ motifs[ intervals[Interval] ] ]
-pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>], gap: usize, motif_ampl: f32) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
+pub fn resource_tensor(
+    resource_len:usize,
+    channels_motif_kinds:&[Vec<(usize, usize, MotifKind)>],
+    gap: usize, motif_ampl: f32,
+    add_to_prev_step: bool,//TODO rename
+    motif_from_zero: bool//TODO rename
+) -> Result<(Tensor, Vec<Vec<Vec<Interval>>>), ThoError> {
     use rand::rngs::StdRng;
     use log::debug;
     use thoosa_shared::test_utils::gen_motif;
@@ -352,7 +362,12 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
         let mut rng = rand::make_rng();
         let mut signal = vec![0f32; resource_len];
         for idx in 1..resource_len {
-            signal[idx] = signal[idx - 1] + normal_step(&mut rng, STEP_SIGMA);
+            if add_to_prev_step {
+                signal[idx] = signal[idx - 1] + normal_step(&mut rng, STEP_SIGMA);
+            } else {
+                signal[idx] = normal_step(&mut rng, STEP_SIGMA);
+            }
+
         }
 
         if total_repeats == 0 {
@@ -404,39 +419,31 @@ pub fn resource_tensor(resource_len:usize, channels_motif_kinds:&[Vec<(usize, us
                 let slot_len = slot_len_base + usize::from(slot_index < slot_len_remainder);
                 if *motif_len > 0 {
                     if *motif_len > slot_len {
-                        return Err(ThoError::new(format!(
-                            "motif len={motif_len} exceeds slot_len={slot_len} (gap={gap}, total_repeats={total_repeats}, resource_len={resource_len})"
-                        )));
+                        return Err(ThoError::new(format!("motif len={motif_len} exceeds slot_len={slot_len} (gap={gap}, total_repeats={total_repeats}, resource_len={resource_len})")));
                     }
                     let max_offset = slot_len - *motif_len;
                     let slot_offset = if max_offset == 0 { 0 } else { rng.random_range(0..=max_offset) };
-                    let start = slot_cursor.checked_add(slot_offset).ok_or_else(|| ThoError::new(format!(
-                        "motif placement exceeds resource length for channel {channel_idx}"
-                    )))?;
-                    let end = start.checked_add(*motif_len).ok_or_else(|| ThoError::new(format!(
-                        "motif placement exceeds resource length for channel {channel_idx}"
-                    )))?;
+                    let start = slot_cursor.checked_add(slot_offset).ok_or_else(|| ThoError::new(format!("motif placement exceeds resource length for channel {channel_idx}")))?;
+
+                    let end = start.checked_add(*motif_len).ok_or_else(|| ThoError::new(format!("motif placement exceeds resource length for channel {channel_idx}")))?;
+
                     if end > resource_len {
-                        return Err(ThoError::new(format!(
-                            "motif placement exceeds resource length for channel {channel_idx}"
-                        )));
+                        return Err(ThoError::new(format!("motif placement exceeds resource length for channel {channel_idx}")));
                     }
-                    let motif = motifs.get(repeat_idx).ok_or_else(|| ThoError::new(format!(
-                        "missing motif for repeat {repeat_idx} in channel {channel_idx}"
-                    )))?;
+                    let motif = motifs.get(repeat_idx).ok_or_else(|| ThoError::new(format!("missing motif for repeat {repeat_idx} in channel {channel_idx}")))?;
                     for (offset, value) in motif.iter().enumerate() {
-                        signal[start + offset] = *value;//signal[start] +
+                        if motif_from_zero {
+                            signal[start + offset] = *value;
+                        } else {
+                            signal[start + offset] += *value;
+                        }
                     }
                     motif_intervals.push(Interval { start, end });
                 }
                 slot_index += 1;
-                let next_cursor = slot_cursor.checked_add(slot_len).ok_or_else(|| ThoError::new(format!(
-                    "motif placement exceeds resource length for channel {channel_idx}"
-                )))?;
+                let next_cursor = slot_cursor.checked_add(slot_len).ok_or_else(|| ThoError::new(format!("motif placement exceeds resource length for channel {channel_idx}")))?;
                 if slot_index < total_repeats {
-                    slot_cursor = next_cursor.checked_add(gap).ok_or_else(|| ThoError::new(format!(
-                        "motif placement exceeds resource length for channel {channel_idx}"
-                    )))?;
+                    slot_cursor = next_cursor.checked_add(gap).ok_or_else(|| ThoError::new(format!("motif placement exceeds resource length for channel {channel_idx}")))?;
                 } else {
                     slot_cursor = next_cursor;
                 }

@@ -13,6 +13,7 @@ use log::{debug, info, warn};
 use tch::Tensor;
 use serde::Deserialize;
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, patch_sample_ranges_flat, LogMelPatchConfig};
+use thoosa_common::audio::{LogMelPatchConfigRangeOrValue, LogMelPatchConfigFields, LogMelPatchConfigBuilder};
 use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -31,6 +32,7 @@ use thoosa_shared::traits::{Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
+
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOMELP1";
 
@@ -285,15 +287,14 @@ where
         run_config: &MelPatchRunConfig,
     ) -> Result<(), ThoError> {
         let mel_config = run_config.mel_config();
-        let patches = audio_to_log_mel_patches(audio, &mel_config)?;
-        let patch_ranges = patch_sample_ranges_flat(&patches, &mel_config)?;
+        let patches = audio_to_log_mel_patches(audio, mel_config)?;
+        let patch_ranges = patch_sample_ranges_flat(&patches, mel_config)?;
         let bucket_ids = assign_lsh_buckets_per_channel(&patches, run_config.bucket_count_i64())?;
 
         if patch_ranges.len() != bucket_ids.len() {
             return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), bucket_ids.len())));
         }
 
-        ensure_mel_patch_temp_stores(temp_stores, tmp_path, run_config.run_id()?, bucket_ids.len())?;
 
         for channel in 0..bucket_ids.len() {
             if patch_ranges[channel].len() != bucket_ids[channel].len() {
@@ -345,12 +346,21 @@ where
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
         let resources = resources_config.to_resources(&self.store).await?;
+
+        debug!("MelPatchStage::run: resources_config={resources_config:?} resources={resources:?}");
+
         let tmp_path = thoosa_shared::with_perf_log(
             || self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock").tmp_path().clone(),
             "MelPatchStage::run/read_ws_tmp_path",
         );
+        let channels = self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock").channels();
 
-        let mut temp_stores_by_run: Vec<Vec<MelPatchTempStore>> = self.run_configs.iter().map(|_| Vec::new()).collect();
+        let mut temp_stores_by_run: Vec<Vec<MelPatchTempStore>> = self.run_configs.iter()
+            .map(|run_config|
+                (0..channels).map(|channel|MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), channel))
+                    .collect::<Result<Vec<_>, ThoError>>()
+            ).collect::<Result<Vec<_>, ThoError>>()?;
+
         for resource in &resources {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(
@@ -433,9 +443,14 @@ pub struct MelPatchRunConfig {
     #[run_config]
     #[in_map]
     pub max_slices: u32,
+
+    #[run_config]
+    #[in_map]
+    mel_config: LogMelPatchConfig
 }
 
 impl MelPatchRunConfig {
+
     pub fn run_id(&self) -> Result<RunId, ThoError> {
         self.id.ok_or_else(|| ThoError::new("MelPatchRunConfig::run_id: missing run id"))
     }
@@ -452,8 +467,12 @@ impl MelPatchRunConfig {
         self.max_slices as usize
     }
 
-    pub fn mel_config(&self) -> LogMelPatchConfig {
-        LogMelPatchConfig::default()
+    pub fn mel_config(&self) -> &LogMelPatchConfig {
+        &self.mel_config
+    }
+
+    pub fn new(id: Option<RunId>, bucket_count: u32, min_slices: u32, max_slices: u32, mel_config:LogMelPatchConfig) -> Self {
+        Self { id, bucket_count, min_slices, max_slices, mel_config }
     }
 }
 
@@ -464,6 +483,7 @@ impl Default for MelPatchRunConfig {
             bucket_count: 256,
             min_slices: 10,
             max_slices: 100,
+            mel_config: Default::default(),
         }
     }
 }
@@ -472,12 +492,42 @@ impl Default for MelPatchRunConfig {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue};
+    use futures_util::StreamExt;
+    use log::debug;
+    use parking_lot::RwLock;
+    use rand::random_range;
+    use tch::{Device, Tensor};
+    use thoosa_common::audio::{LogMelPatchConfig, LogMelPatchConfigRangeOrValue};
+    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, DotProductConfig, FindMotifsRunConfig, MaxAggr, SimilarityMetric, SlicesFilter};
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::RunCtx;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::runs::Simple;
+    use thoosa_common::tch_test_utils;
+    use thoosa_common::tho_device::ThoDevice;
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::ws::FsWorkspace;
+    use thoosa_motifs::fragments::Resolution;
+    use thoosa_properties_map::ToHashmap;
+    use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage, MelPatchResourcesInput};
     use thoosa_run_config_args::GridRunConfigSource;
-    use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_store::IdSlice;
+    use thoosa_shared::{cdt_for_dir, mono_key, ResourceType, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::run_configs::RunConfig;
+    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_store::{IdSlice, SqlStore};
+    use thoosa_store::rusqlite::Transaction;
+    use crate::cli::{import_resources, plot_motif};
+    use crate::RawTensorLoader;
+    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput};
+    use crate::tasks::motif_stats::{MotifStats, MotifStatsInput};
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -533,11 +583,23 @@ mod tests {
 
     #[test]
     fn mel_patch_run_config_grid_uses_slice_and_bucket_parameters() {
+        let default_log_mel_patch_config = LogMelPatchConfig::default();
         let rc = MelPatchRunConfigRangeOrValue {
             id: None,
             bucket_count: 256u32.into(),
             min_slices: 10u32.into(),
             max_slices: 100u32.into(),
+            mel_config: LogMelPatchConfigRangeOrValue {
+                sample_rate: default_log_mel_patch_config.sample_rate.into(),
+                n_fft: default_log_mel_patch_config.n_fft.into(),
+                hop_length: default_log_mel_patch_config.hop_length.into(),
+                n_mels: default_log_mel_patch_config.n_mels.into(),
+                f_min: default_log_mel_patch_config.f_min.into(),
+                f_max: default_log_mel_patch_config.f_max.into(),
+                patch_frames: default_log_mel_patch_config.patch_frames.into(),
+                patch_step: default_log_mel_patch_config.patch_step.into(),
+                log_eps: default_log_mel_patch_config.log_eps.into(),
+            },
         };
 
         let grid = rc.grid_run_configs().expect("MelPatchRunConfigRangeOrValue::grid_run_configs should not fail");
@@ -548,4 +610,166 @@ mod tests {
         assert_eq!(10, run_configs[0].min_slices);
         assert_eq!(100, run_configs[0].max_slices);
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_run_mel_path() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+        debug!("test_dir={test_dir:?}");
+        // let store = Arc::new(SqlStore::in_mem().await?);
+        let store = Arc::new(SqlStore::from_path(test_dir.join(&"main_db.db3")).await?);
+
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            test_dir,
+            3,
+            u32::MAX,
+            32000,
+        )?));
+
+
+
+        let imported_ids = import_resources(
+            &ws,
+            &store,
+            &["label_0", "label_1"],
+            || {
+                Ok(HashMap::from_iter([
+                    (0..10).map(|i| (format!("t_0_{i}"), vec![("label_0".to_string(), 1.0)])).collect::<Vec<_>>(),
+                    (0..10).map(|i| (format!("t_1_{i}"), vec![("label_1".to_string(), 1.0)])).collect::<Vec<_>>()
+                ].concat().into_iter()))
+            },
+            |key: String| {
+                debug!("key={key}");
+                let num_motifs = random_range(5..9);
+
+                if key.starts_with("t_0") {
+
+                    let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
+                        vec![(num_motifs as usize, 100, MotifKind::ChirpUp)],
+                        vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
+                        vec![(num_motifs as usize, 100, MotifKind::HarmonicStack)]
+                    ], 100, 10.0, false, false)?;
+
+                    Ok(resource_t)
+                } else if key.starts_with("t_1") {
+
+                    let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
+                        vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
+                        vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
+                        vec![(num_motifs as usize, 100, MotifKind::Trill)]
+                    ], 100, 10.0, false, false)?;
+
+                    Ok(resource_t)
+                } else {
+                    //TODO random tensor
+                    todo!()
+                }
+
+            },
+            None,
+            true,
+            |t: &Transaction|{
+                SqlStore::save_all_sets(&t)?;
+                Ok(())
+            },
+        ).await?;
+
+        let tensors_path = ws.read().tensors_path().clone();
+
+        let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
+            move |key, _| {
+                let tensor = Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem())))?;//1_ for import id
+                debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
+                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
+            },
+            ThoDevice::from(Device::Cpu),
+        ));
+
+        let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
+
+        let mut patch_run_config = MelPatchRunConfig {
+            id: None,
+
+            bucket_count: 32,
+            min_slices: 0,
+            max_slices: u32::MAX,
+
+            mel_config: LogMelPatchConfig {
+                hop_length: 32,
+                ..LogMelPatchConfig::default()
+            }
+        };
+
+        let find_motifs_run_id = store.save_run_config(
+            None,
+            &FindMotifsRunConfig::type_name(),
+            "FindMotifsRunConfig",
+            FindMotifsRunConfig::new(None, 0, 0, None, SimilarityMetric::DotProduct(DotProductConfig{}), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+        ).await?;
+
+
+        let id = store.save_run_config(
+                Some(&[find_motifs_run_id]),
+                &MelPatchRunConfig::type_name(),
+                "MelPatchRunConfig",
+                patch_run_config.to_properties_iter(None).collect(),
+        ).await?;
+
+        patch_run_config.id = Some(id);
+
+        let mel_patch_stage = Arc::new(MelPatchStage::new(&ws, &store, Arc::clone(&loader), vec![
+            patch_run_config
+
+        ])?);
+
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
+
+        let motifs = store.list_motifs(id).await?;
+
+        debug!("res={res:?} motifs={motifs:?}");
+
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            &ws
+        ));
+
+        let motif_stats = Arc::new(MotifStats::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            Arc::clone(&ws),
+            Arc::clone(&motif_loader_impl),
+        ));
+
+
+        for motif_id in &motifs {
+            let motif = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
+            debug!("heavy_run_mel_path: motif={motif:?}");
+
+            // let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![]))), ctx.branch("motif_load".into(), false)).await?;
+
+            // debug!("heavy_run_mel_path: metrics={metrics:?}");
+
+            // plot_motif(
+            //     &ws,
+            //     ctx.branch("plot".into(), false),
+            //     *motif_id as usize,
+            //     &motif_loader_impl,
+            //     Arc::clone(&motif_stats),
+            //     None,
+            //     Resolution::High,
+            //     false
+            // ).await?;
+
+        }
+
+        assert!(!motifs.is_empty());
+
+        Ok(())
+    }
+
 }

@@ -19,14 +19,17 @@ use bytemuck::{Pod, Zeroable};
 use parking_lot::{Mutex, RwLock};
 use std::array::IntoIter;
 use std::backtrace::Backtrace;
+use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
@@ -1337,7 +1340,7 @@ impl Store for SqlStore {
         let t = conn.transaction()?;
         let mut motif_ids = Vec::new();
 
-        debug!("save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}");
+        debug!("save_groups_as_motifs: run_id={run_id:?}, channel={channel:?} groups={}", groups.len());
 
         {
             for (group, slices) in groups {
@@ -1349,10 +1352,10 @@ impl Store for SqlStore {
                         "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
                         [group as usize, run_id as usize, channel as usize],
                     )
-                    .map_err(|e| Self::log_error((run_id, channel, group), &t, e))?;
+                    .map_err(|e| Self::log_error((group, run_id, channel), &t, e))?;
 
-                let motif_id: i64 =
-                    t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+                let motif_id: i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
+
                 let motif_id_u32 = u32::try_from(motif_id).map_err(|_| ThoError::new(format!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32")))?;
                 motif_ids.push(motif_id_u32);
 
@@ -5310,6 +5313,12 @@ mod store_tests {
     }
 }
 
+pub enum CheckGroups {
+    Lengths(Vec<usize>),
+    MinGroups(usize),
+}
+
+
 pub  struct MockStoreBuilder {
 
     store:MockStore
@@ -5636,13 +5645,33 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_save_groups_as_motifs(mut self)->Self{
-        self.store.expect_save_groups_as_motifs()
-            .withf(|run_id, channel, groups|{
-                debug!("with_save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}, groups={groups:?}");
-                true
-            })
-            .returning(|_, _, groups| Ok((0..groups.len()).map(|idx| idx as u32 + 1).collect()));
+    pub fn with_save_groups_as_motifs(mut self, mut check_groups: Vec<CheckGroups>) ->Self{
+        let times = check_groups.len();
+        check_groups.reverse();
+        let  i_atomic = AtomicUsize::new(0);
+
+    self.store.expect_save_groups_as_motifs()
+        .withf(move |run_id, channel, groups|{
+            let i = i_atomic.fetch_add(1, Relaxed);
+
+            debug!("with_save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}, groups={groups:?} i={i}");
+
+            match &check_groups[i] {
+                CheckGroups::Lengths(expected_groups_lengths) => {
+                    let mut group_lens= groups.values().map(|group|group.len()).collect::<Vec<_>>();
+                    group_lens.sort();
+
+                    assert_eq!(&group_lens, expected_groups_lengths);
+                }
+                CheckGroups::MinGroups(num_groups) => {
+                    assert!(num_groups <= &groups.len());
+                }
+            }
+
+            true
+        })
+        .times(times)
+        .returning(|_, _, groups| Ok((0..groups.len()).map(|idx| idx as u32 + 1).collect()));
         self
     }
 

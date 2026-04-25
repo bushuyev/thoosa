@@ -257,11 +257,12 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //         step: RangeOrValue::Value(1),
             //     }),
             // ]),
+
             freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
-                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 32000. }, step: Some((1000., 1)) },
-                band_hz: RangeOrValue::Value(2.),
+                low_hz: RangeOrValue::Range { range: Range { start: 0., end: 32000. }, step: Some((100., 1)) },
+                band_hz: RangeOrValue::Value(100.),
                 kernel_size: RangeOrValue::Value(1000),
-                stride: RangeOrValue::Value(10),
+                stride: RangeOrValue::Value(100),
                 padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             })]),
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),

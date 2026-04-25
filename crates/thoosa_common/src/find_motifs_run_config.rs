@@ -174,8 +174,11 @@ impl FindMotifsRunConfig {
             ).collect(),
         }
     }
-}
 
+    pub fn new(id: Option<RunId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
+        Self { id, step, window, freq_filter, similarity_metric, slices_filter, max_slices }
+    }
+}
 impl FindMotifsRunConfig {
     //TODO rename to new_with_accumulate_mean
     pub fn new_with_running_mean(
@@ -198,8 +201,7 @@ impl FindMotifsRunConfig {
         }
     }
 
-    //TODO rename to new_with_precalculate_stats
-    pub fn new_with_max_dist(
+    pub fn new_with_precalculate_stats(
         id: Option<u32>,
         step: u32,
         window: u32,

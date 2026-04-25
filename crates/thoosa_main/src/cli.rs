@@ -1705,7 +1705,7 @@ where
     Ok(())
 }
 
-async fn plot_motif<C>(
+pub async fn plot_motif<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     mut ctx: C,
     motif_id: usize,
@@ -1729,21 +1729,23 @@ where
     )
     .await?;
 
-    let metrics_for_plot: Vec<(String, f32)> = motif_stats
-        .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false))
-        .await?
-        .with_data_ref(
-            0,
-            ctx.branch(Some("plot_motif_metrics_values"), false),
-            None,
-            move |stats: &MotifStatsOutput, _ctx| {
-                metrics
-                    .iter()
-                    .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
-                    .collect::<Result<Vec<_>, ThoError>>()
-            },
-        )
-        .await?;
+    // let metrics_for_plot: Vec<(String, f32)> = motif_stats
+    //     .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false))
+    //     .await?
+    //     .with_data_ref(
+    //         0,
+    //         ctx.branch(Some("plot_motif_metrics_values"), false),
+    //         None,
+    //         move |stats: &MotifStatsOutput, _ctx| {
+    //             metrics
+    //                 .iter()
+    //                 .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
+    //                 .collect::<Result<Vec<_>, ThoError>>()
+    //         },
+    //     )
+    //     .await.unwrap_or(vec![]);
+    let metrics_for_plot = vec![];
+
     let metrics_for_plot = Arc::new(metrics_for_plot);
 
 

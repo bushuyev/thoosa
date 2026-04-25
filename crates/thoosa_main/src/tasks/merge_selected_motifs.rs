@@ -407,7 +407,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{CheckGroups, MockStoreBuilder};
     use thoosa_shared::TensorIdSliceIdx;
 
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
@@ -449,7 +449,7 @@ mod tests {
                 )
                 .with_list_motif_slices(1u32, Some(vec![select_run_id_0]), None, None, Ok((0i64, find_run_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
                 .with_list_motif_slices(2u32, Some(vec![select_run_id_1]), None, None, Ok((0i64, find_run_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
-                .with_save_groups_as_motifs()
+                .with_save_groups_as_motifs(vec![CheckGroups::Lengths(vec![4])])
                 .with_save_selected_motifs([(merge_run_id, vec![(1u32, 1.0f64)], Ok(merge_run_id))])
                 .build(),
         );
