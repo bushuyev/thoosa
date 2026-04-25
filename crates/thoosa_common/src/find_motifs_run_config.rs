@@ -860,7 +860,7 @@ impl FromHashmap for ExtendMotifsConfig {
     }
 }
 
-const DEFAULT_METRIC_EPS: f64 = 1e-8;
+pub const DEFAULT_METRIC_EPS: f64 = 1e-8;
 const DEFAULT_INLIER_RATIO_K: f64 = 4.5;
 const DEFAULT_COHERENCE_ITERS: f64 = 10.0;
 const DEFAULT_INTERESTING_Q_LO: f64 = 0.05;

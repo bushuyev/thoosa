@@ -309,6 +309,7 @@ where
             }
 
             for (group, slices) in slices_by_bucket {
+                debug!("save_resource_patches: group={group} slices={slices:?}");
                 temp_stores[channel].save_slices(group, &slices)?;
             }
         }
@@ -501,7 +502,7 @@ mod tests {
     use rand::random_range;
     use tch::{Device, Tensor};
     use thoosa_common::audio::{LogMelPatchConfig, LogMelPatchConfigRangeOrValue};
-    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, DotProductConfig, FindMotifsRunConfig, MaxAggr, SimilarityMetric, SlicesFilter};
+    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, DotProductConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
@@ -513,13 +514,14 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::FsWorkspace;
+    use crate::cli::plot_resource;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
     use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage, MelPatchResourcesInput};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::resource::Resource;
+    use thoosa_shared::resource::{Resource, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_store::{IdSlice, SqlStore};
@@ -659,7 +661,7 @@ mod tests {
 
                     let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
                         vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
-                        vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
+                        vec![(num_motifs as usize, 100, MotifKind::ChirpUp)],
                         vec![(num_motifs as usize, 100, MotifKind::Trill)]
                     ], 100, 10.0, false, false)?;
 
@@ -708,7 +710,7 @@ mod tests {
             None,
             &FindMotifsRunConfig::type_name(),
             "FindMotifsRunConfig",
-            FindMotifsRunConfig::new(None, 0, 0, None, SimilarityMetric::DotProduct(DotProductConfig{}), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+            FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::DotProduct(DotProductConfig{}), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
         ).await?;
 
 
@@ -745,25 +747,44 @@ mod tests {
             Arc::clone(&motif_loader_impl),
         ));
 
+        for resource in Simple::new(ResourceType::Group("all group".into())).to_resources(&store).await? {
+            // resource
+
+            plot_resource(
+                &ws,
+                &store,
+                &loader,
+                resource.id(),
+                None,
+                None,
+                Resolution::Normal,
+                false,
+                ctx.branch("plot".into(), false)
+            ).await?
+
+        }
+
 
         for motif_id in &motifs {
             let motif = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
 
-            // let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![]))), ctx.branch("motif_load".into(), false)).await?;
+            let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+                Metrics::NormThickness(NormThicknessRunConfig::default())
+            ]))), ctx.branch("motif_load".into(), false)).await?;
 
-            // debug!("heavy_run_mel_path: metrics={metrics:?}");
+            debug!("heavy_run_mel_path: metrics={metrics:?}");
 
-            // plot_motif(
-            //     &ws,
-            //     ctx.branch("plot".into(), false),
-            //     *motif_id as usize,
-            //     &motif_loader_impl,
-            //     Arc::clone(&motif_stats),
-            //     None,
-            //     Resolution::High,
-            //     false
-            // ).await?;
+            plot_motif(
+                &ws,
+                ctx.branch("plot".into(), false),
+                *motif_id as usize,
+                &motif_loader_impl,
+                Arc::clone(&motif_stats),
+                None,
+                Resolution::Normal,
+                false
+            ).await?;
 
         }
 
