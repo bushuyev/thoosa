@@ -501,8 +501,10 @@ mod tests {
     use parking_lot::RwLock;
     use rand::random_range;
     use tch::{Device, Tensor};
+    use tch::Device::Cuda;
     use thoosa_common::audio::{LogMelPatchConfig, LogMelPatchConfigRangeOrValue};
-    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, DotProductConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
+    use thoosa_common::dims::MotifSlices;
+    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, DotProductConfig, EucDistConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
@@ -514,6 +516,7 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::ws::FsWorkspace;
+    use thoosa_motifs::distance::clc_d2_similarity;
     use crate::cli::plot_resource;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
@@ -521,15 +524,18 @@ mod tests {
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
-    use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_store::{IdSlice, SqlStore};
     use thoosa_store::rusqlite::Transaction;
+    use thoosa_with_data::with_data;
     use crate::cli::{import_resources, plot_motif};
     use crate::RawTensorLoader;
-    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput};
+    use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_stats::{MotifStats, MotifStatsInput};
+    use crate::tasks::slices_stats::euclidean_distance;
 
     fn temp_dir(name: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -651,18 +657,18 @@ mod tests {
                 if key.starts_with("t_0") {
 
                     let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
-                        vec![(num_motifs as usize, 100, MotifKind::ChirpUp)],
-                        vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
-                        vec![(num_motifs as usize, 100, MotifKind::HarmonicStack)]
+                        vec![(num_motifs as usize, 64, MotifKind::ChirpUp)],
+                        vec![(num_motifs as usize, 64, MotifKind::ChirpDown)],
+                        vec![(num_motifs as usize, 64, MotifKind::HarmonicStack)]
                     ], 100, 10.0, false, false)?;
 
                     Ok(resource_t)
                 } else if key.starts_with("t_1") {
 
                     let (resource_t, resource_intervals) = tch_test_utils::resource_tensor((num_motifs * 1000) as usize, &[
-                        vec![(num_motifs as usize, 100, MotifKind::ChirpDown)],
-                        vec![(num_motifs as usize, 100, MotifKind::ChirpUp)],
-                        vec![(num_motifs as usize, 100, MotifKind::Trill)]
+                        vec![(num_motifs as usize, 64, MotifKind::ChirpDown)],
+                        vec![(num_motifs as usize, 64, MotifKind::ChirpUp)],
+                        vec![(num_motifs as usize, 64, MotifKind::Trill)]
                     ], 100, 10.0, false, false)?;
 
                     Ok(resource_t)
@@ -747,7 +753,8 @@ mod tests {
             Arc::clone(&motif_loader_impl),
         ));
 
-        for resource in Simple::new(ResourceType::Group("all group".into())).to_resources(&store).await? {
+        //it's slow, uncomment if raw tensors data is needed
+        /*for resource in Simple::new(ResourceType::Group("all group".into())).to_resources(&store).await? {
             // resource
 
             plot_resource(
@@ -762,12 +769,24 @@ mod tests {
                 ctx.branch("plot".into(), false)
             ).await?
 
-        }
+        }*/
 
+        let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
 
         for motif_id in &motifs {
-            let motif = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
+            with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                for ref_motif in &all_motifs {
+                    let motif_t = motif.data().as_ref().unsqueeze(0);
+                    debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
+                    // let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
+                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::DotProduct(DotProductConfig{}))?;
+                    debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
+                }
+                Ok::<_, ThoError>(())
+            })?;
+
 
             let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                 Metrics::NormThickness(NormThicknessRunConfig::default())

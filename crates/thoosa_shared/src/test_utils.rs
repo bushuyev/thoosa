@@ -181,6 +181,7 @@ mod tests {
     }
 }
 
+#[derive(Clone, Debug)]
 pub enum MotifKind {
     Triangle,
     Sin,
