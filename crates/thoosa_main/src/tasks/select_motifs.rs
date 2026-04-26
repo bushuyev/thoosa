@@ -1386,7 +1386,7 @@ where
 
         let select_motifs_run_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
         let criteria_metrics = criteria_constraints.iter().map(|constraint| constraint.metric.clone()).collect::<Vec<_>>();
-        debug!("SelectMotifsStage::run: 1. motif_ids.len={} criteria_metrics={criteria_metrics:?}", motif_ids.len());
+        info!("SelectMotifsStage::run: 1. motif_ids.len={} criteria_metrics={criteria_metrics:?}", motif_ids.len());
         let motif_stats = Arc::clone(&self.motif_stats);
 
         let motifs_len = motif_ids.len();

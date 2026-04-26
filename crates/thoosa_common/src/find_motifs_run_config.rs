@@ -292,6 +292,7 @@ pub struct DotProductConfig {
 
 }
 
+//TODO change to not/normalized
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
 pub enum SimilarityMetric {
     #[run_config_default]

@@ -53,14 +53,14 @@ fn main() -> Result<(), ThoError>{
             |t: &Transaction|{
                 SqlStore::save_all_sets(&t)?;
 
-               //resources used in previous N-set not included
+               //resources used in previous N-set not included, sorted by size
                 SqlStore::save_leaky_data_sets("A", Some(1), 0.6, 0.2, 1.0, &t)?;
                 SqlStore::save_leaky_data_sets("A", Some(3), 0.6, 0.2, 1.0, &t)?;
-                SqlStore::save_leaky_data_sets("A", Some(10), 0.6, 0.2, 1.0, &t)?;
+                SqlStore::save_leaky_data_sets("A", Some(6), 0.6, 0.2, 1.0, &t)?;
 
                 SqlStore::save_leaky_data_sets("B", Some(3), 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("B", Some(6), 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("B", Some(12), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("B", Some(10), 0.6, 0.2, 0.9, &t)?;
 
                 SqlStore::save_leaky_data_sets("C", Some(10), 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("C", Some(20), 0.6, 0.2, 0.9, &t)?;
