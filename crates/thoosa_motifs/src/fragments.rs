@@ -42,8 +42,8 @@ use thoosa_shared::*;
 #[derive(Clone, PartialEq, Debug)]
 pub enum DataBy {
 
-    //--data-by=motif_id:1234
-    MotifId(usize), //TODO u32
+    //--data-by=motif_id:1234[,5678]
+    MotifId(Vec<usize>), //TODO u32
     //--data-by=find_motifs_run_id:1234[,5678][;select_motifs_run_ids:12,34,56]
     RunId {
         find_motifs_run_ids: Vec<RunId>,
@@ -65,6 +65,27 @@ pub enum DataBy {
 }
 
 impl DataBy {
+
+    fn parse_motif_ids(payload: &str) -> Result<Vec<usize>, String> {
+        let motif_ids = payload
+            .trim()
+            .trim_matches(|ch| ch == '\'' || ch == '"')
+            .split(',')
+            .filter(|part| !part.is_empty())
+            .map(|part| {
+                part
+                    .trim()
+                    .trim_matches(|ch| ch == '\'' || ch == '"')
+                    .replace(" ", "")
+                    .parse::<usize>()
+                    .map_err(|e| format!("can't parse {part:?} to motif_id: {e}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        if motif_ids.is_empty() {
+            return Err("motif_id payload is empty".to_string());
+        }
+        Ok(motif_ids)
+    }
 
     fn parse_select_motifs_run_ids(payload: &str) -> Result<Vec<RunId>, String> {
         parse_run_ids_vec(payload)
@@ -268,10 +289,7 @@ impl FromStr for DataBy {
 
     fn from_str(v: &str) -> Result<Self, Self::Err> {
         if let Some(rest) = v.strip_prefix("motif_id:") {
-            Ok(DataBy::MotifId(
-                rest.parse()
-                    .map_err(|e| format!("can't parse {rest:?} to motif_id: {e}"))?,
-            ))
+            Ok(DataBy::MotifId(Self::parse_motif_ids(rest)?))
         } else if let Some(rest) = v
             .strip_prefix("find_motifs_run_ids:")
             .or_else(|| v.strip_prefix("find_motifs_run_id:"))
@@ -290,7 +308,7 @@ impl FromStr for DataBy {
             DataBy::parse_motif_net_applied_payload(rest)
         } else {
             Err(format!(
-                "unexpected parameter {v}, should be motif_id:nnn, find_motifs_run_ids:nnn[,mmm][;select_motifs_run_ids[:=]...], select_motifs_run_ids:nnn[,mmm], resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
+                "unexpected parameter {v}, should be motif_id:nnn[,mmm], find_motifs_run_ids:nnn[,mmm][;select_motifs_run_ids[:=]...], select_motifs_run_ids:nnn[,mmm], resource:<resource_id>[;channels=1,2][;freq_filters=[...]], or motif_net_applied:resource_id=<id>;net_path=<path>"
             ))
         }
     }
@@ -318,7 +336,7 @@ pub struct PlotDataArgs {
 }
 
 impl PlotDataArgs {
-    pub fn motifs_by(&self) -> DataBy {
+    pub fn data_by(&self) -> DataBy {
         self.data_by.clone()
     }
 
@@ -398,7 +416,18 @@ mod motifs_tests {
         use std::str::FromStr;
 
         let parsed = DataBy::from_str("motif_id:1234").unwrap();
-        assert_eq!(parsed, DataBy::MotifId(1234));
+        assert_eq!(parsed, DataBy::MotifId(vec![1234]));
+    }
+
+    #[test]
+    fn parses_data_by_multiple_motif_ids() {
+        use std::str::FromStr;
+
+        let parsed = DataBy::from_str("motif_id:1,2,3").unwrap();
+        assert_eq!(parsed, DataBy::MotifId(vec![1, 2, 3]));
+
+        let parsed_spaced = DataBy::from_str("motif_id:'1, 2'").unwrap();
+        assert_eq!(parsed_spaced, DataBy::MotifId(vec![1, 2]));
     }
 
     #[test]
@@ -444,9 +473,9 @@ mod motifs_tests {
 
     #[test]
     fn plot_data_args_new_defaults_to_normal_resolution() {
-        let args = PlotDataArgs::new(DataBy::MotifId(17));
+        let args = PlotDataArgs::new(DataBy::MotifId(vec![17]));
 
-        assert_eq!(args.motifs_by(), DataBy::MotifId(17));
+        assert_eq!(args.data_by(), DataBy::MotifId(vec![17]));
         assert_eq!(args.resolution(), Resolution::Normal);
         assert_eq!(args.limit, None);
         assert!(!args.print_to_stdout());
