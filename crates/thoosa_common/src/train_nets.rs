@@ -53,7 +53,7 @@ use thoosa_shared::traits::{Data, SimpleId, WithId};
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_ids)]
     pub train_motif_nets_run_ids: Vec<RunId>,
 
     #[arg(long)]
@@ -470,7 +470,7 @@ pub fn load_final_model(
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_ids)]
     pub select_motifs_run_ids: Option<Vec<RunId>>,
 
     #[arg(long)]
@@ -1980,7 +1980,7 @@ impl WithId for LoadMotifNetOutput {
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
-    #[arg(long)]
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_ids)]
     pub train_label_nets_run_ids: Vec<RunId>,
 
     #[arg(long)]
