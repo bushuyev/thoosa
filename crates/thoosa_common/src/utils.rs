@@ -1717,6 +1717,8 @@ pub fn parse_run_ids_vec(payload: &str) -> Result<Vec<RunId>, String> {
 
 pub fn parse_run_ids(s: &str) -> Result<u32, String> {
     s.trim()
+        .trim_matches(|ch| ch == '\'' || ch == '"')
+        .replace(" ", "")
         .parse::<u32>()
         .map_err(|e| format!("invalid integer '{s}': {e}"))
 }

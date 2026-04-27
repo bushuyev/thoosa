@@ -29,7 +29,7 @@ use crate::tasks::stage_ids::MERGE_SELECTED_MOTIFS;
 
 #[derive(Debug, Args, Clone)]
 pub struct MergeSelectedMotifsArgs {
-    #[arg(long, value_delimiter = ',')]
+    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_ids)]
     pub select_motifs_run_ids: Vec<RunId>,
 }
 
