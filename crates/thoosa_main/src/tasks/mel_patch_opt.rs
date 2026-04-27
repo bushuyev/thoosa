@@ -166,13 +166,13 @@ impl MelPatchOptStage {
 
     fn mel_patch_window_samples(run_config: &MelPatchRunConfig) -> Result<u32, ThoError> {
         let mel_config = run_config.mel_config();
-        if mel_config.n_fft <= 0 || mel_config.hop_length <= 0 || mel_config.patch_frames <= 0 {
+        if mel_config.time_size <= 0 || mel_config.time_step <= 0 || mel_config.mel_patch_size <= 0 {
             return Err(ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: invalid mel_config={mel_config:?}")));
         }
 
-        let n_fft = u32::try_from(mel_config.n_fft).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: n_fft={} does not fit into u32", mel_config.n_fft)))?;
-        let hop_length = u32::try_from(mel_config.hop_length).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: hop_length={} does not fit into u32", mel_config.hop_length)))?;
-        let patch_frames = u32::try_from(mel_config.patch_frames).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: patch_frames={} does not fit into u32", mel_config.patch_frames)))?;
+        let n_fft = u32::try_from(mel_config.time_size).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: n_fft={} does not fit into u32", mel_config.time_size)))?;
+        let hop_length = u32::try_from(mel_config.time_step).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: hop_length={} does not fit into u32", mel_config.time_step)))?;
+        let patch_frames = u32::try_from(mel_config.mel_patch_size).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size)))?;
 
         hop_length
             .checked_mul(patch_frames.saturating_sub(1))
@@ -234,7 +234,7 @@ impl MelPatchOptStage {
         let motif_count = with_data!(ctx.branch(Some("mel_patch_opt_output"), false), output; |_ctx, output: &MelPatchOutput| {
             Ok::<_, ThoError>(
                 output
-                    .groups_by_run()
+                    .run_ids_motif_ids()
                     .iter()
                     .find(|(output_run_id, _)| *output_run_id == run_id)
                     .map(|(_, motif_ids)| motif_ids.len())

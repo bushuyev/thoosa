@@ -97,16 +97,16 @@ impl<RC> Input for MelPatchResourcesInput<RC> where RC: ResourcesConfig + Debug 
 
 #[derive(Debug, Clone)]
 pub struct MelPatchOutput {
-    groups_by_run: Vec<(RunId, Vec<u32>)>,
+    run_ids_motif_ids: Vec<(RunId, Vec<u32>)>,
 }
 
 impl MelPatchOutput {
-    fn new(groups_by_run: Vec<(RunId, Vec<u32>)>) -> Self {
-        Self { groups_by_run }
+    fn new(run_ids_motif_ids: Vec<(RunId, Vec<u32>)>) -> Self {
+        Self { run_ids_motif_ids }
     }
 
-    pub fn groups_by_run(&self) -> &[(RunId, Vec<u32>)] {
-        &self.groups_by_run
+    pub fn run_ids_motif_ids(&self) -> &[(RunId, Vec<u32>)] {
+        &self.run_ids_motif_ids
     }
 }
 
@@ -394,7 +394,7 @@ where
                 motif_ids.extend(group_motif_ids);
             }
 
-            debug!("MelPatchStage::run: run_id={run_id} resources={} groups_by_channel={motif_ids:?}", resources.len());
+            debug!("MelPatchStage::run: run_id={run_id} resources={} motif_ids={motif_ids:?}", resources.len());
             run_configs_motifs.push((run_id, motif_ids));
         }
 
@@ -499,6 +499,7 @@ impl Default for MelPatchRunConfig {
 mod tests {
     use std::collections::{HashMap, HashSet};
     use std::fs;
+    use std::ops::Range;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -522,9 +523,10 @@ mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::train_nets::OptConfig;
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::clc_d2_similarity;
-    use crate::cli::plot_resource;
+    use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
     use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage, MelPatchResourcesInput};
@@ -533,13 +535,15 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
-    use thoosa_shared::run_configs::RunConfig;
+    use thoosa_shared::run_configs::{RunConfig, RunId};
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_store::{IdSlice, SqlStore, Store};
     use thoosa_store::rusqlite::Transaction;
     use thoosa_with_data::with_data;
     use crate::cli::{import_resources, plot_motif};
     use crate::RawTensorLoader;
+    use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
+    use crate::tasks::mel_patch_opt::MelPatchOptStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
     use crate::tasks::slices_stats::euclidean_distance;
@@ -605,13 +609,13 @@ mod tests {
             min_slices: 10u32.into(),
             max_slices: 100u32.into(),
             mel_config: LogMelPatchConfigRangeOrValue {
-                n_fft: default_log_mel_patch_config.n_fft.into(),
-                hop_length: default_log_mel_patch_config.hop_length.into(),
+                time_size: default_log_mel_patch_config.time_size.into(),
+                time_step: default_log_mel_patch_config.time_step.into(),
                 n_mels: default_log_mel_patch_config.n_mels.into(),
                 f_min: default_log_mel_patch_config.f_min.into(),
                 f_max: default_log_mel_patch_config.f_max.into(),
-                patch_frames: default_log_mel_patch_config.patch_frames.into(),
-                patch_step: default_log_mel_patch_config.patch_step.into(),
+                mel_patch_size: default_log_mel_patch_config.mel_patch_size.into(),
+                mel_patch_step: default_log_mel_patch_config.mel_patch_step.into(),
             },
         };
 
@@ -710,11 +714,11 @@ mod tests {
             max_slices: 100,
 
             mel_config: LogMelPatchConfig {
-                n_fft: 64,
-                hop_length: 4,
+                time_size: 64,
+                time_step: 4,
                 n_mels: 32,
-                patch_frames: 18,
-                patch_step: 32,
+                mel_patch_size: 18,
+                mel_patch_step: 32,
                 ..LogMelPatchConfig::default()
             }
         };
@@ -783,29 +787,37 @@ mod tests {
         debug!("heavy_run_mel_path: avg_norm_thickness={avg_norm_thickness:?}");
         let run_config: crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue<crate::tasks::mel_patch::MelPatchRunConfigFields> = crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue {
             id: None,
-            bucket_count: RangeOrValue::Value(0),
-            min_slices: RangeOrValue::Value(0),
-            max_slices: RangeOrValue::Value(0),
+            bucket_count: RangeOrValue::Range { range: Range {start:64, end:512}, step: None },
+            min_slices: RangeOrValue::Value(2),
+            max_slices: RangeOrValue::Value(100),
             mel_config: LogMelPatchConfigRangeOrValue {
-                n_fft: RangeOrValue::Value(3),
-                hop_length: RangeOrValue::Value(3),
-                n_mels: RangeOrValue::Value(3),
-                f_min: RangeOrValue::Value(3.0),
-                f_max: RangeOrValue::Value(3.0),
-                patch_frames: RangeOrValue::Value(3),
-                patch_step: RangeOrValue::Value(3),
+                time_size: RangeOrValue::Range { range: Range {start:4000, end:16000}, step: None },
+                time_step: RangeOrValue::Range { range: Range {start:32, end:640}, step: None },
+                n_mels: RangeOrValue::Range { range: Range {start:64, end:256}, step: None },
+                f_min: RangeOrValue::Value(20.0),
+                f_max: RangeOrValue::Value(16000.0),
+                mel_patch_size: RangeOrValue::Range { range: Range {start:64, end:128}, step: None },
+                mel_patch_step: RangeOrValue::Range { range: Range {start:4, end:32}, step: None },
             },
         };
 
-        // let opt = AsyncTPEOptimizer::new(
-        //     async |opt_vals| {
-        //         1.
-        //     },
-        //     ConfigurationSpace::new(),
-        //     10,
-        //     3,
-        //     "test"
-        // );
+        let find_and_select_input = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(
+            Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
+        )));
+
+         let run_id = run_opt::</*Simple,*/ _, _, MelPatchRunConfig, _, _>(
+            None,
+            run_config,
+            find_and_select_input,
+            &ws,
+            &store,
+            async |run_configs| {
+                Ok(Arc::new(MelPatchOptStage::new(loader, &ws, &store, run_configs, Arc::new(OptConfig::new(1000, 30)))))
+            },
+            || ctx.branch(Some("opt mel patch"), false),
+        ).await?;
+
+
         /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
 
         let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(motif_len, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
@@ -975,11 +987,11 @@ mod tests {
             max_slices: 100,
 
             mel_config: LogMelPatchConfig {
-                n_fft: 32,
-                hop_length: 4,
+                time_size: 32,
+                time_step: 4,
                 n_mels: 16,
-                patch_frames: 9,
-                patch_step: 32,
+                mel_patch_size: 9,
+                mel_patch_step: 32,
                 ..LogMelPatchConfig::default()
             }
         };
