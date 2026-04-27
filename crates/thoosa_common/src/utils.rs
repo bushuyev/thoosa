@@ -1087,7 +1087,7 @@ pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
 }
 
 pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
-    let std = t_0.f_std_dim(1, true, true)?;
+    let std = t_0.f_std_dim(1, true, true)?.f_add_scalar_(f64::EPSILON)?;
     //TODO std - 0
     Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
 }

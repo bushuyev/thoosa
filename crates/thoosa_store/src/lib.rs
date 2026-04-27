@@ -41,7 +41,7 @@ use mockall::predicate::eq;
 use rand::{Rng, RngExt};
 use rand::seq::SliceRandom;
 use rusqlite::types::Value;
-use rusqlite::{Connection, Error, OpenFlags, Transaction, params};
+use rusqlite::{Connection, Error, OpenFlags, Transaction, params, ToSql};
 use rusqlite::trace::TraceEvent;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
 use thoosa_shared::run_configs::RunId;
@@ -1132,7 +1132,7 @@ impl Store for SqlStore {
         let prefix = prefix.to_string();
         self.with_writer_conn("save_data_sets", move |conn| {
             let t = conn.transaction()?;
-            Self::save_leaky_data_sets(prefix.as_str(), limit, train_coeff, valid_coeff, min_p, &t)?;
+            Self::save_leaky_data_sets(prefix.as_str(), limit, None, train_coeff, valid_coeff, min_p, &t)?;
             t.commit()?;
             Ok(())
         })
@@ -3262,6 +3262,7 @@ impl SqlStore {
     pub fn save_leaky_data_sets(
         prefix: &str,
         limit: Option<usize>,
+        min_length: Option<u32>,
         train_coeff: f32,
         valid_coeff: f32,
         min_p: f32,
@@ -3287,7 +3288,7 @@ impl SqlStore {
 
         Self::validate_min_probability(min_p)?;
 
-        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| num_prefix.as_str()))?;
+        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| num_prefix.as_str()), min_length)?;
 
         let train_group_id = Self::save_resource_set_group(format!("{num_prefix}_train"), t)?;
         let valid_group_id = Self::save_resource_set_group(format!("{num_prefix}_valid"), t)?;
@@ -3360,6 +3361,7 @@ impl SqlStore {
         min_p: f32,
         t: &Transaction,
         not_in_prefix: Option<&str>,
+        min_length: Option<u32>,
     ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
         Self::validate_min_probability(min_p)?;
         let labels = Self::list_labels(t, true)?;
@@ -3368,16 +3370,20 @@ impl SqlStore {
         let mut stmt = t.prepare(
             &["SELECT lr.label_id, lr.resource_id FROM labeled_resources lr LEFT JOIN  resources r on r.id=lr.resource_id \
                 WHERE lr.p >= ? ",
+                min_length.as_ref().map(|_| "AND r.length > ? ").unwrap_or(""),
                 not_in_prefix.as_ref().map(|_|"AND lr.resource_id NOT IN (select rrs.resource_id from resource_resources_set rrs left join resource_set rs on rs.id=rrs.set_id where rs.descr like ?) ").unwrap_or(""),
                 "ORDER BY lr.label_id, r.length",//TODO order by r.length"
             ].join("")
         )?;
+        let mut params:Vec<Value> = vec![min_p.into()];
+        if let Some(min_length) = min_length {
+            params.push(min_length.into());
+        }
+        if let Some(not_in_prefix) = not_in_prefix {
+            params.push(format!("{not_in_prefix}\\_%").into());
+        }
 
-        let mut rows = match not_in_prefix {
-            Some(not_in_prefix) => stmt.query(params![min_p, format!("{not_in_prefix}\\_%")])?,
-            None => stmt.query(params![min_p])?,
-        };
-
+        let mut rows = stmt.query(rusqlite::params_from_iter(params.into_iter()))?;
         while let Some(row) = rows.next()? {
             let label_id = row.get::<usize, usize>(0)?;
             let resource_id = row.get::<usize, usize>(1)?;

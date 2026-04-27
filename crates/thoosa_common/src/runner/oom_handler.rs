@@ -690,23 +690,15 @@ where
                 );
 
                 for adjuster in adjusters {
-                    debug!(
-                        "OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster",
-                        task.as_ref().expect("run_with_runner_impl: missing task"),
-                        os_thread_id(),
-                    );
+                    debug!("OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                     loop {
                         i += 1;
-                        if i > 10000 {//TODO
-                            panic!("OOMHandler: ctx_id={ctx_id:?}  i={i}");
+                        if i > 10000 {//TODO Config
+                            return Err(ThoError::new("OOMHandler: ctx_id={ctx_id:?}  i={i}"));
                         }
 
-                        debug!(
-                            "OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",
-                            task.as_ref().expect("run_with_runner_impl: missing task"),
-                            os_thread_id(),
-                        );
+                        debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                         let adjust_result = apply_adjuster(
                             adjuster,
@@ -717,32 +709,17 @@ where
                         )
                         .await;
 
-                        debug!(
-                            "OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={} adjuster error ",
-                            os_thread_id()
-                        );
+                        debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={} adjuster error ",os_thread_id());
 
                         if let Err(te) = adjust_result {
                             exclusive_job.update_from_error(&te);
-                            debug!(
-                                "OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",
-                                task.as_ref().expect("run_with_runner_impl: missing task"),
-                                os_thread_id(),
-                            );
+                            debug!("OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                             if is_retryable_oom(&te) {
-                                debug!(
-                                    "OOMHandler::run, error: on adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
-                                    task.as_ref().expect("run_with_runner_impl: missing task"),
-                                    os_thread_id(),
-                                );
+                                debug!("OOMHandler::run, error: on adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                 if !adjuster.degrade(&mut contexts) {
-                                    debug!(
-                                        "OOMHandler::run, error: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
-                                        task.as_ref().expect("run_with_runner_impl: missing task"),
-                                        os_thread_id(),
-                                    );
+                                    debug!("OOMHandler::run, error: on adjust_result moving to next adjuster adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                     break;
                                 }
@@ -753,12 +730,7 @@ where
                             return Err(te);
                         }
 
-                        debug!(
-                            "OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",
-                            task.as_ref().expect("run_with_runner_impl: missing task"),
-                            os_thread_id(),
-                            run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),
-                        );
+                        debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
                         let run_result = runner
                             .run(
@@ -782,11 +754,7 @@ where
                                     assert!(all_done, "not yet all_done");
                                 }
 
-                                debug!(
-                                    "OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}",
-                                    task.as_ref().expect("run_with_runner_impl: missing task"),
-                                    os_thread_id(),
-                                );
+                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                 if all_done {
                                     collect_eta_record_oom_success();
@@ -801,27 +769,15 @@ where
 
                                 if is_retryable_oom(&te) {
                                     pref_oom_count();
-                                    debug!(
-                                        "OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
-                                        task.as_ref().expect("run_with_runner_impl: missing task"),
-                                        os_thread_id(),
-                                    );
+                                    debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                     if !adjuster.degrade(&mut contexts) {
-                                        debug!(
-                                            "OOMHandler::run, inner error: on oom moving to next adjuster ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",
-                                            task.as_ref().expect("run_with_runner_impl: missing task"),
-                                            os_thread_id(),
-                                        );
+                                        debug!("OOMHandler::run, inner error: on oom moving to next adjuster ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                         break;
                                     }
                                 } else {
-                                    warn!(
-                                        "OOMHandler::run, inner error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",
-                                        task.as_ref().expect("run_with_runner_impl: missing task"),
-                                        os_thread_id(),
-                                    );
+                                    warn!("OOMHandler::run, inner error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
                                     return Err(te);
                                 }
                             }
@@ -829,11 +785,7 @@ where
                     }
                 }
             } else {
-                warn!(
-                    "OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",
-                    task.as_ref().expect("run_with_runner_impl: missing task"),
-                    os_thread_id(),
-                );
+                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
                 return Err(te);
             }
 
@@ -846,11 +798,7 @@ where
             Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
         }
         Ok(o) => {
-            debug!(
-                "OOMHandler::run: ctx_id={ctx_id:?} task={:?} os_thread_id={} done without oom ",
-                task.as_ref().expect("run_with_runner_impl: missing task"),
-                os_thread_id(),
-            );
+            debug!("OOMHandler::run: ctx_id={ctx_id:?} task={:?} os_thread_id={} done without oom ",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
             Ok(o)
         }

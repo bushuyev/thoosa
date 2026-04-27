@@ -9,7 +9,7 @@ use futures_util::StreamExt;
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
 use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
@@ -379,13 +379,14 @@ where
                     let resources_0_train = Arc::new(resources_0.0.clone());
                     let resources_0_valid = Arc::new(resources_0.1.clone());
                     let label = label.clone();
+                    let label_for_batch = label.clone();
 
 
                     let train_net = Arc::new(TrainNet::new(
                         move |_ctx_for_batch:C,rc:&TrainLabelNetsRunConfig| {
 
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
-
+                            let label = label_for_batch.clone();
                             ready(Ok(ResourcesBatch::new(
                                    Arc::clone(&applied_motif_loader),
                                    rc.common_training_args.batch_size,
@@ -394,16 +395,22 @@ where
                                    Arc::clone(&resources_0_train),
                                    Arc::clone(&resources_0_valid),
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
+                                       let label = label.clone();
                                        async move {
                                            let (x, lengths, y) = with_data!(
                                                ctx.branch(Some("train_label_nets_batch_data"), false),
                                                [x_1_wrapped], [x_0_wrapped];
                                                |_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
-                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
 
-                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.data().t_ref().size()[1]).max().expect("no max_input");
+                                               if x_1.is_empty() || x_1.is_empty(){
+                                                 error!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
+                                               } else {
+                                                 debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
+                                               }
 
-                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: max_input={max_input}");
+                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.data().t_ref().size()[1]).max().ok_or_else(||ThoError::new(format!("batch resources are empty for {label}")))?;
+
+                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} max_input={max_input}");
 
                                                let x_1_refs = x_1.iter().map(|x| x.data()).collect::<Vec<_>>();
                                                let x_0_refs = x_0.iter().map(|x| x.data()).collect::<Vec<_>>();
@@ -614,6 +621,7 @@ where
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
+        assert!(!batches.is_empty());
 
         Self::build_batch_stream(
             Arc::clone(&self.build_batch_fn),
@@ -629,6 +637,7 @@ where
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
+        assert!(!batches.is_empty());
 
         Self::build_batch_stream(
             Arc::clone(&self.build_batch_fn),
@@ -665,7 +674,7 @@ where
             let mut ctx_for_build_fn = ctx.branch(Some("for_build_fn"), false);
 
             async move {
-                debug!("ResourcesBatch::build_batch_stream: batch_i={i}");
+                debug!("ResourcesBatch::build_batch_stream: batch_i={i} batch_keys={batch_keys:?}");
 
                 let batch_len = batch_keys.len();
                 let futures = batch_keys.into_iter().map(|index| {
@@ -1079,5 +1088,77 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_1_resource_batch() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+
+        let resources_1_train = Arc::new(vec![
+            Resource::new(0, 1, "aaa_1_tr", 10),
+        ]);
+        let resources_1_valid = Arc::new(vec![
+            Resource::new(3, 1, "aaa_1_vl", 10),
+        ]);
+
+        let resources_0_train = Arc::new(vec![
+            Resource::new(7, 1, "bbb_0_tr", 10),
+        ]);
+        let resources_0_valid = Arc::new(vec![
+            Resource::new(10, 1, "bbb_0_vl", 10),
+        ]);
+
+        let loader = Arc::new(
+            mock_tensor_loader::build()
+                .with_out_id()
+                .with_run_cached(HashMap::<Resource, Tensor>::from_iter(
+                    resources_1_train.iter().chain(resources_1_valid.iter()).chain(resources_0_train.iter()).chain(resources_0_valid.iter()).map(|r|{
+                        if r.file_stem().contains("_1_") {
+                            (r.clone(), Tensor::ones(&[1, 10], FLOAT_CPU))
+                        } else {
+                            (r.clone(), Tensor::zeros(&[1, 10], FLOAT_CPU))
+                        }
+
+                    })
+                ))
+                .finish(),
+        );
+
+
+        let resource_batch: ResourcesBatch<_, _, ThoTensor<ChannelsData2, SynKey>, ChannelsData2, LabelProbability> = ResourcesBatch::new(
+            loader,
+            2,
+            resources_1_train,
+            resources_1_valid,
+            resources_0_train,
+            resources_0_valid,
+            Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, mut ctx: MockRunCtx|{
+                async move {
+                    let ctx_for_data = ctx.branch(Some("train_label_nets_batch_data"), false);
+                    with_data!(ctx_for_data, [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<ChannelsData2, SynKey>], x_0:&[&ThoTensor<ChannelsData2, SynKey>]|{
+                        debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
+                        let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
+                        let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
+
+                        let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
+
+                         Ok((x.into(), None, y.into()))
+                    })
+                }.boxed()
+            }),
+        );
+
+        let mut batch = resource_batch.train_batch_stream(mock_run_ctx::default(0));
+        let (_batch_x, _lengths,  _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        assert!(batch.next().await.is_none()); //should be only one
+
+        let mut batch = resource_batch.valid_batch_stream(mock_run_ctx::default(0));
+        let (_batch_x, _lengths, _batch_y) = batch.next().await.expect("no batch").expect("batch failed");
+        assert!(batch.next().await.is_none()); //should be only one
+
+
+
+        Ok(())
+    }
+
 
 }
