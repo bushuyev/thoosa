@@ -1153,7 +1153,7 @@ where
         Arc::clone(&motif_loader_impl),
     ));
 
-    match plot_params.motifs_by() {
+    match plot_params.data_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
             debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
             plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx).await?;
@@ -1164,9 +1164,11 @@ where
             plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, print_to_stdout, ctx).await?;
             return Ok(());
         }
-        DataBy::MotifId(motif_id) => {
-            debug!("run_plot: MotifsBy::MotifId run_id={motif_id}");
-            plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, None, resolution, print_to_stdout).await?;
+        DataBy::MotifId(motif_ids) => {
+            debug!("run_plot: MotifsBy::MotifId motif_ids={motif_ids:?}");
+            for motif_id in motif_ids {
+                plot_motif(&ws, ctx.branch(Some(&format!("motif_{motif_id}")), true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout).await?;
+            }
         }
         DataBy::RunId {
             find_motifs_run_ids,
@@ -2086,6 +2088,47 @@ mod cli_tests {
 
         match cli.command {
             Some(crate::cli::Commands::PlotData(args)) => assert!(args.print_to_stdout()),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_plot_data_motif_id_parses_multiple_ids() {
+        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:1,2,3"]);
+
+        match cli.command {
+            Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2, 3])),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_plot_data_motif_id_parses_spaced_quoted_ids() {
+        let cli = Cli::parse_from(["thoosa_main", "plot-data", "--data-by", "motif_id:'1, 2'"]);
+
+        match cli.command {
+            Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_merge_selected_motifs_ids_parse_single_spaced_and_csv_values() {
+        let single = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-ids=1"]);
+        match single.command {
+            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_ids, vec![1]),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let spaced = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-ids='1, 2'"]);
+        match spaced.command {
+            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_ids, vec![1, 2]),
+            other => panic!("unexpected command: {other:?}"),
+        }
+
+        let csv = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-ids=1,2,3"]);
+        match csv.command {
+            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_ids, vec![1, 2, 3]),
             other => panic!("unexpected command: {other:?}"),
         }
     }
