@@ -6,7 +6,8 @@ cargo run --release --bin thoosa_bird_clef -- --term-logger-level=INFO --write-l
 cargo run --release --bin thoosa_bird_clef -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef  find-motifs --resources="set:A10_compau_train" --run-config-cnt="{step:'2000',window:'2000..32000:4000,0','slices_filter':{'Precalculate':{'aggr':{'Mean':{'k':'1.0'}}, 'slices':'1000'}}, 'similarity_metric':{'DotProduct':{}}}" --max-chunk-size=100000
 
 
-cargo run --bin thoosa_hbac  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef plot-data --data-by='resource:429;channels=0' --resolution=high
+cargo run --bin thoosa_bird_clef  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef plot-data --data-by='resource:429;channels=0' --resolution=high
+cargo run --bin thoosa_bird_clef  --release  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef plot-data --data-by="resource:6;channels=0;freq_filters=[{BandPassFilter:{low_hz:0.0,band_hz:2.0,kernel_size:100,stride:10,padding:{Zero:{}}}}]"
 
 cargo run --release  --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/  select-motifs --find-motifs-run-ids=3 --resources-group="group:pure group 1000" --run-config-cnt="{motif_criteria: [{'metric': {'NormThickness': {'eps':'0.00000001'}}, 'min':'0.0'}]}"
 

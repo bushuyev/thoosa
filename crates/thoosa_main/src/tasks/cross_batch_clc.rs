@@ -431,6 +431,7 @@ where
 
         //FIXME tensors which are too small (because of freq_filter) are already removed from batch_0_t and batch_1_t but still present in sizes (as 0) so that resources_0/1 can be filtered. Do it all in unfold_and_cat
         let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
+        // let (batch_0_t, batch_0_sizes) =  cat_and_unfold(&input.tensors[0..input.resources_0.len()], &unfold_params)?; TODO doesn't work because sizes need to match splits to track mask, i.e. single spit can't come from more than one resource
 
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_sizes={batch_0_sizes:?}", input.id);
 
@@ -508,7 +509,7 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
             }
 
         } else {
-            debug!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?}  skipped", t.id(), t.size(), unfold_params);
+            warn!("cross_batch_clc/unfold_and_cat: 0.  t.id={:?} t.size={:?} self.unfold_params={:?}  skipped", t.id(), t.size(), unfold_params);
             sizes.push(0);
         }
         (unfolded_tensors, sizes)
@@ -526,7 +527,8 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params
 
 #[cfg(test)]
 mod tests {
-    use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
+    use std::marker::PhantomData;
+    use crate::tasks::cross_batch_clc::{ unfold_and_cat, CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::find_motifs::{MasksCtx, MeanDistsCtx};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -538,7 +540,7 @@ mod tests {
     use polars::prelude::RevMapping::Global;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Uint8};
-    use tch::Tensor;
+    use tch::{Kind, Tensor};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoError;
@@ -547,6 +549,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use crate::ChannelsData2;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {
@@ -554,6 +557,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
         GlobalCtx::init_devices(2);
+
         let cross_batch_fn: Box<dyn CrossBatchFn<DistsMask, MasksCtx, RunCtxImpl>> = Box::new(
             |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, ctx: &MasksCtx, _: &RunCtxImpl| {
                 debug!("t_0=\n{t_0}");

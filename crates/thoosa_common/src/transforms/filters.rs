@@ -398,6 +398,18 @@ pub fn savgol_smooth_1d_channels(
     Ok(y3.squeeze_dim(0))
 }
 
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+pub struct AbsFilterParams {
+
+}
+
+impl InputFilterLengthAdjuster for AbsFilterParams {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        Box::new(move |l: u32| l)
+    }
+}
+
+
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
