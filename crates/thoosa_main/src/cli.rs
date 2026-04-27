@@ -1,5 +1,5 @@
 use crate::cli::Commands::{
-    FindMotifs, ImportResources, Infer, MelPatch, MotifsToTensor, PlotData, RunAll,
+    FindMotifs, ImportResources, Infer, MelPatch, MelPatchOpt, MotifsToTensor, PlotData, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
@@ -98,7 +98,8 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
-use crate::tasks::mel_patch::{MelPatchResourcesInput, MelPatchRunConfigRangeOrValue, MelPatchStage};
+use crate::tasks::mel_patch::{MelPatchResourcesInput, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage};
+use crate::tasks::mel_patch_opt::MelPatchOptStage;
 use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -273,12 +274,31 @@ impl MelPatchArgs {
     }
 }
 
+#[derive(Debug, Args, Clone)]
+pub struct MelPatchOptArgs {
+    #[arg(long, value_parser=parse_resources)]
+    pub resources: ResourceType,
+
+    #[arg(long)]
+    pub run_config_cnt: String,
+
+    #[command(flatten)]
+    pub opt_config: OptConfig,
+}
+
+impl MelPatchOptArgs {
+    pub fn resource_config(&self) -> Simple {
+        Simple::new(self.resources.clone())
+    }
+}
+
 #[derive(Debug, Subcommand, Clone)]
 pub enum Commands {
     ImportResources(ImportResourcesArgs),
     FindMotifs(FindMotifsArgs),
     SeqScan(SeqScanArgs),
     MelPatch(MelPatchArgs),
+    MelPatchOpt(MelPatchOptArgs),
     PlotData(PlotDataArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
@@ -614,6 +634,39 @@ where
             ).await?;
 
             info!("MelPatch done, run_ids={run_ids:?}");
+        }
+
+        Some(MelPatchOpt(mel_patch_opt_args)) => {
+            debug!("MelPatchOpt: mel_patch_opt_args={mel_patch_opt_args:?}");
+
+            let mel_patch_run_config_range_or_value: MelPatchRunConfigRangeOrValue =
+                serde_json5::from_str(&mel_patch_opt_args.run_config_cnt).expect("MelPatchRunConfig");
+
+            let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(mel_patch_opt_args.resource_config()).check(&store).await?));
+            let init_loader = Arc::clone(&loader);
+            let init_ws = Arc::clone(&ws);
+            let init_store = Arc::clone(&store);
+            let opt_config = Arc::new(mel_patch_opt_args.opt_config.clone());
+
+            let run_ids = run_opt::<_, _, MelPatchRunConfig, _, _>(
+                None,
+                mel_patch_run_config_range_or_value,
+                input_wrapper,
+                &ws,
+                &store,
+                move |run_configs| async move {
+                    Ok(Arc::new(MelPatchOptStage::new(
+                        init_loader,
+                        &init_ws,
+                        &init_store,
+                        run_configs,
+                        opt_config,
+                    )))
+                },
+                || root_ctx.branch(Some("mel patch opt"), true),
+            ).await?;
+
+            info!("MelPatchOpt done, run_ids={run_ids:?}");
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
@@ -2217,6 +2270,28 @@ mod cli_tests {
             Some(crate::cli::Commands::MelPatch(args)) => {
                 assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
                 assert_eq!(args.run_config_cnt, "{bucket_count:256,min_slices:10,max_slices:100}");
+            }
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_mel_patch_opt_command_parses() {
+        let cli = Cli::parse_from([
+            "thoosa_main",
+            "mel-patch-opt",
+            "--resources", "group:find",
+            "--run-config-cnt", "{bucket_count:{range:{start:64,end:256},step:null},min_slices:10,max_slices:100}",
+            "--opt-max-evals", "12",
+            "--opt-num-init", "4",
+        ]);
+
+        match cli.command {
+            Some(crate::cli::Commands::MelPatchOpt(args)) => {
+                assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
+                assert_eq!(args.run_config_cnt, "{bucket_count:{range:{start:64,end:256},step:null},min_slices:10,max_slices:100}");
+                assert_eq!(args.opt_config.opt_max_evals, 12);
+                assert_eq!(args.opt_config.opt_num_init, 4);
             }
             other => panic!("unexpected command: {other:?}"),
         }
