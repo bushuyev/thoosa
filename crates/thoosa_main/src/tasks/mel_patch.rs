@@ -502,15 +502,16 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
-    use futures_util::StreamExt;
+    use futures_util::{StreamExt, TryStreamExt};
     use log::debug;
-    use parking_lot::RwLock;
+    use parking_lot::{RawRwLock, RwLock};
     use rand::random_range;
     use tch::{Device, Tensor};
     use tch::Device::Cuda;
     use thoosa_common::audio::{LogMelPatchConfig, LogMelPatchConfigRangeOrValue};
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, EucDistConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
+    use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
@@ -521,26 +522,26 @@ mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_motifs::distance::clc_d2_similarity;
     use crate::cli::plot_resource;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
     use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage, MelPatchResourcesInput};
     use thoosa_run_config_args::GridRunConfigSource;
-    use thoosa_shared::{cdt_for_dir, mono_key, ResourceType, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{cdt_for_dir, mono_key, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
-    use thoosa_store::{IdSlice, SqlStore};
+    use thoosa_store::{IdSlice, SqlStore, Store};
     use thoosa_store::rusqlite::Transaction;
     use thoosa_with_data::with_data;
     use crate::cli::{import_resources, plot_motif};
     use crate::RawTensorLoader;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-    use crate::tasks::motif_stats::{MotifStats, MotifStatsInput};
+    use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
     use crate::tasks::slices_stats::euclidean_distance;
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -641,8 +642,7 @@ mod tests {
             u32::MAX,
             32000,
         )?));
-
-
+        let motif_len = 64usize;
 
         let imported_ids = import_resources(
             &ws,
@@ -657,7 +657,7 @@ mod tests {
             |key: String| {
                 debug!("key={key}");
                 let num_motifs = 4; //random_range(5usize..9usize);
-                let motif_len = 64usize;
+
                 let motif_gap = 3*motif_len;
                 let resource_len = num_motifs * motif_len + (num_motifs - 1) * motif_gap;
 
@@ -710,10 +710,10 @@ mod tests {
             max_slices: 100,
 
             mel_config: LogMelPatchConfig {
-                n_fft: 32,
+                n_fft: 64,
                 hop_length: 4,
-                n_mels: 16,
-                patch_frames: 9,
+                n_mels: 32,
+                patch_frames: 18,
                 patch_step: 32,
                 ..LogMelPatchConfig::default()
             }
@@ -760,41 +760,55 @@ mod tests {
             Arc::clone(&motif_loader_impl),
         ));
 
-        for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
-            // resource
+        let avg_norm_thickness = futures::stream::iter(motifs.iter().map(|motif_id| {
+            let motif_stats = Arc::clone(&motif_stats);
+            let mut motif_load_ctx = ctx.branch("motif_load".into(), false);
+            async move {
+                let norm_thickness = Metrics::NormThickness(NormThicknessRunConfig::default());
+                let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+                    norm_thickness.clone()
+                ]))), motif_load_ctx.branch("motif_load".into(), false)).await?;
 
-            plot_resource(
-                &ws,
-                &store,
-                &loader,
-                resource.id(),
-                None,
-                None,
-                Resolution::Normal,
-                false,
-                ctx.branch("plot".into(), false)
-            ).await?
+                let norm_thickness = with_data!(motif_load_ctx.branch("metrics".into(), false), metrics; |ctx, metrics:&MotifStatsOutput|{
+                    Ok::<_, ThoError>(metrics.channel_metric_value(&norm_thickness, 0)?.value())
+                })?;
 
-        }
+                debug!("heavy_run_mel_path: norm_thickness={norm_thickness:?}");
+                Ok::<_, ThoError>(norm_thickness)
+            }
+        })).buffer_unordered(10).try_fold(0.0_f32, |acc, value| async move {
+            Ok(acc + value)
+        }).await?/motifs.len() as f32;
 
-        for resource in Simple::new(ResourceType::Set("all_label_1".into())).to_resources(&store).await? {
-            // resource
+        debug!("heavy_run_mel_path: avg_norm_thickness={avg_norm_thickness:?}");
+        let run_config = crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue {
+            id: None,
+            bucket_count: RangeOrValue::Value(0),
+            min_slices: RangeOrValue::Value(0),
+            max_slices: RangeOrValue::Value(0),
+            mel_config: LogMelPatchConfigRangeOrValue {
+                n_fft: RangeOrValue::Value(3),
+                hop_length: RangeOrValue::Value(3),
+                n_mels: RangeOrValue::Value(3),
+                f_min: RangeOrValue::Value(3.0),
+                f_max: RangeOrValue::Value(3.0),
+                patch_frames: RangeOrValue::Value(3),
+                patch_step: RangeOrValue::Value(3),
+            },
+        };
 
-            plot_resource(
-                &ws,
-                &store,
-                &loader,
-                resource.id(),
-                None,
-                None,
-                Resolution::Normal,
-                false,
-                ctx.branch("plot".into(), false)
-            ).await?
+        // let opt = AsyncTPEOptimizer::new(
+        //     async |opt_vals| {
+        //         1.
+        //     },
+        //     ConfigurationSpace::new(),
+        //     10,
+        //     3,
+        //     "test"
+        // );
+        /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
 
-        }
-
-        let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
+        let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(motif_len, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
@@ -812,11 +826,6 @@ mod tests {
             })?;
 
 
-            let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
-                Metrics::NormThickness(NormThicknessRunConfig::default())
-            ]))), ctx.branch("motif_load".into(), false)).await?;
-
-            debug!("heavy_run_mel_path: metrics={metrics:?}");
 
             plot_motif(
                 &ws,
@@ -834,10 +843,46 @@ mod tests {
         assert!(!motifs.is_empty());
         debug!("heavy_run_mel_path: best_reference_distances={best_reference_distances:?}");
         assert!(best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2, "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}");
-
+*/
         Ok(())
     }
 
+    async fn plot_test_resources(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, loader: &Arc<RawTensorLoader<RunCtxImpl>>, mut ctx: &mut RunCtxImpl) -> Result<(), ThoError> {
+        for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
+            // resource
+
+            plot_resource(
+                &ws,
+                &store,
+                &loader,
+                resource.id(),
+                None,
+                None,
+                Resolution::Normal,
+                false,
+                ctx.branch("plot".into(), false),
+                "0_"
+            ).await?
+        }
+
+        for resource in Simple::new(ResourceType::Set("all_label_1".into())).to_resources(&store).await? {
+            // resource
+
+            plot_resource(
+                &ws,
+                &store,
+                &loader,
+                resource.id(),
+                None,
+                None,
+                Resolution::Normal,
+                false,
+                ctx.branch("plot".into(), false),
+                "1_"
+            ).await?
+        }
+        Ok(())
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_run_mel_path_3_channel() -> Result<(), ThoError> {
@@ -993,7 +1038,8 @@ mod tests {
                 None,
                 Resolution::Normal,
                 false,
-                ctx.branch("plot".into(), false)
+                ctx.branch("plot".into(), false),
+                ""
             ).await?
 
         }

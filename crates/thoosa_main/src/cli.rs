@@ -1164,7 +1164,7 @@ where
     match plot_params.data_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
             debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx).await?;
+            plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx, "").await?;
             return Ok(());
         }
         DataBy::MotifNetApplied { resource_id, net_path } => {
@@ -1514,6 +1514,7 @@ fn sanitize_plot_path_segment(v: &str) -> String {
 fn plot_resource_channels<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     resource_id: ResourceId,
+    prefix: &str,
     suffix: &str,
     caption: &str,
     tensor: &ThoTensor<ChannelsData2, SynKey>,
@@ -1553,7 +1554,7 @@ where
         plot_data,
         caption,
         resolution.plot_size((2000, 1000)),
-        &ws.read().plots_path().join("resource").join(format!("resource_{resource_id}_{suffix}.png")),
+        &ws.read().plots_path().join("resource").join(format!("{prefix}resource_{resource_id}_{suffix}.png")),
     )?;
 
     Ok(())
@@ -1595,6 +1596,7 @@ pub async fn plot_resource<C>(
     resolution: Resolution,
     print_to_stdout: bool,
     mut ctx: C,
+    prefix: &str,
 ) -> Result<(), ThoError>
 where
     C: RunCtx + Adjustable,
@@ -1605,7 +1607,7 @@ where
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
+        plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
     }).await?;
 
     if let Some(freq_filters) = freq_filters {
@@ -1619,7 +1621,7 @@ where
 
         let filtered_channels = channels.clone();
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
+            plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
         }).await?;
     }
 
@@ -1655,7 +1657,7 @@ where
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
     raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
+        plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
@@ -1673,7 +1675,7 @@ where
 
         let channel_only_filtered = vec![channel];
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
+            plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         }).await?;
 
         filtered
