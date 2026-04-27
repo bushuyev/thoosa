@@ -781,7 +781,7 @@ mod tests {
         }).await?/motifs.len() as f32;
 
         debug!("heavy_run_mel_path: avg_norm_thickness={avg_norm_thickness:?}");
-        let run_config = crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue {
+        let run_config: crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue<crate::tasks::mel_patch::MelPatchRunConfigFields> = crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue {
             id: None,
             bucket_count: RangeOrValue::Value(0),
             min_slices: RangeOrValue::Value(0),
