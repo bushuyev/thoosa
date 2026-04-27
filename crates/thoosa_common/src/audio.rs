@@ -5,11 +5,10 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::ThoError;
 
+pub const LOG_EPS:f64 = 1e-6;
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 pub struct LogMelPatchConfig {
-    #[run_config]
-    #[in_map]
-    pub sample_rate: f64,
 
     /// FFT/window size in samples, e.g. 1024.
     #[run_config]
@@ -46,16 +45,12 @@ pub struct LogMelPatchConfig {
     #[in_map]
     pub patch_step: i64,
 
-    /// Small value before log().
-    #[run_config]
-    #[in_map]
-    pub log_eps: f64,
+
 }
 
 impl Default for LogMelPatchConfig {
     fn default() -> Self {
         Self {
-            sample_rate: 32_000.0,
             n_fft: 1024,
             hop_length: 320,
             n_mels: 128,
@@ -63,7 +58,6 @@ impl Default for LogMelPatchConfig {
             f_max: 16_000.0,
             patch_frames: 64,
             patch_step: 32,
-            log_eps: 1e-6,
         }
     }
 }
@@ -76,6 +70,7 @@ impl Default for LogMelPatchConfig {
 pub fn audio_to_log_mel_patches(
     audio: &Tensor,
     cfg: &LogMelPatchConfig,
+    sample_rate: f64,
 ) -> Result<Tensor, ThoError> {
     debug!("audio_to_log_mel_patches: audio={audio:?} cfg={cfg:?}");
 
@@ -149,7 +144,7 @@ pub fn audio_to_log_mel_patches(
     // ---------------------------------------------------------------------
     //called once per RunConfig
     let mel_fb = build_mel_filterbank(
-        cfg.sample_rate,
+        sample_rate,
         cfg.n_fft,
         cfg.n_mels,
         cfg.f_min,
@@ -171,7 +166,7 @@ pub fn audio_to_log_mel_patches(
     //
     // log_mel: [C, M, frames]
     // ---------------------------------------------------------------------
-    let log_mel = mel.f_clamp_min(cfg.log_eps)?.f_log()?;
+    let log_mel = mel.f_clamp_min(LOG_EPS)?.f_log()?;
 
     // ---------------------------------------------------------------------
     // 6. Slice time axis into patches.
@@ -408,7 +403,7 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
     let bits_vec = Vec::<i64>::try_from(&bits.f_reshape([-1])?.f_contiguous()?)?;
     debug!("assign_lsh_buckets_per_channel_with_bits: bits_vec={bits_vec:?}");
 
-    let mut bucket_ids = vec![Vec::with_capacity(n_patches as usize); channels as usize];
+    let mut channels_bucket_ids = vec![Vec::with_capacity(n_patches as usize); channels as usize];
 
     for c in 0..channels {
         for p in 0..n_patches {
@@ -422,13 +417,13 @@ pub fn assign_lsh_buckets_per_channel_with_bits(
             let hash = hash_bit_row_with_channel_salt(row, c as u64);
             let bucket = (hash % n_buckets as u64) as usize;
 
-            bucket_ids[c as usize].push(bucket);
+            channels_bucket_ids[c as usize].push(bucket);
         }
     }
-    debug!("assign_lsh_buckets_per_channel_with_bits: bucket_ids={bucket_ids:?}, channels={channels}, n_patches={n_patches}");
+    debug!("assign_lsh_buckets_per_channel_with_bits: bucket_ids={channels_bucket_ids:?}, channels={channels}, n_patches={n_patches}");
 
 
-    Ok(bucket_ids)
+    Ok(channels_bucket_ids)
 }
 
 fn hash_bits_for_bucket_count(n_buckets: i64) -> i64 {
@@ -552,7 +547,6 @@ mod tests {
         debug_plot_impl_wh(&tensor, "test", 0, ((tensor.size()[1] as u32).min(40_000), 1000))?;
 
         let cfg = LogMelPatchConfig {
-            sample_rate: 32_000.0,
             n_fft: 1024,
             hop_length: 320,
             n_mels: 128,
@@ -563,7 +557,7 @@ mod tests {
 
         // Example: mono audio, 10 seconds at 32 kHz.
 
-        let patches = audio_to_log_mel_patches(&tensor, &cfg)?;
+        let patches = audio_to_log_mel_patches(&tensor, &cfg, 32000.)?;
 
 
         debug!("patches shape = {:?}", patches.size());
