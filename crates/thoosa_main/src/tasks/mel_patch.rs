@@ -97,15 +97,15 @@ impl<RC> Input for MelPatchResourcesInput<RC> where RC: ResourcesConfig + Debug 
 
 #[derive(Debug, Clone)]
 pub struct MelPatchOutput {
-    groups_by_run: Vec<(RunId, Vec<usize>)>,
+    groups_by_run: Vec<(RunId, Vec<u32>)>,
 }
 
 impl MelPatchOutput {
-    fn new(groups_by_run: Vec<(RunId, Vec<usize>)>) -> Self {
+    fn new(groups_by_run: Vec<(RunId, Vec<u32>)>) -> Self {
         Self { groups_by_run }
     }
 
-    pub fn groups_by_run(&self) -> &[(RunId, Vec<usize>)] {
+    pub fn groups_by_run(&self) -> &[(RunId, Vec<u32>)] {
         &self.groups_by_run
     }
 }
@@ -285,24 +285,25 @@ where
         tmp_path: &Path,
         temp_stores: &mut Vec<MelPatchTempStore>,
         run_config: &MelPatchRunConfig,
+        sample_rate: f64,
     ) -> Result<(), ThoError> {
         let mel_config = run_config.mel_config();
-        let patches = audio_to_log_mel_patches(audio, mel_config)?;
+        let patches = audio_to_log_mel_patches(audio, mel_config, sample_rate)?;
         let patch_ranges = patch_sample_ranges_flat(&patches, mel_config)?;
-        let bucket_ids = assign_lsh_buckets_per_channel(&patches, run_config.bucket_count_i64())?;
+        let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, run_config.bucket_count_i64())?;
 
-        if patch_ranges.len() != bucket_ids.len() {
-            return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), bucket_ids.len())));
+        if patch_ranges.len() != channels_bucket_ids.len() {
+            return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), channels_bucket_ids.len())));
         }
 
 
-        for channel in 0..bucket_ids.len() {
-            if patch_ranges[channel].len() != bucket_ids[channel].len() {
-                return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: channel={channel} ranges len={} bucket len={}", patch_ranges[channel].len(), bucket_ids[channel].len())));
+        for channel in 0..channels_bucket_ids.len() {
+            if patch_ranges[channel].len() != channels_bucket_ids[channel].len() {
+                return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: channel={channel} ranges len={} bucket len={}", patch_ranges[channel].len(), channels_bucket_ids[channel].len())));
             }
 
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
-            for ((sample_start, _sample_end), bucket) in patch_ranges[channel].iter().zip(bucket_ids[channel].iter()) {
+            for ((sample_start, _sample_end), bucket) in patch_ranges[channel].iter().zip(channels_bucket_ids[channel].iter()) {
                 let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("MelPatchStage::save_resource_patches: bucket={bucket} does not fit into u16")))?;
                 let slice_start = u32::try_from(*sample_start).map_err(|_| ThoError::new(format!("MelPatchStage::save_resource_patches: sample_start={sample_start} does not fit into u32")))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(resource.id(), slice_start));
@@ -354,7 +355,10 @@ where
             || self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock").tmp_path().clone(),
             "MelPatchStage::run/read_ws_tmp_path",
         );
-        let channels = self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock").channels();
+        let (channels, sample_rate) = {
+            let ws = self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock");
+            (ws.channels(), ws.sample_rate())
+        };
 
         let mut temp_stores_by_run: Vec<Vec<MelPatchTempStore>> = self.run_configs.iter()
             .map(|run_config|
@@ -372,29 +376,31 @@ where
 
             with_data!(ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false), loaded; |_ctx, tensor: &ThoTensor<D, Id>| {
                 for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.iter_mut()) {
-                    self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config)?;
+                    self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config, sample_rate as f64)?;
                 }
                 Ok::<_, ThoError>(())
             })?;
         }
 
-        let mut groups_by_run = Vec::with_capacity(self.run_configs.len());
+        let mut run_configs_motifs = Vec::with_capacity(self.run_configs.len());
         for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.into_iter()) {
             let run_id = run_config.run_id()?;
-            let mut groups_by_channel = Vec::with_capacity(temp_stores.len());
+            let mut motif_ids = Vec::with_capacity(temp_stores.len());
             for (channel, mut temp_store) in temp_stores.into_iter().enumerate() {
                 let groups = filter_mel_patch_groups(temp_store.load_groups()?, run_config.min_slices_usize(), run_config.max_slices_usize());
                 let groups_len = groups.len();
-                self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
+                let group_motif_ids = self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
                 temp_store.remove()?;
-                groups_by_channel.push(groups_len);
+                motif_ids.extend(group_motif_ids);
             }
 
-            info!("MelPatchStage::run: run_id={run_id} resources={} groups_by_channel={groups_by_channel:?}", resources.len());
-            groups_by_run.push((run_id, groups_by_channel));
+            debug!("MelPatchStage::run: run_id={run_id} resources={} groups_by_channel={motif_ids:?}", resources.len());
+            run_configs_motifs.push((run_id, motif_ids));
         }
 
-        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new(groups_by_run))))
+        info!("MelPatchStage::run: run_configs_motifs={run_configs_motifs:?}");
+
+        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new(run_configs_motifs))))
     }
 }
 
@@ -598,7 +604,6 @@ mod tests {
             min_slices: 10u32.into(),
             max_slices: 100u32.into(),
             mel_config: LogMelPatchConfigRangeOrValue {
-                sample_rate: default_log_mel_patch_config.sample_rate.into(),
                 n_fft: default_log_mel_patch_config.n_fft.into(),
                 hop_length: default_log_mel_patch_config.hop_length.into(),
                 n_mels: default_log_mel_patch_config.n_mels.into(),
@@ -606,7 +611,6 @@ mod tests {
                 f_max: default_log_mel_patch_config.f_max.into(),
                 patch_frames: default_log_mel_patch_config.patch_frames.into(),
                 patch_step: default_log_mel_patch_config.patch_step.into(),
-                log_eps: default_log_mel_patch_config.log_eps.into(),
             },
         };
 
@@ -620,7 +624,223 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn heavy_run_mel_path() -> Result<(), ThoError> {
+    async fn heavy_run_mel_path_1_channel() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+        debug!("test_dir={test_dir:?}");
+        // let store = Arc::new(SqlStore::in_mem().await?);
+        let store = Arc::new(SqlStore::from_path(test_dir.join(&"main_db.db3")).await?);
+
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            test_dir,
+            1,
+            u32::MAX,
+            32000,
+        )?));
+
+
+
+        let imported_ids = import_resources(
+            &ws,
+            &store,
+            &["label_0", "label_1"],
+            || {
+                Ok(HashMap::from_iter([
+                    (0..10).map(|i| (format!("t_0_{i}"), vec![("label_0".to_string(), 1.0)])).collect::<Vec<_>>(),
+                    (0..10).map(|i| (format!("t_1_{i}"), vec![("label_1".to_string(), 1.0)])).collect::<Vec<_>>()
+                ].concat().into_iter()))
+            },
+            |key: String| {
+                debug!("key={key}");
+                let num_motifs = 4; //random_range(5usize..9usize);
+                let motif_len = 64usize;
+                let motif_gap = 3*motif_len;
+                let resource_len = num_motifs * motif_len + (num_motifs - 1) * motif_gap;
+
+                if key.starts_with("t_0") {
+
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
+                        vec![(num_motifs, motif_len, MotifKind::ChirpUp)],
+                    ], motif_gap, 10.0, false, true)?;//TODO set motif_from_zero to false and z-normalize
+
+                    Ok(resource_t)
+                } else if key.starts_with("t_1") {
+
+                    let (resource_t, _resource_intervals) = tch_test_utils::resource_tensor(resource_len, &[
+                        vec![(num_motifs, motif_len, MotifKind::Trill)],
+                    ], motif_gap, 10.0, false, true)?;
+
+                    Ok(resource_t)
+                } else {
+                    //TODO random tensor
+                    todo!()
+                }
+
+            },
+            None,
+            true,
+            |t: &Transaction|{
+                SqlStore::save_all_sets(&t)?;
+                Ok(())
+            },
+        ).await?;
+
+        let tensors_path = ws.read().tensors_path().clone();
+
+        let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
+            move |key, _| {
+                let tensor = Tensor::load(tensors_path.join(format!("1_{}.pt", key.file_stem())))?;//1_ for import id
+                debug!("test_motifs: key={key:?} loaded tensor={tensor:?}");
+                Ok(ThoTensor::new(SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]), tensor)?)
+            },
+            ThoDevice::from(Device::Cpu),
+        ));
+
+        let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
+
+        let mut patch_run_config = MelPatchRunConfig {
+            id: None,
+
+            bucket_count: 16,
+            min_slices: 2,
+            max_slices: 100,
+
+            mel_config: LogMelPatchConfig {
+                n_fft: 32,
+                hop_length: 4,
+                n_mels: 16,
+                patch_frames: 9,
+                patch_step: 32,
+                ..LogMelPatchConfig::default()
+            }
+        };
+
+        let find_motifs_run_id = store.save_run_config(
+            None,
+            &FindMotifsRunConfig::type_name(),
+            "FindMotifsRunConfig",
+            FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+        ).await?;
+
+
+        let id = store.save_run_config(
+            Some(&[find_motifs_run_id]),
+            &MelPatchRunConfig::type_name(),
+            "MelPatchRunConfig",
+            patch_run_config.to_properties_iter(None).collect(),
+        ).await?;
+
+        patch_run_config.id = Some(id);
+
+        let mel_patch_stage = Arc::new(MelPatchStage::new(&ws, &store, Arc::clone(&loader), vec![
+            patch_run_config
+
+        ])?);
+
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
+
+        let motifs = store.list_motifs(id).await?;
+
+        debug!("res={res:?} motifs={motifs:?}");
+
+        let motif_loader_impl = Arc::new(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            &ws
+        ));
+
+        let motif_stats = Arc::new(MotifStats::new(
+            Arc::clone(&store),
+            Arc::clone(&loader),
+            Arc::clone(&ws),
+            Arc::clone(&motif_loader_impl),
+        ));
+
+        for resource in Simple::new(ResourceType::Set("all_label_0".into())).to_resources(&store).await? {
+            // resource
+
+            plot_resource(
+                &ws,
+                &store,
+                &loader,
+                resource.id(),
+                None,
+                None,
+                Resolution::Normal,
+                false,
+                ctx.branch("plot".into(), false)
+            ).await?
+
+        }
+
+        for resource in Simple::new(ResourceType::Set("all_label_1".into())).to_resources(&store).await? {
+            // resource
+
+            plot_resource(
+                &ws,
+                &store,
+                &loader,
+                resource.id(),
+                None,
+                None,
+                Resolution::Normal,
+                false,
+                ctx.branch("plot".into(), false)
+            ).await?
+
+        }
+
+        let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(64, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
+        let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
+
+        for motif_id in &motifs {
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
+            debug!("heavy_run_mel_path: motif={motif:?}");
+            with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
+                    let motif_t = motif.data().as_ref().unsqueeze(0);
+                    debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
+                    let distance = clc_d2_similarity(&ref_motif.1, &motif_t, SimilarityMetric::EucDist(EucDistConfig{z_normalize: true}))?;
+                    best_reference_distances[ref_idx] = best_reference_distances[ref_idx].min(distance.f_min()?.f_double_value(&[])?);
+                    debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
+                }
+                Ok::<_, ThoError>(())
+            })?;
+
+
+            let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+                Metrics::NormThickness(NormThicknessRunConfig::default())
+            ]))), ctx.branch("motif_load".into(), false)).await?;
+
+            debug!("heavy_run_mel_path: metrics={metrics:?}");
+
+            plot_motif(
+                &ws,
+                ctx.branch("plot".into(), false),
+                *motif_id as usize,
+                &motif_loader_impl,
+                Arc::clone(&motif_stats),
+                None,
+                Resolution::Normal,
+                false
+            ).await?;
+
+        }
+
+        assert!(!motifs.is_empty());
+        debug!("heavy_run_mel_path: best_reference_distances={best_reference_distances:?}");
+        assert!(best_reference_distances.iter().filter(|distance| **distance < 1.0).count() >= 2, "expected MelPatch to recover at least two generated motif kinds, best_reference_distances={best_reference_distances:?}");
+
+        Ok(())
+    }
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_run_mel_path_3_channel() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
