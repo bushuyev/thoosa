@@ -396,7 +396,16 @@ unsafe impl Send for ThoError {}
 impl ThoError {
     pub fn new(msg: impl Into<String> + Display) -> Self {
         let msg = msg.into();
-        Self::new_with_error(msg.clone(), Cause::SomethingElse(msg))
+        if msg.to_lowercase().contains("cuda") {
+            let reset = msg.contains("illegal memory access");
+            warn!("ThoError::new: msg={msg} reset={reset}");
+            Self::new_with_error(msg.clone(), Cause::Cuda {
+                needs_reset: reset, msg: msg.clone()
+            })
+        } else {
+            Self::new_with_error(msg.clone(), Cause::SomethingElse(msg))
+        }
+
     }
 
     pub fn new_with_error(msg: impl Into<String> + Display, what: Cause) -> Self {
