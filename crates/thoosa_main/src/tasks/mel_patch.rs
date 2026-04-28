@@ -303,6 +303,7 @@ where
             }
 
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
+
             for ((sample_start, _sample_end), bucket) in patch_ranges[channel].iter().zip(channels_bucket_ids[channel].iter()) {
                 let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("MelPatchStage::save_resource_patches: bucket={bucket} does not fit into u16")))?;
                 let slice_start = u32::try_from(*sample_start).map_err(|_| ThoError::new(format!("MelPatchStage::save_resource_patches: sample_start={sample_start} does not fit into u32")))?;

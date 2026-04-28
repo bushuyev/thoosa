@@ -114,7 +114,7 @@ pub fn audio_to_log_mel_patches(
     // window: [n_fft]
     // frames: [C, frames, n_fft]
     // ---------------------------------------------------------------------
-    let hann = Tensor::hann_window(cfg.time_size, (Kind::Float, device));
+    let hann = Tensor::f_hann_window(cfg.time_size, (Kind::Float, device))?;
     debug!("audio_to_log_mel_patches: hann={hann:?}");
 
     let frames = frames.f_mul(&hann.f_view([1, 1, cfg.time_size])?)?;
@@ -497,10 +497,7 @@ fn hash_bit_row_with_channel_salt(bits: &[i64], channel: u64) -> u64 {
 }
 
 /// For patches shaped [channels, patches, n_mels, patch_frames],
-/// return [channels * patches, 4].
-///
-/// Each row:
-///     [channel_index, patch_index, sample_start, sample_end]
+/// returns [channels x patches, (sample_start, sample_end)].
 pub fn patch_sample_ranges_flat(
     patches: &Tensor,
     cfg: &LogMelPatchConfig,
@@ -557,17 +554,21 @@ mod tests {
         // debug_plot_impl(&Tensor::rand([1, 1000], FLOAT_CPU), "test", 0)?;
         // let tensor = Tensor::load("/home/bu/tmp/ws_clef/tensors/1_hyamac1_XC497685.ogg.pt")?;
         // let tensor = Tensor::from_slice(gen_motif((sample_rate * 3.) as usize, &MotifKind::HarmonicStack).as_slice()).view((1, -1));
-        let n = (sample_rate * 3.) as usize;
-        let tensor = Tensor::from_slice(compose_freqs(n, sample_rate as usize, vec![50.0, 5000.0]).as_slice()).view((1, -1));
-        let freqs = tensor.f_fft_rfft(None, -1, "backward")?;
+        let n = (sample_rate * 1.) as usize;
+        let tensor = Tensor::cat(&[
+            Tensor::from_slice(compose_freqs(1234, sample_rate as usize, vec![300.0,  3000.0]).as_slice()),
+            Tensor::from_slice(compose_freqs(5678, sample_rate as usize, vec![600.0,  6000.0]).as_slice()),
+            Tensor::from_slice(compose_freqs(9876, sample_rate as usize, vec![1200.0, 12000.0]).as_slice())
+        ], 0).view((1, -1));
+        let freqs = tensor.f_fft_rfft(Some(32000), -1, "backward")?;
         debug!("tensor={tensor:?} freqs=\n{freqs:?}");
-        // debug_plot_impl_wh(&(freqs.abs() *  (2.0 / n as f64)), "freqs", 0, (2000, 1000))?; //((freqs.size()[1] as u32).min(40_000), 1000))?;
-        // debug_plot_impl_wh(&tensor, "test", 0, ((tensor.size()[1] as u32).min(40_000), 1000))?;
+        debug_plot_impl_wh(&(freqs.abs() *  (2.0 / n as f64)), "freqs", 0, (2000, 1000))?; //((freqs.size()[1] as u32).min(40_000), 1000))?;
+        debug_plot_impl_wh(&tensor, "test", 0, (2000, 1000))?;
 
-        // return Ok(());
+        return Ok(());
         let cfg = LogMelPatchConfig {
             time_size: 32000,
-            time_step: 8000,
+            time_step: 800,
             n_mels: 4,
             mel_patch_size: 64,
             mel_patch_step: 32,
