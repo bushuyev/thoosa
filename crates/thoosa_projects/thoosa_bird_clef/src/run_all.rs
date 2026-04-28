@@ -560,7 +560,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 200, end: 8201}, step: Some((2000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 800, end: 16201}, step: Some((2000, 0)) },
             // window: RangeOrValue::Value(10000),
             // freq_filter: None,
             // freq_filter: Some(vec![
@@ -574,7 +574,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 BandPassFilter(BandPassFilterParamsRangeOrValue {
                     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 16001. }, step: Some((4000., 1)) },
                     band_hz: RangeOrValue::Value(1.),
-                    kernel_size: RangeOrValue::Value(1000),
+                    kernel_size: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
                     stride: RangeOrValue::Value(1),
                     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
                 }),
