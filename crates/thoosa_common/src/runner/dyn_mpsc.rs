@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use std::fmt::{Debug, Formatter};
-use log::error;
+use log::{error, info};
 use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot, watch},
@@ -107,6 +107,7 @@ struct LiveJob {
     waiting_resumes: Vec<oneshot::Sender<()>>,
 }
 
+#[derive(Debug)]
 enum ManagerCmd {
     Suspend {
         job_id: JobId,
@@ -249,12 +250,14 @@ pub struct DynamicTaskExecutor {
 }
 
 impl DynamicTaskExecutor {
+
+    //#[cfg(test)] for tests in OOMHandler
     pub fn new(queue_capacity: usize, initial_limit: NonZeroUsize) -> Self {
-        Self::new_inner(queue_capacity, initial_limit, None, Arc::new(|_| Ok(())))
+        Self::new_inner(queue_capacity, initial_limit, 0, Arc::new(|_| Ok(())))
     }
 
-    pub fn new_for_device(queue_capacity: usize, initial_limit: NonZeroUsize, device_idx: usize) -> Self {
-        Self::new_inner(queue_capacity, initial_limit, Some(device_idx), Arc::new(Self::reset_cuda_context))
+    pub fn new_for_device(queue_capacity: usize, initial_limit: NonZeroUsize, tho_device_idx: usize) -> Self {
+        Self::new_inner(queue_capacity, initial_limit, tho_device_idx, Arc::new(Self::reset_cuda_context))
     }
 
     #[cfg(test)]
@@ -264,13 +267,13 @@ impl DynamicTaskExecutor {
         device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
-        Self::new_inner(queue_capacity, initial_limit, Some(device_idx), reset_fn)
+        Self::new_inner(queue_capacity, initial_limit, device_idx, reset_fn)
     }
 
     fn new_inner(
         queue_capacity: usize,
         initial_limit: NonZeroUsize,
-        reset_device_idx: Option<usize>,
+        tho_device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
         let (tx, rx) = mpsc::channel(queue_capacity);
@@ -294,7 +297,7 @@ impl DynamicTaskExecutor {
                 exclusive_job_id_for_manager,
                 accepting_tx_for_manager,
                 accept_gate_for_manager,
-                reset_device_idx,
+                tho_device_idx,
                 reset_fn,
             ).await;
         });
@@ -506,7 +509,7 @@ impl DynamicTaskExecutor {
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
         accepting_tx: watch::Sender<bool>,
         accept_gate: Arc<tokio::sync::RwLock<()>>,
-        reset_device_idx: Option<usize>,
+        tho_device_idx: usize,
         reset_fn: ResetFn,
     ) {
         let mut pending = VecDeque::<Job>::new();
@@ -557,13 +560,15 @@ impl DynamicTaskExecutor {
             );
 
             if reset_in_progress && pending.is_empty() && jobs.is_empty() {
-                if let Some(device_idx) = reset_device_idx {
-                    if let Err(e) = reset_fn(device_idx) {
-                        error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={device_idx}: e={e:?}");
+
+                if tho_device_idx > 0 { //if tho_device_idx == 0 must be running from test
+                    if let Err(e) = reset_fn(tho_device_idx) {
+                        error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={tho_device_idx}: e={e:?}");
+                    } else {
+                        info!("DynamicTaskExecutor::run_manager: CUDA context was reset for device_idx={tho_device_idx}");
                     }
-                } else {
-                    warn!("DynamicTaskExecutor::run_manager: CUDA context reset requested but executor has no bound device");
                 }
+
 
                 accept_gate_guard.take();
                 reset_in_progress = false;
@@ -596,6 +601,8 @@ impl DynamicTaskExecutor {
                 maybe_cmd = cmd_rx.recv(), if !cmd_closed => {
                     match maybe_cmd {
                         Some(cmd) => {
+                            debug!("DynamicTaskExecutor::run_manager: manager cmd={cmd:?} reset_in_progress={reset_in_progress}");
+
                             match cmd {
                                 ManagerCmd::Suspend { job_id, reply } => {
                                     Self::handle_suspend(
@@ -618,6 +625,7 @@ impl DynamicTaskExecutor {
                                     );
                                 }
                                 ManagerCmd::RequestCudaReset => {
+                                    debug!("");
                                     if !reset_in_progress {
                                         reset_in_progress = true;
                                         let _ = accepting_tx.send(false);

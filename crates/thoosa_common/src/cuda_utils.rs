@@ -245,11 +245,11 @@ pub async fn copy_d2h_from_ptr(
                         );
                         let r: sys::CUresult = std::mem::transmute(raw);
                         if r != sys::CUresult::CUDA_SUCCESS {
-                            let needs_reset = r == sys::CUresult::CUDA_ERROR_ASSERT;
+                            let needs_reset = r == sys::CUresult::CUDA_ERROR_ASSERT || r == sys::CUresult::CUDA_ERROR_ILLEGAL_ADDRESS;
                             if needs_reset {
                                 warn!("copy_d2h_from_ptr: needs_reset");
                             }
-                            return Err::<(), Cause>(Cause::Cuda{ needs_reset: needs_reset, msg: format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")});
+                            return Err::<(), Cause>(Cause::Cuda{ needs_reset, msg: format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")});
                         }
 
                         debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={r:?}");
@@ -416,11 +416,11 @@ pub async fn copy_h2d_from_ptr(
                         );
                         let r: sys::CUresult = std::mem::transmute(raw);
                         if r != sys::CUresult::CUDA_SUCCESS {
-                            let needs_reset = r == sys::CUresult::CUDA_ERROR_ASSERT;
+                            let needs_reset = r == sys::CUresult::CUDA_ERROR_ASSERT || r == sys::CUresult::CUDA_ERROR_ILLEGAL_ADDRESS;
                             if needs_reset {
                                 warn!("copy_h2d_from_ptr: needs reset");
                             }
-                            return Err::<(), Cause>(Cause::Cuda{ needs_reset: needs_reset, msg: format!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}")});
+                            return Err::<(), Cause>(Cause::Cuda{ needs_reset, msg: format!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {r:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}")});
                         }
                         let _ = buf_stream.1.synchronize();
                         drop(buf_stream); // return buffer/stream to pool
