@@ -35,6 +35,7 @@ use thoosa_common::copy_ctx;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
@@ -525,7 +526,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
             if to_device_idx == 0 {
                 do_run(input, ctx)
             } else {
-                let stream = copy_ctx::CopyCtx::instance(to_device_idx).acquire_stream().await;
+                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
                 let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
                 let r = do_run(input, ctx);
                 stream.synchronize().unwrap();

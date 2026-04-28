@@ -579,14 +579,14 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
                 }),
                 Abs(AbsFilterParamsRangeOrValue{ _path_pd: Default::default() }),
-                MedianFilter(MedianFilterParamsRangeOrValue{
-                    // window: RangeOrValue::Value(1000)
-                    window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
-                })
+                // MedianFilter(MedianFilterParamsRangeOrValue{
+                //     // window: RangeOrValue::Value(1000)
+                //     window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
+                // })
             ]),
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            // similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ _path_pd: Default::default() }),
-            similarity_metric: SimilarityMetricRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue{ _path_pd: Default::default() }),
+            similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ _path_pd: Default::default() }),
+            // similarity_metric: SimilarityMetricRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue{ _path_pd: Default::default() }),
             // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
             //     aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(5.0) }),
             //     // aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(1.0) }),

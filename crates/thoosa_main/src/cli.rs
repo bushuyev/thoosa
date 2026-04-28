@@ -1814,7 +1814,7 @@ where
 
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
-    let r = motif.with_data_ref(0, ctx.branch(Some("plot_motif_data"), false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
+    let r = motif.with_data_ref(ctx.device_idx(), ctx.branch(Some("plot_motif_data"), false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
             let run_id = motif.extra().find_motifs_run_id;
             let channel = motif.extra().channel;
 
