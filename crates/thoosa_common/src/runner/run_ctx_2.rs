@@ -55,11 +55,11 @@ impl WithId for RunCtxImpl {
 }
 
 impl RunCtxImpl {
-    pub fn new(device_idx: usize, _id: &str,) -> Self {
+    pub fn new(tho_device_idx: usize, _id: &str,) -> Self {
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        Self::with_cache_area(device_idx, mono_key!(0, _id).into())
+        Self::with_cache_area(tho_device_idx, mono_key!(0, _id).into())
     }
 
 

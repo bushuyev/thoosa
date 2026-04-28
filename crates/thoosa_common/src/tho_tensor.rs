@@ -13,6 +13,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, 
 use torch_sys::IntList;
 use log::{debug, info, trace};
 use thoosa_shared::copy_mode::CpuOrGpu;
+use crate::runner::global_ctx::GlobalCtx;
 
 impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
     type Dimensions = D;
@@ -411,7 +412,7 @@ where
             self.tho_device()
         };
 
-        let copy_ctx = CopyCtx::instance(ctx_device);
+        let copy_ctx = GlobalCtx::global().copy_ctx(ctx_device).await;
         let src = if self.t.is_contiguous() { None } else {
             info!("f_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguous");
             Some(self.t.f_contiguous()?)

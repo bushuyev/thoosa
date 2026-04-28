@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
 use parking_lot::RwLock;
-use tch::{Device, Tensor};
+use tch::{Device, Kind, Tensor};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use cached_derive::Cached;
@@ -18,7 +18,7 @@ use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
-use thoosa_common::dims::{AnyMetrics, Dims};
+use thoosa_common::dims::{AnyDims, AnyMetrics, Dims};
 use thoosa_common::find_motifs_run_config::InputFilter;
 
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
@@ -80,7 +80,9 @@ enum PreparedFilter {
         window: u32,
         step: u32,
     },
-    Abs
+    Abs {
+        // hann: ThoTensor<AnyDims, SynKey>
+    }
 }
 
 #[derive(Debug, Cached, Named)]
@@ -160,7 +162,7 @@ where
                     let coeffs = sg_smoothing_coeffs(window_len as usize, sav_gol_config.poly_order as usize)?;
                     let weights = Tensor::from_slice(&coeffs)
                         .f_to_kind(tch::Kind::Float)?
-                        .f_to_device(Cuda(0))?
+                        .f_to_device(Cuda(0))?//TODO device
                         .f_view([1, 1, window_len as i64])?
                         .f_repeat([num_channels, 1, 1])?;
 
@@ -206,7 +208,9 @@ where
                     });
                 }
                 InputFilter::Abs(abs) => {
-                    filters.push(PreparedFilter::Abs)
+                    filters.push(PreparedFilter::Abs{
+                        // hann: Tensor::f_hann_window(sample_rate as i64, (Kind::Float, Cuda(0)))?.into()//TODO view to window size
+                    })
                 }
             }
         }
@@ -277,8 +281,9 @@ where
                     debug!("FreqFilter::apply_tho_tensor, MovingAverage: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
                     filtered_t = filtered_t_out;
                 }
-                PreparedFilter::Abs => {
-                    filtered_t = z_norm_2(&filtered_t, 1)?.f_abs()?;
+                PreparedFilter::Abs{..} => {
+                    filtered_t = z_norm_2(&filtered_t, 1)?; //.f_abs()?;
+                    filtered_t = filtered_t.f_fft_rfft(None, -1, "backward")?.f_abs()?;
                 }
             }
         }
@@ -321,7 +326,7 @@ where
                 PreparedFilter::BandPass { stride, .. } | PreparedFilter::SavGol { stride, .. } => *stride as i64,
                 PreparedFilter::MovingAverage { step, .. } => *step as i64,
                 PreparedFilter::NotchBand { .. } | PreparedFilter::Median { .. } => 1,
-                PreparedFilter::Abs => {1}
+                PreparedFilter::Abs{..} => {1}
             };
 
             effective_stride
@@ -343,7 +348,7 @@ where
                     Self::expand_required_len(required_len, *stride as i64, local_min)
                 }
                 PreparedFilter::SavGol { window_len, stride, .. } => Self::expand_required_len(required_len, *stride as i64, *window_len),
-                PreparedFilter::Abs => {Ok(1)}
+                PreparedFilter::Abs{..} => {Ok(1)}
             }
         })
     }

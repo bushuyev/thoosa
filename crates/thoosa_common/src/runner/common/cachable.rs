@@ -4,8 +4,6 @@ use crate as thoosa_common;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
-#[cfg(any(test, feature = "mock_global_ctx"))]
-use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
 use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
@@ -503,7 +501,7 @@ where
                 Ok(v) => {
                     let data = v.deref();
 
-                    let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
                     let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
                     let r =DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);
                     stream.synchronize()?;
@@ -556,7 +554,7 @@ where
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
                 let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
                 let r =DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                 stream.synchronize()?;
@@ -610,7 +608,7 @@ where
 
                     let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                    let stream = crate::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
+                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
                     let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
                     let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
 
