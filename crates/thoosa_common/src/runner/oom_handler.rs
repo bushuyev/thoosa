@@ -241,13 +241,14 @@ where
     pd_rc: PhantomData<(RC, &'z RCC)>,
 }
 
-#[cfg(any(test, feature = "mock_global_ctx"))]
+#[cfg(all(test, feature = "mock_global_ctx"))]
 fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
+    debug!("OOMHandler::oom_executor: for mock");
     static EXECUTOR: std::sync::OnceLock<crate::runner::dyn_mpsc::DynamicTaskExecutor> = std::sync::OnceLock::new();
     EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16, std::num::NonZeroUsize::new(1).expect("non-zero")))
 }
 
-#[cfg(not(any(test, feature = "mock_global_ctx")))]
+#[cfg(not(all(test, feature = "mock_global_ctx")))]
 fn oom_executor(device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
     GlobalCtx::global().get_executor(device_idx)
 }

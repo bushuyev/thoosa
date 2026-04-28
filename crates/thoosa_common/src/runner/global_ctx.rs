@@ -6,18 +6,24 @@ use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
+use futures_util::StreamExt;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{backtrace_head_lines, with_async_perf_log, with_perf_log, Cause, ThoError, LOCK_TIMEOUT};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use thoosa_shims::context::ThoCudaContext;
+use crate::copy_ctx::CopyCtx;
 use crate::runner::adjusters::max_parallel::{MaxParallel, MAX_PARALLEL};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
+use crate::tho_device::ThoDevice;
+use futures::FutureExt;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -30,7 +36,9 @@ pub struct GlobalCtx {
     caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_time: AtomicU64, //for tracking CPU-only lifetime
     purger: Purger,
-    shutting_down:AtomicBool//TODO not needed if tokio's shutdown_background in project main
+    shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
+
+    copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -87,8 +95,10 @@ impl GlobalCtx {
 
         Self {
             num_devices,
-            executors: (1..num_devices).map(|device_idx| DynamicTaskExecutor::new_for_device(1024, NonZeroUsize::new(16).unwrap(), device_idx))
-                .collect(),
+            executors: (1..num_devices).map(|device_idx| {
+                DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(16).unwrap(), device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+            })
+            .collect(),
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -98,12 +108,28 @@ impl GlobalCtx {
 
             cache_time: Default::default(),
             purger: Purger::new(),
-            shutting_down: false.into()
+            shutting_down: false.into(),
+            copy_ctx: (1..num_devices).map(|device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).collect()
         }
     }
 
-    pub fn get_executor(&self, device:usize)-> &DynamicTaskExecutor {
-        &self.executors[device-1]
+    fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
+        async move {
+            info!("DynamicTaskExecutor::reset_cuda_context: tho_device_idx={tho_device_idx}");
+
+            *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance(0.2, 16);
+
+            let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32).map_err(ThoError::new)?;
+            cu_ctx.reset()?;
+
+            info!("DynamicTaskExecutor::reset_cuda_context: done");
+            Ok(())
+        }.boxed()
+    }
+
+    pub fn get_executor(&self, tho_device:usize) -> &DynamicTaskExecutor {
+        debug!("GlobalCtx::get_executor: tho_device={tho_device} self.executors.len={}", self.executors.len());
+        &self.executors[tho_device -1]
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
@@ -321,6 +347,14 @@ impl GlobalCtx {
 
     pub fn is_shutting_down(&self)->bool {
         self.shutting_down.load(Relaxed)
+    }
+}
+
+impl GlobalCtx {
+    pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockReadGuard<'_, CopyCtx> {
+        let device:ThoDevice = device.into();
+        let gpu_device_ordinal = device.gpu_ordinal();
+        self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).read().await
     }
 }
 
@@ -595,4 +629,11 @@ pub mod mock_global_ctx {
     }
 
     pub static mut USE_REAL_CTX:bool = false;
+}
+
+#[cfg(any(test, feature = "mock_global_ctx"))]
+impl MockGlobalCtx {
+    pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
+        GlobalCtx::real_global().copy_ctx(device).await
+    }
 }

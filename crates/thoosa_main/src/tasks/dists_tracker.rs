@@ -26,6 +26,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunId;
 use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::RunCtx;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_shims::stream::ThoCudaStream;
 use thoosa_shims::stream::ThoStreamGuard;
 use thoosa_store::fs_store::FileMotifTrackerStore;
@@ -621,7 +622,7 @@ impl DistsMask {
                     };
                     let device = ThoDevice::from(mask.device());
                     let kind = mask.kind();
-                    CopyCtx::instance(device).move_t(mask, 0, kind).await?
+                    GlobalCtx::global().copy_ctx(device).await.move_t(mask, 0, kind).await?
                 };
                 let dists = match self.dists {
                     Some(dists) if dists.device().eq(&Cpu) => Some(dists),
@@ -633,7 +634,7 @@ impl DistsMask {
                         };
                         let kind = dists.kind();
                         let dists_device = ThoDevice::from(dists.device());
-                        Some(CopyCtx::instance(dists_device).move_t(dists, 0, kind).await?)
+                        Some(GlobalCtx::global().copy_ctx(dists_device).await.move_t(dists, 0, kind).await?)
                     }
                     None => None,
                 };

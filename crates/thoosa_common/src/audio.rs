@@ -562,8 +562,15 @@ mod tests {
         ], 0).view((1, -1));
         let freqs = tensor.f_fft_rfft(Some(32000), -1, "backward")?;
         debug!("tensor={tensor:?} freqs=\n{freqs:?}");
-        debug_plot_impl_wh(&(freqs.abs() *  (2.0 / n as f64)), "freqs", 0, (2000, 1000))?; //((freqs.size()[1] as u32).min(40_000), 1000))?;
-        debug_plot_impl_wh(&tensor, "test", 0, (2000, 1000))?;
+
+
+        let top_fr =freqs.topk(10, 1, true, false);
+
+        debug!("top_fr.0=\n{} top_fr.1=\n{}", top_fr.0, top_fr.1);
+
+        // debug_plot_impl_wh(&(freqs.abs() *  (2.0 / n as f64)), "freqs", 0, (2000, 1000))?; //((freqs.size()[1] as u32).min(40_000), 1000))?;
+
+        // debug_plot_impl_wh(&tensor, "test", 0, (2000, 1000))?;
 
         return Ok(());
         let cfg = LogMelPatchConfig {

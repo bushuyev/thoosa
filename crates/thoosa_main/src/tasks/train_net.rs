@@ -536,7 +536,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
 
         if self.x.device_idx() == to_device_idx {
-            let stream = CopyCtx::instance(to_device_idx).acquire_stream().await;
+            let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
             let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
 
             let r = do_run(self, &permits_ctx);
@@ -555,7 +555,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
             let input = TrainStepInput::new(x, lengths, expected_y);
 
-            let stream = CopyCtx::instance(1).acquire_stream().await;
+            let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
             let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
             let r = do_run(&input, &permits_ctx);
             stream.synchronize()?;

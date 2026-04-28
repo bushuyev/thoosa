@@ -15,9 +15,13 @@ use tokio::{
 use tracing::{debug, warn};
 use std::sync::Arc;
 use std::sync::atomic::Ordering::Relaxed;
+use futures_util::future::BoxFuture;
 use parking_lot::RwLock;
+use tracing_subscriber::filter::FilterExt;
 use thoosa_shared::{Cause, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shims::context::ThoCudaContext;
+use futures::FutureExt;
 
 enum IsOOM {
     Yes,
@@ -34,9 +38,9 @@ impl From<bool> for IsOOM {
     }
 }
 
-type BoxFuture = Pin<Box<dyn Future<Output = IsOOM> + Send + 'static>>;
+type JobFuture = Pin<Box<dyn Future<Output = IsOOM> + Send + 'static>>;
 type JobId = u64;
-type ResetFn = Arc<dyn Fn(usize) -> Result<(), ThoError> + Send + Sync>;
+type ResetFn = Arc<dyn Fn(usize/*tho_device*/) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send + 'static>;
 
 static NEXT_JOB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -52,7 +56,7 @@ struct CurrentJob {
 
 struct Job {
     id: JobId,
-    fut: BoxFuture,
+    fut: JobFuture,
     /// Maximum number of *other* jobs allowed to run together with this one.
     ///
     /// Examples:
@@ -82,7 +86,7 @@ impl Job {
         let job_id = self.id;
         debug!("DynamicTaskExecutor, Job::run: running job {self:?} ");
 
-        let r = self.fut.await;
+        let r = self.fut.await;//TODO timeout?
 
         debug!("DynamicTaskExecutor, Job::run: done job {job_id:?} ");
 
@@ -253,15 +257,15 @@ impl DynamicTaskExecutor {
 
     //#[cfg(test)] for tests in OOMHandler
     pub fn new(queue_capacity: usize, initial_limit: NonZeroUsize) -> Self {
-        Self::new_inner(queue_capacity, initial_limit, 0, Arc::new(|_| Ok(())))
+        Self::new_inner(queue_capacity, initial_limit, 0, Arc::new(|_| async {Ok(())}.boxed()))
     }
 
-    pub fn new_for_device(queue_capacity: usize, initial_limit: NonZeroUsize, tho_device_idx: usize) -> Self {
-        Self::new_inner(queue_capacity, initial_limit, tho_device_idx, Arc::new(Self::reset_cuda_context))
-    }
+    // pub fn new_for_device(queue_capacity: usize, initial_limit: NonZeroUsize, tho_device_idx: usize) -> Self {
+    //     Self::new_inner(queue_capacity, initial_limit, tho_device_idx, Arc::new(Self::reset_cuda_context))
+    // }
 
-    #[cfg(test)]
-    fn new_with_reset_hook(
+    // #[cfg(test)]
+    pub fn new_with_reset_hook(
         queue_capacity: usize,
         initial_limit: NonZeroUsize,
         device_idx: usize,
@@ -276,6 +280,8 @@ impl DynamicTaskExecutor {
         tho_device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
+        debug!("DynamicTaskExecutor::new_inner: queue_capacity={queue_capacity} initial_limit={initial_limit} tho_device_idx={tho_device_idx}");
+
         let (tx, rx) = mpsc::channel(queue_capacity);
         let (limit_tx, limit_rx) = watch::channel(initial_limit.get());
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -525,7 +531,7 @@ impl DynamicTaskExecutor {
         let mut cmd_closed = false;
         let _limit_closed = false;
         let global_limit = Arc::new(AtomicU64::new(2)); //*limit_rx.borrow();
-        let mut reset_in_progress = false;
+        let mut reset_in_progress = false;//TODO rename to reset_requested
         let mut accept_gate_guard = None::<tokio::sync::OwnedRwLockWriteGuard<()>>;
 
         loop {
@@ -547,26 +553,34 @@ impl DynamicTaskExecutor {
                 current_exclusive_job_id,
             );
 
-            Self::try_spawn_ready_jobs(
-                &mut pending,
-                &mut running,
-                &mut jobs,
-                &mut active_caps,
-                &mut active_count,
-                Arc::clone(&global_limit),
-                &done_tx,
-                &cmd_tx_for_tasks,
-                current_exclusive_job_id,
-            );
+            if !reset_in_progress {
+                Self::try_spawn_ready_jobs(
+                    &mut pending,
+                    &mut running,
+                    &mut jobs,
+                    &mut active_caps,
+                    &mut active_count,
+                    Arc::clone(&global_limit),
+                    &done_tx,
+                    &cmd_tx_for_tasks,
+                    current_exclusive_job_id,
+                );
+            }
 
-            if reset_in_progress && pending.is_empty() && jobs.is_empty() {
+            if reset_in_progress {
 
                 if tho_device_idx > 0 { //if tho_device_idx == 0 must be running from test
-                    if let Err(e) = reset_fn(tho_device_idx) {
-                        error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={tho_device_idx}: e={e:?}");
+                    if active_count <=1 {
+                        if let Err(e) = reset_fn(tho_device_idx).await {
+                            error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={tho_device_idx}: e={e:?}");
+                        } else {
+                            info!("DynamicTaskExecutor::run_manager: CUDA context was reset for device_idx={tho_device_idx}");
+                        }
                     } else {
-                        info!("DynamicTaskExecutor::run_manager: CUDA context was reset for device_idx={tho_device_idx}");
+                        warn!("DynamicTaskExecutor::run_manager: can't reset CUDA context active_count={active_count}");
                     }
+                } else {
+                    warn!("DynamicTaskExecutor::run_manager: reset_in_progress on CPU");
                 }
 
 
@@ -625,7 +639,7 @@ impl DynamicTaskExecutor {
                                     );
                                 }
                                 ManagerCmd::RequestCudaReset => {
-                                    debug!("");
+
                                     if !reset_in_progress {
                                         reset_in_progress = true;
                                         let _ = accepting_tx.send(false);
@@ -1133,7 +1147,9 @@ mod tests {
                     reset_active.store(true, Ordering::SeqCst);
                     std::thread::sleep(Duration::from_millis(50));
                     reset_active.store(false, Ordering::SeqCst);
-                    Ok(())
+                    async {
+                        Ok(())
+                    }.boxed()
                 })
             },
         ));

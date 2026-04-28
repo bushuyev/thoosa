@@ -9,8 +9,6 @@ use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 
-#[cfg(any(test, feature = "mock_global_ctx"))]
-use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
 
 pub enum PurgeCmd {
