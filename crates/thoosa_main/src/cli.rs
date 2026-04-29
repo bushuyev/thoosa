@@ -325,7 +325,8 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
-pub async fn run_cli<F, R, A, S>(
+//TODO - lib vs app
+pub async fn run_cli<F, R, A, S, FI>(
     labeled_resources: F,
     resource_to_tensor: R,
     init_data:S,
@@ -334,6 +335,7 @@ pub async fn run_cli<F, R, A, S>(
     channels: u32,
     max_input: u32,
     sample_rate: u32,
+    infer: Option<FI>,
 ) -> Result<(), ThoError>
 where
     F: Fn(&dyn AsRef<Path>) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError>,
@@ -345,7 +347,12 @@ where
         RunCtxImpl,
         &RunAllArgs,
     ) -> Result<(), ThoError>,
-    S: FnOnce(&Transaction) -> Result<(), ThoError>
+    S: FnOnce(&Transaction) -> Result<(), ThoError>,
+    FI: AsyncFnOnce(
+        &InferArgs,
+        &Arc<RwLock<Box<dyn Workspace>>>,
+        &Arc<Box<dyn Store>>,
+    ) -> Result<(), ThoError>
 {
     // console_subscriber::init();
     if log::log_enabled!(log::Level::Trace) {

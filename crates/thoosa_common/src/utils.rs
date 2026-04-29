@@ -1680,7 +1680,7 @@ pub fn stretch<T: AsRef<Tensor>>(
 
     // Same length: return a shallow clone.
     if in_len == stretch_to {
-        return Ok(t.shallow_clone());
+        return Ok(t.shallow_clone());//it's used only from BatchAppliedMotifNets::consume
     }
 
 

@@ -87,11 +87,11 @@ fn main() -> Result<(), ThoError> {
 
                 run_all(ws, store, loader, root_ctx, run_all_args, all_configs).await
             },
-
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,
             684400,
             200,
+            None,
         )
         .await
     });

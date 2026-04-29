@@ -2,8 +2,8 @@ use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use log::{debug, info};
+use tch::Device::Cpu;
 use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SimilarityMetricRangeOrValue, SlicesFilterRangeOrValue};
-
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::Abs;
@@ -14,10 +14,10 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::{AbsFilterParams, AbsFilterParamsRangeOrValue, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, median_window_from_find_motifs, median_window_from_find_motifs_grid, run_grid, run_opt, FindAndSelect, RunAllArgs};
+use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, median_window_from_find_motifs, median_window_from_find_motifs_grid, run_grid, run_opt, run_plot, FindAndSelect, RunAllArgs};
 use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsRunConfigFields::SelectMotifsRunConfig;
@@ -26,6 +26,7 @@ use thoosa_main::tasks::motif_loader::MotifLoader;
 use thoosa_main::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
 use thoosa_motifs::find::FixedFindMotifsConfig;
+use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_shared::{collect_futures_with_progress, RangeOrValue, ResourceType, StreamBuffering, ThoError};
 use thoosa_shared::ResourceType::NotInGroup;
 use thoosa_shared::run_configs::RunId;
@@ -158,7 +159,13 @@ pub(crate) async fn run_all(
                             || label_ctx.branch(Some("select_motifs"), true),
                         ).await?);
                     }
-                    info!("select motifs done: select_motifs_run_ids={select_motifs_run_ids:?}");
+                    info!("select motifs done: label={label} select_motifs_run_ids={select_motifs_run_ids:?}");
+
+                    if run_all_args.with_plots {
+                        for select_motifs_run_id in &select_motifs_run_ids {
+                            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), run_all_args.resolution, &Cpu, label_ctx.branch("plot".into(), false)).await?;
+                        }
+                    }
 
                     let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, train_motifs_opt_config)));
 
@@ -181,7 +188,7 @@ pub(crate) async fn run_all(
                         || label_ctx.branch(Some("train motif nets"), true),
                     ).await?;
 
-                    info!("train motif nets done: train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
+                    info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
                     //gpt Pre-create context and shared handles for label-net stage construction.
                     let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
@@ -218,7 +225,7 @@ pub(crate) async fn run_all(
                         || label_ctx.branch(Some("train label nets"), true),
                     ).await?;
 
-                    info!("train label nets done: run_ids={train_label_nets_run_ids:?}");
+                    info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
 
 
                     Ok(())
@@ -297,6 +304,13 @@ pub(crate) async fn run_all(
                         .into_iter().map(
                         |opt_select_result_ids| opt_select_result_ids.1
                     ).collect::<Vec<_>>();
+
+                    if run_all_args.with_plots {
+                        for select_motifs_run_id in &select_motifs_run_ids {
+                            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![*select_motifs_run_id] }), run_all_args.resolution, &Cpu, ctx.branch("plot".into(), false)).await?;
+                        }
+                    }
+
 
                     info!("opt FindAndSelectMotifsRunConfig done: select_motifs_run_ids={select_motifs_run_ids:?}");
 
@@ -560,9 +574,9 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 800, end: 16201}, step: Some((2000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 8000, end: 128001}, step: Some((8000, 0)) },
             // window: RangeOrValue::Value(10000),
-            // freq_filter: None,
+            freq_filter: None,
             // freq_filter: Some(vec![
             //     AverageFilter(AverageFilterParamsRangeOrValue {
             //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
@@ -570,20 +584,20 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             //     }),
             // ]),
 
-            freq_filter: Some(vec![
-                BandPassFilter(BandPassFilterParamsRangeOrValue {
-                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 16001. }, step: Some((4000., 1)) },
-                    band_hz: RangeOrValue::Value(1.),
-                    kernel_size: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
-                    stride: RangeOrValue::Value(1),
-                    padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-                }),
-                Abs(AbsFilterParamsRangeOrValue{ _path_pd: Default::default() }),
+            // freq_filter: Some(vec![
+                // BandPassFilter(BandPassFilterParamsRangeOrValue {
+                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 16001. }, step: Some((4000., 1)) },
+                //     band_hz: RangeOrValue::Value(1.),
+                //     kernel_size: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
+                //     stride: RangeOrValue::Value(1),
+                //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+                // }),
+                // Abs(AbsFilterParamsRangeOrValue{ _path_pd: Default::default() }),
                 // MedianFilter(MedianFilterParamsRangeOrValue{
                 //     // window: RangeOrValue::Value(1000)
                 //     window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
                 // })
-            ]),
+            // ]),
             // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
             similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ _path_pd: Default::default() }),
             // similarity_metric: SimilarityMetricRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue{ _path_pd: Default::default() }),
@@ -604,12 +618,12 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             id: None,
             extend_config: None,
             motif_criteria: vec![
-                MotifCriterionConstraintRangeOrValue {
-                    metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
-                        eps: RangeOrValue::Value(1e-8),
-                    }),
-                    min: RangeOrValue::Value(0.5),
-                }
+                // MotifCriterionConstraintRangeOrValue {
+                //     metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
+                //         eps: RangeOrValue::Value(1e-8),
+                //     }),
+                //     min: RangeOrValue::Value(0.5),
+                // }
             ],
             extend_max_slices: None,
         },
@@ -689,14 +703,19 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         // }),
-        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-            // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            ff_mult: RangeOrValue::Value(2),
-            // dropout: RangeOrValue::Value(0.1),
-            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+        //     // d_model: RangeOrValue::Value(64),
+        //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+        //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+        //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     ff_mult: RangeOrValue::Value(2),
+        //     // dropout: RangeOrValue::Value(0.1),
+        //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        // })
+        net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
+            // num_layers: RangeOrValue::Value(4),
+            num_layers: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
+            slices_len: RangeOrValue::Range { range: Range { start: 10, end: 8000 }, step: None },
         })
 
     };
