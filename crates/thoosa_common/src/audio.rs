@@ -556,11 +556,11 @@ mod tests {
         // let tensor = Tensor::from_slice(gen_motif((sample_rate * 3.) as usize, &MotifKind::HarmonicStack).as_slice()).view((1, -1));
         let n = (sample_rate * 1.) as usize;
         let tensor = Tensor::cat(&[
-            Tensor::from_slice(compose_freqs(1234, sample_rate as usize, vec![300.0,  3000.0]).as_slice()),
-            Tensor::from_slice(compose_freqs(5678, sample_rate as usize, vec![600.0,  6000.0]).as_slice()),
-            Tensor::from_slice(compose_freqs(9876, sample_rate as usize, vec![1200.0, 12000.0]).as_slice())
+            // Tensor::from_slice(compose_freqs(1234, sample_rate as usize, vec![300.0,  3000.0]).as_slice()),
+            // Tensor::from_slice(compose_freqs(5678, sample_rate as usize, vec![600.0,  6000.0]).as_slice()),
+            Tensor::from_slice(compose_freqs(6800, sample_rate as usize, vec![1200.0, 12000.0]).as_slice())
         ], 0).view((1, -1));
-        let freqs = tensor.f_fft_rfft(Some(32000), -1, "backward")?;
+        let freqs = tensor.f_fft_rfft(None, -1, "backward")?.f_abs()?;
         debug!("tensor={tensor:?} freqs=\n{freqs:?}");
 
 

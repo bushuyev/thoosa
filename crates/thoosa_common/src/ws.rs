@@ -18,7 +18,7 @@ use tch::nn::{self, VarStore};
 use tch::{Device, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key};
+use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key, panic_to_err};
 
 pub(crate) const NET_PARAMS_FILE: &str = "parameters.json";
 pub(crate) const NET_WEIGHTS_FILE: &str = "weights.safetensors";
@@ -595,7 +595,7 @@ impl Workspace for FsWorkspace {
 
         info!("save_label_net:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
 
-        vs.save(vs_path)?;
+        panic_to_err!(vs.save(vs_path))?; //View for SafeView unwraps
 
         let path = base_path.join(NET_PARAMS_FILE);
         fs::write(&path, serde_json5::to_string(params)?)?;
