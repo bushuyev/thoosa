@@ -15,7 +15,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::transforms::filters::{AbsFilterParams, AbsFilterParamsRangeOrValue, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, RfftFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{AbsFilterParams, AbsFilterParamsRangeOrValue, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, median_window_from_find_motifs, median_window_from_find_motifs_grid, run_grid, run_opt, run_plot, FindAndSelect, RunAllArgs};
 use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
@@ -159,7 +159,7 @@ pub(crate) async fn run_all(
                             || label_ctx.branch(Some("select_motifs"), true),
                         ).await?);
                     }
-                    info!("select motifs done: select_motifs_run_ids={select_motifs_run_ids:?}");
+                    info!("select motifs done: label={label} select_motifs_run_ids={select_motifs_run_ids:?}");
 
                     if run_all_args.with_plots {
                         for select_motifs_run_id in &select_motifs_run_ids {
@@ -188,7 +188,7 @@ pub(crate) async fn run_all(
                         || label_ctx.branch(Some("train motif nets"), true),
                     ).await?;
 
-                    info!("train motif nets done: train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
+                    info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
                     //gpt Pre-create context and shared handles for label-net stage construction.
                     let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
@@ -225,7 +225,7 @@ pub(crate) async fn run_all(
                         || label_ctx.branch(Some("train label nets"), true),
                     ).await?;
 
-                    info!("train label nets done: run_ids={train_label_nets_run_ids:?}");
+                    info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
 
 
                     Ok(())
@@ -574,7 +574,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 800, end: 16201}, step: Some((2000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 8000, end: 128001}, step: Some((8000, 0)) },
             // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
@@ -593,7 +593,6 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
                 // }),
                 // Abs(AbsFilterParamsRangeOrValue{ _path_pd: Default::default() }),
-                // Rfft(RfftFilterParamsRangeOrValue{ enabled: true, _path_pd: Default::default() }),
                 // MedianFilter(MedianFilterParamsRangeOrValue{
                 //     // window: RangeOrValue::Value(1000)
                 //     window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
@@ -714,8 +713,9 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
         // })
         net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Value(4),
-            slices_len: RangeOrValue::Value(1000),
+            // num_layers: RangeOrValue::Value(4),
+            num_layers: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
+            slices_len: RangeOrValue::Range { range: Range { start: 10, end: 8000 }, step: None },
         })
 
     };
