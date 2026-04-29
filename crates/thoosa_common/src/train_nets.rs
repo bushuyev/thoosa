@@ -1506,13 +1506,13 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
 
     SeqBuilder::new(num_features/*30000*/, None)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("lin_label_node: input={t:?}");
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )?
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         debug!("lin_label_node: input={t:?}");
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )?
         .split1(
 
         {
@@ -1525,11 +1525,12 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 })),
                 None,
             )*/;
-            for _ in 0..lin_params.motif_layers {
+            for layer in 0..lin_params.motif_layers {
                 builder = builder.linear_s(
                     num_features,
-                    "todo",
-                )?;
+                    format!("split_layer_{layer}"),
+                )?
+                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
 
             }
             builder
@@ -1581,22 +1582,22 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         // .conv_1d("lin_label_node conv", 1000)
         .linear_s(
             num_features,
-            "todo",
+            "head_linear_s_0",
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
         .linear_s(
             256,
-            "todo",
+            "head_linear_s_256"
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
         .linear_s(
             128,
-            "todo",
+            "head_linear_s_128"
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
         .linear_s(
             1,
-            "todo",
+            "head_linear_s_1"
         )?
         // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
         .end_seq()
@@ -2066,7 +2067,7 @@ pub struct InferArgs {
     #[arg(long, default_value_t = 1000)]
     pub input_slice_step: usize,
 
-    #[arg(long, default_value = "../../data_local/test_eegs")]
+    #[arg(long)]
     pub input_dir: String,
 
     #[arg(long, default_value = "submission.csv")]

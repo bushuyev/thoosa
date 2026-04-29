@@ -80,7 +80,8 @@ pub enum StatsKey {
     MovingAverageFilter {
         window: u32,
     },
-    Abs {}
+    Abs {},
+    Rftt {}
 }
 
 impl Named for StatsKeys {//for  CachableIdTr
@@ -132,12 +133,12 @@ impl From<&AverageFilterParams> for StatsKey {
     }
 }
 
-
 impl From<&AbsFilterParams> for StatsKey {
     fn from(value: &AbsFilterParams) -> Self {
         StatsKey::Abs {}
     }
 }
+
 
 
 impl From<&InputFilter> for StatsKey {
@@ -148,7 +149,7 @@ impl From<&InputFilter> for StatsKey {
             InputFilter::SavGolFilter(filter) => filter.into(),
             InputFilter::MedianFilter(filter) => filter.into(),
             InputFilter::AverageFilter(filter) => filter.into(),
-            InputFilter::Abs(filter) => filter.into()
+            InputFilter::Abs(filter) => filter.into(),
         }
     }
 }
@@ -281,7 +282,7 @@ impl InputFilterLengthAdjuster for InputFilter {
             InputFilter::SavGolFilter(filter) => filter.adjust_length(),
             InputFilter::MedianFilter(filter) => filter.adjust_length(),
             InputFilter::AverageFilter(filter) => filter.adjust_length(),
-            InputFilter::Abs(filter) => filter.adjust_length()
+            InputFilter::Abs(filter) => filter.adjust_length(),
         }
     }
 }

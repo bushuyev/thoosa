@@ -1,13 +1,15 @@
 #![recursion_limit = "1024"] //for deep async future type - to avoid "error: queries overflow the depth limit"
 
+use std::fs;
 use std::sync::Arc;
-use crate::data::resource_to_tensor;
+use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
 use log::{debug, error, info};
 use std::time::Instant;
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
@@ -66,6 +68,10 @@ fn main() -> Result<(), ThoError>{
                 SqlStore::save_leaky_data_sets("C", Some(20), None, 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("C", Some(30), None, 0.6, 0.2, 0.9, &t)?;
 
+                SqlStore::save_leaky_data_sets("D", Some(100), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("E", Some(200), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("F", Some(300), None, 0.6, 0.2, 0.9, &t)?;
+
                 ///shuffles randomly
                 SqlStore::save_leaky_data_sets("X", None, None, 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("Y", None, None, 0.6, 0.2, 0.9, &t)?;
@@ -98,6 +104,11 @@ fn main() -> Result<(), ThoError>{
             1,
             u32::MAX,
             32000,
+            Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>,|{
+                debug!("bird_clef: infer");
+                infer_labels(params, ws, store).await
+
+            }),
         ).await
     });
 
@@ -114,4 +125,54 @@ fn main() -> Result<(), ThoError>{
     std::process::exit(0x0000); //for jupyter
 
     Ok(())
+}
+
+
+async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
+    for entry in fs::read_dir(&params.input_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.ends_with("ogg") {
+            debug!("path={path:?}");
+            let ogg_t = ogg_to_tensor(path)?;
+
+
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use parking_lot::RwLock;
+    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::train_nets::InferArgs;
+    use thoosa_common::ws::WsMockBuilder;
+    use thoosa_shared::ThoError;
+    use thoosa_store::MockStoreBuilder;
+    use crate::infer_labels;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_0() -> Result<(), ThoError> {
+        let ws = Arc::new(RwLock::new(
+            WsMockBuilder::new(None, 1, 100, u32::MAX)
+
+            .build(),
+        ));
+
+        let store = Arc::new(
+            MockStoreBuilder::new()
+
+            .build(),
+        );
+
+        let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 0);
+
+        infer_labels(&params, &ws, &store).await?;
+
+        Ok(())
+    }
 }

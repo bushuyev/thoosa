@@ -8,6 +8,7 @@ use tch::{Device, Kind, Tensor};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use cached_derive::Cached;
+use thoosa_common::debug_plot;
 use thoosa_named_derive::Named;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
@@ -81,7 +82,7 @@ enum PreparedFilter {
         step: u32,
     },
     Abs {
-        // hann: ThoTensor<AnyDims, SynKey>
+
     }
 }
 
@@ -209,7 +210,6 @@ where
                 }
                 InputFilter::Abs(abs) => {
                     filters.push(PreparedFilter::Abs{
-                        // hann: Tensor::f_hann_window(sample_rate as i64, (Kind::Float, Cuda(0)))?.into()//TODO view to window size
                     })
                 }
             }
@@ -239,7 +239,7 @@ where
     }
 
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData2, SynKey>) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> {
-        let mut filtered_t = input_tensor.t_ref().totype(Float);
+        let mut filtered_t = input_tensor.t_ref().f_totype(Float)?;
         for filter in self.filters.iter() {
             match filter {
                 PreparedFilter::NotchBand { low_hz, high_hz } => {
@@ -282,8 +282,7 @@ where
                     filtered_t = filtered_t_out;
                 }
                 PreparedFilter::Abs{..} => {
-                    filtered_t = z_norm_2(&filtered_t, 1)?; //.f_abs()?;
-                    filtered_t = filtered_t.f_fft_rfft(None, -1, "backward")?.f_abs()?;
+                    filtered_t = z_norm_2(&filtered_t, 1)?.f_abs()?;
                 }
             }
         }
@@ -348,7 +347,7 @@ where
                     Self::expand_required_len(required_len, *stride as i64, local_min)
                 }
                 PreparedFilter::SavGol { window_len, stride, .. } => Self::expand_required_len(required_len, *stride as i64, *window_len),
-                PreparedFilter::Abs{..} => {Ok(1)}
+                PreparedFilter::Abs { .. } => { Ok(1) }
             }
         })
     }

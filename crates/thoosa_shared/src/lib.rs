@@ -396,8 +396,9 @@ unsafe impl Send for ThoError {}
 impl ThoError {
     pub fn new(msg: impl Into<String> + Display) -> Self {
         let msg = msg.into();
-        if msg.to_lowercase().contains("cuda") {
-            let reset = msg.contains("illegal memory access");
+        let msg_lc = msg.to_lowercase();
+        if msg_lc.contains("cuda") {
+            let reset = msg_lc.contains("illegal memory access") || msg_lc.contains("stream synchronize failed");
             warn!("ThoError::new: msg={msg} reset={reset}");
             Self::new_with_error(msg.clone(), Cause::Cuda {
                 needs_reset: reset, msg: msg.clone()
@@ -405,7 +406,6 @@ impl ThoError {
         } else {
             Self::new_with_error(msg.clone(), Cause::SomethingElse(msg))
         }
-
     }
 
     pub fn new_with_error(msg: impl Into<String> + Display, what: Cause) -> Self {

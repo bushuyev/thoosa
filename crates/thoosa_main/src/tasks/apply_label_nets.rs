@@ -136,6 +136,7 @@ where
             .collect::<Vec<_>>();
 
         label_nets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+
         if label_nets.is_empty() {
             return Err(ThoError::new("ApplyLabelNets::new: no label nets loaded"));
         }
