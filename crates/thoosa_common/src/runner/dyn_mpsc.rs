@@ -430,16 +430,21 @@ impl DynamicTaskExecutor {
             let cmd_tx = self.cmd_tx.clone();
 
             let fut = fut.take().expect("future must only be moved into a submitted job");
+            let accepting_tx = self.accepting_tx.clone();
             let wrapped = async move {
                 let result = fut.await;
 
                 let needs_reset = result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset());
                 if needs_reset {
+                    let _ = accepting_tx.send(false);
                     warn!("DynamicTaskExecutor::submit: needs_reset");
+                    if cmd_tx.send(ManagerCmd::RequestCudaReset).is_err() {
+                        error!("DynamicTaskExecutor::submit: failed to request CUDA context reset for job_id={job_id}");
+                    }
+                    let _ = result_tx.send(result);
+                    return  false.into();//TODO clean up logic
                 }
-                if needs_reset && cmd_tx.send(ManagerCmd::RequestCudaReset).is_err() {
-                    error!("DynamicTaskExecutor::submit: failed to request CUDA context reset for job_id={job_id}");
-                }
+
 
                 let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
                 let mut exclusive_job_id = exclusive_job_id.write();
