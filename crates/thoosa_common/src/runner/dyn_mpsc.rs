@@ -435,14 +435,17 @@ impl DynamicTaskExecutor {
                 let result = fut.await;
 
                 let needs_reset = result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset());
+
                 if needs_reset {
-                    let _ = accepting_tx.send(false);
                     warn!("DynamicTaskExecutor::submit: needs_reset");
+
+                    let _ = accepting_tx.send(false);
+
                     if cmd_tx.send(ManagerCmd::RequestCudaReset).is_err() {
                         error!("DynamicTaskExecutor::submit: failed to request CUDA context reset for job_id={job_id}");
                     }
                     let _ = result_tx.send(result);
-                    return  false.into();//TODO clean up logic
+                    return false.into();//TODO clean up logic
                 }
 
 
@@ -574,15 +577,22 @@ impl DynamicTaskExecutor {
 
             if reset_in_progress {
 
-                if tho_device_idx > 0 { //if tho_device_idx == 0 must be running from test
-                    if active_count <=1 {
+                if tho_device_idx > 0 {
+                    if accept_gate_guard.is_none() {
+                        if let Ok(guard) = Arc::clone(&accept_gate).try_write_owned() {
+                            accept_gate_guard = Some(guard);
+                        }
+                    }
+                    //if tho_device_idx == 0 must be running from test
+                    if jobs.is_empty() {
                         if let Err(e) = reset_fn(tho_device_idx).await {
                             error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={tho_device_idx}: e={e:?}");
                         } else {
+
                             info!("DynamicTaskExecutor::run_manager: CUDA context was reset for device_idx={tho_device_idx}");
                         }
                     } else {
-                        warn!("DynamicTaskExecutor::run_manager: can't reset CUDA context active_count={active_count}");
+                        warn!("DynamicTaskExecutor::run_manager: can't reset CUDA context jobs.len={}", jobs.len());
                     }
                 } else {
                     warn!("DynamicTaskExecutor::run_manager: reset_in_progress on CPU");

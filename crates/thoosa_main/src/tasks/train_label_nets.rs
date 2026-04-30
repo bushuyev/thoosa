@@ -65,6 +65,7 @@ where
     C: RunCtx + Adjustable + 'static
 {
     train_motif_nets_run_ids: Vec<RunId>,
+    motif_nets_ids: Vec<RunId>,
     run_configs: Arc<OptRunConfigs<
         Vec<NamedVal<TrainLabelNetsRunConfigFields>>,
         Vec<NamedRange<TrainLabelNetsRunConfigFields>>,
@@ -116,6 +117,7 @@ where
     if num_nets == 0 {
         return Err(ThoError::new("No motifs nets to train on"));
     }
+    let motif_nets_ids = apply_motif_nets.motif_nets_ids();
 
     let applied_motif_loader = Arc::new(ABStage::new(
         SynKey::new([
@@ -126,8 +128,11 @@ where
         apply_motif_nets
     ));
 
+
+
     TrainLabelNets::new(
         train_motif_nets_run_ids,
+        motif_nets_ids,
         applied_motif_loader,
         num_nets,
         run_configs,
@@ -147,6 +152,7 @@ where
 
     pub async fn new(
         train_motif_nets_run_ids: Vec<RunId>,
+        motif_nets_ids: Vec<u32>,
         applied_motif_loader: Arc<LM>,
         num_nets:u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
@@ -166,6 +172,8 @@ where
             })
             .filter(|labels| !labels.is_empty());
         Ok(Self {
+            train_motif_nets_run_ids,
+            motif_nets_ids,
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
             applied_motif_loader,
@@ -173,14 +181,13 @@ where
             num_nets,
             store: Arc::clone(store),
             opt_config,
-            train_motif_nets_run_ids,
             labels,
 
         })
     }
 
 }
-
+//TODO remove
 #[derive(Debug)]
 pub struct TrainLabelNetsInput {
     id: SynKey
@@ -235,6 +242,7 @@ impl WithId for TrainLabelNetsInput {
 pub struct TrainLabelNetsOutput {
     id: RunId,
     train_motif_nets_run_ids: Vec<RunId>,
+    motif_nets_ids:Vec<u32>,
     results: Vec<TrainLabelNetsRunConfigResult>
 }
 impl WithId for TrainLabelNetsOutput {
@@ -271,7 +279,9 @@ impl SavableResult for TrainLabelNetsOutput {
         self.id = run_id;
 
         for result in &mut self.results {
+            //TODO add ctx to save and pass train_label_nets_run_id & motif_nets_ids as refs
             result.set_train_label_nets_run_id(run_id);
+            result.set_motif_nets_ids(self.motif_nets_ids.clone());
             result.save(store, ws).await?;
         }
 
@@ -280,8 +290,13 @@ impl SavableResult for TrainLabelNetsOutput {
 }
 
 impl TrainLabelNetsOutput {
-    pub fn new(train_motif_nets_run_ids: Vec<RunId>, results: Vec<TrainLabelNetsRunConfigResult>) -> Self {
-        Self { id: 0, train_motif_nets_run_ids, results }
+    pub fn new(train_motif_nets_run_ids: Vec<RunId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetsRunConfigResult>) -> Self {
+        Self {
+            id: 0,
+            train_motif_nets_run_ids,
+            motif_nets_ids,
+            results
+        }
     }
 }
 
@@ -310,7 +325,7 @@ where
         debug!("TrainLabelNets::run: num_nets={}", self.num_nets);
 
         async move {
-            //gpt Split resources into train/valid sets per label for binary label-vs-rest training.
+            //Split resources into train/valid sets per label for binary label-vs-rest training.
             let resources_config = with_data!(ctx.branch(Some("train_label_nets_resources"), false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoError>(input.resources_config().clone())
             })?;
@@ -361,10 +376,9 @@ where
                 let opt_config = Arc::clone(&self.opt_config);
                 let train_label_nets_run_configs = Arc::clone(&train_label_nets_run_configs);
                 let applied_motif_loader = Arc::clone(&self.applied_motif_loader);
-                let train_motif_nets_run_ids = self.train_motif_nets_run_ids.clone();
 
-                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?} train_label_nets_run_configs={train_label_nets_run_configs:?}");
-
+                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_ids={:?} train_label_nets_run_configs={train_label_nets_run_configs:?}", self.train_motif_nets_run_ids);
+                let motif_nets_ids = self.motif_nets_ids.clone();
 
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
                 let num_nets = self.num_nets;
@@ -447,9 +461,9 @@ where
                                     Ok((conv_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                                 LabelNetTypeArgs::LinNet(LinNetArgs {
-                                     num_layers, slices_len
-                                }) => {
-                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, num_layers)));
+                                     num_layers, features
+                                                         }) => {
+                                    let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, num_layers)));
 
                                     Ok((lin_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
@@ -495,7 +509,6 @@ where
 
                     Ok::<_, ThoError>(
                         TrainLabelNetsRunConfigResult::new(
-                            train_motif_nets_run_ids, //TODO
                             label,
                             result.min_loss,
                             result.node_params,
@@ -516,7 +529,7 @@ where
                 "train labels",
             ).await;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), results))))
+            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), self.motif_nets_ids.clone(), results))))
         }
     }
 }
@@ -621,7 +634,7 @@ where
         let batches = shuffle_and_chunk_with_rng(self.resources_1_train.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
-        assert!(!batches.is_empty());
+        assert!(!batches.is_empty(), "train_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}",self.resources_1_train,  self.resources_0_train);
 
         Self::build_batch_stream(
             Arc::clone(&self.build_batch_fn),
@@ -637,7 +650,7 @@ where
         let batches = shuffle_and_chunk_with_rng(self.resources_1_valid.len(), self.half_batch_size, &mut rng());
 
         debug!("ResourcesBatch::train_batch_iter: batches={batches:?}");
-        assert!(!batches.is_empty());
+        assert!(!batches.is_empty(), "valid_batch_stream: batch is empty, self.resources_1_train={:?} self.resources_0_train={:?}",self.resources_1_train,  self.resources_0_train);
 
         Self::build_batch_stream(
             Arc::clone(&self.build_batch_fn),
@@ -946,7 +959,7 @@ mod tests {
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(100)),
                     NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
                     // NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::SlicesLen)), Val::Int(1000)),//TODO used as num features in any_len_label_node
+                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::Features)), Val::Int(1000)),//TODO used as num features in any_len_label_node
                 ]),
                 vec![
                     // NamedRange::new(TrainLabelNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))

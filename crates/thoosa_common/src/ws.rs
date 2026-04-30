@@ -595,7 +595,7 @@ impl Workspace for FsWorkspace {
 
         info!("save_label_net:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
 
-        panic_to_err!(vs.save(vs_path))?; //View for SafeView unwraps
+        panic_to_err!(vs.save(vs_path))?; //View for SafeView unwraps, it should be retried
 
         let path = base_path.join(NET_PARAMS_FILE);
         fs::write(&path, serde_json5::to_string(params)?)?;

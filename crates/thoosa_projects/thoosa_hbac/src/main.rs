@@ -4,11 +4,12 @@ mod data;
 mod run_all;
 
 use std::sync::Arc;
-use log::{error, info};
+use log::{debug, error, info};
 use std::time::Instant;
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
@@ -91,7 +92,10 @@ fn main() -> Result<(), ThoError> {
             20,
             684400,
             200,
-            None,
+            Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>,|{
+                debug!("bird_clef: infer");
+                todo!()
+            }),
         )
         .await
     });

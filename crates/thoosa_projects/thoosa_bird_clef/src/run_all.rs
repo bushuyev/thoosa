@@ -201,7 +201,7 @@ pub(crate) async fn run_all(
                     )/*.check(&store).await?*/));
 
                     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
-                    let train_label_nets_run_ids = run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
+                    match run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
                         None,
                         train_label_nets_run_config_range_or_value,
                         train_labels_input,
@@ -223,10 +223,14 @@ pub(crate) async fn run_all(
                             ).await.map(|v| Arc::new(v))
                         },
                         || label_ctx.branch(Some("train label nets"), true),
-                    ).await?;
-
-                    info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
-
+                    ).await {
+                        Ok(train_label_nets_run_ids) => {
+                            info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
+                        }
+                        Err(e) => {
+                            info!("train label nets failed: label={label} e={e:?}");
+                        }
+                    };
 
                     Ok(())
                 }
@@ -574,7 +578,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 8000, end: 128001}, step: Some((8000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 128201}, step: Some((8000, 0)) },
             // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
@@ -714,8 +718,8 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         // })
         net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
             // num_layers: RangeOrValue::Value(4),
-            num_layers: RangeOrValue::Range { range: Range { start: 4, end: 16 }, step: None },
-            slices_len: RangeOrValue::Range { range: Range { start: 10, end: 8000 }, step: None },
+            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
+            features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
         })
 
     };
