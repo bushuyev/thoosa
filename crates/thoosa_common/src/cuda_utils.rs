@@ -989,7 +989,15 @@ mod tests {
             .expect("failed to bind CUDA context for test_small_one_copy_types");
 
 
+        let t_0 = Tensor::rand(&[100000], FLOAT_CUDA);
+        let sum_0 = t_0.sum_dim_intlist(0, false, None).double_value(&[]);
+
+
         cu_ctx.reset()?;
+
+        let sum_1 = t_0.sum_dim_intlist(0, false, None).double_value(&[]);
+
+        debug!("sum_0={sum_0} sum_1={sum_1}");
 
 
         Ok(())

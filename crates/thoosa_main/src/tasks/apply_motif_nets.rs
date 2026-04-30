@@ -36,7 +36,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -70,7 +70,7 @@ where
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
     pd:PhantomData<C>,
-    apply_motif_nets: Vec<Arc<ApplyMotifNet<C>>>,
+    apply_motif_nets: Vec<(u32/*net_id*/, Arc<ApplyMotifNet<C>>)>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
 }
@@ -280,27 +280,26 @@ where
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
-        //gpt Load all selected motif nets for the provided train_motif_nets_run_ids.
+        //Load all motif nets matching max_loss and selected_nets_limit for the provided train_motif_nets_run_ids.
         let mut selected_nets = Vec::new();
         for train_motif_nets_run_id in &train_motif_nets_run_ids {
             selected_nets.extend(store.list_selected_nets(*train_motif_nets_run_id, max_loss, selected_nets_limit).await?);
         }
+
         let selected_nets_len = selected_nets.len();
+        //this defines order in which motif nets should be applied to a resource before running label net
         let futures = selected_nets
             .into_iter()
-            .map(|(path, _losss)|{
+            .map(|(id, path, _losss)|{
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
                 async move {
 
-                    // debug!("ApplyMotifNets::new: channel={channel} motif_id={motif_id} load_motif_net={load_motif_net:?}");
-
-
                     match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path))), load_ctx).await {
                         Ok(net) => {
                             debug!("ApplyMotifNets::new: loaded net={net:?}");
-                            Ok::<_, ThoError>(Some(net))
+                            Ok::<_, ThoError>(Some((id, net)))
                         }
                         Err(e) => {
                             error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
@@ -314,8 +313,8 @@ where
             futures,
             selected_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
-            StreamBuffering::Ordered,
-            "ApplyMotifNets::new",
+            StreamBuffering::Ordered,//to keep same order as in selected_nets_ids
+            "ApplyMotifNets::new/load motif nets",
         )
         .await
         .into_iter()
@@ -326,7 +325,7 @@ where
         let mut motif_widths = HashSet::new();
         let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
-        for motif_net in loaded_motif_nets {
+        for (net_id, motif_net) in loaded_motif_nets {
             let (motif_id, motif_width) = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false), motif_net; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 let motif_width = v.extra().motif_net_params.num_features();
                 motif_widths.insert(motif_width);
@@ -352,7 +351,7 @@ where
             };
 
             let freq_filter_find_motifs_run_id = if freq_filter.is_some() { Some(find_motifs_run_id) } else { None };
-            loaded_motif_nets_with_filters.push((motif_id, motif_net, motif_width, freq_filter_find_motifs_run_id, freq_filter));
+            loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_id, freq_filter));
         }
 
         if motif_widths.len() > 1 {
@@ -366,16 +365,16 @@ where
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
-        let train_motif_nets_run_ids_sorted = train_motif_nets_run_ids.clone();//TODO move to util CompKey::from Vec
-        // train_motif_nets_run_ids_sorted.sort(); it's anyway unsorted when being taken from tmp cache, each output is sorted in BatchAppliedMotifNets
+
+
         Ok(Self {
-            id: SynKey::new(train_motif_nets_run_ids_sorted.into_iter().map(|run_id| mono_key!(run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
+            id: SynKey::new(train_motif_nets_run_ids.into_iter().map(|run_id| mono_key!(run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
             ws: Arc::clone(&ws),
             store:Arc::clone(&store),
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|(motif_id, net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| Arc::new(ApplyMotifNet::new(
+                .map(|(motif_id, net_id, net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| (net_id, Arc::new(ApplyMotifNet::new(
                     motif_id,
                     net,
                     motif_width,
@@ -384,7 +383,7 @@ where
                     slice_step,//TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
                     fail_if_size_bigger_than
-                ))).collect(),
+                )))).collect(),
             slice_step,
             motif_width
         })
@@ -392,6 +391,10 @@ where
 
     pub fn num_nets(&self) -> usize {
         self.apply_motif_nets.len()
+    }
+
+    pub fn motif_nets_ids(&self) -> Vec<u32> {
+        self.apply_motif_nets.iter().map(|(id, ..)| *id).collect()
     }
 }
 
@@ -424,7 +427,7 @@ where
         let mut inputs_by_filter_group: HashMap<Option<RunId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
         inputs_by_filter_group.insert(None, Arc::clone(&input));
 
-        for apply_motif_net in &apply_motif_nets {
+        for (net_id, apply_motif_net) in &apply_motif_nets {
             let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
             if inputs_by_filter_group.contains_key(&group_key) {
                 continue;
@@ -445,7 +448,7 @@ where
         let inputs_by_filter_group = Arc::new(inputs_by_filter_group);
         let futures = apply_motif_nets
             .into_iter()
-            .map(|apply_motif_net|{
+            .map(|(net_id, apply_motif_net)|{
                 let inputs_by_filter_group = Arc::clone(&inputs_by_filter_group);
                 let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
                 let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
@@ -523,7 +526,7 @@ where
             futures,
             apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
-            StreamBuffering::Unordered,
+            StreamBuffering::Ordered,//to keep same order as in selected_nets_ids
             "ApplyMotifNets::run",
         )
         .await

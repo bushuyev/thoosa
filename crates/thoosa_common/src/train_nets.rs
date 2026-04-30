@@ -136,13 +136,13 @@ impl TrainLabelNetsRunConfig {
 
 #[derive(Debug)]
 pub struct TrainLabelNetsRunConfigResult {
-    train_motif_nets_run_ids: Vec<RunId>,
     train_label_nets_run_id: Option<RunId>,
     pub label: String,
     pub loss: f32,
     label_node_params: LabelNetParams,
     train_label_nets_run_config: TrainLabelNetsRunConfig,
     var_store: VarStore,
+    motif_nets_ids:Vec<u32>
 }
 
 impl WithId for Box<TrainLabelNetsRunConfigResult> {
@@ -156,26 +156,29 @@ impl WithId for Box<TrainLabelNetsRunConfigResult> {
 
 impl TrainLabelNetsRunConfigResult {
     pub fn new(
-        train_motif_nets_run_ids: Vec<RunId>,
         label: String,
         loss: f32,
         label_node_params: LabelNetParams,
-        train_motifs_nodes_values: TrainLabelNetsRunConfig,
+        train_label_nets_run_config: TrainLabelNetsRunConfig,
         var_store: VarStore,
     ) -> Self {
         Self {
-            train_motif_nets_run_ids,
             train_label_nets_run_id: None,
             label,
             loss,
             label_node_params,
-            train_label_nets_run_config: train_motifs_nodes_values,
+            train_label_nets_run_config,
             var_store,
+            motif_nets_ids: vec![],
         }
     }
 
     pub fn set_train_label_nets_run_id(&mut self, run_id: RunId) {
         self.train_label_nets_run_id = Some(run_id);
+    }
+
+    pub fn set_motif_nets_ids(&mut self, motif_nets_ids:Vec<u32>) {
+        self.motif_nets_ids = motif_nets_ids;
     }
 }
 
@@ -193,16 +196,12 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        let mut input_run_ids = Vec::new();
-        let input_run_ids = if let Some(run_id) = self.train_label_nets_run_id {
-            input_run_ids.push(run_id);
-            input_run_ids.as_slice()
-        } else {
-            self.train_motif_nets_run_ids.as_slice()
-        };
+        //train_label_nets_run_id set in TrainLabelNetsOutput::save
+        let mut input_run_ids = self.train_label_nets_run_id.map(|train_label_nets_run_id| vec![train_label_nets_run_id]).expect("no train_label_nets_run_id");
+
 
         let run_config_id = store.save_run_config(
-            Some(input_run_ids),
+            Some(input_run_ids.as_slice()),//it's used as input for TrainLabelNetsOutput
             &TrainLabelNetsRunConfig::type_name(),
             "Label",
             run_config_values_with_loss(self.train_label_nets_run_config.to_properties_iter(None), self.loss),
@@ -217,7 +216,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
             )
             .expect("save_label_net failed");
 
-        store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss).await?;
+        store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss, Some(self.motif_nets_ids.clone())).await?;
 
         Ok(run_config_id)
     }
@@ -1225,12 +1224,12 @@ impl SelfAttentionNetParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinLenNetParams {
     pub motif_layers: u32,
-    pub slices_len: u32,
+    pub features: u32,
 }
 
 impl LinLenNetParams {
-    pub fn new(slices_len: u32, motif_layers: u32) -> Self {
-        Self { motif_layers, slices_len }
+    pub fn new(features: u32, motif_layers: u32) -> Self {
+        Self { motif_layers, features }
     }
 }
 
@@ -1501,77 +1500,113 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         panic!("Unexpected params type: {:?}", params.net_type);
     };
 
-    let num_features = lin_params.slices_len;//params.motif_nets;
+    let num_features = lin_params.features;//params.motif_nets;
     debug!("lin_label_node: num_features={num_features}");
 
-
-    SeqBuilder::new(num_features/*30000*/, None)?
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-        //         debug!("lin_label_node: input={t:?}");
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     None,
-        // )?
-        .split1(
-
-        {
-            let mut seq_builder = SeqBuilder::new(num_features, None)?;
-            let mut builder = &mut seq_builder
-            /*.closure(
-                Arc::new(Box::new(move |t: &Tensor| {
-                    debug!("lin_label_node: motif input={t:?}");
-                    Ok(t.shallow_clone())
-                })),
-                None,
-            )*/;
-            for layer in 0..lin_params.motif_layers {
-                builder = builder.linear_s(
-                    num_features,
-                    format!("split_layer_{layer}"),
-                )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
-
-            }
-            builder
-                .end_seq()?
-            },
-
-            Box::new(move |t: &Tensor| {
-                debug!("lin_label_node: t.size={:?}", t.size());
-                let batch_size = t.size()[0];
-                let motif_nets = t.size()[1];
-                let dim_size = t.size()[2] as u32;
-                let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
-                debug!("lin_label_node: ranges={ranges:?}");
-
-
-                Ok(ranges.into_iter().map(|start| {
-
-                    let t = if start as u32 + num_features > dim_size  {
-                        debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-                        pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
-                    } else {
-                        debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
-                        t.f_narrow(2, start, num_features as i64)?
-                    };
-
-                    Ok(t)
-                }).collect::<Result<Vec<Tensor>, ThoError>>()?)
-            }),
-            Box::new(move |res: Vec<Tensor>| {
-                debug!("lin_label_node: res={res:?}");
-
-                let all = Tensor::f_concat(res.as_slice(), 1)?;
-                debug!("lin_label_node: all.size={:?}", all.size());
-
-                let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
-                debug!("lin_label_node: r.size={:?}", r.size());
-
-                Ok(r)
-
-            })
+    let mut seq_builder = SeqBuilder::new(0, None)?;
+    let mut builder = seq_builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("lin_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
+                // Ok(t.transpose(1, 2))
+                Ok(t.shallow_clone())
+            })),
+            Some(params.motif_nets),
         )?
+        .adaptive_avg_pool(lin_params.features,lin_params.features )?;
+
+        for layer in 0..lin_params.motif_layers {
+            builder = builder.linear_feats(
+                "self_attention_in_proj",
+                lin_params.features,
+                lin_params.features,
+            )?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            ;
+        }
+
+
+    builder.linear_s(
+            1,
+            "self_attention_label_head_last",
+        )?
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("lin_label_node: out={:?}", t.size());
+                // Ok(t.transpose(1, 2))
+                Ok(t.f_mean_dim(1, false, None)?)
+            })),
+            Some(params.motif_nets),
+        )?
+        .end_seq()
+
+    // SeqBuilder::new(num_features/*30000*/, None)?
+    //     // .closure(
+    //     //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+    //     //         debug!("lin_label_node: input={t:?}");
+    //     //         Ok(t.shallow_clone())
+    //     //     })),
+    //     //     None,
+    //     // )?
+    //     .split1(
+    //
+    //     {
+    //         let mut seq_builder = SeqBuilder::new(num_features, None)?;
+    //         let mut builder = &mut seq_builder
+    //         /*.closure(
+    //             Arc::new(Box::new(move |t: &Tensor| {
+    //                 debug!("lin_label_node: motif input={t:?}");
+    //                 Ok(t.shallow_clone())
+    //             })),
+    //             None,
+    //         )*/;
+    //         for layer in 0..lin_params.motif_layers {
+    //             builder = builder.linear_s(
+    //                 num_features,
+    //                 format!("split_layer_{layer}"),
+    //             )?
+    //             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+    //
+    //         }
+    //         builder
+    //             .end_seq()?
+    //         },
+    //
+    //         Box::new(move |t: &Tensor| {
+    //             debug!("lin_label_node: t.size={:?}", t.size());
+    //             let batch_size = t.size()[0];
+    //             let motif_nets = t.size()[1];
+    //             let dim_size = t.size()[2] as u32;
+    //             let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
+    //             debug!("lin_label_node: ranges={ranges:?}");
+    //
+    //
+    //             Ok(ranges.into_iter().map(|start| {
+    //
+    //                 let t = if start as u32 + num_features > dim_size  {
+    //                     debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
+    //                     pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
+    //                 } else {
+    //                     debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
+    //                     t.f_narrow(2, start, num_features as i64)?
+    //                 };
+    //
+    //                 Ok(t)
+    //             }).collect::<Result<Vec<Tensor>, ThoError>>()?)
+    //         }),
+    //         Box::new(move |res: Vec<Tensor>| {
+    //             debug!("lin_label_node: res={res:?}");
+    //
+    //             let all = Tensor::f_concat(res.as_slice(), 1)?;
+    //             debug!("lin_label_node: all.size={:?}", all.size());
+    //
+    //             let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
+    //             debug!("lin_label_node: r.size={:?}", r.size());
+    //
+    //             Ok(r)
+    //
+    //         })
+    //     )?
         // .closure(
         //     Arc::new(Box::new(move |t: &Tensor| {
         //         debug!("lin_label_node: final input={t:?}");
@@ -1580,27 +1615,27 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         //     None,
         // )
         // .conv_1d("lin_label_node conv", 1000)
-        .linear_s(
-            num_features,
-            "head_linear_s_0",
-        )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        .linear_s(
-            256,
-            "head_linear_s_256"
-        )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        .linear_s(
-            128,
-            "head_linear_s_128"
-        )?
-        .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        .linear_s(
-            1,
-            "head_linear_s_1"
-        )?
-        // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
-        .end_seq()
+        // .linear_s(
+        //     num_features,
+        //     "head_linear_s_0",
+        // )?
+        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        // .linear_s(
+        //     256,
+        //     "head_linear_s_256"
+        // )?
+        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        // .linear_s(
+        //     128,
+        //     "head_linear_s_128"
+        // )?
+        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+        // .linear_s(
+        //     1,
+        //     "head_linear_s_1"
+        // )?
+        // // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
+        // .end_seq()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -1836,7 +1871,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         )?;
 
-        store.save_selected_net(train_motifs_nets_run_id, path, self.loss).await?;
+        store.save_selected_net(train_motifs_nets_run_id, path, self.loss, None).await?;
 
         Ok(run_config_id)
 
@@ -2178,7 +2213,7 @@ pub struct LinNetArgs {
 
     #[in_map]
     #[run_config]
-    pub slices_len: u32,
+    pub features: u32,
 }
 
 
@@ -2205,7 +2240,7 @@ impl LinNetArgs {
     pub fn new(num_layers: u32, slices_len: u32) -> Self {
         Self {
             num_layers,
-            slices_len,
+            features: slices_len,
         }
     }
 }
@@ -2379,7 +2414,7 @@ mod train_tests {
         debug!("test_dir={test_dir:?}");
         let channels = 3;
         let max_motif_nodes = 19;
-        let slices_len = 23;
+        let features = 23;
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
@@ -2389,7 +2424,7 @@ mod train_tests {
         )?));
         let params = LabelNetParams::new(
             max_motif_nodes,
-            LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 3)),
+            LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, 3)),
         );
 
         let mut vs_0 = VarStore::new(Cpu);
@@ -2398,13 +2433,13 @@ mod train_tests {
         vs_0.freeze();
 
         let batch = 11i64;
-        for slices in [slices_len, 123, 17] {
+        for features in [features, 123, 17] {
             let _ = net.tho_forward(
                 &Tensor::rand(
                     [
                         batch,
                         channels as i64,
-                        slices as i64,
+                        features as i64,
                     ],
                     FLOAT_CPU,
                 )
@@ -3850,7 +3885,7 @@ mod train_tests {
         let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", HashMap::new()).await?;
         let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainLabelNetsRunConfigResult::new(
-            vec![source_run_id],
+            // vec![source_run_id],
             "alpha".to_string(),
             0.125,
             LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
@@ -3865,7 +3900,7 @@ mod train_tests {
 
         assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
         assert_eq!(vec![child_run_id], store.list_output_run_ids(parent_run_id).await?);
-        assert_eq!(vec![(PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
+        assert_eq!(vec![(0, PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
 
         Ok(())
     }

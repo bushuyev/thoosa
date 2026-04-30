@@ -436,7 +436,7 @@ impl MyCosineConv1d {
         debug!("MyCosineConv1d: l={l}");
         let kernel = match init {
             None => {
-                vs.var("kernel", &[1, 1, l], nn::Init::Const(0.0))
+                vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?
             }
             Some(motif_slices) => {
                 let l = motif_slices.size()[1];

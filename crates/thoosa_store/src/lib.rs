@@ -287,9 +287,9 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
-    async fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32) -> Result<(), ThoError>;
+    async fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_run_id: Option<Vec<u32>>) -> Result<(), ThoError>;
 
-    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(PathBuf, f32)>, ThoError>;
+    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
     #[cfg(test)]
@@ -481,13 +481,14 @@ mock! {
             run_id: RunId,
             path: PathBuf,
             loss: f32,
+            input_nets:Option<Vec<u32>>
         ) -> Result<(), ThoError>;
         async fn list_selected_nets(
             &self,
             run_id: RunId,
             loss: Option<f32>,
             limit: Option<usize>,
-        ) -> Result<Vec<(PathBuf, f32)>, ThoError>;
+        ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
         async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
         #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
@@ -851,33 +852,7 @@ impl Store for SqlStore {
                 row.get::<usize, RunId>(0)
             })?;
 
-            if let Some(input_run_ids) = input_run_id {
-                let (mut q, params) = input_run_ids.into_iter().fold(
-                    (
-                        vec!["INSERT INTO run_configs_input (run_id, input_run_id) VALUES"],
-                        vec![],
-                    ),
-                    |(mut q, mut params): (Vec<&str>, Vec<Value>), v| {
-                        q.push("(?, ?)");
-                        q.push(",");
-
-                        params.push(Value::Integer(run_id as i64));
-                        params.push(Value::Integer(v as i64)); //input_run_id
-                        //
-                        (q, params)
-                    },
-                );
-
-                if params.len() > 0 {
-                    q.pop();
-
-                    let q_str = q.into_iter().collect::<String>();
-
-                    debug!("SqlStore::save_run_config: params={params:?}");
-
-                    t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))?;
-                }
-            }
+            Self::insert_input( input_run_id, &t, run_id, "INSERT INTO run_configs_input (run_id, input_run_id) VALUES")?;
 
             if properties_vals.len() > 0 {
                 for property_val in properties_vals.into_iter() {
@@ -2154,6 +2129,7 @@ impl Store for SqlStore {
         run_id: RunId,
         path: PathBuf,
         loss: f32,
+        input_run_id: Option<Vec<u32>>,
     ) -> Result<(), ThoError> {
         self.with_writer_conn("save_selected_net", move |conn| {
             let t = conn.transaction()?;
@@ -2162,19 +2138,27 @@ impl Store for SqlStore {
                 rusqlite::params![path.to_string_lossy().to_string(), run_id, loss],
             )?;
 
+            let net_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+                row.get::<usize, RunId>(0)
+            })?;
+
+
+            Self::insert_input(input_run_id, &t, run_id, "INSERT INTO selected_nets_input (id, input_id) VALUES")?;
+
+
             t.commit()?;
             Ok(())
         })
         .await
     }
 
-    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(PathBuf, f32)>, ThoError> {
+    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
         self.with_reader_conn("list_selected_nets", move |conn| {
             let selected_nets = {
                 //TODO compose
                 let (query, params): (&str, Vec<rusqlite::types::Value>) = match (loss, limit) {
                     (Some(loss), Some(limit)) => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC LIMIT ?",
+                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC LIMIT ?",
                         vec![
                             rusqlite::types::Value::Integer(run_id as i64),
                             rusqlite::types::Value::Real(loss as f64),
@@ -2182,24 +2166,28 @@ impl Store for SqlStore {
                         ],
                     ),
                     (Some(loss), None) => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC",
+                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC",
                         vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
                     ),
                     (None, Some(limit)) => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC LIMIT ?",
+                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC LIMIT ?",
                         vec![
                             rusqlite::types::Value::Integer(run_id as i64),
                             rusqlite::types::Value::Integer(limit as i64),
                         ],
                     ),
                     (None, None) => (
-                        "SELECT net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC",
+                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC",
                         vec![rusqlite::types::Value::Integer(run_id as i64)],
                     ),
                 };
                 let mut stmt = conn.prepare(query)?;
                 stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                    Ok((PathBuf::from(row.get::<usize, String>(0)?), row.get::<usize, f32>(1)?))
+                    Ok((
+                        row.get::<usize, u32>(0)?,
+                        PathBuf::from(row.get::<usize, String>(1)?),
+                        row.get::<usize, f32>(2)?
+                    ))
                 })?
                 .map(|v| v.unwrap())
                 .collect::<Vec<_>>()
@@ -2986,12 +2974,24 @@ impl SqlStore {
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS selected_nets (
+                id    INTEGER PRIMARY KEY,
                 net_path  VARCHAR(1024),
                 run_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                loss    FLOAT NOT NULL
+                loss    FLOAT NOT NULL,
+                UNIQUE(net_path)
             )",
                 (),
             )?;
+
+            t.execute(
+            "CREATE TABLE IF NOT EXISTS selected_nets_input (
+                input_id  NOT NULL REFERENCES selected_nets(id) ON DELETE CASCADE,
+                id NOT NULL REFERENCES selected_nets(id) ON DELETE CASCADE,
+
+                PRIMARY KEY (input_run_id, run_id)
+            )",
+            (),
+        )?;
 
             t.execute("commit", ())?;
 
@@ -3708,6 +3708,39 @@ impl SqlStore {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         Ok((channel, run_id))
+    }
+
+    fn insert_input(input_run_id: Option<Vec<RunId>>, t: &Transaction, run_id: RunId, sql: &str) -> Result<(), ThoError> {
+        if let Some(input_run_ids) = input_run_id {
+            let (mut q, params) = input_run_ids.into_iter().fold(
+                (
+                    vec![sql],
+                    vec![],
+                ),
+                |(mut q, mut params): (Vec<&str>, Vec<Value>), v| {
+                    q.push("(?, ?)");
+                    q.push(",");
+
+                    params.push(Value::Integer(run_id as i64));
+                    params.push(Value::Integer(v as i64)); //input_run_id
+                    //
+                    (q, params)
+                },
+            );
+
+            if params.len() > 0 {
+                q.pop();
+
+                let q_str = q.into_iter().collect::<String>();
+
+                debug!("SqlStore::insert_input: params={params:?}");
+
+                t.execute(&q_str, rusqlite::params_from_iter(params.into_iter()))?;
+            }
+        }
+
+
+        Ok(())
     }
 }
 
@@ -4488,31 +4521,31 @@ mod store_tests {
         ).await?;
 
         for i in 0..105 {
-            store.save_selected_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32).await?;
+            store.save_selected_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
         }
 
         let selected = store.list_selected_nets(run_id, None, None).await?;
         assert_eq!(105, selected.len());
-        assert_eq!(PathBuf::from("nets/000"), selected[0].0);
-        assert_eq!(0.0, selected[0].1);
-        assert_eq!(PathBuf::from("nets/104"), selected[104].0);
-        assert_eq!(104.0, selected[104].1);
+        assert_eq!(PathBuf::from("nets/000"), selected[0].1);
+        assert_eq!(0.0, selected[0].2);
+        assert_eq!(PathBuf::from("nets/104"), selected[104].1);
+        assert_eq!(104.0, selected[104].2);
 
         let limited = store.list_selected_nets(run_id, None, Some(3)).await?;
         assert_eq!(3, limited.len());
-        assert_eq!(PathBuf::from("nets/000"), limited[0].0);
-        assert_eq!(PathBuf::from("nets/001"), limited[1].0);
-        assert_eq!(PathBuf::from("nets/002"), limited[2].0);
+        assert_eq!(PathBuf::from("nets/000"), limited[0].1);
+        assert_eq!(PathBuf::from("nets/001"), limited[1].1);
+        assert_eq!(PathBuf::from("nets/002"), limited[2].1);
 
         let filtered = store.list_selected_nets(run_id, Some(15.0), None).await?;
         assert_eq!(15, filtered.len());
-        assert_eq!(PathBuf::from("nets/000"), filtered[0].0);
-        assert_eq!(PathBuf::from("nets/014"), filtered[14].0);
+        assert_eq!(PathBuf::from("nets/000"), filtered[0].1);
+        assert_eq!(PathBuf::from("nets/014"), filtered[14].1);
 
         let filtered_limited = store.list_selected_nets(run_id, Some(15.0), Some(5)).await?;
         assert_eq!(5, filtered_limited.len());
-        assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].0);
-        assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].0);
+        assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].1);
+        assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].1);
 
         Ok(())
     }
@@ -5481,7 +5514,7 @@ impl MockStoreBuilder {
         for (run_id, path, loss) in inputs {
             self.store
                 .expect_save_selected_net()
-                .with(eq(run_id), eq(path), eq(loss))
+                .with(eq(run_id), eq(path), eq(loss), eq(None))
                 .times(1)
                 .return_const(Ok(()));
         }
@@ -5493,7 +5526,7 @@ impl MockStoreBuilder {
         inputs: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (RunId, Option<f32>, Option<usize>, Result<Vec<(PathBuf, f32)>, ThoError>)> + Debug,
+        I: IntoIterator<Item = (RunId, Option<f32>, Option<usize>, Result<Vec<(u32,PathBuf, f32)>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
         debug!("with_list_selected_nets: inputs={data:?}");
