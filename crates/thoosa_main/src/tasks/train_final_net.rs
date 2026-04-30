@@ -512,8 +512,8 @@ mod tests {
                         Some(0.3),
                         Some(2),
                         Ok(vec![
-                            (net_id_0, 0.1f32),
-                            (net_id_1, 0.2f32),
+                            (0, net_id_0, 0.1f32),
+                            (0, net_id_1, 0.2f32),
                         ]),
                     ),
                 ])
