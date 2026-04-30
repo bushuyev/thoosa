@@ -232,6 +232,9 @@ where
     fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
         where Self:Sized;
 
+    fn drop_device(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
+    where Self:Sized;
+
 
     fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
         where Self:Sized;
@@ -354,6 +357,15 @@ where
 
 
     fn dump_to_cpu(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
+    where
+        Self: Sized
+    {
+        async {
+            Ok(())
+        }
+    }
+
+    fn drop_device(wrap: &DevicesWrap<O>, device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
     where
         Self: Sized
     {
@@ -725,6 +737,18 @@ where
         }
     }
 
+    fn drop_device(wrap: &DevicesWrap<O>, device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
+    where
+        Self: Sized
+    {
+        async move {
+            assert!(device_idx > 0, "can't drop cpu");
+            drop(wrap.cached_data[device_idx].write().await.take());
+
+            Ok(())
+        }
+    }
+
     fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
     where
         Self: Sized
@@ -877,6 +901,10 @@ where
 
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError> {
         O::M::dump_to_cpu(self, device_idx).await
+    }
+
+    pub async fn drop_device(&self, device_idx: usize) -> Result<(), ThoError> {
+        O::M::drop_device(self, device_idx).await
     }
 
     pub async fn with_selected_data<S, R, P>(
