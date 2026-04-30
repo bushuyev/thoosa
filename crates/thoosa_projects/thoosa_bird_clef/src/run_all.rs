@@ -27,7 +27,7 @@ use thoosa_main::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
-use thoosa_shared::{collect_futures_with_progress, RangeOrValue, ResourceType, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, panic_to_err_async, RangeOrValue, ResourceType, StreamBuffering, ThoError};
 use thoosa_shared::ResourceType::NotInGroup;
 use thoosa_shared::run_configs::RunId;
 use thoosa_store::Store;
@@ -96,6 +96,7 @@ pub(crate) async fn run_all(
                 let find_resources = find_resources.clone();
                 let select_resources = select_resources.clone();
                 async move {
+                    panic_to_err_async!(async move {
                     let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
                     let find_motifs_run_config_rov = Arc::clone(&find_motifs_run_config);
 
@@ -232,7 +233,8 @@ pub(crate) async fn run_all(
                         }
                     };
 
-                    Ok(())
+                    Ok::<_, ThoError>(())
+                        })
                 }
             });
 
@@ -244,7 +246,7 @@ pub(crate) async fn run_all(
                 "bird_clef_labels",
             ).await;
 
-            Ok(())
+            Ok::<_, ThoError>(())
         }
         FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
             let futures = labels.iter().filter(|label|

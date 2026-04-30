@@ -202,6 +202,26 @@ where
         Ok(())
     }
 
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("TmpCached::drop_gpu: device_idx={device_idx}");
+        let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
+            .iter()
+            .map(|entry| (entry.key().clone(), Arc::clone(entry.value())))
+            .collect();
+
+        for (key, val) in keys_vals {
+            debug!("TmpCached::drop_gpu: key={key:?}");
+
+            if let Err(err) = val.drop_device(device_idx).await {
+                debug!("TmpCached::drop_gpu: key={key:?} dump_to_cpu err={err:?}");
+            } else {
+                debug!("TmpCached::drop_gpu: key={key:?} dump_to_cpu ok");
+            }
+
+        }
+        Ok(())
+    }
+
     //it's just dropped
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         0

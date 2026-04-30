@@ -287,6 +287,33 @@ impl GlobalCtx {
         Ok(())
     }
 
+    ///ids_to_keep_by_type - should be few keys long - only inputs involved in the current operation
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
+    pub async fn drop_device<'a>(
+        &'a self,
+        device_idx: usize,
+        descr: &str,
+    ) -> Result<(), ThoError> {
+        assert_ne!(device_idx, 0);
+        debug!("GlobalCtx::drop_device: device_idx={device_idx} descr={descr}");
+        let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
+
+        for (type_name, entry) in maps.iter() {
+            let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::drop_device: timed out waiting for cache gate read lock").await;
+            debug!("GlobalCtx::drop_device: type_name={type_name}");
+            entry.purger.drop_gpu(device_idx, type_name).await?;
+            debug!("GlobalCtx::drop_device: type_name={type_name} descr={descr} done");
+            collect_eta_record_completion(dump_eta_guard.id());
+        }
+
+        self.is_all_on_cpu[device_idx].store(true, Relaxed);
+        debug!("GlobalCtx::drop_device: device_idx={device_idx} descr={descr} done");
+
+        Ok(())
+    }
+
+
     pub async fn purge_cpu(&self, retain_last: u64) {//retain_last - caches younger than current cache time - retain_last should not be purged
         debug!("GlobalCtx::purge_cpu: retain_last={retain_last}");
 

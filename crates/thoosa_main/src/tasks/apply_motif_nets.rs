@@ -1399,9 +1399,9 @@ pub(crate) mod tests {
                 ])
                 .with_list_selected_nets([
                     (select_motifs_run_id, Some(0.3), None, Ok(vec![
-                        (net_id_0_0.clone(), 0.1f32),
-                        (net_id_0_1.clone(), 0.2f32),
-                        (net_id_1_0.clone(), 0.25f32),
+                        (0, net_id_0_0.clone(), 0.1f32),
+                        (0, net_id_0_1.clone(), 0.2f32),
+                        (0, net_id_1_0.clone(), 0.25f32),
                     ]))
                 ])
                 .build()
@@ -1536,8 +1536,8 @@ pub(crate) mod tests {
                 ])
                 .with_list_selected_nets([
                     (select_motifs_run_id, Some(0.3), None, Ok(vec![
-                        (net_id_0_0.clone(), 0.1f32),
-                        (net_id_0_1.clone(), 0.2f32),
+                        (0, net_id_0_0.clone(), 0.1f32),
+                        (0, net_id_0_1.clone(), 0.2f32),
                     ])),
                 ])
                 .build(),
@@ -1628,7 +1628,7 @@ pub(crate) mod tests {
             ])
             .with_list_selected_nets([
                 (select_motifs_run_id, Some(0.3), None, Ok(vec![
-                    (net_id_0_0.clone(), 0.1f32),
+                    (0, net_id_0_0.clone(), 0.1f32),
                 ]))
             ])
             .build()

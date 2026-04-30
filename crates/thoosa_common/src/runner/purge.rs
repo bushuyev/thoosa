@@ -40,6 +40,10 @@ where
         self.map.purge_gpu(ids_to_keep, device_idx, name).await
     }
 
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        self.map.drop_gpu(device_idx, name).await
+    }
+
     #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         self.map.debug_gpu(device_idx).await
@@ -73,6 +77,13 @@ where
         }
     }
 
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self.map.upgrade() {
+            Some(map) => map.drop_gpu(device_idx, name).await,
+            None => Ok(()),
+        }
+    }
+
     #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         match self.map.upgrade() {
@@ -94,6 +105,12 @@ pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
     async fn purge_gpu(
         &self,
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
+        device_idx: usize,
+        name: &str,
+    ) -> Result<(), ThoError>;
+
+    async fn drop_gpu(
+        &self,
         device_idx: usize,
         name: &str,
     ) -> Result<(), ThoError>;
@@ -229,6 +246,42 @@ where
         debug!("debug_gpu: device_idx={device_idx} type_name={:?} self.len={} on_gpu: {gpu_size} bytes", self.type_name(), self.len());
 
         Ok(gpu_size)
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        let items: Vec<(
+            K,
+            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
+        )> = self.iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect();
+
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu_{:?}", name), self.len(), 1);
+        let dump_eta_guard_id = dump_eta_guard.id();
+        stream::iter(items)
+
+            .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
+                match fut.await {
+                    Ok(v) => {
+                        if let Err(e) = v.drop_device(device_idx).await {
+                            warn!("drop_gpu failed: key={key:?} err={e:?}");
+                        } else {
+                            debug!("drop_gpu ok: key={key:?}");
+                        }
+                    }
+                    Err(e) => {
+                        if e.is_oom() {
+                            debug!("drop_gpu: Err key={key:?} err={e:?}")
+                        } else {
+                            warn!("drop_gpu: Err key={key:?} err={e:?}")
+                        }
+                    },
+                }
+                collect_eta_record_completion(dump_eta_guard_id);
+            })
+            .await;
+
+        Ok(())
     }
 }
 

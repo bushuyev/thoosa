@@ -2143,7 +2143,7 @@ impl Store for SqlStore {
             })?;
 
 
-            Self::insert_input(input_run_id, &t, run_id, "INSERT INTO selected_nets_input (id, input_id) VALUES")?;
+            Self::insert_input(input_run_id, &t, net_id, "INSERT INTO selected_nets_input (id, input_id) VALUES")?;
 
 
             t.commit()?;
@@ -2988,7 +2988,7 @@ impl SqlStore {
                 input_id  NOT NULL REFERENCES selected_nets(id) ON DELETE CASCADE,
                 id NOT NULL REFERENCES selected_nets(id) ON DELETE CASCADE,
 
-                PRIMARY KEY (input_run_id, run_id)
+                PRIMARY KEY (input_id, id)
             )",
             (),
         )?;
