@@ -132,34 +132,36 @@ pub(crate) async fn run_all(
                     let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
 
                     //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
-                    let mut select_motifs_run_ids = vec![];
-                    for find_motifs_run_id in &find_motifs_run_ids {
-                        select_motifs_run_ids.extend(run_grid::</*Labeled,*/ _, _, _, _, _>(
-                            Some(vec![*find_motifs_run_id]),
-                            Arc::clone(&select_motifs_run_config),
-                            Arc::clone(&select_motifs_input),
-                            &ws,
-                            &store,
-                            async |run_configs| {
-                                Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
-                                    &ws,
-                                    &store,
-                                    Arc::clone(&loader),
-                                    Arc::new(MotifLoader::new(
-                                        Arc::clone(&store),
-                                        Arc::clone(&loader),
-                                        &ws
-                                    )),
-                                    run_configs,
-                                    vec![*find_motifs_run_id],
-                                    run_all_args.max_chunk_size as i64,
-                                    // #[cfg(test)]
-                                    None
-                                ).await.expect("SelectMotifsStage::new failed"))
-                            },
-                            || label_ctx.branch(Some("select_motifs"), true),
-                        ).await?);
-                    }
+                    // let mut select_motifs_run_ids = vec![];
+                    //
+                    // for find_motifs_run_id in &find_motifs_run_ids {
+                    //     select_motifs_run_ids.extend(run_grid::</*Labeled,*/ _, _, _, _, _>(
+                    //         Some(vec![*find_motifs_run_id]),
+                    //         Arc::clone(&select_motifs_run_config),
+                    //         Arc::clone(&select_motifs_input),
+                    //         &ws,
+                    //         &store,
+                    //         async |run_configs| {
+                    //             Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                    //                 &ws,
+                    //                 &store,
+                    //                 Arc::clone(&loader),
+                    //                 Arc::new(MotifLoader::new(
+                    //                     Arc::clone(&store),
+                    //                     Arc::clone(&loader),
+                    //                     &ws
+                    //                 )),
+                    //                 run_configs,
+                    //                 vec![*find_motifs_run_id],
+                    //                 run_all_args.max_chunk_size as i64,
+                    //                 // #[cfg(test)]
+                    //                 None
+                    //             ).await.expect("SelectMotifsStage::new failed"))
+                    //         },
+                    //         || label_ctx.branch(Some("select_motifs"), true),
+                    //     ).await?);
+                    // }
+                    let select_motifs_run_ids = store.select_all_motifs(&find_motifs_run_ids)?;
                     info!("select motifs done: label={label} select_motifs_run_ids={select_motifs_run_ids:?}");
 
                     if run_all_args.with_plots {
