@@ -285,6 +285,8 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_selected_motifs(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
 
+    async fn select_all_motifs(&self, run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
+
     async fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
     async fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_run_id: Option<Vec<u32>>) -> Result<(), ThoError>;
@@ -470,6 +472,7 @@ mock! {
             run_id: RunId,
             selected_motifs: Vec<(u32, f64)>,
         ) -> Result<RunId, ThoError>;
+        async fn select_all_motifs(&self, run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
 
         async fn list_selected_motifs(
             &self,
@@ -2077,6 +2080,32 @@ impl Store for SqlStore {
             t.commit()?;
 
             Ok(run_id)
+        })
+        .await
+    }
+
+    async fn select_all_motifs(&self, run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError> {
+        let run_ids = run_ids.to_vec();
+        debug!("select_all_motifs: run_ids={run_ids:?}");
+        self.with_writer_conn("select_all_motifs", move |conn| {
+            let t = conn.transaction()?;
+            let mut selected_run_ids = Vec::with_capacity(run_ids.len());
+
+            for input_run_id in run_ids {
+                t.execute("INSERT INTO run_configs (type, descr) VALUES (?, ?)", params!["SelectMotifsRunConfig", "bypass"])?;
+
+                let selected_run_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+                    row.get::<usize, RunId>(0)
+                })?;
+
+                t.execute("INSERT INTO run_configs_input (run_id, input_run_id) VALUES (?, ?)", params![selected_run_id, input_run_id])?;
+                t.execute("INSERT INTO selected_motifs (run_id, motif_id, rate) SELECT ?, id, 1.0 FROM motifs WHERE run_id=?", params![selected_run_id, input_run_id])?;
+                selected_run_ids.push(selected_run_id);
+            }
+
+            t.commit()?;
+
+            Ok(selected_run_ids)
         })
         .await
     }
@@ -4619,6 +4648,54 @@ mod store_tests {
         // );
         //
         // store.lock().delete_slices_without_matches(run_id)?;
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_select_all_motifs_creates_bypass_selection_runs() -> Result<(), ThoError> {
+        let store = SqlStore::in_mem().await?;
+
+        let first_find_run_id = store.save_run_config(None, &"FindMotifsRunConfig", "first", HashMap::new()).await?;
+        let second_find_run_id = store.save_run_config(None, &"BucketingRunConfig", "second", HashMap::new()).await?;
+
+        let (first_motif_ids, second_motif_ids) = {
+            let mut guard = store.conn().lock();
+            let t = guard.transaction()?;
+            let insert_motif = |run_id: RunId, channel_id: i64, group_ord: i64| -> Result<u32, ThoError> {
+                t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", params![group_ord, run_id as i64, channel_id])?;
+                let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+                    row.get::<usize, u32>(0)
+                })?;
+                Ok(motif_id)
+            };
+
+            let first_motif_ids = vec![insert_motif(first_find_run_id, 0, 0)?, insert_motif(first_find_run_id, 1, 1)?];
+            let second_motif_ids = vec![insert_motif(second_find_run_id, 1, 0)?];
+            t.commit()?;
+            (first_motif_ids, second_motif_ids)
+        };
+
+        let selected_run_ids = store.select_all_motifs(&[first_find_run_id, second_find_run_id]).await?;
+
+        assert_eq!(2, selected_run_ids.len());
+
+        let configs = store.list_run_configs_by_ids(&selected_run_ids).await?;
+        assert_eq!(2, configs.len());
+        assert!(configs.iter().all(|run_config| run_config.run_config_type == "SelectMotifsRunConfig"));
+        assert!(configs.iter().all(|run_config| run_config.descr == "bypass"));
+
+        let input_run_ids = store.list_input_run_ids(&selected_run_ids).await?;
+        assert!(input_run_ids.contains(&(selected_run_ids[0], first_find_run_id)));
+        assert!(input_run_ids.contains(&(selected_run_ids[1], second_find_run_id)));
+
+        let first_selected = store.list_selected_motifs(selected_run_ids[0], 2).await?;
+        assert_eq!(vec![(first_motif_ids[0], 1.0)], first_selected[0]);
+        assert_eq!(vec![(first_motif_ids[1], 1.0)], first_selected[1]);
+
+        let second_selected = store.list_selected_motifs(selected_run_ids[1], 2).await?;
+        assert_eq!(Vec::<(u32, f64)>::new(), second_selected[0]);
+        assert_eq!(vec![(second_motif_ids[0], 1.0)], second_selected[1]);
 
         Ok(())
     }
