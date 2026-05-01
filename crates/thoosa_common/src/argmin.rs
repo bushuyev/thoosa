@@ -46,16 +46,16 @@ impl std::fmt::Display for ArgminMathError {
 #[cfg(test)]
 impl std::error::Error for ArgminMathError {}
 
-//TODO remove
-impl <D, Id> Clone for ThoTensor<D, Id>
-where
- D: Dims,
- Id: Named + Debug + Clone
-{
-    fn clone(&self) -> Self {
-        ThoTensor::new(self.id().clone(), self.t_ref().shallow_clone()).expect("can't clone")
-    }
-}
+// //TODO remove
+// impl <D, Id> Clone for ThoTensor<D, Id>
+// where
+//  D: Dims,
+//  Id: Named + Debug + Clone
+// {
+//     fn clone(&self) -> Self {
+//         ThoTensor::new(self.id().clone(), self.t_ref().shallow_clone()).expect("can't clone")
+//     }
+// }
 
 impl ThoTensor {
     pub fn force_requires_grad(&self) {
