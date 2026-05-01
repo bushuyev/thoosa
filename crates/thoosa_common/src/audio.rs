@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use log::debug;
 use serde::Deserialize;
 use tch::{Device, Kind, TchError, Tensor};
@@ -532,6 +533,680 @@ pub fn patch_sample_ranges_flat(
     Ok(values)
 }
 
+#[derive(Debug, Clone)]
+pub struct FreqPeak {
+    pub hz: f32,
+    pub magnitude: f32,
+    pub bin: i64,
+}
+
+/// `audio`: Tensor of shape [channels, audio_data]
+/// `sample_rate`: e.g. 48_000.0
+/// `n_peaks`: number of strongest frequencies per channel
+pub fn strongest_freqs_per_channel(
+    audio: &Tensor,
+    sample_rate: f32,
+    n_peaks: i64,
+) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+    let size = audio.size();
+    assert_eq!(size.len(), 2, "expected [channels, audio_data]");
+
+    let channels = size[0];
+    let audio_len = size[1];
+
+    assert!(audio_len > 1);
+    assert!(n_peaks > 0);
+
+    // Ensure floating point input.
+    let audio = audio.to_kind(Kind::Float);
+
+    // FFT over the last dimension: [channels, audio_data] -> [channels, freq_bins]
+    //
+    // rfft output is complex.
+    // Number of bins is audio_len / 2 + 1.
+    let spectrum = audio.f_fft_rfft(None, -1, "backward")?;
+
+    // Complex magnitude: [channels, freq_bins]
+    let magnitude = spectrum.f_abs()?;
+
+    let bins = magnitude.size()[1];
+
+    // Ignore DC bin 0, otherwise "frequency 0" can dominate.
+    let magnitude_no_dc = magnitude.f_narrow(1, 1, bins - 1)?;
+
+    let k = n_peaks.min(bins - 1);
+
+    // topk along frequency-bin dimension.
+    //
+    // values:  [channels, k]
+    // indices: [channels, k], but relative to `magnitude_no_dc`,
+    // so real FFT bin = index + 1.
+    let (values, indices) = magnitude_no_dc.f_topk(k, 1, true, true)?;
+
+    let values = values.to_device(Device::Cpu);
+    let indices = indices.to_device(Device::Cpu);
+
+    let values_flat: Vec<f32> = Vec::<f32>::try_from(values.f_reshape([-1])?)?;
+    let indices_flat: Vec<i64> = Vec::<i64>::try_from(indices.f_reshape([-1])?)?;
+
+    let mut result = Vec::with_capacity(channels as usize);
+
+    for ch in 0..channels {
+        let mut ch_peaks = Vec::with_capacity(k as usize);
+
+        for j in 0..k {
+            let flat_idx = (ch * k + j) as usize;
+
+            let fft_bin = indices_flat[flat_idx] + 1;
+            let magnitude = values_flat[flat_idx];
+
+            let hz = fft_bin as f32 * sample_rate / audio_len as f32;
+
+            ch_peaks.push(FreqPeak {
+                hz,
+                magnitude,
+                bin: fft_bin,
+            });
+        }
+
+        result.push(ch_peaks);
+    }
+
+    Ok(result)
+}
+
+pub fn strongest_freqs_per_channel_windowed(
+    audio: &Tensor,
+    sample_rate: f32,
+    n_peaks: i64,
+) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+    let size = audio.size();
+    assert_eq!(size.len(), 2);
+
+    let audio_len = size[1];
+
+    let audio = audio.to_kind(Kind::Float);
+
+    // Remove per-channel DC offset.
+    let audio = &audio - audio.f_mean_dim([1].as_slice(), true, Kind::Float)?;
+
+    // Hann window: [audio_data]
+    let window = Tensor::hann_window(audio_len, (Kind::Float, audio.device()));
+
+    // Broadcast window over channels: [channels, audio_data]
+    let audio = audio * window;
+
+    strongest_freqs_per_channel(&audio, sample_rate, n_peaks)
+}
+
+fn parabolic_interpolated_bin(m: &[f32], bin: usize) -> f32 {
+    if bin == 0 || bin + 1 >= m.len() {
+        return bin as f32;
+    }
+
+    let ym1 = m[bin - 1];
+    let y0 = m[bin];
+    let yp1 = m[bin + 1];
+
+    let denom = ym1 - 2.0 * y0 + yp1;
+
+    if denom.abs() < 1e-12 {
+        return bin as f32;
+    }
+
+    // Offset relative to integer bin.
+    // For a peak halfway between two bins, this becomes approximately +/-0.5.
+    let delta = 0.5 * (ym1 - yp1) / denom;
+
+    bin as f32 + delta.clamp(-0.5, 0.5)
+}
+
+pub fn strongest_freqs_per_channel_windowed_nms(
+    audio: &Tensor,
+    sample_rate: f32,
+    n_peaks: usize,
+
+    // Peaks closer than this are treated as the same peak.
+    //
+    // For your example, something like 20.0 Hz is reasonable.
+    min_separation_hz: f32,
+
+    // Stop after peaks weaker than this fraction of the strongest peak.
+    //
+    // Use 0.0 to disable.
+    // Use e.g. 0.05 to ignore small leakage/sidelobes.
+    min_relative_magnitude: f32,
+) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+    let size = audio.size();
+    assert_eq!(size.len(), 2, "expected [channels, audio_data]");
+
+    let audio_len = size[1];
+    assert!(audio_len > 1);
+    assert!(n_peaks > 0);
+
+    let audio = audio.to_kind(Kind::Float);
+
+    // Remove per-channel DC offset.
+    let audio = &audio - audio.f_mean_dim([1i64].as_slice(), true, Kind::Float)?;
+
+    // Hann window reduces spectral leakage, but also spreads one true frequency
+    // over a few neighboring bins. That is why NMS is useful.
+    let window = Tensor::hann_window(audio_len, (Kind::Float, audio.device()));
+    let audio = audio.f_mul(&window)?;
+
+    strongest_freqs_per_channel_nms(
+        &audio,
+        sample_rate,
+        n_peaks,
+        min_separation_hz,
+        min_relative_magnitude,
+    )
+}
+
+pub fn strongest_freqs_per_channel_nms(
+    audio: &Tensor,
+    sample_rate: f32,
+    n_peaks: usize,
+    min_separation_hz: f32,
+    min_relative_magnitude: f32,
+) -> Result<Vec<Vec<FreqPeak>>, TchError> {
+    let size = audio.size();
+    assert_eq!(size.len(), 2, "expected [channels, audio_data]");
+
+    let channels = size[0] as usize;
+    let audio_len = size[1] as usize;
+
+    let bin_hz = sample_rate / audio_len as f32;
+
+    let suppression_radius_bins = ((min_separation_hz / bin_hz).ceil() as usize).max(1);
+
+    let spectrum = audio
+        .to_kind(Kind::Float)
+        .f_fft_rfft(None, -1, "backward")?;
+
+    let magnitude = spectrum
+        .f_abs()?
+        .to_device(Device::Cpu)
+        .to_kind(Kind::Float);
+
+    let bins = magnitude.size()[1] as usize;
+
+    let flat: Vec<f32> = Vec::<f32>::try_from(magnitude.f_reshape([-1])?)?;
+
+    let mut result = Vec::with_capacity(channels);
+
+    for ch in 0..channels {
+        let offset = ch * bins;
+        let m = &flat[offset..offset + bins];
+
+        // Ignore DC bin 0.
+        let strongest = m
+            .iter()
+            .skip(1)
+            .copied()
+            .filter(|x| x.is_finite())
+            .fold(0.0_f32, f32::max);
+
+        let min_abs_magnitude = strongest * min_relative_magnitude;
+
+        let mut candidates: Vec<usize> = (1..bins).collect();
+
+        candidates.sort_unstable_by(|&a, &b| {
+            m[b].partial_cmp(&m[a]).unwrap_or(Ordering::Equal)
+        });
+
+        let mut chosen_bins: Vec<usize> = Vec::with_capacity(n_peaks);
+
+        'candidate_loop: for bin in candidates {
+            let mag = m[bin];
+
+            if !mag.is_finite() {
+                continue;
+            }
+
+            if mag < min_abs_magnitude {
+                break;
+            }
+
+            // Keep only local maxima.
+            //
+            // This removes ordinary shoulders of a peak.
+            let is_local_max = if bin + 1 < bins {
+                m[bin] >= m[bin - 1] && m[bin] >= m[bin + 1]
+            } else {
+                m[bin] >= m[bin - 1]
+            };
+
+            if !is_local_max {
+                continue;
+            }
+
+            // Non-maximum suppression:
+            // if this bin is close to an already selected stronger bin,
+            // treat it as the same frequency peak.
+            for &selected in &chosen_bins {
+                if bin.abs_diff(selected) <= suppression_radius_bins {
+                    continue 'candidate_loop;
+                }
+            }
+
+            chosen_bins.push(bin);
+
+            if chosen_bins.len() >= n_peaks {
+                break;
+            }
+        }
+
+        let mut peaks = Vec::with_capacity(chosen_bins.len());
+
+        for bin in chosen_bins {
+            let interpolated_bin = parabolic_interpolated_bin(m, bin);
+            let hz = interpolated_bin * bin_hz;
+
+            peaks.push(FreqPeak {
+                hz,
+                magnitude: m[bin],
+                bin: bin as i64,
+            });
+        }
+
+        peaks.sort_by(|a, b| {
+            b.magnitude
+                .partial_cmp(&a.magnitude)
+                .unwrap_or(Ordering::Equal)
+        });
+
+        result.push(peaks);
+    }
+
+    Ok(result)
+}
+
+
+#[derive(Debug, Clone, Copy)]
+pub enum BandAggregation {
+    Sum,
+    Mean,
+}
+
+/// Converts `[channels, audio_data]` into `[channels, freq_bands]`.
+///
+/// Band ranges are:
+///
+/// ```text
+/// 0..step_hz
+/// step_hz..2*step_hz
+/// 2*step_hz..3*step_hz
+/// ...
+/// up to sample_rate / 2
+/// ```
+///
+/// Example:
+///
+/// ```text
+/// sample_rate = 32_000
+/// step_hz = 1_000
+/// output bands = 16
+/// band 0  = 0..1000 Hz
+/// band 1  = 1000..2000 Hz
+/// ...
+/// band 15 = 15000..16000 Hz
+/// ```
+pub fn fft_band_amplitudes(
+    audio: &Tensor,
+    sample_rate: f64,
+    step_hz: f64,
+    aggregation: BandAggregation,
+    apply_hann_window: bool,
+    remove_dc_offset: bool,
+) -> Result<Tensor, TchError> {
+    let size = audio.size();
+    assert_eq!(size.len(), 2, "expected [channels, audio_data]");
+
+    let channels = size[0];
+    let audio_len = size[1];
+
+    assert!(audio_len > 1);
+    assert!(sample_rate > 0.0);
+    assert!(step_hz > 0.0);
+
+    let device = audio.device();
+
+    let mut audio = audio.to_kind(Kind::Float);
+
+    if remove_dc_offset {
+        audio = &audio - audio.f_mean_dim([1i64].as_slice(), true, Kind::Float)?;
+    }
+
+    if apply_hann_window {
+        let window = Tensor::hann_window(audio_len, (Kind::Float, device));
+        audio = audio * window;
+    }
+
+    // [channels, audio_data] -> [channels, rfft_bins]
+    let spectrum = audio.f_fft_rfft(None, -1, "backward")?;
+
+    // [channels, rfft_bins]
+    let magnitude = spectrum.f_abs()?;
+
+    // Optional normalization.
+    //
+    // This makes magnitudes less dependent on audio_len.
+    // For exact amplitude reconstruction, DC/Nyquist need special handling,
+    // but for band aggregation this is usually good enough.
+    let magnitude = magnitude * (2.0 / audio_len as f64);
+
+    let rfft_bins = magnitude.size()[1];
+
+    let nyquist_hz = sample_rate / 2.0;
+    let band_count = (nyquist_hz / step_hz).ceil() as i64;
+
+    // Frequency of every rfft bin:
+    //
+    // bin_hz = bin_index * sample_rate / audio_len
+    //
+    // Shape: [rfft_bins]
+    let bin_freqs = Tensor::arange(rfft_bins, (Kind::Float, device))
+        * (sample_rate / audio_len as f64);
+
+    // Map frequency -> band index.
+    //
+    // Example:
+    // 0 Hz      -> band 0
+    // 999 Hz    -> band 0
+    // 1000 Hz   -> band 1
+    // 15000 Hz  -> band 15, if step_hz = 1000
+    //
+    // Shape: [rfft_bins]
+    let band_idx_1d = (bin_freqs / step_hz)
+        .to_kind(Kind::Int64)
+        .f_clamp_max(band_count - 1)?;
+
+    // Expand to [channels, rfft_bins], because scatter_add needs same shape as src.
+    let band_idx_2d = band_idx_1d
+        .f_unsqueeze(0)?
+        .f_expand([channels, rfft_bins], true)?;
+
+    // Aggregate magnitudes into fixed frequency bands.
+    //
+    // [channels, band_count]
+    let zeros = Tensor::zeros([channels, band_count], (Kind::Float, device));
+
+    let summed = zeros.f_scatter_add(1, &band_idx_2d, &magnitude)?;
+
+    match aggregation {
+        BandAggregation::Sum => Ok(summed),
+
+        BandAggregation::Mean => {
+            // Count how many FFT bins landed in each frequency band.
+            //
+            // Shape: [band_count]
+            let counts = Tensor::zeros([band_count], (Kind::Float, device))
+                .f_scatter_add(
+                    0,
+                    &band_idx_1d,
+                    &Tensor::ones([rfft_bins], (Kind::Float, device)),
+                )?
+                .f_clamp_min(1.0)?;
+
+            Ok(summed / counts.f_unsqueeze(0)?)
+        }
+    }
+}
+
+
+/// Input:
+///   audio: [channels, slices, audio_data]
+///
+/// Output:
+///   [channels, slices, bands]
+///
+/// This is equivalent to applying the old `[channels, audio_data] -> [channels, bands]`
+/// function independently to every slice.
+pub fn fft_band_amplitudes_sliced(
+    audio: &Tensor,
+    sample_rate: f64,
+    step_hz: f64,
+    aggregation: BandAggregation,
+    apply_hann_window: bool,
+    remove_dc_offset: bool,
+) -> Result<Tensor, ThoError> {
+    let size = audio.size();
+    assert_eq!(size.len(), 3, "expected [channels, slices, audio_data]");
+
+    let channels = size[0];
+    let slices = size[1];
+    let audio_len = size[2];
+
+    assert!(channels > 0);
+    assert!(slices > 0);
+    assert!(audio_len > 1);
+    assert!(sample_rate > 0.0);
+    assert!(step_hz > 0.0);
+
+    let device = audio.device();
+
+    let mut audio = audio.f_to_kind(Kind::Float)?;
+
+    // Remove per-[channel, slice] DC offset.
+    //
+    // [channels, slices, audio_data]
+    // mean over last dim -> [channels, slices, 1]
+    if remove_dc_offset {
+        let mean = audio.f_mean_dim([2i64].as_slice(), true, Kind::Float)?;
+        audio = audio.f_sub(&mean)?;
+    }
+
+    // Apply Hann window over the last dimension.
+    //
+    // window: [audio_data]
+    // view:   [1, 1, audio_data]
+    // broadcast over [channels, slices, audio_data]
+    if apply_hann_window {
+        let window = Tensor::f_hann_window(audio_len, (Kind::Float, device))?;
+        let window = window.f_view([1, 1, audio_len])?;
+        audio = audio.f_mul(&window)?;
+    }
+
+    // FFT over last dimension:
+    //
+    // [channels, slices, audio_data]
+    //   -> [channels, slices, rfft_bins]
+    let spectrum = audio.f_fft_rfft(None, -1, "backward")?;
+
+    // Complex magnitude:
+    //
+    // [channels, slices, rfft_bins]
+    let magnitude = spectrum.f_abs()?;
+
+    // Optional approximate amplitude normalization.
+    //
+    // For exact amplitude reconstruction, DC/Nyquist need special handling,
+    // but for band features this is usually fine.
+    let magnitude = magnitude.f_mul_scalar(2.0 / audio_len as f64)?;
+
+    let rfft_bins = magnitude.size()[2];
+
+    let nyquist_hz = sample_rate / 2.0;
+    let band_count = (nyquist_hz / step_hz).ceil() as i64;
+
+    assert!(band_count > 0);
+
+    // Frequency of every rfft bin:
+    //
+    // bin_freq = bin_index * sample_rate / audio_len
+    //
+    // Shape: [rfft_bins]
+    let bin_freqs = Tensor::f_arange(rfft_bins, (Kind::Float, device))?
+        .f_mul_scalar(sample_rate / audio_len as f64)?;
+
+    // Map each FFT bin to a fixed frequency band.
+    //
+    // Shape: [rfft_bins]
+    let band_idx_1d = bin_freqs
+        .f_div_scalar(step_hz)?
+        .f_to_kind(Kind::Int64)?
+        .f_clamp_max(band_count - 1)?;
+
+    // Expand band indices to match magnitude shape.
+    //
+    // [rfft_bins]
+    //   -> [1, 1, rfft_bins]
+    //   -> [channels, slices, rfft_bins]
+    let band_idx_3d = band_idx_1d
+        .f_view([1, 1, rfft_bins])?
+        .f_expand([channels, slices, rfft_bins], true)?;
+
+    // Aggregate into bands along dim=2.
+    //
+    // src:   [channels, slices, rfft_bins]
+    // index: [channels, slices, rfft_bins]
+    // out:   [channels, slices, band_count]
+    let zeros = Tensor::f_zeros([channels, slices, band_count], (Kind::Float, device))?;
+
+    let summed = zeros.f_scatter_add(2, &band_idx_3d, &magnitude)?;
+
+    match aggregation {
+        BandAggregation::Sum => Ok(summed),
+
+        BandAggregation::Mean => {
+            // Count how many FFT bins fall into each band.
+            //
+            // counts: [band_count]
+            let ones = Tensor::f_ones([rfft_bins], (Kind::Float, device))?;
+
+            let counts = Tensor::f_zeros([band_count], (Kind::Float, device))?
+                .f_scatter_add(0, &band_idx_1d, &ones)?
+                .f_clamp_min(1.0)?;
+
+            // [band_count] -> [1, 1, band_count]
+            let counts = counts.f_view([1, 1, band_count])?;
+
+            Ok(summed.f_div(&counts)?)
+        }
+    }
+}
+
+/// Create random LSH hyperplanes.
+///
+/// `data_dim` = size of the last dimension of your input tensor.
+/// `num_bits` = number of LSH bits.
+/// Number of buckets will be `2^num_bits`.
+///
+/// planes shape: [data_dim, num_bits]
+pub fn make_lsh_planes(
+    data_dim: i64,
+    num_bits: i64,
+    kind: Kind,
+    device: Device,
+) -> Result<Tensor, ThoError> {
+    if data_dim <= 0 {
+        return Err(ThoError::new("data_dim must be > 0"));
+    }
+    if num_bits <= 0 || num_bits > 30 {
+        return Err(ThoError::new("num_bits must be in 1..=30 to avoid huge bucket tensors"));
+    }
+
+    Ok(Tensor::f_randn(&[data_dim, num_bits], (kind, device))?)
+}
+
+/// Convert input `[M, N, data]` into `[M, N, buckets]` using LSH.
+///
+/// Each `[data]` vector is assigned to exactly one bucket.
+/// Output is one-hot.
+///
+/// `x` shape:      [M, N, data]
+/// `planes` shape: [data, num_bits]
+/// output shape:   [M, N, 2^num_bits]
+pub fn lsh_bucket_one_hot_3d(
+    x: &Tensor,
+    planes: &Tensor,
+    normalize: bool,
+) -> Result<Tensor, ThoError> {
+    let x_size = x.size();
+    if x_size.len() != 3 {
+        return Err(ThoError::new(format!(
+            "expected x shape [M, N, data], got {:?}",
+            x_size
+        )));
+    }
+
+    let p_size = planes.size();
+    if p_size.len() != 2 {
+        return Err(ThoError::new(format!(
+            "expected planes shape [data, num_bits], got {:?}",
+            p_size
+        )));
+    }
+
+    let m = x_size[0];
+    let n = x_size[1];
+    let data_dim = x_size[2];
+
+    let planes_data_dim = p_size[0];
+    let num_bits = p_size[1];
+
+    if data_dim != planes_data_dim {
+        return Err(ThoError::new(format!("x data dim {} does not match planes data dim {}", data_dim, planes_data_dim)));
+    }
+
+    if num_bits <= 0 || num_bits > 30 {
+        return Err(ThoError::new("num_bits must be in 1..=30 to avoid huge bucket tensors"));
+    }
+
+    let num_buckets = 1_i64 << num_bits;
+
+    // [M, N, data] -> [M * N, data]
+    let x_flat = x.f_view([m * n, data_dim])?;
+
+    // Optional cosine normalization.
+    let x_flat = if normalize {
+        let eps = 1e-12;
+
+        // norm = sqrt(sum(x^2, dim=-1, keepdim=true))
+        let norm = x_flat
+            .f_pow_tensor_scalar(2.0)?
+            .f_sum_dim_intlist(&[-1i64][..], true, x.kind())?
+            .f_clamp_min(eps)?
+            .f_sqrt()?;
+
+        x_flat.f_div(&norm)?
+    } else {
+        x_flat
+    };
+
+    // [M * N, data] @ [data, num_bits] -> [M * N, num_bits]
+    let projections = x_flat.f_matmul(planes)?;
+
+    // Sign bits: [M * N, num_bits], values 0/1.
+    let bits = projections
+        .f_ge(0.0)?
+        .f_to_kind(Kind::Int64)?;
+
+    // Convert bit-vector to integer bucket id.
+    //
+    // Example for num_bits = 4:
+    // bits [b0, b1, b2, b3]
+    // id = b0*1 + b1*2 + b2*4 + b3*8
+    let weights_vec: Vec<i64> = (0..num_bits).map(|i| 1_i64 << i).collect();
+
+    let weights = Tensor::f_from_slice(&weights_vec)?
+        .f_to_device(x.device())?
+        .f_view([1, num_bits])?;
+
+    // [M * N]
+    let bucket_ids = bits
+        .f_mul(&weights)?
+        .f_sum_dim_intlist(&[-1i64][..], false, Kind::Int64)?;
+
+    // [M * N, buckets]
+    let one_hot = bucket_ids
+        .f_one_hot(num_buckets)?
+        .f_to_kind(x.kind())?;
+
+    // [M, N, buckets]
+    Ok(one_hot.f_view([m, n, num_buckets])?)
+}
 
 #[cfg(test)]
 mod tests {
@@ -543,79 +1218,49 @@ mod tests {
     use thoosa_shared::audio_utils::compose_freqs;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_shared::ThoError;
-    use crate::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, patch_sample_ranges_flat, LogMelPatchConfig};
+    use crate::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, make_lsh_planes, patch_sample_ranges_flat, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation, LogMelPatchConfig};
     use crate::debug_plot;
-    use crate::utils::{debug_plot_impl, debug_plot_impl_wh};
+    use crate::utils::{debug_plot_impl, debug_plot_impl_wh, reset_print_options};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_audio_to_log_mel_patches() -> Result<(), ThoError>{
+    async fn test_audio() -> Result<(), ThoError>{
+        reset_print_options();
         let sample_rate = 32000.;
         // plot_t(&resource_t, &format!("resource_{i}"))?;
         // debug_plot_impl(&Tensor::rand([1, 1000], FLOAT_CPU), "test", 0)?;
         // let tensor = Tensor::load("/home/bu/tmp/ws_clef/tensors/1_hyamac1_XC497685.ogg.pt")?;
-        // let tensor = Tensor::from_slice(gen_motif((sample_rate * 3.) as usize, &MotifKind::HarmonicStack).as_slice()).view((1, -1));
-        let n = (sample_rate * 1.) as usize;
+
         let tensor = Tensor::cat(&[
-            // Tensor::from_slice(compose_freqs(1234, sample_rate as usize, vec![300.0,  3000.0]).as_slice()),
-            // Tensor::from_slice(compose_freqs(5678, sample_rate as usize, vec![600.0,  6000.0]).as_slice()),
-            Tensor::from_slice(compose_freqs(6800, sample_rate as usize, vec![1200.0, 12000.0]).as_slice())
+            Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![2500.0]).as_slice()), //300.0,
+            Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![5500.0]).as_slice()), //600.0,
+            Tensor::from_slice(compose_freqs(4000, sample_rate as usize, vec![10500.0]).as_slice()) //1000.0,
         ], 0).view((1, -1));
-        let freqs = tensor.f_fft_rfft(None, -1, "backward")?.f_abs()?;
-        debug!("tensor={tensor:?} freqs=\n{freqs:?}");
 
 
-        let top_fr =freqs.topk(10, 1, true, false);
+        let channels_slices_freqamp = fft_band_amplitudes_sliced(
+            &tensor.unfold(
+                1,
+                3000, //should be taken from RunConfig
+                3000
+            ), // [channels, audio_data]
+            32_000.0,             // sample rate - from workspace
+            1_000.0,              // frequency band width - from RunConfig
+            BandAggregation::Sum, // or Mean - from RunConfig
+            false,    // Hann window
+            true,      // remove DC offset - from RunConfig
+        )?;
 
-        debug!("top_fr.0=\n{} top_fr.1=\n{}", top_fr.0, top_fr.1);
+        debug!("bands size = {:?} channels_slices_freqamp=\n{channels_slices_freqamp}", channels_slices_freqamp.size());
+        let num_bits = 4; //should be taken from RunConfig
+        let planes = make_lsh_planes(channels_slices_freqamp.size()[2], num_bits, Kind::Float, Device::Cpu)?;
 
-        // debug_plot_impl_wh(&(freqs.abs() *  (2.0 / n as f64)), "freqs", 0, (2000, 1000))?; //((freqs.size()[1] as u32).min(40_000), 1000))?;
+        let buckets = lsh_bucket_one_hot_3d(&channels_slices_freqamp, &planes, true)?;
 
-        // debug_plot_impl_wh(&tensor, "test", 0, (2000, 1000))?;
+        debug!("buckets=\n{buckets}");
+
+
 
         return Ok(());
-        let cfg = LogMelPatchConfig {
-            time_size: 32000,
-            time_step: 800,
-            n_mels: 4,
-            mel_patch_size: 64,
-            mel_patch_step: 32,
-            ..Default::default()
-        };
 
-        // Example: mono audio, 10 seconds at 32 kHz.
-
-
-        let patches = audio_to_log_mel_patches(&tensor, &cfg, sample_rate)?;
-
-
-        debug!("patches shape = {:?}", patches.size());
-        let patches_indexes = patch_sample_ranges_flat(&patches, &cfg)?;
-        debug!("patches indexes len={} patches_indexes{patches_indexes:?}", patches_indexes[0].len());
-
-
-        let bucket_ids = assign_lsh_buckets_per_channel(&patches, 256)?;
-
-        debug!("bucket_ids.len={} bucket_ids={bucket_ids:?}", bucket_ids[0].len());
-
-        for channel in 0..bucket_ids.len() {
-            let mut motifs = HashMap::<usize, Vec<(usize, usize)>>::new();
-
-            for (patch, bucket) in patches_indexes[channel].iter().zip(bucket_ids[channel].iter()) {
-                let bucket_slices = motifs.entry(*bucket).or_insert(vec![]);
-                bucket_slices.push(*patch);
-            }
-
-            debug!("motifs.len={}", motifs.len());
-
-            for (id, motif_slices) in motifs {
-                debug!("id={id} motif_slices={motif_slices:?}");
-                let num_slices = motif_slices.len();
-                let motif_t = Tensor::stack( motif_slices.into_iter().map(|(from, to)|tensor.i((channel as i64, from as i64..to as i64))).collect::<Vec<_>>().as_slice(), 0);
-                debug!("motif_t={motif_t:?}");
-                // debug_plot_impl_wh(&motif_t, &format!("bucket_{id}, {} slices", num_slices), 0, ((tensor.size()[1] as u32).min(40_000), 2000))?;
-            }
-        }
-
-        Ok(())
     }
 }
