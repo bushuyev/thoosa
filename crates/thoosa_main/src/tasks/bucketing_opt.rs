@@ -27,12 +27,12 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::mel_patch::{MelPatchOutput, MelPatchResourcesInput, MelPatchRunConfig, MelPatchRunConfigFields, MelPatchRunConfigRangeOrValue, MelPatchStage};
+use crate::tasks::bucketing::{MelPatchOutput, MelPatchResourcesInput, BucketRunConfig, BucketingStage, BucketRunConfigRangeOrValue, BucketRunConfigFields};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_shared::comp_id::SynKey;
 
-impl OptRunConfigSource for MelPatchRunConfigRangeOrValue<MelPatchRunConfigFields> {
-    type P = MelPatchRunConfigFields;
+impl OptRunConfigSource for BucketRunConfigRangeOrValue<BucketRunConfigFields> {
+    type P = BucketRunConfigFields;
 
     fn opt_run_configs(
         &self,
@@ -55,15 +55,15 @@ impl OptRunConfigSource for MelPatchRunConfigRangeOrValue<MelPatchRunConfigField
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct MelPatchOptResult {
-    best_configs: Vec<MelPatchRunConfig>,
+    best_configs: Vec<BucketRunConfig>,
 }
 
 impl MelPatchOptResult {
-    pub fn new(best_configs: Vec<MelPatchRunConfig>) -> Self {
+    pub fn new(best_configs: Vec<BucketRunConfig>) -> Self {
         Self { best_configs }
     }
 
-    pub fn best_configs(&self) -> &[MelPatchRunConfig] {
+    pub fn best_configs(&self) -> &[BucketRunConfig] {
         &self.best_configs
     }
 }
@@ -111,31 +111,31 @@ impl MelPatchOptEvalMetrics {
 }
 
 #[derive(Debug)]
-pub struct MelPatchOptStage {
+pub struct BucketingOptStage {
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     loader: Arc<RawTensorLoader<RunCtxImpl>>,
     run_configs: Arc<
         OptRunConfigs<
-            Vec<NamedVal<MelPatchRunConfigFields>>,
-            Vec<NamedRange<MelPatchRunConfigFields>>,
-            Vec<Hyperparameter<MelPatchRunConfigFields>>,
-            MelPatchRunConfigFields,
+            Vec<NamedVal<BucketRunConfigFields>>,
+            Vec<NamedRange<BucketRunConfigFields>>,
+            Vec<Hyperparameter<BucketRunConfigFields>>,
+            BucketRunConfigFields,
         >,
     >,
     opt_config: Arc<OptConfig>,
 }
 
-impl MelPatchOptStage {
+impl BucketingOptStage {
     pub fn new(
         loader: Arc<RawTensorLoader<RunCtxImpl>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         run_configs: OptRunConfigs<
-            Vec<NamedVal<MelPatchRunConfigFields>>,
-            Vec<NamedRange<MelPatchRunConfigFields>>,
-            Vec<Hyperparameter<MelPatchRunConfigFields>>,
-            MelPatchRunConfigFields,
+            Vec<NamedVal<BucketRunConfigFields>>,
+            Vec<NamedRange<BucketRunConfigFields>>,
+            Vec<Hyperparameter<BucketRunConfigFields>>,
+            BucketRunConfigFields,
         >,
         opt_config: Arc<OptConfig>,
     ) -> Self {
@@ -164,23 +164,11 @@ impl MelPatchOptStage {
         Ok(run_id)
     }
 
-    fn mel_patch_window_samples(run_config: &MelPatchRunConfig) -> Result<u32, ThoError> {
-        let mel_config = run_config.mel_config();
-        if mel_config.time_size <= 0 || mel_config.time_step <= 0 || mel_config.mel_patch_size <= 0 {
-            return Err(ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: invalid mel_config={mel_config:?}")));
-        }
-
-        let n_fft = u32::try_from(mel_config.time_size).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: n_fft={} does not fit into u32", mel_config.time_size)))?;
-        let hop_length = u32::try_from(mel_config.time_step).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: hop_length={} does not fit into u32", mel_config.time_step)))?;
-        let patch_frames = u32::try_from(mel_config.mel_patch_size).map_err(|_| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size)))?;
-
-        hop_length
-            .checked_mul(patch_frames.saturating_sub(1))
-            .and_then(|tail| tail.checked_add(n_fft))
-            .ok_or_else(|| ThoError::new(format!("MelPatchOptStage::mel_patch_window_samples: sample span overflow for mel_config={mel_config:?}")))
+    fn mel_patch_window_samples(run_config: &BucketRunConfig) -> Result<u32, ThoError> {
+        run_config.window_samples()
     }
 
-    fn find_motifs_run_config_for_mel_patch(run_config: &MelPatchRunConfig) -> Result<FindMotifsRunConfig, ThoError> {
+    fn find_motifs_run_config_for_mel_patch(run_config: &BucketRunConfig) -> Result<FindMotifsRunConfig, ThoError> {
         Ok(FindMotifsRunConfig::new(
             None,
             0,
@@ -196,7 +184,7 @@ impl MelPatchOptStage {
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<RawTensorLoader<RunCtxImpl>>,
-        run_config: &mut MelPatchRunConfig,
+        run_config: &mut BucketRunConfig,
         resources_config: &Simple,
         mut ctx: RunCtxImpl,
     ) -> Result<MelPatchOptEvalMetrics, ThoError> {
@@ -217,7 +205,7 @@ impl MelPatchOptStage {
         )
         .await?;
 
-        let mel_patch_stage = Arc::new(MelPatchStage::<Simple, RawTensorLoader<RunCtxImpl>, ChannelsData2, SynKey, RunCtxImpl>::new(
+        let mel_patch_stage = Arc::new(BucketingStage::<Simple, RawTensorLoader<RunCtxImpl>, ChannelsData2, SynKey, RunCtxImpl>::new(
             ws,
             store,
             loader,
@@ -246,10 +234,10 @@ impl MelPatchOptStage {
     }
 
     async fn eval_opt_config(
-        const_vals: &[NamedVal<MelPatchRunConfigFields>],
-        grid_vals: &[NamedVal<MelPatchRunConfigFields>],
-        opt_vals: &[NamedVal<MelPatchRunConfigFields>],
-        min_loss_ref: &Arc<RwLock<(f32, Option<MelPatchRunConfig>)>>,
+        const_vals: &[NamedVal<BucketRunConfigFields>],
+        grid_vals: &[NamedVal<BucketRunConfigFields>],
+        opt_vals: &[NamedVal<BucketRunConfigFields>],
+        min_loss_ref: &Arc<RwLock<(f32, Option<BucketRunConfig>)>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: &Arc<RawTensorLoader<RunCtxImpl>>,
@@ -257,7 +245,7 @@ impl MelPatchOptStage {
         grid_idx: usize,
         ctx: &mut RunCtxImpl,
     ) -> (MelPatchOptEvalMetrics, f32) {
-        let mut run_config: MelPatchRunConfig = [const_vals, grid_vals, opt_vals].concat().into_iter().into();
+        let mut run_config: BucketRunConfig = [const_vals, grid_vals, opt_vals].concat().into_iter().into();
 
         let ws = Arc::clone(ws);
         let store = Arc::clone(store);
@@ -275,29 +263,29 @@ impl MelPatchOptStage {
             )
         })
         .unwrap_or_else(|e| {
-            warn!("MelPatchOptStage::run: failed run_config={run_config:?}: {e:?}");
+            warn!("BucketingOptStage::run: failed run_config={run_config:?}: {e:?}");
             MelPatchOptEvalMetrics::failed()
         });
 
         let loss = if eval_metrics.motif_count == 0 { f32::MAX } else { 1.0 / eval_metrics.motif_count as f32 };
-        debug!("MelPatchOptStage::run: run_config={run_config:?} motif_count={} loss={loss}", eval_metrics.motif_count);
+        debug!("BucketingOptStage::run: run_config={run_config:?} motif_count={} loss={loss}", eval_metrics.motif_count);
 
-        if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(LOCK_TIMEOUT).expect("lock timeout"), "MelPatchOptStage/run/read_min_loss").0 {
-            *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(LOCK_TIMEOUT).expect("lock timeout"), "MelPatchOptStage/run/write_min_loss") = (loss, Some(run_config));
+        if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(LOCK_TIMEOUT).expect("lock timeout"), "BucketingOptStage/run/read_min_loss").0 {
+            *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(LOCK_TIMEOUT).expect("lock timeout"), "BucketingOptStage/run/write_min_loss") = (loss, Some(run_config));
         }
 
         (eval_metrics, loss)
     }
 }
 
-impl Stage for MelPatchOptStage {
+impl Stage for BucketingOptStage {
     type Ctx = RunCtxImpl;
     type In<'a> = MelPatchResourcesInput<Simple>;
     type Out = MelPatchOptResult;
 }
 
-impl AsyncStage for MelPatchOptStage {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "MelPatchOptStage::run"))]
+impl AsyncStage for BucketingOptStage {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingOptStage::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
@@ -313,10 +301,10 @@ impl AsyncStage for MelPatchOptStage {
         let opt_num_init = self.opt_config.opt_num_init;
         let mut mel_patch_opt_ctx = ctx.branch(Some("mel_patch_opt"), true);
         let grid_runs_len = grid_runs.len();
-        info!("MelPatchOptStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
+        info!("BucketingOptStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
 
         let futures = grid_runs.into_iter().enumerate().map(|(grid_idx, (grid_vals, opt_params))| {
-            let min_loss = Arc::new(RwLock::new((f32::MAX, None::<MelPatchRunConfig>)));
+            let min_loss = Arc::new(RwLock::new((f32::MAX, None::<BucketRunConfig>)));
             let min_loss_ref = Arc::clone(&min_loss);
 
             let const_vals = const_vals.clone();
@@ -352,14 +340,14 @@ impl AsyncStage for MelPatchOptStage {
 
                 opt.optimize().await;
 
-                let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(LOCK_TIMEOUT).expect("lock timeout"), "MelPatchOptStage/run/read_min_loss");
+                let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(LOCK_TIMEOUT).expect("lock timeout"), "BucketingOptStage/run/read_min_loss");
                 let (best_loss, best_config) = (guard.0, guard.1.as_ref().cloned());
 
                 if let Some(best_config) = best_config {
-                    info!("MelPatchOptStage::run: best_loss={best_loss:?} best_config={best_config:?}");
+                    info!("BucketingOptStage::run: best_loss={best_loss:?} best_config={best_config:?}");
                     Ok::<_, ThoError>((grid_idx, Some(best_config)))
                 } else {
-                    warn!("MelPatchOptStage::run: no best config for grid_vals={grid_vals:?} best_loss={best_loss:?}");
+                    warn!("BucketingOptStage::run: no best config for grid_vals={grid_vals:?} best_loss={best_loss:?}");
                     Ok::<_, ThoError>((grid_idx, None))
                 }
             }
@@ -370,7 +358,7 @@ impl AsyncStage for MelPatchOptStage {
             grid_runs_len,
             crate::buffer_limits::MEL_PATCH_OPT_STAGE_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
-            "MelPatchOptStage::run",
+            "BucketingOptStage::run",
         )
         .await;
 
