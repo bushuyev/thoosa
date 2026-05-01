@@ -17,8 +17,8 @@ use crate::tho_device::ThoDevice;
 
 pub struct CopyCtx {
     cu_ctx: Arc<ThoCudaContext>,
-    buffs: usize,
-    buf_size: usize,
+    pub(crate) buffs: usize,
+    pub(crate) buf_size: usize,
     stream_pool: Arc<Pool<ThoCudaStream>>,
     bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 }
@@ -43,7 +43,7 @@ impl CopyCtx {
             cu_ctx,
             buffs,
             buf_size,
-            stream_pool: Arc::new(Pool::from_iter((0..32).map(|i|ThoCudaStream::from_pool(0, false).unwrap()))),//TODO unwrap)),
+            stream_pool: Arc::new(Pool::from_iter((0..32).map(|i|ThoCudaStream::from_pool(0/*TODO device*/, false).unwrap()))),//TODO unwrap)),
             bufs_pool,
         }
     }

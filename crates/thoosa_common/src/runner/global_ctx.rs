@@ -117,10 +117,17 @@ impl GlobalCtx {
         async move {
             info!("DynamicTaskExecutor::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
-            *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance(0.2, 16);
+            GlobalCtx::global().drop_device(tho_device_idx, "drop").await?;
 
             let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32).map_err(ThoError::new)?;
             cu_ctx.reset()?;
+            // let (buffs, buf_size) = {
+            //     let copy_ctx = GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].read().await;
+            //     (copy_ctx.buffs, copy_ctx.buf_size)
+            // };
+            // *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::new(buffs, buf_size);
+            *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance(0.2, 16);
+
 
             info!("DynamicTaskExecutor::reset_cuda_context: done");
             Ok(())
@@ -291,24 +298,24 @@ impl GlobalCtx {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="GlobalCtx::dump_all_to_cpu"))]
     pub async fn drop_device<'a>(
         &'a self,
-        device_idx: usize,
+        tho_device_idx: usize,
         descr: &str,
     ) -> Result<(), ThoError> {
-        assert_ne!(device_idx, 0);
-        debug!("GlobalCtx::drop_device: device_idx={device_idx} descr={descr}");
+        assert_ne!(tho_device_idx, 0);
+        debug!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr}");
         let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {
             let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::drop_device: timed out waiting for cache gate read lock").await;
             debug!("GlobalCtx::drop_device: type_name={type_name}");
-            entry.purger.drop_gpu(device_idx, type_name).await?;
+            entry.purger.drop_gpu(tho_device_idx, type_name).await?;
             debug!("GlobalCtx::drop_device: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
-        self.is_all_on_cpu[device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::drop_device: device_idx={device_idx} descr={descr} done");
+        self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
+        debug!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr} done");
 
         Ok(())
     }
@@ -663,4 +670,35 @@ impl MockGlobalCtx {
     pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
         GlobalCtx::real_global().copy_ctx(device).await
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use log::debug;
+    use tch::kind::FLOAT_CUDA;
+    use tch::Tensor;
+    use thoosa_shared::ThoError;
+    use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::global_ctx::GlobalCtx;
+    //TODO
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    // async fn test_device_reset() -> Result<(), ThoError>{
+    //     unsafe {
+    //         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+    //     }
+    //     GlobalCtx::init_devices(2);
+    //
+    //     let t_0 = DevicesWrap::wrap(Tensor::rand(&[100000], FLOAT_CUDA));
+    //     let sum_0 = t_0t_0.sum_dim_intlist(0, false, None).double_value(&[]);
+    //
+    //     GlobalCtx::reset_cuda_context(1).await?;
+    //
+    //     let sum_1 = t_0.sum_dim_intlist(0, false, None).double_value(&[]);
+    //
+    //     debug!("sum_0={sum_0} sum_1={sum_1}");
+    //
+    //
+    //     Ok(())
+    // }
+
 }
