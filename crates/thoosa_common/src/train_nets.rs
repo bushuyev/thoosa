@@ -213,8 +213,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
                 &self.label,
                 &self.var_store,
                 &self.label_node_params,
-            )
-            .expect("save_label_net failed");
+            )?;
         debug!("TrainLabelNetsRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
         store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss, Some(self.motif_nets_ids.clone())).await?;

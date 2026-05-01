@@ -577,7 +577,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct BatchAppliedMotifNetsInput {
     id: SynKey,
     len: usize,
@@ -624,13 +624,13 @@ impl Data for BatchAppliedMotifNetsInput {
 
 impl Input for BatchAppliedMotifNetsInput {}
 
-impl Select<()> for BatchAppliedMotifNetsInput {
-    type Output = Self;
-
-    fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
-        Ok(self.clone())
-    }
-}
+// impl Select<()> for BatchAppliedMotifNetsInput {
+//     type Output = Self;
+//
+//     fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
+//         Ok(self.clone())
+//     }
+// }
 
 impl Adjustable for BatchAppliedMotifNetsInput {}
 
