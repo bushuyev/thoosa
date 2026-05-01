@@ -977,32 +977,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_device_reset() -> Result<(), ThoError>{
-        unsafe {
-            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-        }
-
-        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
-        cu_ctx
-            .bind_to_thread()
-            .expect("failed to bind CUDA context for test_small_one_copy_types");
-
-
-        let t_0 = Tensor::rand(&[100000], FLOAT_CUDA);
-        let sum_0 = t_0.sum_dim_intlist(0, false, None).double_value(&[]);
-
-
-        cu_ctx.reset()?;
-
-        let sum_1 = t_0.sum_dim_intlist(0, false, None).double_value(&[]);
-
-        debug!("sum_0={sum_0} sum_1={sum_1}");
-
-
-        Ok(())
-    }
-
 }
 
 

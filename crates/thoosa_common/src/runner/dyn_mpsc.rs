@@ -273,28 +273,28 @@ impl DynamicTaskExecutor {
         )
     }
 
-    pub fn new_for_device(
-        queue_capacity: usize,
-        initial_limit: NonZeroUsize,
-        tho_device_idx: usize,
-    ) -> Self {
-        Self::new_inner(
-            queue_capacity,
-            initial_limit,
-            tho_device_idx,
-            Arc::new(|device_idx| {
-                async move {
-                    tokio::task::spawn_blocking(move || Self::reset_cuda_context(device_idx))
-                        .await
-                        .map_err(|e| ThoError::new(format!("CUDA reset task join failed: {e}")))??;
-                    info!("Reset cuda device done, dropping data from  maps");
-                    GlobalCtx::global().drop_device(device_idx, "drop").await?;
-
-                    Ok(())
-                }.boxed()
-            }),
-        )
-    }
+    // pub fn new_for_device(
+    //     queue_capacity: usize,
+    //     initial_limit: NonZeroUsize,
+    //     tho_device_idx: usize,
+    // ) -> Self {
+    //     Self::new_inner(
+    //         queue_capacity,
+    //         initial_limit,
+    //         tho_device_idx,
+    //         Arc::new(|device_idx| {
+    //             async move {
+    //                 tokio::task::spawn_blocking(move || Self::reset_cuda_context(device_idx))
+    //                     .await
+    //                     .map_err(|e| ThoError::new(format!("CUDA reset task join failed: {e}")))??;
+    //                 info!("Reset cuda device done, dropping data from  maps");
+    //                 GlobalCtx::global().drop_device(device_idx, "drop").await?;
+    //
+    //                 Ok(())
+    //             }.boxed()
+    //         }),
+    //     )
+    // }
 
     pub fn new_with_reset_hook(
         queue_capacity: usize,
@@ -354,13 +354,13 @@ impl DynamicTaskExecutor {
         }
     }
 
-     fn reset_cuda_context(device_idx: usize) -> Result<(), ThoError> {
-        let cu_ctx = ThoCudaContext::new((device_idx - 1) as i32).map_err(ThoError::new)?;
-        cu_ctx.reset()?;
-
-        warn!("DynamicTaskExecutor::reset_cuda_context: done");
-        Ok(())
-    }
+    //  fn reset_cuda_context(device_idx: usize) -> Result<(), ThoError> {
+    //     let cu_ctx = ThoCudaContext::new((device_idx - 1) as i32).map_err(ThoError::new)?;
+    //     cu_ctx.reset()?;
+    //
+    //     warn!("DynamicTaskExecutor::reset_cuda_context: done");
+    //     Ok(())
+    // }
 
     fn closed_error(msg: impl Into<String>) -> ThoError {
         ThoError::new_with_error(msg.into(), Cause::SubmitErrorClosed)
@@ -423,7 +423,7 @@ impl DynamicTaskExecutor {
                     if let Some(job_id) = job_id_to_rerun {
                         self.clear_exclusive_job_id(job_id);
                     }
-                    return Err(Self::closed_error("Can't submit job: executor is closed"));
+                    return Err(Self::closed_error(format!("Can't submit job: executor is_closed={}", self.tx.is_closed())));
                 }
                 Err(e) => {
                     error!("DynamicTaskExecutor::submit: reserve job_id={job_id} timed out: e={e:?}");
