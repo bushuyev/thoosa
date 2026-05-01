@@ -1,5 +1,5 @@
 use crate::cli::Commands::{
-    FindMotifs, ImportResources, Infer, MelPatch, MelPatchOpt, MotifsToTensor, PlotData, RunAll,
+    FindMotifs, ImportResources, Infer, Bucket, BucketOpt, MotifsToTensor, PlotData, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
@@ -98,8 +98,8 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
-use crate::tasks::mel_patch::{MelPatchResourcesInput, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage};
-use crate::tasks::mel_patch_opt::MelPatchOptStage;
+use crate::tasks::bucketing::{MelPatchResourcesInput, BucketRunConfig, BucketingStage, BucketRunConfigRangeOrValue};
+use crate::tasks::bucketing_opt::BucketingOptStage;
 use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
@@ -260,7 +260,7 @@ impl SeqScanArgs {
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct MelPatchArgs {
+pub struct BucketArgs {
     #[arg(long, value_parser=parse_resources)]
     pub resources: ResourceType,
 
@@ -268,14 +268,14 @@ pub struct MelPatchArgs {
     pub run_config_cnt: String,
 }
 
-impl MelPatchArgs {
+impl BucketArgs {
     pub fn resource_config(&self) -> Simple {
         Simple::new(self.resources.clone())
     }
 }
 
 #[derive(Debug, Args, Clone)]
-pub struct MelPatchOptArgs {
+pub struct BucketOptArgs {
     #[arg(long, value_parser=parse_resources)]
     pub resources: ResourceType,
 
@@ -286,7 +286,7 @@ pub struct MelPatchOptArgs {
     pub opt_config: OptConfig,
 }
 
-impl MelPatchOptArgs {
+impl BucketOptArgs {
     pub fn resource_config(&self) -> Simple {
         Simple::new(self.resources.clone())
     }
@@ -297,8 +297,8 @@ pub enum Commands {
     ImportResources(ImportResourcesArgs),
     FindMotifs(FindMotifsArgs),
     SeqScan(SeqScanArgs),
-    MelPatch(MelPatchArgs),
-    MelPatchOpt(MelPatchOptArgs),
+    Bucket(BucketArgs),
+    BucketOpt(BucketOptArgs),
     PlotData(PlotDataArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
@@ -607,19 +607,18 @@ where
             info!("SeqScan done, run_ids={run_ids:?}");
         }
 
-        Some(MelPatch(mel_patch_args)) => {
-            debug!("MelPatch: mel_patch_args={mel_patch_args:?}");
+        Some(Bucket(bucket_args)) => {
+            debug!("MelPatch: mel_patch_args={bucket_args:?}");
 
-            let mel_patch_run_config_range_or_value: MelPatchRunConfigRangeOrValue =
-                serde_json5::from_str(&mel_patch_args.run_config_cnt).expect("MelPatchRunConfig");
+            let mel_patch_run_config_range_or_value: BucketRunConfigRangeOrValue = serde_json5::from_str(&bucket_args.run_config_cnt).expect("MelPatchRunConfig");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(mel_patch_args.resource_config()).check(&store).await?));
+            let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(bucket_args.resource_config()).check(&store).await?));
 
             let find_motifs_run_id = store.save_run_config(
                 None,
                 &FindMotifsRunConfig::type_name(),
                 "FindMotifsRunConfig",
-                FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+                FindMotifsRunConfig::new(None, 0, 8000, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
             ).await?;
 
 
@@ -630,12 +629,12 @@ where
                 &ws,
                 &store,
                 |run_configs| async {
-                    Arc::new(MelPatchStage::<Simple, RawTensorLoader<RunCtxImpl>, ChannelsData2, SynKey, RunCtxImpl>::new(
+                    Arc::new(BucketingStage::<Simple, RawTensorLoader<RunCtxImpl>, ChannelsData2, SynKey, RunCtxImpl>::new(
                         &ws,
                         &store,
                         loader,
                         run_configs
-                    ).expect("MelPatchStage::new failed"))
+                    ).expect("BucketingStage::new failed"))
                 },
                 || root_ctx.branch(Some("mel patch"), true),
             ).await?;
@@ -643,10 +642,10 @@ where
             info!("MelPatch done, run_ids={run_ids:?}");
         }
 
-        Some(MelPatchOpt(mel_patch_opt_args)) => {
+        Some(BucketOpt(mel_patch_opt_args)) => {
             debug!("MelPatchOpt: mel_patch_opt_args={mel_patch_opt_args:?}");
 
-            let mel_patch_run_config_range_or_value: MelPatchRunConfigRangeOrValue =
+            let mel_patch_run_config_range_or_value: BucketRunConfigRangeOrValue =
                 serde_json5::from_str(&mel_patch_opt_args.run_config_cnt).expect("MelPatchRunConfig");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(mel_patch_opt_args.resource_config()).check(&store).await?));
@@ -655,14 +654,14 @@ where
             let init_store = Arc::clone(&store);
             let opt_config = Arc::new(mel_patch_opt_args.opt_config.clone());
 
-            let run_ids = run_opt::<_, _, MelPatchRunConfig, _, _>(
+            let run_ids = run_opt::<_, _, BucketRunConfig, _, _>(
                 None,
                 mel_patch_run_config_range_or_value,
                 input_wrapper,
                 &ws,
                 &store,
                 move |run_configs| async move {
-                    Ok(Arc::new(MelPatchOptStage::new(
+                    Ok(Arc::new(BucketingOptStage::new(
                         init_loader,
                         &init_ws,
                         &init_store,
@@ -2274,7 +2273,7 @@ mod cli_tests {
         ]);
 
         match cli.command {
-            Some(crate::cli::Commands::MelPatch(args)) => {
+            Some(crate::cli::Commands::Bucket(args)) => {
                 assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
                 assert_eq!(args.run_config_cnt, "{bucket_count:256,min_slices:10,max_slices:100}");
             }
@@ -2294,7 +2293,7 @@ mod cli_tests {
         ]);
 
         match cli.command {
-            Some(crate::cli::Commands::MelPatchOpt(args)) => {
+            Some(crate::cli::Commands::BucketOpt(args)) => {
                 assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
                 assert_eq!(args.run_config_cnt, "{bucket_count:{range:{start:64,end:256},step:null},min_slices:10,max_slices:100}");
                 assert_eq!(args.opt_config.opt_max_evals, 12);

@@ -1,3 +1,5 @@
+#![allow(non_camel_case_types)]
+
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs;
@@ -10,9 +12,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use log::{debug, info, warn};
-use tch::Tensor;
+use tch::{Device, Kind, Tensor};
 use serde::Deserialize;
-use thoosa_common::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, patch_sample_ranges_flat, LogMelPatchConfig};
+use thoosa_common::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes_for_buckets, patch_sample_ranges_flat, BandAggregation, LogMelPatchConfig};
 use thoosa_common::audio::{LogMelPatchConfigRangeOrValue, LogMelPatchConfigFields, LogMelPatchConfigBuilder};
 use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
@@ -34,7 +36,7 @@ use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
 
 
-const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOMELP1";
+const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
 
 #[derive(Debug, Clone)]
 pub struct MelPatchResourcesInput<RC>
@@ -155,9 +157,9 @@ pub struct MelPatchTempStore {
 }
 
 impl MelPatchTempStore {
-    fn new(path: &Path, run_id: RunId, channel: u32) -> Result<Self, ThoError> {
+    fn new(path: &Path, run_id: RunId, bucket: u16) -> Result<Self, ThoError> {
         fs::create_dir_all(path)?;
-        let file_path = path.join(format!("{run_id}_{channel}_mel_patches.bin"));
+        let file_path = path.join(format!("{run_id}_bucket_{bucket}_bucketing.bin"));
         let file = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(&file_path)?;
         let mut writer = BufWriter::new(file);
         writer.write_all(&MEL_PATCH_TEMP_MAGIC)?;
@@ -170,10 +172,10 @@ impl MelPatchTempStore {
         })
     }
 
-    fn save_slices(&mut self, group: u16, slices: &[TensorIdSliceIdx]) -> Result<(), ThoError> {
-        debug!("MelPatchTempStore::save_slices: path={:?} group={group} slices.len={}", self.path, slices.len());
+    fn save_slices(&mut self, channel: u32, slices: &[TensorIdSliceIdx]) -> Result<(), ThoError> {
+        debug!("MelPatchTempStore::save_slices: path={:?} channel={channel} slices.len={}", self.path, slices.len());
         for slice in slices {
-            self.writer.write_all(&group.to_le_bytes())?;
+            self.writer.write_all(&channel.to_le_bytes())?;
             self.writer.write_all(&slice.0.to_le_bytes())?;
             self.writer.write_all(&slice.1.to_le_bytes())?;
         }
@@ -181,23 +183,23 @@ impl MelPatchTempStore {
         Ok(())
     }
 
-    fn load_groups(&mut self) -> Result<HashMap<u16, HashSet<IdSlice>>, ThoError> {
+    fn load_channel_groups(&mut self, group: u16) -> Result<HashMap<u32, HashSet<IdSlice>>, ThoError> {
         self.writer.flush()?;
         let mut reader = BufReader::new(File::open(&self.path)?);
         let mut magic = [0u8; MEL_PATCH_TEMP_MAGIC.len()];
         reader.read_exact(&mut magic)?;
         if magic != MEL_PATCH_TEMP_MAGIC {
-            return Err(ThoError::new(format!("MelPatchTempStore::load_groups: unexpected file header in {:?}", self.path)));
+            return Err(ThoError::new(format!("MelPatchTempStore::load_channel_groups: unexpected file header in {:?}", self.path)));
         }
 
-        let mut groups: HashMap<u16, HashSet<IdSlice>> = HashMap::new();
+        let mut groups: HashMap<u32, HashSet<IdSlice>> = HashMap::new();
         let mut slice_id = 0u32;
         loop {
-            let mut group_bytes = [0u8; 2];
-            match reader.read(&mut group_bytes[0..1])? {
+            let mut channel_bytes = [0u8; 4];
+            match reader.read(&mut channel_bytes[0..1])? {
                 0 => break,
-                1 => reader.read_exact(&mut group_bytes[1..2])?,
-                n => return Err(ThoError::new(format!("MelPatchTempStore::load_groups: unexpected read size {n}"))),
+                1 => reader.read_exact(&mut channel_bytes[1..4])?,
+                n => return Err(ThoError::new(format!("MelPatchTempStore::load_channel_groups: unexpected read size {n}"))),
             }
 
             let mut resource_id_bytes = [0u8; 4];
@@ -205,14 +207,15 @@ impl MelPatchTempStore {
             reader.read_exact(&mut resource_id_bytes)?;
             reader.read_exact(&mut slice_idx_bytes)?;
 
-            slice_id = slice_id.checked_add(1).ok_or_else(|| ThoError::new("MelPatchTempStore::load_groups: slice_id overflow"))?;
-            groups.entry(u16::from_le_bytes(group_bytes)).or_default().insert(IdSlice(
+            slice_id = slice_id.checked_add(1).ok_or_else(|| ThoError::new("MelPatchTempStore::load_channel_groups: slice_id overflow"))?;
+            groups.entry(u32::from_le_bytes(channel_bytes)).or_default().insert(IdSlice(
                 slice_id,
                 u32::from_le_bytes(resource_id_bytes),
                 u32::from_le_bytes(slice_idx_bytes),
             ));
         }
 
+        debug!("MelPatchTempStore::load_channel_groups: group={group} channels={}", groups.len());
         Ok(groups)
     }
 
@@ -223,7 +226,7 @@ impl MelPatchTempStore {
 }
 
 #[derive(Debug, Named)]
-pub struct MelPatchStage<RC, L, D, Id, C>
+pub struct BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
@@ -234,11 +237,11 @@ where
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
-    run_configs: Vec<MelPatchRunConfig>,
+    run_configs: Vec<BucketRunConfig>,
     pd: PhantomData<(RC, D, Id, C)>,
 }
 
-impl<RC, L, D, Id, C> MelPatchStage<RC, L, D, Id, C>
+impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
@@ -250,23 +253,24 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
-        run_configs: Vec<MelPatchRunConfig>,
+        run_configs: Vec<BucketRunConfig>,
     ) -> Result<Self, ThoError> {
         if run_configs.is_empty() {
-            return Err(ThoError::new("MelPatchStage::new: run_configs should not be empty"));
+            return Err(ThoError::new("BucketingStage::new: run_configs should not be empty"));
         }
 
         for run_config in &run_configs {
             run_config.run_id()?;
             if run_config.bucket_count == 0 {
-                return Err(ThoError::new("MelPatchStage::new: bucket_count must be positive"));
+                return Err(ThoError::new("BucketingStage::new: bucket_count must be positive"));
             }
             if run_config.bucket_count > u16::MAX as u32 + 1 {
-                return Err(ThoError::new(format!("MelPatchStage::new: bucket_count={} exceeds u16 group ord capacity", run_config.bucket_count)));
+                return Err(ThoError::new(format!("BucketingStage::new: bucket_count={} exceeds u16 group ord capacity", run_config.bucket_count)));
             }
             if run_config.min_slices > run_config.max_slices {
-                return Err(ThoError::new(format!("MelPatchStage::new: min_slices={} exceeds max_slices={}", run_config.min_slices, run_config.max_slices)));
+                return Err(ThoError::new(format!("BucketingStage::new: min_slices={} exceeds max_slices={}", run_config.min_slices, run_config.max_slices)));
             }
+            run_config.validate_bucket_config()?;
         }
 
         Ok(Self {
@@ -282,37 +286,93 @@ where
         &self,
         resource: &Resource,
         audio: &Tensor,
-        tmp_path: &Path,
-        temp_stores: &mut Vec<MelPatchTempStore>,
-        run_config: &MelPatchRunConfig,
+        _tmp_path: &Path,
+        temp_stores: &mut [MelPatchTempStore],
+        run_config: &BucketRunConfig,
         sample_rate: f64,
     ) -> Result<(), ThoError> {
-        let mel_config = run_config.mel_config();
+        let mel_config = run_config.log_mel_config()?;
         let patches = audio_to_log_mel_patches(audio, mel_config, sample_rate)?;
         let patch_ranges = patch_sample_ranges_flat(&patches, mel_config)?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, run_config.bucket_count_i64())?;
 
         if patch_ranges.len() != channels_bucket_ids.len() {
-            return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), channels_bucket_ids.len())));
+            return Err(ThoError::new(format!("BucketingStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), channels_bucket_ids.len())));
         }
 
 
         for channel in 0..channels_bucket_ids.len() {
             if patch_ranges[channel].len() != channels_bucket_ids[channel].len() {
-                return Err(ThoError::new(format!("MelPatchStage::save_resource_patches: channel={channel} ranges len={} bucket len={}", patch_ranges[channel].len(), channels_bucket_ids[channel].len())));
+                return Err(ThoError::new(format!("BucketingStage::save_resource_patches: channel={channel} ranges len={} bucket len={}", patch_ranges[channel].len(), channels_bucket_ids[channel].len())));
             }
 
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
 
             for ((sample_start, _sample_end), bucket) in patch_ranges[channel].iter().zip(channels_bucket_ids[channel].iter()) {
-                let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("MelPatchStage::save_resource_patches: bucket={bucket} does not fit into u16")))?;
-                let slice_start = u32::try_from(*sample_start).map_err(|_| ThoError::new(format!("MelPatchStage::save_resource_patches: sample_start={sample_start} does not fit into u32")))?;
+                let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("BucketingStage::save_resource_patches: bucket={bucket} does not fit into u16")))?;
+                let slice_start = u32::try_from(*sample_start).map_err(|_| ThoError::new(format!("BucketingStage::save_resource_patches: sample_start={sample_start} does not fit into u32")))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(resource.id(), slice_start));
             }
 
             for (group, slices) in slices_by_bucket {
                 debug!("save_resource_patches: group={group} slices={slices:?}");
-                temp_stores[channel].save_slices(group, &slices)?;
+                temp_stores[group as usize].save_slices(channel as u32, &slices)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn save_resource_plain_buckets(
+        &self,
+        resource: &Resource,
+        audio: &Tensor,
+        temp_stores: &mut [MelPatchTempStore],
+        run_config: &BucketRunConfig,
+        plain_config: &PlainConfig,
+        sample_rate: f64,
+    ) -> Result<(), ThoError> {
+        if temp_stores.len() != run_config.bucket_count as usize {
+            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: temp stores={} bucket_count={}", temp_stores.len(), run_config.bucket_count)));
+        }
+
+        let audio_size = audio.size();
+        if audio_size.len() != 2 {
+            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: expected audio shape [channels, samples], got {audio_size:?}")));
+        }
+        if plain_config.slice_size <= 0 || plain_config.slice_step <= 0 {
+            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: invalid plain_config={plain_config:?}")));
+        }
+        if audio_size[1] < plain_config.slice_size {
+            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: audio too short samples={} slice_size={}", audio_size[1], plain_config.slice_size)));
+        }
+
+        let slices = audio.f_unfold(1, plain_config.slice_size, plain_config.slice_step)?;
+        debug!("save_resource_plain_buckets: slices={slices:?}");
+
+        let channels_slices_freqamp = fft_band_amplitudes_sliced(&slices, sample_rate, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset)?;
+        debug!("save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
+
+        let planes = make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device())?;
+        debug!("save_resource_plain_buckets: planes={planes:?}");
+
+        let buckets_one_hot = lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, plain_config.normalize_lsh)?;
+        debug!("save_resource_plain_buckets: buckets_one_hot={buckets_one_hot:?}");
+
+        let channels_bucket_ids = bucket_ids_from_one_hot_3d(&buckets_one_hot)?;
+
+        for (channel, bucket_ids) in channels_bucket_ids.iter().enumerate() {
+            let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
+            for (slice_idx, bucket) in bucket_ids.iter().enumerate() {
+                let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("BucketingStage::save_resource_plain_buckets: bucket={bucket} does not fit into u16")))?;
+                let sample_start = (slice_idx as i64).checked_mul(plain_config.slice_step).ok_or_else(|| ThoError::new("BucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
+                let slice_start = u32::try_from(sample_start).map_err(|_| ThoError::new(format!("BucketingStage::save_resource_plain_buckets: sample_start={sample_start} does not fit into u32")))?;
+                slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(resource.id(), slice_start));
+            }
+
+            for (group, slices) in slices_by_bucket {
+                debug!("save_resource_plain_buckets: group={group} slices={slices:?}");
+                temp_stores[group as usize].save_slices(channel as u32, &slices)?;
             }
         }
 
@@ -320,7 +380,7 @@ where
     }
 }
 
-impl<RC, L, D, Id, C> Stage for MelPatchStage<RC, L, D, Id, C>
+impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
@@ -335,7 +395,7 @@ where
     type Out = MelPatchOutput;
 }
 
-impl<RC, L, D, Id, C> AsyncStage for MelPatchStage<RC, L, D, Id, C>
+impl<RC, L, D, Id, C> AsyncStage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
@@ -343,27 +403,30 @@ where
     Id: Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "MelPatchStage::run"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let resources_config = with_data!(ctx.branch(Some("mel_patch_resources"), false), input; |_ctx, input: &MelPatchResourcesInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
         let resources = resources_config.to_resources(&self.store).await?;
 
-        debug!("MelPatchStage::run: resources_config={resources_config:?} resources={resources:?}");
+        debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
 
         let tmp_path = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock").tmp_path().clone(),
-            "MelPatchStage::run/read_ws_tmp_path",
+            || self.ws.try_read_for(LOCK_TIMEOUT).expect("BucketingStage::run: timed out waiting for workspace read lock").tmp_path().clone(),
+            "BucketingStage::run/read_ws_tmp_path",
         );
         let (channels, sample_rate) = {
-            let ws = self.ws.try_read_for(LOCK_TIMEOUT).expect("MelPatchStage::run: timed out waiting for workspace read lock");
+            let ws = self.ws.try_read_for(LOCK_TIMEOUT).expect("BucketingStage::run: timed out waiting for workspace read lock");
             (ws.channels(), ws.sample_rate())
         };
 
         let mut temp_stores_by_run: Vec<Vec<MelPatchTempStore>> = self.run_configs.iter()
             .map(|run_config|
-                (0..channels).map(|channel|MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), channel))
+                (0..run_config.bucket_count).map(|bucket| {
+                    let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+                    MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
+                })
                     .collect::<Result<Vec<_>, ThoError>>()
             ).collect::<Result<Vec<_>, ThoError>>()?;
 
@@ -377,7 +440,10 @@ where
 
             with_data!(ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false), loaded; |_ctx, tensor: &ThoTensor<D, Id>| {
                 for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.iter_mut()) {
-                    self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config, sample_rate as f64)?;
+                    match run_config.mel_config() {
+                        BucketingConfig::Mel(_) => self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config, sample_rate as f64)?,
+                        BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(resource, tensor.t_ref(), temp_stores, run_config, plain_config, sample_rate as f64)?,
+                    }
                 }
                 Ok::<_, ThoError>(())
             })?;
@@ -385,37 +451,36 @@ where
 
         let mut run_configs_motifs = Vec::with_capacity(self.run_configs.len());
         for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.into_iter()) {
+            // self.store.up
             let run_id = run_config.run_id()?;
-            let mut motif_ids = Vec::with_capacity(temp_stores.len());
-            for (channel, mut temp_store) in temp_stores.into_iter().enumerate() {
-                let groups = filter_mel_patch_groups(temp_store.load_groups()?, run_config.min_slices_usize(), run_config.max_slices_usize());
-                let groups_len = groups.len();
-                let group_motif_ids = self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
+            let mut motif_ids = Vec::new();
+            let mut groups_by_channel = (0..channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
+            for (bucket, mut temp_store) in temp_stores.into_iter().enumerate() {
+                let group = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+                for (channel, slices) in temp_store.load_channel_groups(group)? {
+                    let channel = usize::try_from(channel).map_err(|_| ThoError::new(format!("BucketingStage::run: channel={channel} does not fit into usize")))?;
+                    if channel >= groups_by_channel.len() {
+                        return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={channels}")));
+                    }
+                    groups_by_channel[channel].entry(group).or_default().extend(slices);
+                }
                 temp_store.remove()?;
+            }
+
+            for (channel, groups) in groups_by_channel.into_iter().enumerate() {
+                let groups = filter_mel_patch_groups(groups, run_config.min_slices_usize(), run_config.max_slices_usize());
+                let group_motif_ids = self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
                 motif_ids.extend(group_motif_ids);
             }
 
-            debug!("MelPatchStage::run: run_id={run_id} resources={} motif_ids={motif_ids:?}", resources.len());
+            debug!("BucketingStage::run: run_id={run_id} resources={} motif_ids={motif_ids:?}", resources.len());
             run_configs_motifs.push((run_id, motif_ids));
         }
 
-        info!("MelPatchStage::run: run_configs_motifs={run_configs_motifs:?}");
+        info!("BucketingStage::run: run_configs_motifs={run_configs_motifs:?}");
 
         Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new(run_configs_motifs))))
     }
-}
-
-fn ensure_mel_patch_temp_stores(
-    temp_stores: &mut Vec<MelPatchTempStore>,
-    tmp_path: &Path,
-    run_id: RunId,
-    channels: usize,
-) -> Result<(), ThoError> {
-    while temp_stores.len() < channels {
-        let channel = u32::try_from(temp_stores.len()).map_err(|_| ThoError::new("ensure_mel_patch_temp_stores: channel index does not fit into u32"))?;
-        temp_stores.push(MelPatchTempStore::new(tmp_path, run_id, channel)?);
-    }
-    Ok(())
 }
 
 pub fn filter_mel_patch_groups(groups: HashMap<u16, HashSet<IdSlice>>, min_slices: usize, max_slices: usize) -> HashMap<u16, HashSet<IdSlice>> {
@@ -426,17 +491,153 @@ pub fn filter_mel_patch_groups(groups: HashMap<u16, HashSet<IdSlice>>, min_slice
             if (min_slices..=max_slices).contains(&len) {
                 Some((group, slices))
             } else {
-                warn!("MelPatchStage: skipping group={group} with {len} slices");
+                warn!("BucketingStage: skipping group={group} with {len} slices");
                 None
             }
         })
         .collect()
 }
 
+fn bucket_ids_from_one_hot_3d(buckets: &Tensor) -> Result<Vec<Vec<usize>>, ThoError> {
+    let size = buckets.size();
+    if size.len() != 3 {
+        return Err(ThoError::new(format!("bucket_ids_from_one_hot_3d: expected [channels, slices, buckets], got {size:?}")));
+    }
+
+    let channels = size[0];
+    let slices = size[1];
+    let bucket_ids = buckets.f_argmax(Some(2), false)?.f_to_device(Device::Cpu)?.f_to_kind(Kind::Int64)?.f_contiguous()?;
+    let flat = Vec::<i64>::try_from(&bucket_ids.f_reshape([-1])?)?;
+    let mut result = vec![Vec::with_capacity(slices as usize); channels as usize];
+    for channel in 0..channels {
+        for slice in 0..slices {
+            let idx = (channel * slices + slice) as usize;
+            let bucket = usize::try_from(flat[idx]).map_err(|_| ThoError::new(format!("bucket_ids_from_one_hot_3d: bucket={} does not fit into usize", flat[idx])))?;
+            result[channel as usize].push(bucket);
+        }
+    }
+
+    Ok(result)
+}
+
+fn deterministic_plain_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, device: Device) -> Result<Tensor, ThoError> {
+    if data_dim <= 0 {
+        return Err(ThoError::new("deterministic_plain_lsh_planes: data_dim must be > 0"));
+    }
+    if num_bits <= 0 || num_bits > 30 {
+        return Err(ThoError::new("deterministic_plain_lsh_planes: num_bits must be in 1..=30"));
+    }
+
+    let count = usize::try_from(data_dim.checked_mul(num_bits).ok_or_else(|| ThoError::new("deterministic_plain_lsh_planes: plane size overflow"))?).map_err(|_| ThoError::new("deterministic_plain_lsh_planes: plane size does not fit into usize"))?;
+    let mut seed = 0x9e3779b97f4a7c15u64 ^ (data_dim as u64).wrapping_mul(0xbf58476d1ce4e5b9) ^ (num_bits as u64).wrapping_mul(0x94d049bb133111eb);
+    let mut values = Vec::with_capacity(count);
+    for idx in 0..count {
+        seed ^= (idx as u64).wrapping_mul(0x9e3779b97f4a7c15);
+        seed = seed.wrapping_mul(0xbf58476d1ce4e5b9).rotate_left(27);
+        let unit = ((seed >> 40) as f32) / ((1u32 << 24) as f32);
+        values.push(unit * 2.0 - 1.0);
+    }
+
+    Ok(Tensor::f_from_slice(&values)?.f_to_kind(kind)?.f_to_device(device)?.f_view([data_dim, num_bits])?)
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[allow(non_camel_case_types)]
+pub enum PlainBandAggregation {
+    #[run_config_default]
+    Sum(PlainBandAggregationSum),
+    Mean(PlainBandAggregationMean),
+}
+
+impl Default for PlainBandAggregation {
+    fn default() -> Self {
+        Self::Sum(PlainBandAggregationSum {})
+    }
+}
+
+impl PlainBandAggregation {
+    fn to_audio(&self) -> BandAggregation {
+        match self {
+            Self::Sum(_) => BandAggregation::Sum,
+            Self::Mean(_) => BandAggregation::Mean,
+        }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct PlainBandAggregationSum {}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, Default)]
+pub struct PlainBandAggregationMean {}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+pub struct PlainConfig {
+    #[run_config]
+    #[in_map]
+    pub slice_size: i64,
+
+    #[run_config]
+    #[in_map]
+    pub slice_step: i64,
+
+    #[run_config]
+    #[in_map]
+    pub band_hz: f64,
+
+    #[run_config]
+    #[in_map]
+    pub aggregation: PlainBandAggregation,
+
+    #[run_config]
+    #[in_map]
+    pub apply_hann_window: bool,
+
+    #[run_config]
+    #[in_map]
+    pub remove_dc_offset: bool,
+
+    #[run_config]
+    #[in_map]
+    pub lsh_bits: i64,
+
+    #[run_config]
+    #[in_map]
+    pub normalize_lsh: bool,
+}
+
+impl Default for PlainConfig {
+    fn default() -> Self {
+        Self {
+            slice_size: 3000,
+            slice_step: 3000,
+            band_hz: 1000.0,
+            aggregation: PlainBandAggregation::default(),
+            apply_hann_window: false,
+            remove_dc_offset: true,
+            lsh_bits: 8,
+            normalize_lsh: true,
+        }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[allow(non_camel_case_types)]
+pub enum BucketingConfig {
+    #[run_config_default]
+    Mel(LogMelPatchConfig),
+    Plain(PlainConfig),
+}
+
+impl Default for BucketingConfig {
+    fn default() -> Self {
+        Self::Mel(LogMelPatchConfig::default())
+    }
+}
+
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_grid]
-pub struct MelPatchRunConfig {
+pub struct BucketRunConfig {
     #[in_map]
     pub id: Option<RunId>,
 
@@ -454,13 +655,13 @@ pub struct MelPatchRunConfig {
 
     #[run_config]
     #[in_map]
-    mel_config: LogMelPatchConfig
+    bucket_config: BucketingConfig
 }
 
-impl MelPatchRunConfig {
+impl BucketRunConfig {
 
     pub fn run_id(&self) -> Result<RunId, ThoError> {
-        self.id.ok_or_else(|| ThoError::new("MelPatchRunConfig::run_id: missing run id"))
+        self.id.ok_or_else(|| ThoError::new("BucketRunConfig::run_id: missing run id"))
     }
 
     pub fn bucket_count_i64(&self) -> i64 {
@@ -475,23 +676,64 @@ impl MelPatchRunConfig {
         self.max_slices as usize
     }
 
-    pub fn mel_config(&self) -> &LogMelPatchConfig {
-        &self.mel_config
+    pub fn mel_config(&self) -> &BucketingConfig {
+        &self.bucket_config
     }
 
-    pub fn new(id: Option<RunId>, bucket_count: u32, min_slices: u32, max_slices: u32, mel_config:LogMelPatchConfig) -> Self {
-        Self { id, bucket_count, min_slices, max_slices, mel_config }
+    pub fn log_mel_config(&self) -> Result<&LogMelPatchConfig, ThoError> {
+        match &self.bucket_config {
+            BucketingConfig::Mel(mel_config) => Ok(mel_config),
+            BucketingConfig::Plain(_) => Err(ThoError::new("BucketRunConfig::log_mel_config: bucketing config is Plain")),
+        }
+    }
+
+    pub fn validate_bucket_config(&self) -> Result<(), ThoError> {
+        if let BucketingConfig::Plain(plain_config) = &self.bucket_config {
+            if plain_config.lsh_bits <= 0 || plain_config.lsh_bits > 16 {
+                return Err(ThoError::new(format!("BucketRunConfig::validate_bucket_config: Plain lsh_bits={} must be in 1..=16", plain_config.lsh_bits)));
+            }
+            let expected_bucket_count = 1u32.checked_shl(plain_config.lsh_bits as u32).ok_or_else(|| ThoError::new(format!("BucketRunConfig::validate_bucket_config: invalid lsh_bits={}", plain_config.lsh_bits)))?;
+            if self.bucket_count != expected_bucket_count {
+                return Err(ThoError::new(format!("BucketRunConfig::validate_bucket_config: Plain bucket_count={} must equal 2^lsh_bits={expected_bucket_count}", self.bucket_count)));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn window_samples(&self) -> Result<u32, ThoError> {
+        match &self.bucket_config {
+            BucketingConfig::Mel(mel_config) => {
+                if mel_config.time_size <= 0 || mel_config.time_step <= 0 || mel_config.mel_patch_size <= 0 {
+                    return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid mel_config={mel_config:?}")));
+                }
+                let n_fft = u32::try_from(mel_config.time_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: n_fft={} does not fit into u32", mel_config.time_size)))?;
+                let hop_length = u32::try_from(mel_config.time_step).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: hop_length={} does not fit into u32", mel_config.time_step)))?;
+                let patch_frames = u32::try_from(mel_config.mel_patch_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size)))?;
+
+                hop_length.checked_mul(patch_frames.saturating_sub(1)).and_then(|tail| tail.checked_add(n_fft)).ok_or_else(|| ThoError::new(format!("BucketRunConfig::window_samples: sample span overflow for mel_config={mel_config:?}")))
+            }
+            BucketingConfig::Plain(plain_config) => {
+                if plain_config.slice_size <= 0 {
+                    return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid plain_config={plain_config:?}")));
+                }
+                u32::try_from(plain_config.slice_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: slice_size={} does not fit into u32", plain_config.slice_size)))
+            }
+        }
+    }
+
+    pub fn new(id: Option<RunId>, bucket_count: u32, min_slices: u32, max_slices: u32, mel_config: BucketingConfig) -> Self {
+        Self { id, bucket_count, min_slices, max_slices, bucket_config: mel_config }
     }
 }
 
-impl Default for MelPatchRunConfig {
+impl Default for BucketRunConfig {
     fn default() -> Self {
         Self {
             id: None,
             bucket_count: 256,
             min_slices: 10,
             max_slices: 100,
-            mel_config: Default::default(),
+            bucket_config: BucketingConfig::default(),
         }
     }
 }
@@ -530,7 +772,7 @@ mod tests {
     use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
-    use super::{filter_mel_patch_groups, MelPatchTempStore, MelPatchRunConfig, MelPatchRunConfigRangeOrValue, MelPatchStage, MelPatchResourcesInput};
+    use super::{filter_mel_patch_groups, BucketingConfig, BucketingConfigRangeOrValue, MelPatchTempStore, BucketRunConfig, BucketingStage, MelPatchResourcesInput, BucketRunConfigRangeOrValue};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
@@ -544,7 +786,7 @@ mod tests {
     use crate::cli::{import_resources, plot_motif};
     use crate::RawTensorLoader;
     use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
-    use crate::tasks::mel_patch_opt::MelPatchOptStage;
+    use crate::tasks::bucketing_opt::BucketingOptStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
     use crate::tasks::slices_stats::euclidean_distance;
@@ -564,16 +806,16 @@ mod tests {
     #[test]
     fn mel_patch_temp_store_loads_saved_slices_as_groups() -> Result<(), ThoError> {
         let dir = temp_dir("mel_patch_temp_store_loads_saved_slices_as_groups");
-        let mut store = MelPatchTempStore::new(&dir, 7, 1)?;
+        let mut store = MelPatchTempStore::new(&dir, 7, 3)?;
 
-        store.save_slices(3, &[slice(10, 100), slice(11, 110)])?;
-        store.save_slices(5, &[slice(12, 120)])?;
-        store.save_slices(3, &[slice(13, 130)])?;
+        store.save_slices(1, &[slice(10, 100), slice(11, 110)])?;
+        store.save_slices(2, &[slice(12, 120)])?;
+        store.save_slices(1, &[slice(13, 130)])?;
 
-        let groups = store.load_groups()?;
+        let groups = store.load_channel_groups(3)?;
         assert_eq!(groups.len(), 2);
-        assert_eq!(groups.get(&3).expect("missing group 3").len(), 3);
-        assert_eq!(groups.get(&5).expect("missing group 5").len(), 1);
+        assert_eq!(groups.get(&1).expect("missing channel 1").len(), 3);
+        assert_eq!(groups.get(&2).expect("missing channel 2").len(), 1);
 
         store.remove()?;
         fs::remove_dir_all(&dir)?;
@@ -604,12 +846,12 @@ mod tests {
     #[test]
     fn mel_patch_run_config_grid_uses_slice_and_bucket_parameters() {
         let default_log_mel_patch_config = LogMelPatchConfig::default();
-        let rc = MelPatchRunConfigRangeOrValue {
+        let rc = BucketRunConfigRangeOrValue {
             id: None,
             bucket_count: 256u32.into(),
             min_slices: 10u32.into(),
             max_slices: 100u32.into(),
-            mel_config: LogMelPatchConfigRangeOrValue {
+            bucket_config: BucketingConfigRangeOrValue::Mel(LogMelPatchConfigRangeOrValue {
                 time_size: default_log_mel_patch_config.time_size.into(),
                 time_step: default_log_mel_patch_config.time_step.into(),
                 n_mels: default_log_mel_patch_config.n_mels.into(),
@@ -617,11 +859,11 @@ mod tests {
                 f_max: default_log_mel_patch_config.f_max.into(),
                 mel_patch_size: default_log_mel_patch_config.mel_patch_size.into(),
                 mel_patch_step: default_log_mel_patch_config.mel_patch_step.into(),
-            },
+            }),
         };
 
-        let grid = rc.grid_run_configs().expect("MelPatchRunConfigRangeOrValue::grid_run_configs should not fail");
-        let run_configs: Vec<MelPatchRunConfig> = grid.to_run_configs();
+        let grid = rc.grid_run_configs().expect("BucketRunConfigRangeOrValue::grid_run_configs should not fail");
+        let run_configs: Vec<BucketRunConfig> = grid.to_run_configs();
 
         assert_eq!(1, run_configs.len());
         assert_eq!(256, run_configs[0].bucket_count);
@@ -707,21 +949,21 @@ mod tests {
 
         let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
 
-        let mut patch_run_config = MelPatchRunConfig {
+        let mut patch_run_config = BucketRunConfig {
             id: None,
 
             bucket_count: 16,
             min_slices: 2,
             max_slices: 100,
 
-            mel_config: LogMelPatchConfig {
+            bucket_config: BucketingConfig::Mel(LogMelPatchConfig {
                 time_size: 64,
                 time_step: 4,
                 n_mels: 32,
                 mel_patch_size: 18,
                 mel_patch_step: 32,
                 ..LogMelPatchConfig::default()
-            }
+            })
         };
 
         let find_motifs_run_id = store.save_run_config(
@@ -734,14 +976,14 @@ mod tests {
 
         let id = store.save_run_config(
             Some(&[find_motifs_run_id]),
-            &MelPatchRunConfig::type_name(),
-            "MelPatchRunConfig",
+            &BucketRunConfig::type_name(),
+            "BucketRunConfig",
             patch_run_config.to_properties_iter(None).collect(),
         ).await?;
 
         patch_run_config.id = Some(id);
 
-        let mel_patch_stage = Arc::new(MelPatchStage::new(&ws, &store, Arc::clone(&loader), vec![
+        let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), vec![
             patch_run_config
 
         ])?);
@@ -786,12 +1028,12 @@ mod tests {
         }).await?/motifs.len() as f32;
 
         debug!("heavy_run_mel_path: avg_norm_thickness={avg_norm_thickness:?}");
-        let run_config: crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue<crate::tasks::mel_patch::MelPatchRunConfigFields> = crate::tasks::mel_patch::MelPatchRunConfigRangeOrValue {
+        let run_config: crate::tasks::bucketing::BucketRunConfigRangeOrValue<crate::tasks::bucketing::BucketRunConfigFields> = crate::tasks::bucketing::BucketRunConfigRangeOrValue {
             id: None,
             bucket_count: RangeOrValue::Range { range: Range {start:64, end:512}, step: None },
             min_slices: RangeOrValue::Value(2),
             max_slices: RangeOrValue::Value(100),
-            mel_config: LogMelPatchConfigRangeOrValue {
+            bucket_config: BucketingConfigRangeOrValue::Mel(LogMelPatchConfigRangeOrValue {
                 time_size: RangeOrValue::Range { range: Range {start:4000, end:16000}, step: None },
                 time_step: RangeOrValue::Range { range: Range {start:32, end:640}, step: None },
                 n_mels: RangeOrValue::Range { range: Range {start:64, end:256}, step: None },
@@ -799,21 +1041,21 @@ mod tests {
                 f_max: RangeOrValue::Value(16000.0),
                 mel_patch_size: RangeOrValue::Range { range: Range {start:64, end:128}, step: None },
                 mel_patch_step: RangeOrValue::Range { range: Range {start:4, end:32}, step: None },
-            },
+            }),
         };
 
         let find_and_select_input = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(
             Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
         )));
 
-         let run_id = run_opt::</*Simple,*/ _, _, MelPatchRunConfig, _, _>(
+         let run_id = run_opt::</*Simple,*/ _, _, BucketRunConfig, _, _>(
             None,
             run_config,
             find_and_select_input,
             &ws,
             &store,
             async |run_configs| {
-                Ok(Arc::new(MelPatchOptStage::new(loader, &ws, &store, run_configs, Arc::new(OptConfig::new(1000, 30)))))
+                Ok(Arc::new(BucketingOptStage::new(loader, &ws, &store, run_configs, Arc::new(OptConfig::new(1000, 30)))))
             },
             || ctx.branch(Some("opt mel patch"), false),
         ).await?;
@@ -980,21 +1222,21 @@ mod tests {
 
         let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
 
-        let mut patch_run_config = MelPatchRunConfig {
+        let mut patch_run_config = BucketRunConfig {
             id: None,
 
             bucket_count: 16,
             min_slices: 10,
             max_slices: 100,
 
-            mel_config: LogMelPatchConfig {
+            bucket_config: BucketingConfig::Mel(LogMelPatchConfig {
                 time_size: 32,
                 time_step: 4,
                 n_mels: 16,
                 mel_patch_size: 9,
                 mel_patch_step: 32,
                 ..LogMelPatchConfig::default()
-            }
+            })
         };
 
         let find_motifs_run_id = store.save_run_config(
@@ -1007,14 +1249,14 @@ mod tests {
 
         let id = store.save_run_config(
             Some(&[find_motifs_run_id]),
-            &MelPatchRunConfig::type_name(),
-            "MelPatchRunConfig",
+            &BucketRunConfig::type_name(),
+            "BucketRunConfig",
             patch_run_config.to_properties_iter(None).collect(),
         ).await?;
 
         patch_run_config.id = Some(id);
 
-        let mel_patch_stage = Arc::new(MelPatchStage::new(&ws, &store, Arc::clone(&loader), vec![
+        let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), vec![
             patch_run_config
 
         ])?);

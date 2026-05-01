@@ -1110,6 +1110,78 @@ pub fn make_lsh_planes(
     Ok(Tensor::f_randn(&[data_dim, num_bits], (kind, device))?)
 }
 
+
+fn ceil_log2_i64(x: i64) -> Result<i64, TchError> {
+    if x <= 1 {
+        return Err(TchError::Kind(
+            "number of buckets must be > 1".into(),
+        ));
+    }
+
+    let mut bits = 0_i64;
+    let mut value = 1_i64;
+
+    while value < x {
+        bits += 1;
+
+        if bits > 30 {
+            return Err(TchError::Kind(
+                "too many buckets requested; refusing num_bits > 30".into(),
+            ));
+        }
+
+        value <<= 1;
+    }
+
+    Ok(bits)
+}
+
+#[derive(Debug)]
+pub struct LshPlanes {
+    pub planes: Tensor,
+    pub num_bits: i64,
+    pub raw_buckets: i64,
+    pub wanted_buckets: i64,
+}
+
+/// Create random cosine-LSH hyperplanes from desired bucket count.
+///
+/// If `wanted_buckets` is not a power of two, `raw_buckets` will be rounded up
+/// to the next power of two.
+///
+/// Example:
+/// wanted_buckets = 1000
+/// num_bits = 10
+/// raw_buckets = 1024
+pub fn make_lsh_planes_for_buckets(
+    data_dim: i64,
+    wanted_buckets: i64,
+    kind: Kind,
+    device: Device,
+) -> Result<LshPlanes, TchError> {
+    if data_dim <= 0 {
+        return Err(TchError::Kind("data_dim must be > 0".into()));
+    }
+
+    if wanted_buckets <= 1 {
+        return Err(TchError::Kind(
+            "wanted_buckets must be > 1".into(),
+        ));
+    }
+
+    let num_bits = ceil_log2_i64(wanted_buckets)?;
+    let raw_buckets = 1_i64 << num_bits;
+
+    let planes = Tensor::f_randn(&[data_dim, num_bits], (kind, device))?;
+
+    Ok(LshPlanes {
+        planes,
+        num_bits,
+        raw_buckets,
+        wanted_buckets,
+    })
+}
+
 /// Convert input `[M, N, data]` into `[M, N, buckets]` using LSH.
 ///
 /// Each `[data]` vector is assigned to exactly one bucket.
@@ -1208,6 +1280,98 @@ pub fn lsh_bucket_one_hot_3d(
     Ok(one_hot.f_view([m, n, num_buckets])?)
 }
 
+
+pub fn lsh_bucket_one_hot_3d_exact_buckets(
+    x: &Tensor,
+    lsh: &LshPlanes,
+    normalize: bool,
+) -> Result<Tensor, TchError> {
+    let x_size = x.size();
+    if x_size.len() != 3 {
+        return Err(TchError::Kind(format!(
+            "expected x shape [M, N, data], got {:?}",
+            x_size
+        )));
+    }
+
+    let p_size = lsh.planes.size();
+    if p_size.len() != 2 {
+        return Err(TchError::Kind(format!(
+            "expected planes shape [data, num_bits], got {:?}",
+            p_size
+        )));
+    }
+
+    let m = x_size[0];
+    let n = x_size[1];
+    let data_dim = x_size[2];
+
+    let planes_data_dim = p_size[0];
+    let num_bits = p_size[1];
+
+    if data_dim != planes_data_dim {
+        return Err(TchError::Kind(format!(
+            "x data dim {} does not match planes data dim {}",
+            data_dim, planes_data_dim
+        )));
+    }
+
+    if num_bits != lsh.num_bits {
+        return Err(TchError::Kind(format!(
+            "planes num_bits {} does not match lsh.num_bits {}",
+            num_bits, lsh.num_bits
+        )));
+    }
+
+    let x_flat = x.f_view([m * n, data_dim])?;
+
+    let x_flat = if normalize {
+        let eps = 1e-12;
+
+        let norm = x_flat
+            .f_pow_tensor_scalar(2.0)?
+            .f_sum_dim_intlist(&[-1i64][..], true, x.kind())?
+            .f_clamp_min(eps)?
+            .f_sqrt()?;
+
+        x_flat.f_div(&norm)?
+    } else {
+        x_flat
+    };
+
+    // [M * N, data] @ [data, num_bits] -> [M * N, num_bits]
+    let projections = x_flat.f_matmul(&lsh.planes)?;
+
+    // [M * N, num_bits], values 0/1
+    let bits = projections
+        .f_ge(0.0)?
+        .f_to_kind(Kind::Int64)?;
+
+    let weights_vec: Vec<i64> = (0..num_bits).map(|i| 1_i64 << i).collect();
+
+    let weights = Tensor::f_from_slice(&weights_vec)?
+        .f_to_device(x.device())?
+        .f_view([1, num_bits])?;
+
+    // Raw bucket ids in range [0, raw_buckets).
+    let raw_bucket_ids = bits
+        .f_mul(&weights)?
+        .f_sum_dim_intlist(&[-1i64][..], false, Kind::Int64)?;
+
+    // Compress raw 2^bits buckets into exactly wanted_buckets.
+    //
+    // If wanted_buckets == raw_buckets, this changes nothing.
+    let bucket_ids = raw_bucket_ids.f_fmod(lsh.wanted_buckets)?;
+
+    // [M * N, wanted_buckets]
+    let one_hot = bucket_ids
+        .f_one_hot(lsh.wanted_buckets)?
+        .f_to_kind(x.kind())?;
+
+    // [M, N, wanted_buckets]
+    one_hot.f_view([m, n, lsh.wanted_buckets])
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1218,7 +1382,7 @@ mod tests {
     use thoosa_shared::audio_utils::compose_freqs;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_shared::ThoError;
-    use crate::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, make_lsh_planes, patch_sample_ranges_flat, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation, LogMelPatchConfig};
+    use crate::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes, make_lsh_planes_for_buckets, patch_sample_ranges_flat, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation, LogMelPatchConfig};
     use crate::debug_plot;
     use crate::utils::{debug_plot_impl, debug_plot_impl_wh, reset_print_options};
 
@@ -1252,9 +1416,9 @@ mod tests {
 
         debug!("bands size = {:?} channels_slices_freqamp=\n{channels_slices_freqamp}", channels_slices_freqamp.size());
         let num_bits = 4; //should be taken from RunConfig
-        let planes = make_lsh_planes(channels_slices_freqamp.size()[2], num_bits, Kind::Float, Device::Cpu)?;
+        let planes = make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], 10, Kind::Float, Device::Cpu)?;
 
-        let buckets = lsh_bucket_one_hot_3d(&channels_slices_freqamp, &planes, true)?;
+        let buckets = lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, true)?;
 
         debug!("buckets=\n{buckets}");
 
