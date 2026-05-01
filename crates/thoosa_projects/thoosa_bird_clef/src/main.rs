@@ -17,7 +17,7 @@ use thoosa_main::RawTensorLoader;
 use thoosa_shared::{collect_futures_with_progress, StreamBuffering, ThoError};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
-use thoosa_store::{SqlStore, Store};
+use thoosa_store::{LimitBy, SqlStore, Store};
 use crate::run_all::{run_all, run_all_grid_config_0};
 
 mod data;
@@ -56,26 +56,26 @@ fn main() -> Result<(), ThoError>{
                 SqlStore::save_all_sets(&t)?;
 
                //resources used in previous N-set not included, sorted by size
-                SqlStore::save_leaky_data_sets("A", Some(1), None, 0.6, 0.2, 1.0, &t)?;
-                SqlStore::save_leaky_data_sets("A", Some(3), None, 0.6, 0.2, 1.0, &t)?;
-                SqlStore::save_leaky_data_sets("A", Some(6), None, 0.6, 0.2, 1.0, &t)?;
+                SqlStore::save_leaky_data_sets("A", LimitBy::Count(1), None, 0.6, 0.2, 1.0, &t)?;
+                SqlStore::save_leaky_data_sets("A", LimitBy::Count(3), None, 0.6, 0.2, 1.0, &t)?;
+                SqlStore::save_leaky_data_sets("A", LimitBy::Count(6), None, 0.6, 0.2, 1.0, &t)?;
 
-                SqlStore::save_leaky_data_sets("B", Some(3), Some(32000), 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("B", Some(6), Some(32000), 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("B", Some(10), Some(32000), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("B", LimitBy::Count(3), Some(32000), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("B", LimitBy::Count(6), Some(32000), 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("B", LimitBy::Count(10), Some(32000), 0.6, 0.2, 0.9, &t)?;
 
-                SqlStore::save_leaky_data_sets("C", Some(10), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("C", Some(20), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("C", Some(30), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("C", LimitBy::Count(10), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("C", LimitBy::Count(20), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("C", LimitBy::Count(30), None, 0.6, 0.2, 0.9, &t)?;
 
-                SqlStore::save_leaky_data_sets("D", Some(100), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("E", Some(200), None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("F", Some(300), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("D", LimitBy::Count(100), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("E", LimitBy::Count(200), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("F", LimitBy::Count(300), None, 0.6, 0.2, 0.9, &t)?;
 
                 ///shuffles randomly
-                SqlStore::save_leaky_data_sets("X", None, None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("Y", None, None, 0.6, 0.2, 0.9, &t)?;
-                SqlStore::save_leaky_data_sets("Z", None, None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("X", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("Y", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("Z", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
 
                 Ok(())
             },
