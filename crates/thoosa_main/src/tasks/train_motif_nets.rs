@@ -241,8 +241,12 @@ where
                 ).await?;
 
 
+                //TODO it's needed only for CosineNet
                 let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
-                    Ok::<_, ThoError>((Arc::new(motif.data().clone())/*TODO clone*/, motif.extra().window))
+                    let src = motif.data().as_ref();
+                    let mut dst = src.f_zeros_like()?;
+                    dst.f_copy_(&src)?;
+                    Ok::<_, ThoError>((Arc::new(ThoTensor::<MotifSlices, SynKey>::new(motif.id().clone(), dst)?), motif.extra().window))
                 })?;
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);

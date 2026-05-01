@@ -161,7 +161,7 @@ pub(crate) async fn run_all(
                     //         || label_ctx.branch(Some("select_motifs"), true),
                     //     ).await?);
                     // }
-                    let select_motifs_run_ids = store.select_all_motifs(&find_motifs_run_ids)?;
+                    let select_motifs_run_ids = store.select_all_motifs(&find_motifs_run_ids).await?;
                     info!("select motifs done: label={label} select_motifs_run_ids={select_motifs_run_ids:?}");
 
                     if run_all_args.with_plots {
@@ -582,7 +582,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 128201}, step: Some((8000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 128201}, step: Some((16000, 0)) },
             // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
