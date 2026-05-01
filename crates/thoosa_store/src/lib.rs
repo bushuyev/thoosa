@@ -169,7 +169,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn save_leaky_data_sets(
         &self,
         prefix: &str,
-        limit: Option<usize>,
+        limit: LimitBy,
         train_coeff: f32,
         valid_coeff: f32,
         min_p: f32,
@@ -335,7 +335,7 @@ mock! {
         async fn save_leaky_data_sets(
             &self,
             prefix: &str,
-            limit: Option<usize>,
+            limit: LimitBy,
             train_coeff: f32,
             valid_coeff: f32,
             min_p: f32,
@@ -549,6 +549,11 @@ impl Debug for SqlMotifTrackerStore {
     }
 }
 
+pub enum LimitBy {
+    Count(usize),
+    Length(usize),
+    None
+}
 
 //TODO move all prepared statements into init
 #[derive(Debug)]
@@ -1098,7 +1103,7 @@ impl Store for SqlStore {
     async fn save_leaky_data_sets(
         &self,
         prefix: &str,
-        limit: Option<usize>,
+        limit: LimitBy,
         train_coeff: f32,
         valid_coeff: f32,
         min_p: f32,
@@ -3261,7 +3266,7 @@ impl SqlStore {
     /// builds train/validation/tests resources sets copying same resource in all sets if not enough resources available
     pub fn save_leaky_data_sets(
         prefix: &str,
-        limit: Option<usize>,
+        limit: LimitBy,
         min_length: Option<u32>,
         train_coeff: f32,
         valid_coeff: f32,
@@ -3270,12 +3275,10 @@ impl SqlStore {
     ) -> Result<(), ThoError> {
 
         let num_prefix = match limit {
-            None => {
-                format!("{prefix}")
-            }
-            Some(n) => {
+            LimitBy::Count(n) | LimitBy::Length(n)=> {
                 format!("{prefix}{n}")
             }
+            LimitBy::None => format!("{prefix}")
         };
 
         if train_coeff < 0.0 || valid_coeff < 0.0 {
@@ -3288,7 +3291,14 @@ impl SqlStore {
 
         Self::validate_min_probability(min_p)?;
 
-        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, limit.as_ref().map(|p| num_prefix.as_str()), min_length)?;
+        let (labels, mut resources_by_label) = Self::resource_ids_by_label(min_p, t, match limit {
+            LimitBy::Count(_) | LimitBy::Length(_) => {
+                Some(num_prefix.as_str())
+            }
+            LimitBy::None => {
+                None
+            }
+        }, min_length)?;
 
         let train_group_id = Self::save_resource_set_group(format!("{num_prefix}_train"), t)?;
         let valid_group_id = Self::save_resource_set_group(format!("{num_prefix}_valid"), t)?;
@@ -3298,18 +3308,26 @@ impl SqlStore {
         let mut rng = rand::rng();
 
         for (label_id, label) in labels {
-            let mut resources = resources_by_label.remove(&label_id).expect(&format!("no resources for {label}"));
+            let (mut resources, lengths) = resources_by_label.remove(&label_id).expect(&format!("no resources for {label}"));
             debug!("save_data_sets: label={label} train_resources={resources:?}");
             if resources.is_empty() {
                 warn!("no resources for {label}");
                 continue;
             }
 
-            if limit.is_none(){
-                resources.shuffle(&mut rng); //TODO add param. The resources are order by length in resource_ids_by_label
-            }
+            let available = match limit {
+                LimitBy::Count(count) => {
+                    resources.len().min(count)
+                }
+                LimitBy::Length(max_length) => {
+                    Self::limit_by_length(lengths, max_length).max(1)
+                }
+                LimitBy::None => {
+                    resources.shuffle(&mut rng); //TODO add param? The resources are ordered by length in resource_ids_by_label
+                    resources.len()
+                }
+            };
 
-            let available = limit.unwrap_or(resources.len()).min(resources.len());
             let selected = &resources[..available];
             
             let train_len = (available as f32 * train_coeff).floor() as usize;
@@ -3357,18 +3375,29 @@ impl SqlStore {
         Ok(())
     }
 
+    fn limit_by_length(lengths: Vec<usize>, max_length: usize) -> usize {
+        let mut length_sum = 0;
+        for (i, resource_length) in lengths.iter().enumerate() {
+            length_sum += resource_length;
+            if max_length <= length_sum {
+                return i;
+            }
+        }
+        0
+    }
+
     fn resource_ids_by_label(
         min_p: f32,
         t: &Transaction,
         not_in_prefix: Option<&str>,
         min_length: Option<u32>,
-    ) -> Result<(Vec<(usize, String)>, HashMap<usize, Vec<usize>>), ThoError> {
+    ) -> Result<(Vec<(usize, String)>, HashMap<usize, (Vec<usize>, Vec<usize>)>), ThoError> {
         Self::validate_min_probability(min_p)?;
         let labels = Self::list_labels(t, true)?;
-        let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, Vec::new())).collect::<HashMap<usize, Vec<usize>>>();
+        let mut resources_by_label = labels.iter().map(|(label_id, _)| (*label_id, (Vec::new(), Vec::new()))).collect::<HashMap<usize, (Vec<usize>, Vec<usize>)>>();
 
         let mut stmt = t.prepare(
-            &["SELECT lr.label_id, lr.resource_id FROM labeled_resources lr LEFT JOIN  resources r on r.id=lr.resource_id \
+            &["SELECT lr.label_id, lr.resource_id, r.length FROM labeled_resources lr LEFT JOIN  resources r on r.id=lr.resource_id \
                 WHERE lr.p >= ? ",
                 min_length.as_ref().map(|_| "AND r.length > ? ").unwrap_or(""),
                 not_in_prefix.as_ref().map(|_|"AND lr.resource_id NOT IN (select rrs.resource_id from resource_resources_set rrs left join resource_set rs on rs.id=rrs.set_id where rs.descr like ?) ").unwrap_or(""),
@@ -3387,7 +3416,11 @@ impl SqlStore {
         while let Some(row) = rows.next()? {
             let label_id = row.get::<usize, usize>(0)?;
             let resource_id = row.get::<usize, usize>(1)?;
-            resources_by_label.entry(label_id).or_insert_with(Vec::new).push(resource_id);
+            let length = row.get::<usize, usize>(2)?;
+
+            let mut ids_length = resources_by_label.entry(label_id).or_insert((vec![], vec![]));
+            ids_length.0.push(resource_id);
+            ids_length.1.push(length);
         }
 
         Ok((labels, resources_by_label))
@@ -3932,9 +3965,7 @@ mod store_tests {
     use thoosa_shared::val::Val;
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
-    use crate::{
-        MotifTrackerStore, RunConfigFilter, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError,
-    };
+    use crate::{LimitBy, MotifTrackerStore, RunConfigFilter, SetCond, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store, ThoError};
     use std::path::PathBuf;
 
     #[ctor::ctor]
@@ -4184,7 +4215,7 @@ mod store_tests {
             import_id,
         ).await?;
 
-        store.save_leaky_data_sets("L", Some(10), 0.6, 0.2, 1.0, true).await?;
+        store.save_leaky_data_sets("L", LimitBy::Count(10), 0.6, 0.2, 1.0, true).await?;
 
         let mut train_sets_resources = HashMap::new();
         for (set_id, descr) in store.list_resource_set_group_sets("L10_train").await? {
@@ -4237,6 +4268,89 @@ mod store_tests {
         // assert_eq!(vec!["ccc_only_0", "ccc_only_2"], train_sets_resources["L10_ccc_train"]);
         // assert_eq!(vec!["ccc_only_0"],               valid_sets_resources["L10_ccc_valid"]);
         // assert_eq!(vec!["ccc_only_1", "ccc_only_3"], test_sets_resources["L10_ccc_test"]);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_save_data_sets_limit_by_length_keeps_resources_within_total_length() -> Result<(), ThoError> {
+        let mut store = SqlStore::in_mem().await?;
+        let import_id = store.save_import("test".to_string()).await?;
+        store.save_label("aaa").await?;
+        store.save_label("bbb").await?;
+
+        store.save_resources_labels(
+            &HashMap::from([
+                (
+                    "aaa_len_25".to_string(),
+                    (ResourceStats::new(vec![1, 25]), vec![("aaa".into(), 1.0)]),
+                ),
+                (
+                    "aaa_len_50".to_string(),
+                    (ResourceStats::new(vec![1, 50]), vec![("aaa".into(), 1.0)]),
+                ),
+                (
+                    "aaa_len_100".to_string(),
+                    (ResourceStats::new(vec![1, 100]), vec![("aaa".into(), 1.0)]),
+                ),
+                (
+                    "bbb_len_150".to_string(),
+                    (ResourceStats::new(vec![1, 150]), vec![("bbb".into(), 1.0)]),
+                ),
+                (
+                    "bbb_len_200".to_string(),
+                    (ResourceStats::new(vec![1, 200]), vec![("bbb".into(), 1.0)]),
+                ),
+            ]),
+            import_id,
+        ).await?;
+
+        store.save_leaky_data_sets("L", LimitBy::Length(100), 0.6, 0.2, 1.0, true).await?;
+
+        let mut train_sets_resources = HashMap::new();
+        for (set_id, descr) in store.list_resource_set_group_sets("L100_train").await? {
+            train_sets_resources.insert(
+                descr,
+                store
+                    .list_resource_set_resources(set_id).await?
+                    .into_iter()
+                    .map(|resource| resource.file_stem().to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let mut valid_sets_resources = HashMap::new();
+        for (set_id, descr) in store.list_resource_set_group_sets("L100_valid").await? {
+            valid_sets_resources.insert(
+                descr,
+                store
+                    .list_resource_set_resources(set_id).await?
+                    .into_iter()
+                    .map(|resource| resource.file_stem().to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        let mut test_sets_resources = HashMap::new();
+        for (set_id, descr) in store.list_resource_set_group_sets("L100_test").await? {
+            test_sets_resources.insert(
+                descr,
+                store
+                    .list_resource_set_resources(set_id).await?
+                    .into_iter()
+                    .map(|resource| resource.file_stem().to_string())
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        assert_eq!(vec!["aaa_len_25".to_string()], train_sets_resources["L100_aaa_train"]);
+        assert_eq!(vec!["aaa_len_50".to_string()], valid_sets_resources["L100_aaa_valid"]);
+        assert_eq!(vec!["aaa_len_50".to_string()], test_sets_resources["L100_aaa_test"]);
+
+        //if the smallest resources is bigger than limit it's still used
+        assert_eq!(vec!["bbb_len_150".to_string()], train_sets_resources["L100_bbb_train"]);
+        assert_eq!(vec!["bbb_len_150".to_string()], valid_sets_resources["L100_bbb_valid"]);
+        assert_eq!(vec!["bbb_len_150".to_string()], test_sets_resources["L100_bbb_test"]);
 
         Ok(())
     }
@@ -4726,7 +4840,7 @@ mod store_tests {
         debug!("resource_ids={resource_ids:?}");
 
         store_guard.save_pure_sets(10, false).await?;
-        store_guard.save_leaky_data_sets("A", None, 0.6, 0.2, 1.0, false).await?;
+        store_guard.save_leaky_data_sets("A", LimitBy::None, 0.6, 0.2, 1.0, false).await?;
         Ok(resource_ids)
     }
 
