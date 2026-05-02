@@ -50,6 +50,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=LIBTORCH");
 
     println!("cargo:rerun-if-changed=src-cpp/stream.cpp");
+    println!("cargo:rerun-if-changed=src-cpp/CMakeLists.txt");
     println!("cargo:rerun-if-changed=src-cpp/memcpy.cpp");
     println!("cargo:rerun-if-changed=src-cpp/context.cpp");
     println!("cargo:rerun-if-changed=src-cpp/device_stats.cpp");

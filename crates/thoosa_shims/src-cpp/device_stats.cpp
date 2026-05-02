@@ -5,6 +5,7 @@
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAFunctions.h>
 #include <c10/core/CachingDeviceAllocator.h>
+#include <cuda.h>
 #include <cstdint>
 
 struct ThoDeviceStats
@@ -17,19 +18,17 @@ struct ThoDeviceStats
 };
 
 extern "C" {
-int tho_get_device_stats(int device, ThoDeviceStats* stats_out)
+CUresult tho_get_device_stats(int device, ThoDeviceStats* stats_out)
 {
     try {
         if (stats_out == nullptr) {
-            tho_set_last_error_msg("tho_get_device_stats", "null stats_out");
-            return 0;
+            return tho_set_last_error_code("tho_get_device_stats", CUDA_ERROR_INVALID_VALUE, "null stats_out");
         }
 
         at::globalContext().lazyInitDevice(c10::DeviceType::CUDA);
         const auto device_count = c10::cuda::device_count();
         if (device < 0 || device >= device_count) {
-            tho_set_last_error_msg("tho_get_device_stats", "invalid device index");
-            return 0;
+            return tho_set_last_error_code("tho_get_device_stats", CUDA_ERROR_INVALID_DEVICE, "invalid device index");
         }
 
         auto* allocator = c10::cuda::CUDACachingAllocator::get();
@@ -55,16 +54,14 @@ int tho_get_device_stats(int device, ThoDeviceStats* stats_out)
             requested,
             non_releasable
         };
-        return 1;
+        tho_clear_last_error();
+        return CUDA_SUCCESS;
     } catch (const c10::Error& e) {
-        tho_set_last_error_msg("tho_get_device_stats", e.what_without_backtrace());
-        return 0;
+        return tho_set_last_error_cuda_msg("tho_get_device_stats", e.what_without_backtrace(), CUDA_ERROR_UNKNOWN);
     } catch (const std::exception& e) {
-        tho_set_last_error_ex("tho_get_device_stats", e);
-        return 0;
+        return tho_set_last_error_code("tho_get_device_stats", CUDA_ERROR_UNKNOWN, e.what());
     } catch (...) {
-        tho_set_last_error_msg("tho_get_device_stats", "unknown C++ exception");
-        return 0;
+        return tho_set_last_error_code("tho_get_device_stats", CUDA_ERROR_UNKNOWN, "unknown C++ exception");
     }
 }
 }
