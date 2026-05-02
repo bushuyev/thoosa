@@ -16,6 +16,8 @@ use chrono::SecondsFormat;
 use lazy_static::lazy_static;
 use log::{debug, error, trace, warn};
 use num_traits::PrimInt;
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
 use rand::{Rng, RngExt};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -180,6 +182,113 @@ pub enum StreamBuffering {
     Ordered,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct CudaActivityPauseTicket {
+    generation: u64,
+    owner: bool,
+}
+
+impl CudaActivityPauseTicket {
+    pub fn is_owner(self) -> bool {
+        self.owner
+    }
+}
+
+#[derive(Debug, Default)]
+struct CudaActivityGateState {
+    paused: bool,
+    generation: u64,
+}
+
+#[derive(Debug, Default)]
+pub struct CudaActivityGate {
+    state: Mutex<CudaActivityGateState>,
+    notify: tokio::sync::Notify,
+}
+
+impl CudaActivityGate {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.state.lock().paused
+    }
+
+    pub fn request_pause(&self) -> CudaActivityPauseTicket {
+        let mut state = self.state.lock();
+        let ticket = CudaActivityPauseTicket {
+            generation: state.generation,
+            owner: !state.paused,
+        };
+
+        if !state.paused {
+            state.paused = true;
+            self.notify.notify_waiters();
+        }
+
+        ticket
+    }
+
+    pub fn finish_pause(&self, ticket: CudaActivityPauseTicket) {
+        if !ticket.owner {
+            return;
+        }
+
+        let mut state = self.state.lock();
+        if state.paused && state.generation == ticket.generation {
+            state.paused = false;
+            state.generation += 1;
+            self.notify.notify_waiters();
+        }
+    }
+
+    pub async fn wait_if_paused(&self) {
+        loop {
+            let notified = {
+                let state = self.state.lock();
+                if !state.paused {
+                    return;
+                }
+                self.notify.notified()
+            };
+            notified.await;
+        }
+    }
+
+    pub async fn wait_for_pause_to_finish(&self, ticket: CudaActivityPauseTicket) {
+        loop {
+            let notified = {
+                let state = self.state.lock();
+                if !state.paused || state.generation != ticket.generation {
+                    return;
+                }
+                self.notify.notified()
+            };
+            notified.await;
+        }
+    }
+
+    pub async fn wait_until_paused(&self) {
+        loop {
+            let notified = {
+                let state = self.state.lock();
+                if state.paused {
+                    return;
+                }
+                self.notify.notified()
+            };
+            notified.await;
+        }
+    }
+}
+
+static CUDA_ACTIVITY_GATE: Lazy<CudaActivityGate> = Lazy::new(CudaActivityGate::new);
+
+pub fn cuda_activity_gate() -> &'static CudaActivityGate {
+    &CUDA_ACTIVITY_GATE
+}
+
 async fn collect_stream_with_progress<T, S>(
     mut stream: S,
     results: &mut Vec<T>,
@@ -199,7 +308,13 @@ async fn collect_stream_with_progress<T, S>(
 
 
     loop {
+        cuda_activity_gate().wait_if_paused().await;
+
         tokio::select! {
+            biased;
+            _ = cuda_activity_gate().wait_until_paused(), if !cuda_activity_gate().is_paused() => {
+                cuda_activity_gate().wait_if_paused().await;
+            }
             _ = eta_tick.tick() => {
                 collect_eta_maybe_log(false);
             }
@@ -1580,9 +1695,11 @@ mod shared_tests {
     use crate::{
         add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
         make_combos, parse_range_str, snake_to_camel, test_utils, Cause,
-        RangeOrValue, ResourceType, ThoError,
+        RangeOrValue, ResourceType, ThoError, StreamBuffering,
     };
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
     use clap::{Args, Parser};
     use log::debug;
     use std::collections::HashSet;
@@ -1591,6 +1708,44 @@ mod shared_tests {
     #[ctor::ctor]
     fn init() {
         test_utils::init_test_logging();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_collect_futures_with_progress_waits_for_cuda_activity_gate() {
+        let started = Arc::new(AtomicUsize::new(0));
+        let pause_ticket = super::cuda_activity_gate().request_pause();
+
+        let collect = {
+            let started = Arc::clone(&started);
+            tokio::spawn(async move {
+                super::collect_futures_with_progress(
+                    (0..4).map(move |idx| {
+                        let started = Arc::clone(&started);
+                        async move {
+                            started.fetch_add(1, Ordering::SeqCst);
+                            Ok::<_, ThoError>(idx)
+                        }
+                    }),
+                    4,
+                    4,
+                    StreamBuffering::Unordered,
+                    "test_collect_futures_with_progress_waits_for_cuda_activity_gate",
+                )
+                    .await
+            })
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(started.load(Ordering::SeqCst), 0);
+
+        super::cuda_activity_gate().finish_pause(pause_ticket);
+
+        let results = tokio::time::timeout(Duration::from_secs(2), collect)
+            .await
+            .expect("collector should resume")
+            .expect("collector task should not panic");
+        assert_eq!(results.len(), 4);
+        assert_eq!(started.load(Ordering::SeqCst), 4);
     }
 
     #[test]
