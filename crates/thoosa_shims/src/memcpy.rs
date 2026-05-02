@@ -1,7 +1,8 @@
 use std::ffi::c_void;
 
+pub use crate::cuda_result::CuResult;
+
 pub type CuDevicePtr = u64;
-pub type CuResult = i32;
 
 unsafe extern "C" {
     pub fn tho_cu_memcpy_dtoh_async(

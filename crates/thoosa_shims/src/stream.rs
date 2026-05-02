@@ -1,6 +1,6 @@
 // tho_cuda_stream.rs
 
-use std::ffi::{c_char, c_void, CStr};
+use std::ffi::c_void;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ptr::NonNull;
@@ -8,14 +8,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use thoosa_shared::ThoError;
 
+use crate::cuda_result::{check_cuda_status, cuda_error_from_last_error, cuda_error_from_status};
+pub use crate::cuda_result::{CuResult, CUDA_ERROR_ASSERT, CUDA_ERROR_ILLEGAL_ADDRESS, CUDA_SUCCESS};
+
 type CudaStreamPtr = *mut c_void;
 type CudaStreamGuardPtr = *mut c_void;
-type CuResult = i32;
-
-pub const CUDA_SUCCESS: CuResult = 0;
-pub const CUDA_ERROR_ASSERT: CuResult = 710;
-pub const CUDA_ERROR_ILLEGAL_ADDRESS: CuResult = 700;
-
 
 unsafe extern "C" {
     fn tho_get_current_stream(device: i32) -> CudaStreamPtr;
@@ -23,28 +20,11 @@ unsafe extern "C" {
     fn tho_stream_device(stream: CudaStreamPtr) -> i32;
     fn tho_stream_raw(stream: CudaStreamPtr) -> *mut c_void;
 
-    // Low-level/debug only. Prefer the guard API.
-    fn tho_set_current_stream(stream: CudaStreamPtr) -> i32;
-
     fn tho_stream_guard_new(stream: CudaStreamPtr) -> CudaStreamGuardPtr;
     fn tho_stream_guard_delete(guard: CudaStreamGuardPtr);
 
     fn tho_stream_synchronize(stream: CudaStreamPtr) -> CuResult;
     fn tho_delete_stream(stream: CudaStreamPtr);
-
-    fn tho_get_last_error_message() -> *const c_char;
-}
-
-fn last_cpp_error(prefix: &str) -> String {
-    let msg = unsafe {
-        let p = tho_get_last_error_message();
-        if p.is_null() {
-            "<no message>".to_string()
-        } else {
-            CStr::from_ptr(p).to_string_lossy().into_owned()
-        }
-    };
-    format!("{prefix}: {msg}")
 }
 
 struct Inner {
@@ -75,13 +55,13 @@ unsafe impl Sync for ThoCudaStream {}
 impl ThoCudaStream {
     pub fn from_pool(device: i32, high_pri: bool) -> Result<Self, ThoError> {
         let ptr = unsafe { tho_get_stream_from_pool(device, if high_pri { 1 } else { 0 }) };
-        let ptr = NonNull::new(ptr).ok_or_else(|| ThoError::new(last_cpp_error("tho_get_stream_from_pool failed")))?;
+        let ptr = NonNull::new(ptr).ok_or_else(|| cuda_error_from_last_error("tho_get_stream_from_pool"))?;
         Ok(Self(Arc::new(Inner { ptr, device })))
     }
 
     pub fn current(device: i32) -> Result<Self, ThoError> {
         let ptr = unsafe { tho_get_current_stream(device) };
-        let ptr = NonNull::new(ptr).ok_or_else(|| ThoError::new(last_cpp_error("tho_get_current_stream failed")))?;
+        let ptr = NonNull::new(ptr).ok_or_else(|| cuda_error_from_last_error("tho_get_current_stream"))?;
         Ok(Self(Arc::new(Inner { ptr, device })))
     }
 
@@ -90,21 +70,17 @@ impl ThoCudaStream {
     /// # Safety
     /// `ptr` must come from this shim and must be uniquely owned by the caller.
     pub unsafe fn from_owned_raw(ptr: CudaStreamPtr) -> Result<Self, ThoError> {
-        let ptr = NonNull::new(ptr).ok_or_else(|| ThoError::new("from_owned_raw: null stream pointer"))?;
-        let device = tho_stream_device(ptr.as_ptr());
+        let ptr = NonNull::new(ptr).ok_or_else(|| cuda_error_from_status("from_owned_raw null stream pointer", crate::cuda_result::CUDA_ERROR_INVALID_HANDLE))?;
+        let device = unsafe { tho_stream_device(ptr.as_ptr()) };
         if device < 0 {
-            return Err(ThoError::new(last_cpp_error("tho_stream_device failed")));
+            return Err(cuda_error_from_last_error("tho_stream_device"));
         }
         Ok(Self(Arc::new(Inner { ptr, device })))
     }
 
     pub fn synchronize(&self) -> Result<(), ThoError> {
-        let r = unsafe { tho_stream_synchronize(self.ffi_ptr()) };
-        if r == CUDA_SUCCESS {
-            Ok(())
-        } else {
-            Err(ThoError::new(last_cpp_error("stream synchronize failed")))
-        }
+        let status = unsafe { tho_stream_synchronize(self.ffi_ptr()) };
+        check_cuda_status(status, "tho_stream_synchronize")
     }
 
     /// Underlying CUDA stream handle for custom CUDA code.
@@ -112,7 +88,7 @@ impl ThoCudaStream {
         let p = unsafe { tho_stream_raw(self.ffi_ptr()) };
         NonNull::new(p)
             .map(|p| p.as_ptr())
-            .ok_or_else(|| ThoError::new(last_cpp_error("tho_stream_raw failed")))
+            .ok_or_else(|| cuda_error_from_last_error("tho_stream_raw"))
     }
 
     pub fn device(&self) -> i32 {
@@ -140,7 +116,7 @@ pub struct ThoStreamGuard {
 impl ThoStreamGuard {
     pub fn new(stream: &ThoCudaStream) -> Result<Self, ThoError> {
         let ptr = unsafe { tho_stream_guard_new(stream.ffi_ptr()) };
-        let ptr = NonNull::new(ptr).ok_or_else(|| ThoError::new(last_cpp_error("tho_stream_guard_new failed")))?;
+        let ptr = NonNull::new(ptr).ok_or_else(|| cuda_error_from_last_error("tho_stream_guard_new"))?;
         Ok(Self {
             ptr,
             _not_send_or_sync: PhantomData,
@@ -164,4 +140,3 @@ where
     let _guard = ThoStreamGuard::new(stream)?;
     Ok(f())
 }
-

@@ -11,6 +11,7 @@ use thoosa_shared::{Cause, ThoError};
 use tokio_utils::Pool;
 use tub::Guard;
 use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_ERROR_ASSERT, CUDA_ERROR_ILLEGAL_ADDRESS, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
 use crate::copy_ctx::CopyCtx;
@@ -29,12 +30,7 @@ impl PinnedHostBuffer {
             thoosa_shims::memcpy::tho_cu_mem_host_alloc(&mut raw, len, flags)
         };
 
-        if res != CUDA_SUCCESS as i32 {
-            return Err(Cause::SomethingElse(format!(
-                "cuMemHostAlloc failed with {res:?} (len={len})"
-            ))
-            .into());
-        }
+        check_cuda_status(res, "cuMemHostAlloc")?;
 
         Ok(Self {
             ptr: raw as *mut u8,
@@ -69,8 +65,8 @@ impl Drop for PinnedHostBuffer {
             thoosa_shims::memcpy::tho_cu_mem_free_host(self.ptr as *mut c_void)
         };
 
-        if res != CUDA_SUCCESS as i32 {
-            log::error!("cuMemFreeHost failed with {res:?}");
+        if let Err(err) = check_cuda_status(res, "cuMemFreeHost") {
+            log::error!("{err:?}");
         }
     }
 }
@@ -111,11 +107,7 @@ fn ensure_copy_d2h_source_is_device_memory(src_ptr: usize) -> Result<(), ThoErro
     };
 
 
-    if result != CUDA_SUCCESS {
-        return Err(Cause::SomethingElse(format!(
-            "copy_d2h_from_ptr source pointer validation failed for src_ptr={src_ptr} with {result:?}"
-        )).into());
-    }
+    check_cuda_status(result, "cuPointerGetAttribute")?;
 
     if is_device_memory == 0 {
         return Err(Cause::SomethingElse(format!(
@@ -232,7 +224,7 @@ pub async fn copy_d2h_from_ptr(
                     let stream = buf_stream.1.clone();
 
                     tokio::task::spawn_blocking(  move ||{
-                        let _guard = ThoStreamGuard::new(stream.as_ref()).map_err(|te|te.what().clone())?;
+                        let _guard = ThoStreamGuard::new(stream.as_ref())?;
                         let result = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
                             buf_ptr as *mut c_void,
                             src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
@@ -241,7 +233,7 @@ pub async fn copy_d2h_from_ptr(
                         );
                         if result != CUDA_SUCCESS {
                             debug!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}");
-                            return Err(ThoError::from_cuda_error("tho_cu_memcpy_dtoh_async failed", result));
+                            check_cuda_status(result, "tho_cu_memcpy_dtoh_async")?;
                         }
 
                         debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={result:?}");
@@ -258,7 +250,7 @@ pub async fn copy_d2h_from_ptr(
                             dst_off_ptr as *mut u8,
                             c_buf_size,
                         );
-                        Ok(())
+                        Ok::<(), ThoError>(())
                     })
                         .await??;
 
@@ -395,7 +387,7 @@ pub async fn copy_h2d_from_ptr(
                         //----------------------------------------------------------
                         // 2. copy   pinned host buffer  →  GPU tensor   (CUDA)
                         //----------------------------------------------------------
-                        let _guard = ThoStreamGuard::new(buf_stream.1.as_ref()).map_err(|te|te.what().clone())?;
+                        let _guard = ThoStreamGuard::new(buf_stream.1.as_ref())?;
                         let result = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
                             dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
                             buf_ptr as *const c_void,
@@ -404,13 +396,13 @@ pub async fn copy_h2d_from_ptr(
                         );
                         if result != CUDA_SUCCESS {
                             debug!("tho_cu_memcpy_htod_async failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
-                            return Err(ThoError::from_cuda_error("tho_cu_memcpy_htod_async failed", result));
+                            check_cuda_status(result, "tho_cu_memcpy_htod_async")?;
                         }
                         let _ = buf_stream.1.synchronize();
                         drop(buf_stream); // return buffer/stream to pool
                         debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?} done", os_thread_id());
 
-                        Ok(())
+                        Ok::<(), ThoError>(())
 
                     }).await.map_err(|e| Cause::External {
                         type_name: std::any::type_name::<tokio::task::JoinError>(),

@@ -119,7 +119,7 @@ impl GlobalCtx {
 
             GlobalCtx::global().drop_device(tho_device_idx, "drop").await?;
 
-            let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32).map_err(ThoError::new)?;
+            let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
             cu_ctx.reset()?;
             // let (buffs, buf_size) = {
             //     let copy_ctx = GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].read().await;
