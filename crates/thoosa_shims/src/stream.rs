@@ -12,7 +12,10 @@ type CudaStreamPtr = *mut c_void;
 type CudaStreamGuardPtr = *mut c_void;
 type CuResult = i32;
 
-const CUDA_SUCCESS: CuResult = 0;
+pub const CUDA_SUCCESS: CuResult = 0;
+pub const CUDA_ERROR_ASSERT: CuResult = 710;
+pub const CUDA_ERROR_ILLEGAL_ADDRESS: CuResult = 700;
+
 
 unsafe extern "C" {
     fn tho_get_current_stream(device: i32) -> CudaStreamPtr;
