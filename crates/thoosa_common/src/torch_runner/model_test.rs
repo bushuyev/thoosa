@@ -633,7 +633,7 @@ mod tests {
                                 MemLimit(m) => {
                                     if t.size()[0] > *m as i64 {
                                         debug!("Err(MyError::OutOfMemory) MemLimit");
-                                        return Err(Cause::OutOfMemory.into());
+                                        return Err(ThoError::oom());
                                     }
                                 }
                                 FailUntil::NaxParallel(max_other_parallel_threshold) => {
@@ -641,14 +641,14 @@ mod tests {
                                     debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
 
                                     if max_other_parallel > *max_other_parallel_threshold {
-                                        return Err(Cause::OutOfMemory.into());
+                                        return Err(ThoError::oom());
                                     }
                                 }
                                 DumpedToCpu => {
                                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.device_idx());
                                     if !is_all_on_cpu {
                                         debug!("Err(MyError::OutOfMemory) DumpedToCpu");
-                                        return Err(Cause::OutOfMemory.into());
+                                        return Err(ThoError::oom());
                                     }
                                 }
                                 Never => {}

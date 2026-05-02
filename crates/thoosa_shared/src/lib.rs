@@ -337,7 +337,7 @@ async fn collect_stream_with_progress<T, S>(
                     }
                     Err(e) => {
                         *err += 1;
-                        if e.is_oom {
+                        if e.is_oom() {
                             warn!("collect_stream_with_progress: {descr}: got oom {e:?}");
                         } else {
                             error!("collect_stream_with_progress: {descr}: {e:?}");
@@ -463,9 +463,15 @@ impl Display for TensorIdSliceIdx {
 }
 
 #[derive(Debug, Clone)]
+pub enum CudaAction {
+    NeedsRestart,
+    HandleOOM,
+    Other //wrong index, etc
+}
+
+#[derive(Debug, Clone)]
 pub enum Cause {
-    OutOfMemory,
-    Cuda{needs_reset:bool, msg:String},
+    Cuda { action: CudaAction, msg: String },
     AdjusterFailed,
     UnsupportedDegradeLevel,
     ExpectedValue,
@@ -489,7 +495,6 @@ pub struct ThoError {
     pub msg: String,
     #[allow(dead_code)]
     backtrace: Backtrace,
-    is_oom: bool,
     pub what: Cause,
 }
 
@@ -499,7 +504,6 @@ impl Clone for ThoError {
     fn clone(&self) -> Self {
         ThoError {
             msg: self.msg.clone(),
-            is_oom: self.is_oom,
             backtrace: Backtrace::capture(),
             what: self.what.clone(),
         }
@@ -512,62 +516,91 @@ impl ThoError {
     pub fn new(msg: impl Into<String> + Display) -> Self {
         let msg = msg.into();
         let msg_lc = msg.to_lowercase();
+
         if msg_lc.contains("cuda") {
-            let reset = msg_lc.contains("illegal memory access") || msg_lc.contains("stream synchronize failed");
-            warn!("ThoError::new: msg={msg} reset={reset}");
-            Self::new_with_error(msg.clone(), Cause::Cuda {
-                needs_reset: reset, msg: msg.clone()
-            })
+            Self::from_cuda_message(msg_lc)
         } else {
-            Self::new_with_error(msg.clone(), Cause::SomethingElse(msg))
+            Self::new_with_cause("Unknown error", Cause::SomethingElse(msg))
         }
     }
 
-    pub fn new_with_error(msg: impl Into<String> + Display, what: Cause) -> Self {
-        trace!("ThoosaError::new: msg={}", msg);
+    pub fn from_cuda_message(msg: impl Into<String> + Display) -> Self {
+        Self::new_with_cause("Cuda error", cuda_cause_from_msg(msg))
+    }
+
+    pub fn from_cuda_error(msg: impl Into<String> + Display, cuda_error:i32) -> Self {
+        Self::new_with_cause("Cuda error", cuda_cause_from_error_code(cuda_error))
+    }
+
+    pub fn new_with_cause(msg: impl Into<String> + Display, what: Cause) -> Self {
+        debug!("ThoosaError::new: msg={msg}");
+
         let backtrace = Backtrace::capture();
-        let is_oom = match &what {
-            Cause::OutOfMemory => {
-                true
-            }
-            Cause::JobError { inner, .. } => {
-                inner.is_oom()
-            }
-            _ => {
-                false
-            }
-        };
+        trace!("msg={msg} {}", backtrace.to_string());
 
-
-        debug!("msg={msg} {}", backtrace.to_string());
         Self {
             msg: msg.into(),
             backtrace,
-            is_oom,
             what,
         }
     }
 
+    // #[cfg(test)] - used from other crates
     pub fn oom() -> Self {
         debug!("ThoosaError::new: oom");
         let backtrace = Backtrace::capture();
 
-        // debug!("{}", backtrace.to_string());
         Self {
             msg: "oom".into(),
             backtrace,
-            is_oom: true,
-            what: Cause::OutOfMemory,
+            what: Cause::Cuda {
+                action: CudaAction::HandleOOM,
+                msg: "test".to_string(),
+            },
         }
     }
 
     pub fn is_oom(&self) -> bool {
-        self.is_oom
+        match &self.what{
+            Cause::Cuda { action, msg } => {
+                match action {
+                    CudaAction::HandleOOM => true,
+                    _=> false
+                }
+            }
+            Cause::JobError { job_id, inner } => {
+                inner.is_oom()
+            },
+            _=> false
+        }
+
+    }
+
+
+    pub fn is_retryable_oom(&self) -> bool {
+        match &self.what{
+            Cause::Cuda { action, msg } => {
+                match action {
+                    CudaAction::HandleOOM => true,
+                    _=> false
+                }
+            }
+            Cause::AdjusterFailed => true,
+            Cause::JobError { job_id, inner } => {
+                inner.is_retryable_oom()
+            },
+            _=> false
+        }
     }
 
     pub fn needs_cuda_ctx_reset(&self) -> bool {
-        match self.what {
-            Cause::Cuda { needs_reset, .. } => needs_reset,
+        match &self.what {
+            Cause::Cuda { action, .. } => {
+                match action {
+                    CudaAction::NeedsRestart => true,
+                    _=> false
+                }
+            },
 
             _=> false
         }
@@ -577,53 +610,650 @@ impl ThoError {
         &self.what
     }
 
+    #[deprecated] //it's not checked for cuda/oom. Use into()
     pub fn from_error<E>(msg: impl Into<String> + Display, err: E) -> Self
     where
         E: Error + Send + Sync + 'static,
     {
-        let err_msg = err.to_string();
-        if err_msg.contains("out of memory") || err_msg.contains("can't allocate memory") {
-            ThoError::new_with_error(msg, Cause::OutOfMemory)
-        } else {
-            ThoError::new_with_error(
-                msg,
-                Cause::External {
-                    type_name: std::any::type_name::<E>(),
-                    source: Arc::new(err),
-                },
-            )
-        }
+        ThoError::new_with_cause(
+            msg,
+            Cause::External {
+                type_name: std::any::type_name::<E>(),
+                source: Arc::new(err),
+            },
+        )
     }
+
 
     pub fn from_msg(msg: impl Into<String> + Display) -> Self
     {
-        let msg_str = msg.to_string();
-        if msg_str.contains("out of memory") || msg_str.contains("can't allocate memory") {//TODO same check in few errors constructors
-            ThoError::new_with_error(msg, Cause::OutOfMemory)
-        } else {
-            ThoError::new_with_error(msg, Cause::SomethingElse(msg_str))
-        }
+        ThoError::new(msg)
     }
 
 
+    #[deprecated] //it's not checked for cuda/oom. Use into()
     pub fn from_boxed_error(
         msg: impl Into<String> + Display,
         err: Box<dyn Error + Send + Sync + 'static>,
     ) -> Self {
-        let err_msg = err.to_string();
-        if err_msg.contains("out of memory") || err_msg.contains("can't allocate memory") {
-            ThoError::new_with_error(msg, Cause::OutOfMemory)
-        } else {
-            ThoError::new_with_error(
-                msg,
-                Cause::External {
-                    type_name: std::any::type_name_of_val(err.as_ref()),
-                    source: Arc::from(err),
-                },
-            )
-        }
+        ThoError::new_with_cause(
+            msg,
+            Cause::External {
+                type_name: std::any::type_name_of_val(err.as_ref()),
+                source: Arc::from(err),
+            },
+        )
     }
 }
+
+fn cuda_cause(action: CudaAction, msg: impl Into<String>) -> Cause {
+    Cause::Cuda {
+        action,
+        msg: msg.into(),
+    }
+}
+
+/// Classifies known CUDA Runtime API `cudaError_t` and CUDA Driver API `CUresult`
+/// numeric codes.
+///
+/// Important:
+/// - CUDA Runtime and Driver APIs share many numeric values, e.g. OOM = 2,
+///   illegal address = 700.
+/// - libtorch usually reports Runtime API text, but if you get raw codes from
+///   `/usr/local/cuda/include/cuda.h`, those are Driver API `CUresult` codes.
+pub fn cuda_cause_from_error_code(code: i32) -> Cause {
+    match code {
+        // --------------------------------------------------------------------
+        // Recoverable / mitigation path.
+        // Runtime: cudaErrorMemoryAllocation = 2
+        // Driver:  CUDA_ERROR_OUT_OF_MEMORY = 2
+        // --------------------------------------------------------------------
+        2 => cuda_cause(
+            CudaAction::HandleOOM,
+            "CUDA error 2: cudaErrorMemoryAllocation / CUDA_ERROR_OUT_OF_MEMORY: \
+             out of memory; try dropping tensors, emptying cache, reducing batch/concurrency",
+        ),
+
+        // --------------------------------------------------------------------
+        // Strong restart candidates: sticky/context-poisoning/device exception.
+        // These are the important ones for libtorch worker restart policy.
+        // --------------------------------------------------------------------
+
+        // Runtime: cudaErrorECCUncorrectable = 214
+        // Driver:  CUDA_ERROR_ECC_UNCORRECTABLE = 214
+        214 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 214: cudaErrorECCUncorrectable / CUDA_ERROR_ECC_UNCORRECTABLE: \
+             uncorrectable ECC error; treat as fatal for the worker/GPU path",
+        ),
+
+        // Runtime: cudaErrorNvlinkUncorrectable = 220
+        // Driver:  CUDA_ERROR_NVLINK_UNCORRECTABLE = 220
+        220 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 220: cudaErrorNvlinkUncorrectable / CUDA_ERROR_NVLINK_UNCORRECTABLE: \
+             uncorrectable NVLink error; treat as fatal for the worker/GPU path",
+        ),
+
+        // Runtime: cudaErrorContained = 226
+        // Usually indicates GPU error containment; CUDA docs describe this as
+        // leaving the process inconsistent.
+        226 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 226: cudaErrorContained: contained device exception; \
+             process state is inconsistent, restart worker",
+        ),
+
+        // Runtime: cudaErrorIllegalAddress = 700
+        // Driver:  CUDA_ERROR_ILLEGAL_ADDRESS = 700
+        700 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 700: cudaErrorIllegalAddress / CUDA_ERROR_ILLEGAL_ADDRESS: \
+             illegal memory access; CUDA context/process is likely poisoned",
+        ),
+
+        // Runtime: cudaErrorLaunchTimeout = 702
+        // Driver:  CUDA_ERROR_LAUNCH_TIMEOUT = 702
+        702 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 702: cudaErrorLaunchTimeout / CUDA_ERROR_LAUNCH_TIMEOUT: \
+             kernel launch timed out and was terminated; restart worker",
+        ),
+
+        // Runtime: cudaErrorContextIsDestroyed = 709
+        // Driver:  CUDA_ERROR_CONTEXT_IS_DESTROYED = 709
+        709 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 709: cudaErrorContextIsDestroyed / CUDA_ERROR_CONTEXT_IS_DESTROYED: \
+             CUDA context was destroyed or invalid; libtorch state may hold stale CUDA objects",
+        ),
+
+        // Runtime: cudaErrorAssert = 710
+        // Driver:  CUDA_ERROR_ASSERT = 710
+        710 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 710: cudaErrorAssert / CUDA_ERROR_ASSERT: \
+             device-side assert triggered; restart worker",
+        ),
+
+        // Runtime: cudaErrorHardwareStackError = 714
+        // Driver:  CUDA_ERROR_HARDWARE_STACK_ERROR = 714
+        714 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 714: cudaErrorHardwareStackError / CUDA_ERROR_HARDWARE_STACK_ERROR: \
+             hardware stack error; restart worker",
+        ),
+
+        // Runtime: cudaErrorIllegalInstruction = 715
+        // Driver:  CUDA_ERROR_ILLEGAL_INSTRUCTION = 715
+        715 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 715: cudaErrorIllegalInstruction / CUDA_ERROR_ILLEGAL_INSTRUCTION: \
+             illegal GPU instruction; restart worker",
+        ),
+
+        // Runtime: cudaErrorMisalignedAddress = 716
+        // Driver:  CUDA_ERROR_MISALIGNED_ADDRESS = 716
+        716 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 716: cudaErrorMisalignedAddress / CUDA_ERROR_MISALIGNED_ADDRESS: \
+             misaligned GPU memory access; restart worker",
+        ),
+
+        // Runtime: cudaErrorInvalidAddressSpace = 717
+        // Driver:  CUDA_ERROR_INVALID_ADDRESS_SPACE = 717
+        717 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 717: cudaErrorInvalidAddressSpace / CUDA_ERROR_INVALID_ADDRESS_SPACE: \
+             invalid address space in kernel; restart worker",
+        ),
+
+        // Runtime: cudaErrorInvalidPc = 718
+        // Driver:  CUDA_ERROR_INVALID_PC = 718
+        718 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 718: cudaErrorInvalidPc / CUDA_ERROR_INVALID_PC: \
+             invalid program counter; restart worker",
+        ),
+
+        // Runtime: cudaErrorLaunchFailure = 719
+        // Driver:  CUDA_ERROR_LAUNCH_FAILED = 719
+        719 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 719: cudaErrorLaunchFailure / CUDA_ERROR_LAUNCH_FAILED: \
+             unspecified launch failure; restart worker",
+        ),
+
+        // Runtime: cudaErrorTensorMemoryLeak = 721
+        721 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 721: cudaErrorTensorMemoryLeak: \
+             tensor memory leak detected by device runtime; restart worker",
+        ),
+
+        // Runtime: cudaErrorMpsClientTerminated = 810
+        // Driver:  CUDA_ERROR_MPS_CLIENT_TERMINATED = 810
+        810 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 810: cudaErrorMpsClientTerminated / CUDA_ERROR_MPS_CLIENT_TERMINATED: \
+             MPS client terminated; restart worker",
+        ),
+
+        // Runtime: cudaErrorExternalDevice = 911
+        911 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 911: cudaErrorExternalDevice: \
+             external device error; async case should be treated as fatal for the worker",
+        ),
+
+        // Runtime: cudaErrorUnknown = 999
+        // Driver:  CUDA_ERROR_UNKNOWN = 999
+        999 => cuda_cause(
+            CudaAction::NeedsRestart,
+            "CUDA error 999: cudaErrorUnknown / CUDA_ERROR_UNKNOWN: \
+             unknown CUDA error; safest policy is to restart worker",
+        ),
+
+        // --------------------------------------------------------------------
+        // Non-OOM, usually code/config/input bugs or environment failures.
+        // These should not be “fixed” by reducing concurrency.
+        // They are classified as Other because they do not necessarily mean
+        // CUDA context poisoning.
+        // --------------------------------------------------------------------
+
+        // Runtime: cudaErrorInvalidValue = 1
+        // Driver:  CUDA_ERROR_INVALID_VALUE = 1
+        1 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 1: invalid value; likely API misuse, bad argument, bad shape/index, or stale handle",
+        ),
+
+        // Runtime: cudaErrorInitializationError = 3
+        // Driver:  CUDA_ERROR_NOT_INITIALIZED = 3
+        3 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 3: initialization/not-initialized error; check driver/runtime/context initialization",
+        ),
+
+        // Runtime: cudaErrorCudartUnloading = 4
+        // Driver:  CUDA_ERROR_DEINITIALIZED = 4
+        4 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 4: CUDA runtime/driver is deinitializing; usually process shutdown or teardown ordering",
+        ),
+
+        // Runtime: cudaErrorInvalidDevice = 101
+        // Driver:  CUDA_ERROR_INVALID_DEVICE = 101
+        101 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 101: invalid device; check selected CUDA device index",
+        ),
+
+        // Runtime: cudaErrorInvalidResourceHandle = 400
+        // Driver:  CUDA_ERROR_INVALID_HANDLE = 400
+        400 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 400: invalid resource/handle; possible stale stream/event/library handle or API misuse",
+        ),
+
+        // Runtime: cudaErrorNotReady = 600
+        // Driver:  CUDA_ERROR_NOT_READY = 600
+        600 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 600: not ready; async operation has not completed yet",
+        ),
+
+        // Runtime: cudaErrorIllegalState = 401 in newer CUDA runtimes.
+        401 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 401: illegal state; usually API sequencing/capture/state misuse",
+        ),
+
+        // Runtime: cudaErrorInvalidConfiguration = 9
+        9 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 9: invalid kernel launch configuration; fix launch/grid/block/shared-memory parameters",
+        ),
+
+        // Runtime: cudaErrorLaunchOutOfResources = 701
+        // Driver:  CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES = 701
+        701 => cuda_cause(
+            CudaAction::Other,
+            "CUDA error 701: launch out of resources; reduce block size/register/shared-memory usage or fix custom kernel",
+        ),
+
+        _ => cuda_cause(
+            CudaAction::Other,
+            format!("CUDA error {code}: unclassified CUDA error code"),
+        ),
+    }
+}
+pub fn cuda_cause_from_msg(p0: impl Into<String> + Display) -> Cause {
+    // Use Display, not Into<String>, so this also works nicely with things like
+    // &TchError, anyhow::Error, etc.
+    let msg = p0.to_string();
+    let lower = msg.to_ascii_lowercase();
+
+    // ------------------------------------------------------------------------
+    // OOM first.
+    // PyTorch/libtorch OOM messages often contain a lot of allocator stats:
+    // "CUDA out of memory. Tried to allocate..."
+    // ------------------------------------------------------------------------
+    if contains_any(
+        &lower,
+        &[
+            "cuda out of memory",
+            "torch.cuda.outofmemoryerror",
+            "outofmemoryerror",
+            "cudaerror memory allocation",
+            "cudaerrormemoryallocation",
+            "cuda error: out of memory",
+            "cuda_error_out_of_memory",
+            "cuda_error_memory_allocation",
+            "out of memory",
+        ],
+    ) {
+        return cuda_cause(CudaAction::HandleOOM, msg);
+    }
+
+    // ------------------------------------------------------------------------
+    // Fatal/sticky CUDA errors.
+    // These are the ones after which I would restart the libtorch GPU worker.
+    // ------------------------------------------------------------------------
+
+    if contains_any(
+        &lower,
+        &[
+            "device-side assert triggered",
+            "cudaerrorassert",
+            "cuda_error_assert",
+            "cuda error: device-side assert",
+            "error 710",
+            "code=710",
+            "code 710",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "illegal memory access",
+            "cudaerrorillegaladdress",
+            "cuda_error_illegal_address",
+            "cuda error: an illegal memory access was encountered",
+            "error 700",
+            "code=700",
+            "code 700",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "unspecified launch failure",
+            "cudaerrorlaunchfailure",
+            "cuda_error_launch_failed",
+            "cuda error: unspecified launch failure",
+            "error 719",
+            "code=719",
+            "code 719",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "launch timed out",
+            "launch timeout",
+            "cudaerrorlaunchtimeout",
+            "cuda_error_launch_timeout",
+            "error 702",
+            "code=702",
+            "code 702",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "hardware stack error",
+            "cudaerrorhardwarestackerror",
+            "cuda_error_hardware_stack_error",
+            "error 714",
+            "code=714",
+            "code 714",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "illegal instruction",
+            "cudaerrorillegalinstruction",
+            "cuda_error_illegal_instruction",
+            "error 715",
+            "code=715",
+            "code 715",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "misaligned address",
+            "cudaerrormisalignedaddress",
+            "cuda_error_misaligned_address",
+            "error 716",
+            "code=716",
+            "code 716",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "invalid address space",
+            "cudaerrorinvalidaddressspace",
+            "cuda_error_invalid_address_space",
+            "error 717",
+            "code=717",
+            "code 717",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "invalid program counter",
+            "invalid pc",
+            "cudaerrorinvalidpc",
+            "cuda_error_invalid_pc",
+            "error 718",
+            "code=718",
+            "code 718",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "context is destroyed",
+            "context was destroyed",
+            "cudaerrorcontextisdestroyed",
+            "cuda_error_context_is_destroyed",
+            "error 709",
+            "code=709",
+            "code 709",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "uncorrectable ecc",
+            "ecc uncorrectable",
+            "cudaerroreccuncorrectable",
+            "cuda_error_ecc_uncorrectable",
+            "error 214",
+            "code=214",
+            "code 214",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "nvlink uncorrectable",
+            "cudaerrornvlinkuncorrectable",
+            "cuda_error_nvlink_uncorrectable",
+            "error 220",
+            "code=220",
+            "code 220",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "contained device exception",
+            "cudaerrorcontained",
+            "error 226",
+            "code=226",
+            "code 226",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "tensor memory leak",
+            "cudaerrortensormemoryleak",
+            "error 721",
+            "code=721",
+            "code 721",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "mps client terminated",
+            "cudaerrormpsclientterminated",
+            "cuda_error_mps_client_terminated",
+            "error 810",
+            "code=810",
+            "code 810",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "external device",
+            "cudaerrorexternaldevice",
+            "error 911",
+            "code=911",
+            "code 911",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "cuda error: unknown error",
+            "cudaerrorunknown",
+            "cuda_error_unknown",
+            "error 999",
+            "code=999",
+            "code 999",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    // ------------------------------------------------------------------------
+    // CUDA library errors.
+    //
+    // These are not raw CUDA enum values, but in libtorch they often show up
+    // after a previous fatal CUDA error poisoned the context. I would classify
+    // the more severe ones as NeedsRestart unless you know they come from a
+    // deterministic API/config bug.
+    // ------------------------------------------------------------------------
+
+    if contains_any(
+        &lower,
+        &[
+            "cudnn_status_internal_error",
+            "cudnn_status_execution_failed",
+            "cudnn_status_mapping_error",
+            "cudnn error: cudnn_status_internal_error",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "cublas_status_execution_failed",
+            "cublas_status_internal_error",
+            "cublas_status_mapping_error",
+            "cublas error",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "cusolver_status_internal_error",
+            "cusolver_status_execution_failed",
+            "cusparse_status_execution_failed",
+            "cusparse_status_internal_error",
+            "cufft_internal_error",
+            "cufft_exec_failed",
+        ],
+    ) {
+        return cuda_cause(CudaAction::NeedsRestart, msg);
+    }
+
+    // ------------------------------------------------------------------------
+    // Non-OOM / usually not restart-worthy.
+    // Keep these after fatal matches because some messages contain extra text.
+    // ------------------------------------------------------------------------
+
+    if contains_any(
+        &lower,
+        &[
+            "invalid device ordinal",
+            "invalid device",
+            "cudaerrorinvaliddevice",
+            "cuda_error_invalid_device",
+            "invalid argument",
+            "invalid value",
+            "cudaerrorinvalidvalue",
+            "cuda_error_invalid_value",
+            "invalid configuration argument",
+            "cudaerrorinvalidconfiguration",
+            "launch out of resources",
+            "cudaerrorlaunchoutofresources",
+            "cuda_error_launch_out_of_resources",
+            "invalid resource handle",
+            "cudaerrorinvalidresourcehandle",
+            "cuda_error_invalid_handle",
+            "index out of bounds",
+            "index is out of bounds",
+            "index out of range",
+            "dimension out of range",
+            "shape",
+            "sizes",
+            "expected scalar type",
+            "expected dtype",
+        ],
+    ) {
+        return cuda_cause(CudaAction::Other, msg);
+    }
+
+    cuda_cause(CudaAction::Other, msg)
+}
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| haystack.contains(needle))
+}
+
 
 //TODO https://github.com/rust-lang/rust/issues/65280
 impl Debug for ThoError {
@@ -643,8 +1273,7 @@ impl Debug for ThoError {
 impl From<Cause> for ThoError {
     fn from(value: Cause) -> Self {
         match value {
-            Cause::OutOfMemory => Self::oom(),
-            e => Self::new_with_error(format!("e={e:?}"), e),
+            e => Self::new_with_cause(format!("e={e:?}"), e),
         }
     }
 }
@@ -655,28 +1284,11 @@ where
 {
     fn from(value: E) -> Self {
         debug!("ThoosaError::from: value={}", value);
-        let msg = value.to_string();
 
-        if msg.contains("out of memory") || msg.contains("can't allocate memory") {
-            ThoError::oom()
-        } else {
-            ThoError::new_with_error(
-                msg,
-                Cause::External {
-                    type_name: std::any::type_name::<E>(),
-                    source: Arc::new(value),
-                },
-            )
-        }
+        ThoError::new(value.to_string())
     }
 }
 
-// impl Display for ThoError {
-//     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-//         todo!()
-//     }
-// }
-// impl Error for ThoError {}
 
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
@@ -1245,12 +1857,12 @@ where
 
     pub fn expect_value(&self) -> Result<&V, ThoError> {
         match self {
-            RangeOrValue::Range { .. } => Err(ThoError::new_with_error(
+            RangeOrValue::Range { .. } => Err(ThoError::new_with_cause(
                 "expected RangeOrValue::Value, got Range",
                 Cause::ExpectedValue,
             )),
             RangeOrValue::Value(v) => Ok(v),
-            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_error(
+            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_cause(
                 "expected RangeOrValue::Value, got Dynamic",
                 Cause::ExpectedValue,
             )),
@@ -1260,11 +1872,11 @@ where
     pub fn expect_range(&self) -> Result<&Range<V>, ThoError> {
         match self {
             RangeOrValue::Range { range, step: _ } => Ok(range),
-            RangeOrValue::Value(_v) => Err(ThoError::new_with_error(
+            RangeOrValue::Value(_v) => Err(ThoError::new_with_cause(
                 "expected RangeOrValue::Range, got Value",
                 Cause::ExpectedRange,
             )),
-            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_error(
+            RangeOrValue::Dynamic(_resolve) => Err(ThoError::new_with_cause(
                 "expected RangeOrValue::Range, got Dynamic",
                 Cause::ExpectedRange,
             )),
@@ -1430,7 +2042,7 @@ pub fn clc_step(input_n: u32, motif_width: u32, slices_num: u32) -> (u32, u32) {
 pub fn parse_corr_labels(descr: &str) -> Result<Vec<(i64, String)>, ThoError> {
     let re: Regex = Regex::new(r#"\((?<id>\d+),\s"(?<kind>\w+)"\)"#)
         .map_err(|e| {
-            ThoError::new_with_error("compile corr labels regex", Cause::RegexParse(e))
+            ThoError::new_with_cause("compile corr labels regex", Cause::RegexParse(e))
         })?; //TODO const, error
     Ok(re
         .captures_iter(descr)
@@ -1530,7 +2142,7 @@ fn parse_range_str(
             ))
         })
         .unwrap_or_else(|| {
-            Err(ThoError::new_with_error(
+            Err(ThoError::new_with_cause(
                 format!("can't parse range {range}"),
                 Cause::InvalidRange {
                     range: range.to_string(),
@@ -1908,7 +2520,7 @@ mod shared_tests {
         let params =
             TestParams::try_parse_from(vec!["", "--step=1.1..2.2", "--window=1..2"].into_iter())
                 .map_err(|e| {
-                    ThoError::new_with_error(
+                    ThoError::new_with_cause(
                         "parse range-or-value args",
                         Cause::CliParse(Arc::new(e)),
                     )
@@ -1944,7 +2556,7 @@ mod shared_tests {
         let params =
             TestParams::try_parse_from(vec!["", "--resources=list:aaa,bbb,ccc"].into_iter())
                 .map_err(|e| {
-                    ThoError::new_with_error(
+                    ThoError::new_with_cause(
                         "parse resources args (list)",
                         Cause::CliParse(Arc::new(e)),
                     )
@@ -1956,7 +2568,7 @@ mod shared_tests {
         );
         let params = TestParams::try_parse_from(vec!["", "--resources=set:aaa"].into_iter())
             .map_err(|e| {
-                ThoError::new_with_error(
+                ThoError::new_with_cause(
                     "parse resources args (set)",
                     Cause::CliParse(Arc::new(e)),
                 )
@@ -1965,7 +2577,7 @@ mod shared_tests {
 
         let params = TestParams::try_parse_from(vec!["", "--resources=group:bbb"].into_iter())
             .map_err(|e| {
-                ThoError::new_with_error(
+                ThoError::new_with_cause(
                     "parse resources args (group)",
                     Cause::CliParse(Arc::new(e)),
                 )
@@ -1993,7 +2605,7 @@ mod shared_tests {
             vec!["", "--step=-1.01..2.2:0.1", "--window=-20..20:2"].into_iter(),
         )
         .map_err(|e| {
-            ThoError::new_with_error(
+            ThoError::new_with_cause(
                 "parse range-or-value args with step",
                 Cause::CliParse(Arc::new(e)),
             )
@@ -2044,7 +2656,7 @@ mod shared_tests {
 
         let params = TestParams::try_parse_from(vec!["", "--step=1.1", "--window=10"].into_iter())
             .map_err(|e| {
-                ThoError::new_with_error(
+                ThoError::new_with_cause(
                     "parse range-or-value args (value)",
                     Cause::CliParse(Arc::new(e)),
                 )
@@ -2381,14 +2993,14 @@ macro_rules! panic_to_err_async {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("panic_to_err_async: String: {msg}");
-                    Err(thoosa_shared::ThoError::from_msg(msg.as_str()))
+                    let msg1 = msg.as_str();Err(ThoError::new(msg1))
 
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("panic_to_err_async: str: {msg}");
-                    Err(thoosa_shared::ThoError::from_msg(*msg))
+                    let msg1 = *msg;Err(ThoError::new(msg1))
                 } else {
                     log::debug!("panic_to_err_async: unknown: {e:?}");
-                    Err(thoosa_shared::ThoError::from_msg(format!("{e:?}")))
+                    let msg = format!("{e:?}");Err(ThoError::new(msg))
                 }
             }
         }
@@ -2407,17 +3019,17 @@ macro_rules! panic_to_err {
             Err(e) => {
                 if let Some(msg) = e.downcast_ref::<String>() {
                     log::debug!("thoosa_err String: {msg}");
-                    Err(ThoError::from_msg(msg))
+                    Err(ThoError::new(msg))
 
                 // } else if let Some(thoosa_error) = e.downcast_ref::<ThoosaError>() {
                 //     Err(*thoosa_error)
 
                 } else if let Some(msg) = e.downcast_ref::<&str>() {
                     log::debug!("thoosa_err str: {msg}");
-                    Err(ThoError::from_msg(*msg))
+                    let msg1 = *msg;Err(ThoError::new(msg1))
                 } else {
                     log::debug!("thoosa_err unknown: {e:?}");
-                    Err(ThoError::from_msg(format!("{e:?}")))
+                    let msg = format!("{e:?}");Err(ThoError::new(msg))
                 }
             }
         }
