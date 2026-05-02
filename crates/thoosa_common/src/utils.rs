@@ -982,21 +982,6 @@ pub fn hist_1_dim(tensor: &Tensor, bins: u32) -> Tensor {
     one_hot.sum_dim_intlist(1, false, Kind::Int)
 }
 
-//TODO replace with same from cuda_utils free_mem, total_mem
-pub fn cuda_mem() -> (usize, usize) {
-    use cudarc::driver::CudaContext;
-    use cust::sys::cuMemGetInfo_v2;
-
-    let _ctx = CudaContext::new(0).unwrap();
-    let mut free: usize = 0;
-    let mut total: usize = 0;
-    unsafe {
-        let _res = cuMemGetInfo_v2(&mut free, &mut total);
-        // assert_eq!(res, sys::CUresult::CUDA_SUCCESS);
-    }
-    (free, total)
-}
-
 
 pub fn kick_register_cuda_hooks() {
     unsafe {

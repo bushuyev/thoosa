@@ -981,14 +981,13 @@ mod tpe_optimizer_tests {
         move |params| {
             debug!("params={params:?}");
 
-            let t: Tensor = ThoTensor::new((), Tensor::from_slice(
+            let t: Tensor = Tensor::from_slice(
                 params
                     .into_iter()
                     .map(|v| <&NamedVal<String> as TryInto<f64>>::try_into(v).unwrap())
                     .collect::<Vec<f64>>()
                     .as_slice(),
-            )).unwrap()
-            .into();
+            );
             let loss = t
                 .subtract_scalar(d_x)
                 .pow_tensor_scalar(2)

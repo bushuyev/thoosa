@@ -2310,7 +2310,7 @@ mod train_tests {
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
-    use crate::utils::{cuda_mem, from, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
+    use crate::utils::{from, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };

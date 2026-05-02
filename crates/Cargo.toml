@@ -69,7 +69,7 @@ lazy_static = "1"
 num-traits = "0"
 regex = "1"
 bytemuck = { version = "1", features = ["derive"] }
-cudarc = { version = "0", features = ["cuda-12040"] }
+
 ctor = "0"
 
 syn = {version="2", features=["full"]}
