@@ -46,143 +46,149 @@ impl std::fmt::Display for ArgminMathError {
 #[cfg(test)]
 impl std::error::Error for ArgminMathError {}
 
-// //TODO remove
-// impl <D, Id> Clone for ThoTensor<D, Id>
-// where
-//  D: Dims,
-//  Id: Named + Debug + Clone
-// {
-//     fn clone(&self) -> Self {
-//         ThoTensor::new(self.id().clone(), self.t_ref().shallow_clone()).expect("can't clone")
-//     }
-// }
+#[derive(Debug)]
+pub struct ArgminThoTensor(ThoTensor);
 
-impl ThoTensor {
+impl Deref for ArgminThoTensor {
+    type Target = Tensor;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0.t
+    }
+}
+
+impl Clone for ArgminThoTensor {
+    fn clone(&self) -> Self {
+        ArgminThoTensor(ThoTensor::new(self.0.id().clone(), self.0.t_ref().shallow_clone()).expect("can't clone"))
+    }
+}
+
+impl ArgminThoTensor {
     pub fn force_requires_grad(&self) {
         unsafe {
             let const_ptr = self as *const Self;
             let mut_ptr = const_ptr as *mut Self;
-            (*mut_ptr).t = self.t.shallow_clone().set_requires_grad(true);
+            (*mut_ptr).0.t = self.0.t.shallow_clone().set_requires_grad(true);
         }
     }
 
 }
 
 
-impl Into<Tensor> for ThoTensor {
-    fn into(self) -> Tensor {
-        self.t
-    }
-}
+// impl Into<Tensor> for ThoTensor {
+//     fn into(self) -> Tensor {
+//         self.0.t
+//     }
+// }
 
-impl Deref for ThoTensor {
-    type Target = Tensor;
+// impl Deref for ThoTensor {
+//     type Target = Tensor;
+//
+//     fn deref(&self) -> &Self::Target {
+//         &self.0.t
+//     }
+// }
 
-    fn deref(&self) -> &Self::Target {
-        &self.t
-    }
-}
-
-impl DerefMut for ThoTensor {
+impl DerefMut for ArgminThoTensor {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.t
+        &mut self.0.t
     }
 }
 
-impl ArgminSub<ThoTensor, ThoTensor> for ThoTensor {
-    fn sub(&self, other: &ThoTensor) -> ThoTensor {
-        (&self.t - &other.t).into()
+impl ArgminSub<ArgminThoTensor, ArgminThoTensor> for ArgminThoTensor {
+    fn sub(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
+        (&self.0.t - &other.0.t).into()
     }
 }
 
-impl ArgminSub<f64, ThoTensor> for ThoTensor {
-    fn sub(&self, other: &f64) -> ThoTensor {
-        (self.t.subtract_scalar(*other)).into()
+impl ArgminSub<f64, ArgminThoTensor> for ArgminThoTensor {
+    fn sub(&self, other: &f64) -> ArgminThoTensor {
+        (self.0.t.subtract_scalar(*other)).into()
     }
 }
 
-impl ArgminAdd<ThoTensor, ThoTensor> for ThoTensor {
-    fn add(&self, other: &ThoTensor) -> ThoTensor {
-        (&self.t + &other.t).into()
+impl ArgminAdd<ArgminThoTensor, ArgminThoTensor> for ArgminThoTensor {
+    fn add(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
+        (&self.0.t + &other.0.t).into()
     }
 }
 
-impl ArgminAdd<f64, ThoTensor> for ThoTensor {
-    fn add(&self, other: &f64) -> ThoTensor {
-        (self.t.f_add_scalar(*other)).unwrap().into()
+impl ArgminAdd<f64, ArgminThoTensor> for ArgminThoTensor {
+    fn add(&self, other: &f64) -> ArgminThoTensor {
+        (self.0.t.f_add_scalar(*other)).unwrap().into()
     }
 }
 
-impl ArgminDot<ThoTensor, f64> for ThoTensor {
-    fn dot(&self, other: &ThoTensor) -> f64 {
-        debug!("ArgminDot::dot: size={:?} self.t={}", self.t.size(), self.t);
+impl ArgminDot<ArgminThoTensor, f64> for ArgminThoTensor {
+    fn dot(&self, other: &ArgminThoTensor) -> f64 {
+        debug!("ArgminDot::dot: size={:?} self.0.t={}", self.0.t.size(), self.0.t);
         debug!(
-            "ArgminDot::dot: size={:?} other.t={}",
-            other.t.size(),
-            other.t
+            "ArgminDot::dot: size={:?} other.0.t={}",
+            other.0.t.size(),
+            other.0.t
         );
-        let v = self.t.dot(&other.t).double_value(&[]);
+        let v = self.0.t.dot(&other.0.t).double_value(&[]);
         debug!("ArgminDot::dot: v={}", v);
         v
     }
 }
 
-impl ArgminMul<f64, ThoTensor> for ThoTensor {
-    fn mul(&self, other: &f64) -> ThoTensor {
-        self.t.multiply_scalar(*other).into()
+impl ArgminMul<f64, ArgminThoTensor> for ArgminThoTensor {
+    fn mul(&self, other: &f64) -> ArgminThoTensor {
+        self.0.t.multiply_scalar(*other).into()
     }
 }
 
-impl ArgminMul<ThoTensor, ThoTensor> for ThoTensor {
-    fn mul(&self, other: &ThoTensor) -> ThoTensor {
-        self.t.multiply(other).into()
+impl ArgminMul<ArgminThoTensor, ArgminThoTensor> for ArgminThoTensor {
+    fn mul(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
+        self.0.t.multiply(other).into()
     }
 }
 
-impl ArgminL1Norm<f64> for ThoTensor {
+impl ArgminL1Norm<f64> for ArgminThoTensor {
     fn l1_norm(&self) -> f64 {
-        self.t.linalg_norm(0, 0, true, None).double_value(&[])
+        self.0.t.linalg_norm(0, 0, true, None).double_value(&[])
     }
 }
 
-impl ArgminSignum for ThoTensor {
+impl ArgminSignum for ArgminThoTensor {
     fn signum(self) -> Self {
-        self.t.sign().into()
+        self.0.t.sign().into()
     }
 }
 
-impl ArgminZeroLike for ThoTensor {
+impl ArgminZeroLike for ArgminThoTensor {
     fn zero_like(&self) -> Self {
-        Tensor::zeros(self.t.size(), (self.t.kind(), self.t.device())).into()
+        Tensor::zeros(self.0.t.size(), (self.0.t.kind(), self.0.t.device())).into()
     }
 }
 
 //TODO test
-impl ArgminMinMax for ThoTensor {
+impl ArgminMinMax for ArgminThoTensor {
     fn min(x: &Self, y: &Self) -> Self {
-        Tensor::stack(&[&x.t, &y.t], 0).amin(1, false).into()
+        Tensor::stack(&[&x.0.t, &y.0.t], 0).amin(1, false).into()
     }
     fn max(x: &Self, y: &Self) -> Self {
-        Tensor::stack(&[&x.t, &y.t], 0).amax(1, false).into()
+        Tensor::stack(&[&x.0.t, &y.0.t], 0).amax(1, false).into()
     }
 }
 
-impl ArgminL2Norm<f64> for ThoTensor {
+impl ArgminL2Norm<f64> for ArgminThoTensor {
     fn l2_norm(&self) -> f64 {
-        self.t.linalg_norm(2, 0, true, None).double_value(&[])
+        self.0.t.linalg_norm(2, 0, true, None).double_value(&[])
     }
 }
 
-impl From<Tensor> for ThoTensor {
+impl From<Tensor> for ArgminThoTensor {
     fn from(value: Tensor) -> Self {
         // debug!("new: {:?} device={:?} requires_grad={}", crate::utils::from::<Vec<f32>>(&value), value.device(), value.requires_grad());
-        ThoTensor::new((), value).unwrap()
+        ArgminThoTensor(ThoTensor::new((), value).unwrap())
     }
 }
 
-impl ArgminMul<ThoTensor, ThoTensor> for f64 {
-    fn mul(&self, other: &ThoTensor) -> ThoTensor {
-        other.t.multiply_scalar(*self).into()
+impl ArgminMul<ArgminThoTensor, ArgminThoTensor> for f64 {
+    fn mul(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
+        other.0.t.multiply_scalar(*self).into()
     }
 }
 
@@ -190,14 +196,14 @@ impl ArgminMul<ThoTensor, ThoTensor> for f64 {
 
 pub(crate) struct TensorProblem<F>
 where
-    F: Fn(&ThoTensor) -> Tensor,
+    F: Fn(&ArgminThoTensor) -> Tensor,
 {
     loss_fn: F,
 }
 
 impl<F> TensorProblem<F>
 where
-    F: Fn(&ThoTensor) -> Tensor,
+    F: Fn(&ArgminThoTensor) -> Tensor,
 {
     #[allow(dead_code)]
     pub fn new(loss_fn: F) -> Self {
@@ -207,12 +213,12 @@ where
 
 impl<F> CostFunction for TensorProblem<F>
 where
-    F: Fn(&ThoTensor) -> Tensor,
+    F: Fn(&ArgminThoTensor) -> Tensor,
 {
-    type Param = ThoTensor;
+    type Param = ArgminThoTensor;
     type Output = f64;
 
-    fn cost(&self, theta: &ThoTensor) -> Result<Self::Output, Error> {
+    fn cost(&self, theta: &ArgminThoTensor) -> Result<Self::Output, Error> {
         // debug!("cost: theta={:?} device={:?} requires_grad={:?}", theta, theta.device(), theta.requires_grad());
 
         Ok(tch::with_grad(|| {
@@ -236,18 +242,14 @@ where
 
 impl<F> Gradient for TensorProblem<F>
 where
-    F: Fn(&ThoTensor) -> Tensor,
+    F: Fn(&ArgminThoTensor) -> Tensor,
 {
-    type Param = ThoTensor;
-    type Gradient = ThoTensor;
+    type Param = ArgminThoTensor;
+    type Gradient = ArgminThoTensor;
 
-    fn gradient(&self, p: &ThoTensor) -> Result<Self::Gradient, Error> {
-        debug!(
-            "gradient: p={:?} device={:?} requires_grad={:?}",
-            p,
-            p.device_idx(),
-            p.requires_grad()
-        );
+    fn gradient(&self, p: &ArgminThoTensor) -> Result<Self::Gradient, Error> {
+        debug!("gradient: p={:?} device={:?} requires_grad={:?}",p,p.0.device_idx(),p.0.requires_grad());
+
         let grad = p.grad(); //.to_device(Cpu);
         debug!("gradient: grad={}", grad);
         Ok(grad.into())
@@ -262,13 +264,13 @@ pub fn run_lbfgs<F>(
 ) -> Result<
     OptimizationResult<
         TensorProblem<F>,
-        LBFGS<MoreThuenteLineSearch<ThoTensor, ThoTensor, f64>, ThoTensor, ThoTensor, f64>,
-        IterState<ThoTensor, ThoTensor, (), (), (), f64>,
+        LBFGS<MoreThuenteLineSearch<ArgminThoTensor, ArgminThoTensor, f64>, ArgminThoTensor, ArgminThoTensor, f64>,
+        IterState<ArgminThoTensor, ArgminThoTensor, (), (), (), f64>,
     >,
     ThoError,
 >
 where
-    F: Fn(&ThoTensor) -> Tensor,
+    F: Fn(&ArgminThoTensor) -> Tensor,
 {
     let solver = LBFGS::new(
         MoreThuenteLineSearch::new(), //.with_c(1e-4, 0.9)?, //.with_bounds(1., 10.)?,
@@ -302,7 +304,7 @@ mod tests {
 
     use thoosa_shared::ThoError;
 
-    use crate::argmin::{ArgminMathError, ThoTensor, TensorProblem, run_lbfgs};
+    use crate::argmin::{ArgminMathError, ArgminThoTensor, TensorProblem, run_lbfgs};
     use crate::opt::rbf_nll;
 
     #[test]
@@ -310,16 +312,11 @@ mod tests {
         struct MyProblem {}
 
         impl CostFunction for MyProblem {
-            type Param = ThoTensor;
+            type Param = ArgminThoTensor;
             type Output = f64;
 
             fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
-                debug!(
-                    "cost: p={:?} device={:?} requires_grad={:?}",
-                    p,
-                    p.device_idx(),
-                    p.requires_grad()
-                );
+                debug!("cost: p={:?} device={:?} requires_grad={:?}",p,p.0.device_idx(),p.0.requires_grad());
 
                 Ok(tch::with_grad(|| {
                     p.force_requires_grad();
@@ -337,16 +334,11 @@ mod tests {
         }
 
         impl Gradient for MyProblem {
-            type Param = ThoTensor;
-            type Gradient = ThoTensor;
+            type Param = ArgminThoTensor;
+            type Gradient = ArgminThoTensor;
 
             fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
-                debug!(
-                    "gradient: p={:?} device={:?} requires_grad={:?}",
-                    p,
-                    p.device_idx(),
-                    p.requires_grad()
-                );
+                debug!("gradient: p={:?} device={:?} requires_grad={:?}",p,p.0.device_idx(),p.0.requires_grad());
                 let grad = p.grad(); //.to_device(Cpu);
                 debug!("gradient: grad={:?}", grad);
                 Ok(grad.into())

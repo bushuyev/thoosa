@@ -930,7 +930,7 @@ mod distance_tests {
     use thoosa_common::loader::SyncWrapper;
     use thoosa_shared::panic_to_err;
     use thoosa_common::utils::{
-        cuda_mem, from, hist_1_dim, lin_iter,
+         from, hist_1_dim, lin_iter,
         lin_t, plot_series, plot_series_with_points, reset_print_options,
         skewness_kurtosis_1_dim, three_sigs_tensor, to_vec_f32, z_norm_dims,
     };

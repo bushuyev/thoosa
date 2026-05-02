@@ -22,7 +22,7 @@ parking_lot.workspace = true
 crossbeam-channel.workspace = true
 clap.workspace = true
 serde_json.workspace = true
-cudarc.workspace = true
+
 
 polars.workspace = true
 plotters = { version = "0.3.5"}

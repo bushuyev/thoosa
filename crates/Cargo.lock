@@ -1012,15 +1012,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e2931af7e13dc045d8e9d26afccc6fa115d64e115c9c84b1166288b46f6782c2"
 
 [[package]]
-name = "cudarc"
-version = "0.17.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72ba848ae5c6f3cb36e71eab5f268763e3fabcabe3f7bc683e16f7fa3d46281e"
-dependencies = [
- "libloading 0.8.8",
-]
-
-[[package]]
 name = "cust"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4948,7 +4939,6 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "ctor 0.5.0",
- "cudarc",
  "futures",
  "hound",
  "lewton",
@@ -4992,7 +4982,6 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
  "ctor 0.5.0",
- "cudarc",
  "cust",
  "dashmap 6.1.0",
  "futures",
@@ -5054,7 +5043,6 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "ctor 0.2.9",
- "cudarc",
  "futures",
  "libloading 0.9.0",
  "log",
@@ -5153,7 +5141,6 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-utils",
  "ctor 0.5.0",
- "cudarc",
  "futures",
  "futures-util",
  "libloading 0.9.0",
