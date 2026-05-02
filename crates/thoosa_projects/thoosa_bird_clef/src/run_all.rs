@@ -57,6 +57,7 @@ pub(crate) async fn run_all(
     debug!("run_all");
 
     let labels = store.list_labels(true).await?;
+    info!("run_all: labels={:?}", labels.len());
     debug!("run_all: labels={labels:?}");
     let labels_filter = run_all_args.labels_filter();
     let labels_filter_ref = labels_filter.as_ref();
@@ -127,10 +128,9 @@ pub(crate) async fn run_all(
                     ).await?;
 
                     info!("run_all: label={label} find_motifs_run_ids={find_motifs_run_ids:?}");
-                    let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
 
-                    let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
-
+                    // let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
+                    // let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
                     //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
                     // let mut select_motifs_run_ids = vec![];
                     //
