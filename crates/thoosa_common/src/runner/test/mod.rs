@@ -699,7 +699,7 @@ mod tests {
                 FailUntil::MemLimit(mem_limit) => {
                     let _device_idx = deive_idx;
                     if input.data.0.len() > mem_limit as usize {
-                        return Err(Cause::OutOfMemory.into());
+                        return Err(ThoError::oom());
                     }
                 }
                 FailUntil::NaxParallel(max_other_parallel_threshold) => {
@@ -707,7 +707,7 @@ mod tests {
                     debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
 
                     if max_other_parallel > max_other_parallel_threshold {
-                        return Err(Cause::OutOfMemory.into());
+                        return Err(ThoError::oom());
                     }
                 }
 
@@ -717,7 +717,7 @@ mod tests {
                     debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
                     if !is_all_on_cpu {
-                        return Err(Cause::OutOfMemory.into());
+                        return Err(ThoError::oom());
                     }
                 }
                 FailUntil::Never => {}

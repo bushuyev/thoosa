@@ -188,11 +188,11 @@ impl ParentSuspendGuard {
                 job_id: parent.job_id,
                 reply: ack_tx,
             })
-            .map_err(|_| ThoError::new_with_error("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
         ack_rx
             .await
-            .map_err(|_| ThoError::new_with_error("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
         self.suspended = true;
         Ok(())
@@ -215,11 +215,11 @@ impl ParentSuspendGuard {
                 job_id: parent.job_id,
                 reply: ack_tx,
             })
-            .map_err(|_| ThoError::new_with_error("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
         ack_rx
             .await
-            .map_err(|_| ThoError::new_with_error("executor is closed", Cause::SubmitErrorClosed))?;
+            .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
         self.suspended = false;
         Ok(())
@@ -362,11 +362,11 @@ impl DynamicTaskExecutor {
     // }
 
     fn closed_error(msg: impl Into<String>) -> ThoError {
-        ThoError::new_with_error(msg.into(), Cause::SubmitErrorClosed)
+        ThoError::new_with_cause(msg.into(), Cause::SubmitErrorClosed)
     }
 
     fn resetting_submit_error() -> ThoError {
-        ThoError::new_with_error(
+        ThoError::new_with_cause(
             "Can't submit job: CUDA context reset is in progress",
             Cause::SubmitErrorClosed,
         )
@@ -560,7 +560,7 @@ impl DynamicTaskExecutor {
                     exclusive_job_id.replace(job_id);
 
                     result.map_err(|e| {
-                        ThoError::new_with_error(
+                        ThoError::new_with_cause(
                             e.msg.clone(),
                             Cause::JobError {
                                 job_id,
@@ -602,7 +602,7 @@ impl DynamicTaskExecutor {
             suspend_guard.resume().await?;
 
             return result.map_err(|_| {
-                ThoError::new_with_error(
+                ThoError::new_with_cause(
                     "job was cancelled before producing a result",
                     Cause::SubmitErrorClosed,
                 )
@@ -1342,12 +1342,13 @@ mod tests {
         },
         time::Duration,
     };
+    use thoosa_shared::CudaAction;
 
     fn needs_reset_error() -> ThoError {
-        ThoError::new_with_error(
+        ThoError::new_with_cause(
             "needs reset",
             Cause::Cuda {
-                needs_reset: true,
+                action: CudaAction::NeedsRestart,
                 msg: "reset me".into(),
             },
         )

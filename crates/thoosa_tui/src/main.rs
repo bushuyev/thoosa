@@ -1961,7 +1961,7 @@ impl App {
     }
 
     async fn load_filtered_run_configs(&mut self, keep_run_id: Option<u32>) -> Result<(), ThoError> {
-        let normalized = self.search_filters.normalized().map_err(ThoError::from_msg)?;
+        let normalized = self.search_filters.normalized().map_err(ThoError::new)?;
         let run_configs = self
             .store
             .list_run_configs_filtered(RunConfigFilter {

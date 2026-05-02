@@ -101,7 +101,7 @@ where
     }
 
     fn contextualize_take_error(key: &<D as WithId>::ID, err: ThoError) -> ThoError {
-        ThoError::new_with_error(format!("can't take from cache for {key:?}: {}", err.msg), err.what().clone())
+        ThoError::new_with_cause(format!("can't take from cache for {key:?}: {}", err.msg), err.what().clone())
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
@@ -253,7 +253,7 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::{Cause, simple_id, CopyToDevice, ThoError};
+    use thoosa_shared::{Cause, simple_id, CopyToDevice, ThoError, CudaAction};
     // use crate::common::Data;
     use crate::runner::global_ctx::mock_global_ctx;
     use thoosa_shared::traits::{CachableIdTr, Data, SimpleId, WithId};
@@ -395,10 +395,10 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
             {
                 Box::pin(async move {
                     if self.device == 0 && dst_device == 1 {
-                        Err(ThoError::new_with_error(
+                        Err(ThoError::new_with_cause(
                             "copy failed",
                             Cause::Cuda {
-                                needs_reset: true,
+                                action: CudaAction::Other,
                                 msg: "copy failed".into(),
                             },
                         ))
