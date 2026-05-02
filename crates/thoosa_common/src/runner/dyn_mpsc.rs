@@ -252,6 +252,7 @@ impl Drop for ParentSuspendGuard {
     }
 }
 
+///Its goad is to run synchronous tasks. Currently, it's used from OOMHandler only.
 #[derive(Debug)]
 pub struct DynamicTaskExecutor {
     tx: mpsc::Sender<Job>,
@@ -272,29 +273,6 @@ impl DynamicTaskExecutor {
             Arc::new(|_| async { Ok(()) }.boxed()),
         )
     }
-
-    // pub fn new_for_device(
-    //     queue_capacity: usize,
-    //     initial_limit: NonZeroUsize,
-    //     tho_device_idx: usize,
-    // ) -> Self {
-    //     Self::new_inner(
-    //         queue_capacity,
-    //         initial_limit,
-    //         tho_device_idx,
-    //         Arc::new(|device_idx| {
-    //             async move {
-    //                 tokio::task::spawn_blocking(move || Self::reset_cuda_context(device_idx))
-    //                     .await
-    //                     .map_err(|e| ThoError::new(format!("CUDA reset task join failed: {e}")))??;
-    //                 info!("Reset cuda device done, dropping data from  maps");
-    //                 GlobalCtx::global().drop_device(device_idx, "drop").await?;
-    //
-    //                 Ok(())
-    //             }.boxed()
-    //         }),
-    //     )
-    // }
 
     pub fn new_with_reset_hook(
         queue_capacity: usize,
