@@ -240,11 +240,8 @@ pub async fn copy_d2h_from_ptr(
                             stream.as_mut_ptr(),
                         );
                         if result != CUDA_SUCCESS {
-                            let needs_reset = result == CUDA_ERROR_ASSERT || result == CUDA_ERROR_ILLEGAL_ADDRESS;
-                            if needs_reset {
-                                warn!("copy_d2h_from_ptr: needs_reset");
-                            }
-                            return Err::<(), Cause>(Cause::Cuda{ needs_reset, msg: format!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}")});
+                            debug!("tho_cu_memcpy_dtoh_async failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={c_buf_size}");
+                            return Err(ThoError::from_cuda_error("tho_cu_memcpy_dtoh_async failed", result));
                         }
 
                         debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={result:?}");
@@ -263,11 +260,7 @@ pub async fn copy_d2h_from_ptr(
                         );
                         Ok(())
                     })
-                        .await
-                        .map_err(|e| Cause::External {
-                            type_name: std::any::type_name::<tokio::task::JoinError>(),
-                            source: Arc::new(e),
-                        })??;
+                        .await??;
 
                     drop(buf_stream);
                     Ok(())
@@ -277,7 +270,7 @@ pub async fn copy_d2h_from_ptr(
             .collect::<Vec<_>>()
             .await
             .into_iter()
-            .collect::<Result<(), Cause>>()?;
+            .collect::<Result<(), ThoError>>()?;
     }
     debug!("copy_d2h_from_ptr: dst_t={dst_t:?} dst_t.device={:?}", dst_t.device());
     Ok(dst_t)
@@ -410,11 +403,8 @@ pub async fn copy_h2d_from_ptr(
                             buf_stream.1.as_mut_ptr(),
                         );
                         if result != CUDA_SUCCESS {
-                            let needs_reset = result == CUDA_ERROR_ASSERT || result == CUDA_ERROR_ILLEGAL_ADDRESS;
-                            if needs_reset {
-                                warn!("copy_h2d_from_ptr: needs reset");
-                            }
-                            return Err::<(), Cause>(Cause::Cuda{ needs_reset, msg: format!("cuMemcpyHtoDAsync_v2 failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}")});
+                            debug!("tho_cu_memcpy_htod_async failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
+                            return Err(ThoError::from_cuda_error("tho_cu_memcpy_htod_async failed", result));
                         }
                         let _ = buf_stream.1.synchronize();
                         drop(buf_stream); // return buffer/stream to pool
@@ -435,7 +425,7 @@ pub async fn copy_h2d_from_ptr(
             .collect::<Vec<_>>()
             .await
             .into_iter()
-            .collect::<Result<(), Cause>>()?;
+            .collect::<Result<(), ThoError>>()?;
     }
 
     Ok(dst_t)

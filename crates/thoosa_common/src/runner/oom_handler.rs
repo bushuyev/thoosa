@@ -405,10 +405,6 @@ fn oom_job_id(error: &ThoError) -> Option<u64> {
     }
 }
 
-fn is_retryable_oom(error: &ThoError) -> bool {
-    matches!(error.what(), Cause::OutOfMemory | Cause::AdjusterFailed) || oom_job_id(error).is_some()
-}
-
 struct ExclusiveJobGuard {
     device_idx: usize,
     job_id: Option<u64>,
@@ -567,9 +563,9 @@ where
                     match adjuster_err {
                         AdjusterError::AdjustFailed(v) => {
                             *input_select_adjusted = Some(v);
-                            Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
+                            Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
                         }
-                        AdjusterError::SomethingElse => Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string()))),
+                        AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
                     }
                 }
             }
@@ -587,9 +583,9 @@ where
                 match adjuster_err {
                     AdjusterError::AdjustFailed(v) => {
                         *task = Some(v);
-                        Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
+                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
                     }
-                    AdjusterError::SomethingElse => Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string()))),
+                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
                 }
             }
         },
@@ -610,9 +606,9 @@ where
                     match adjuster_err {
                         AdjusterError::AdjustFailed(v) => {
                             *run_context = Some(v);
-                            Err(ThoError::new_with_error(msg, Cause::AdjusterFailed))
+                            Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
                         }
-                        AdjusterError::SomethingElse => Err(ThoError::new_with_error(msg, Cause::SomethingElse("zz".to_string()))),
+                        AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
                     }
                 }
             }
@@ -682,7 +678,7 @@ where
                 os_thread_id(),
             );
 
-            if is_retryable_oom(&te) {
+            if te.is_retryable_oom() {
                 pref_oom_count();
                 debug!(
                     "OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} before adjusters",
@@ -716,7 +712,7 @@ where
                             exclusive_job.update_from_error(&te);
                             debug!("OOMHandler::run, error: on ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={} adjuster error te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
-                            if is_retryable_oom(&te) {
+                            if te.is_retryable_oom() {
                                 debug!("OOMHandler::run, error: on adjust_result ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                                 if !adjuster.degrade(&mut contexts) {
@@ -768,7 +764,7 @@ where
                                 exclusive_job.update_from_error(&te);
                                 debug!("OOMHandler::run, error: err te={te:?}");
 
-                                if is_retryable_oom(&te) {
+                                if te.is_retryable_oom() {
                                     pref_oom_count();
                                     debug!("OOMHandler::run, error: on oom ctx_id={ctx_id:?} task={:?} os_thread_id={} adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
@@ -1328,12 +1324,12 @@ mod tests {
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
         let (init_task, init_calls) = mock_runnable([
-            Err(ThoError::from(Cause::OutOfMemory)), //no adjusters
-            Err(ThoError::from(Cause::OutOfMemory)), //input adjuster
+            Err(ThoError::oom()), //no adjusters
+            Err(ThoError::oom()), //input adjuster
         ]);
 
         let (adjusted_task, adjusted_calls) = mock_runnable([
-            Err(ThoError::from(Cause::OutOfMemory)), //task adjuster
+            Err(ThoError::oom()), //task adjuster
             Ok(TestOutput::new(111.)),                    //ctx adjuster
         ]);
 
@@ -1387,7 +1383,7 @@ mod tests {
     async fn test_only_task_adjuster() {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let (init_task, init_calls) = mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
+        let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
         let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
@@ -1427,7 +1423,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (task, task_calls) = mock_runnable([
-            Err(ThoError::from(Cause::OutOfMemory)),
+            Err(ThoError::oom()),
             Ok(TestOutput::new(10.)),
         ]);
         let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
@@ -1466,7 +1462,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (task, task_calls) = mock_runnable([
-            Err(ThoError::from(Cause::OutOfMemory)),
+            Err(ThoError::oom()),
             Ok(TestOutput::new(10.)),
         ]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
@@ -1507,13 +1503,13 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
         let (init_task1, init_calls1) =
-            mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
+            mock_runnable([Err(ThoError::oom())]);
         let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
 
         let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
 
         let (init_task2, init_calls2) =
-            mock_runnable([Err(ThoError::from(Cause::OutOfMemory))]);
+            mock_runnable([Err(ThoError::oom())]);
         let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
 
         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);

@@ -957,7 +957,7 @@ where
             }
         }
 
-        Err(ThoError::new_with_error(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
+        Err(ThoError::new_with_cause(format!("DevicesWrap::take_data_prefer_device_or_any: no data for {id}"), Cause::NotFound))
     }
 
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
