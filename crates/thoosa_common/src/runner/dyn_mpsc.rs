@@ -10,6 +10,7 @@ use std::{
     },
 };
 
+#[cfg(any(test, feature = "mock_global_ctx"))]
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{error, info};
@@ -22,8 +23,6 @@ use tokio::{
 use tracing::{debug, warn};
 
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
-use thoosa_shims::context::ThoCudaContext;
-use crate::runner::global_ctx::GlobalCtx;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum JobFeedback {
@@ -336,6 +335,7 @@ impl DynamicTaskExecutor {
                 accepting_tx_for_manager,
                 accept_gate_for_manager,
                 tho_device_idx,
+                reset_fn_for_manager,
             ).await;
         });
 
@@ -496,6 +496,7 @@ impl DynamicTaskExecutor {
             let rerun_job_id = job_id_to_rerun;
             let accepting_tx = self.accepting_tx.clone();
             let reset_fn = Arc::clone(&self.reset_fn);
+            let accept_gate = Arc::clone(&self.accept_gate);
             let tho_device_idx = self.tho_device_idx;
 
 
@@ -516,24 +517,26 @@ impl DynamicTaskExecutor {
                             }
                         }
 
+                        // Close the shared gate before reporting ContextReset to this
+                        // submitter. The reset itself must not be awaited here: this job
+                        // may be a child of a suspended parent, and reset_fn can need
+                        // resources or locks that parent releases only after this result
+                        // is returned.
                         let pause_ticket = cuda_activity_gate().request_pause();
                         let _ = accepting_tx.send(false);
 
                         if pause_ticket.is_owner() {
-                            let reset_result = reset_fn(tho_device_idx).await;
-
-                            if let Err(e) = reset_result {
-                                error!("DynamicTaskExecutor::submit: CUDA context reset failed for tho_device_idx={tho_device_idx}: e={e:?}");
-                            } else {
-                                info!("DynamicTaskExecutor::submit: CUDA context was reset for tho_device_idx={tho_device_idx}");
-                            }
-
-                            cuda_activity_gate().finish_pause(pause_ticket);
-                        } else {
-                            cuda_activity_gate().wait_for_pause_to_finish(pause_ticket).await;
+                            Self::spawn_cuda_reset_task(
+                                tho_device_idx,
+                                reset_fn,
+                                accepting_tx.clone(),
+                                accept_gate,
+                                Arc::clone(&exclusive_job_id),
+                                pause_ticket,
+                                "submit",
+                            );
                         }
 
-                        let _ = accepting_tx.send(true);
                         let _ = result_tx.send(Err(ThoError::new_with_cause("Context was reset", Cause::ContextReset)));
                         return JobFeedback::Neutral;
                     } else {
@@ -587,11 +590,71 @@ impl DynamicTaskExecutor {
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
-            let result = result_rx.await?;
+            let result = result_rx.await.map_err(|_| {
+                ThoError::new_with_cause(
+                    "job was cancelled before producing a result",
+                    Cause::SubmitErrorCancelled,
+                )
+            })?;
             suspend_guard.resume().await?;
 
             return result;
         }
+    }
+
+    fn spawn_cuda_reset_task(
+        tho_device_idx: usize,
+        reset_fn: ResetFn,
+        accepting_tx: watch::Sender<bool>,
+        accept_gate: Arc<tokio::sync::RwLock<()>>,
+        exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+        pause_ticket: CudaActivityPauseTicket,
+        source: &'static str,
+    ) {
+        // The reset task owns reopening the executor. Keeping that in a Drop guard makes
+        // cancellation or reset_fn failure leave the activity gate and accepting flag in
+        // a consistent state.
+        struct ResetPauseGuard {
+            accepting_tx: watch::Sender<bool>,
+            exclusive_job_id: Arc<RwLock<Option<JobId>>>,
+            pause_ticket: CudaActivityPauseTicket,
+        }
+
+        impl Drop for ResetPauseGuard {
+            fn drop(&mut self) {
+                {
+                    let mut exclusive = self.exclusive_job_id.write();
+                    if exclusive.is_some() {
+                        warn!("DynamicTaskExecutor::spawn_cuda_reset_task: clearing stale exclusive_job_id={exclusive:?} after reset");
+                        exclusive.take();
+                    }
+                }
+                let _ = self.accepting_tx.send(true);
+                cuda_activity_gate().finish_pause(self.pause_ticket);
+            }
+        }
+
+        tokio::spawn(async move {
+            let _reset_guard = ResetPauseGuard {
+                accepting_tx,
+                exclusive_job_id,
+                pause_ticket,
+            };
+            // Hold the write side while resetting so new submissions cannot pass the
+            // read-side accept gate in the window between accepting=false and the shared
+            // activity gate becoming visible to all tasks.
+            let _accept_guard = Arc::clone(&accept_gate).write_owned().await;
+
+            if tho_device_idx > 0 {
+                if let Err(e) = reset_fn(tho_device_idx).await {
+                    error!("DynamicTaskExecutor::spawn_cuda_reset_task: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
+                } else {
+                    info!("DynamicTaskExecutor::spawn_cuda_reset_task: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
+                }
+            } else {
+                warn!("DynamicTaskExecutor::spawn_cuda_reset_task: reset requested on CPU/test executor source={source}");
+            }
+        });
     }
 
     pub fn clear_exclusive_job_id(&self, job_id: u64) {
@@ -639,6 +702,7 @@ impl DynamicTaskExecutor {
         accepting_tx: watch::Sender<bool>,
         accept_gate: Arc<tokio::sync::RwLock<()>>,
         tho_device_idx: usize,
+        reset_fn: ResetFn,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -655,19 +719,10 @@ impl DynamicTaskExecutor {
 
         let global_limit = Arc::new(AtomicU64::new(*limit_rx.borrow() as u64));
 
-        // Means: a reset has been requested and must not be forgotten.
-        // It stays true until reset_fn has actually been attempted.
-        let mut reset_requested = false;
-        let mut reset_pause_ticket = None::<CudaActivityPauseTicket>;
-
-        // While present, no submitter can pass the accept gate.
-        let mut accept_gate_guard = None::<tokio::sync::OwnedRwLockWriteGuard<()>>;
-
         loop {
             debug!(
                 "DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} \
-                 active_count={active_count} running.len={} pending.len={} global_limit={} \
-                 reset_requested={reset_requested} jobs.len={}",
+                 active_count={active_count} running.len={} pending.len={} global_limit={} jobs.len={}",
                 running.len(),
                 pending.len(),
                 global_limit.load(Ordering::Relaxed),
@@ -693,14 +748,18 @@ impl DynamicTaskExecutor {
                 &mut active_count,
                 global_limit.load(Ordering::Relaxed) as usize,
                 &accepting_tx,
-                &mut reset_requested,
-                &mut reset_pause_ticket,
+                &reset_fn,
+                &accept_gate,
+                &exclusive_job_id,
+                tho_device_idx,
             );
 
-            // Resuming existing suspended jobs is held while the shared reset gate is paused.
-            // Once it opens, exclusive_job_id is ignored for these resumes so parents can
-            // receive reset errors from nested jobs without deadlocking behind their child.
+            // During reset, no pending jobs are spawned. Resume waiters still need a
+            // path out: a child can return ContextReset while its parent is suspended,
+            // and that parent may hold cache/device resources that reset_fn needs before
+            // the reset can complete.
             if !cuda_activity_gate().is_paused() {
+                let current_exclusive_job_id = *exclusive_job_id.read();
                 Self::try_resume_waiters(
                     &mut jobs,
                     &mut active_caps,
@@ -708,29 +767,6 @@ impl DynamicTaskExecutor {
                     global_limit.load(Ordering::Relaxed) as usize,
                     None,
                 );
-            }
-
-            if reset_requested && accept_gate_guard.is_none() {
-                if let Ok(guard) = Arc::clone(&accept_gate).try_write_owned() {
-                    accept_gate_guard = Some(guard);
-                }
-            }
-
-            if reset_requested && accept_gate_guard.is_some() && jobs.is_empty() {
-
-                let mut exclusive = exclusive_job_id.write();
-                if exclusive.is_some() {
-                    warn!("DynamicTaskExecutor::run_manager: clearing stale exclusive_job_id={exclusive:?} after reset");
-                    exclusive.take();
-                }
-
-
-                reset_requested = false;
-                accept_gate_guard.take();
-                let _ = accepting_tx.send(true);
-            }
-            if !reset_requested && !cuda_activity_gate().is_paused() {
-                let current_exclusive_job_id = *exclusive_job_id.read();
                 Self::try_spawn_ready_jobs(
                     &mut pending,
                     &mut running,
@@ -742,13 +778,22 @@ impl DynamicTaskExecutor {
                     &cmd_tx_for_tasks,
                     current_exclusive_job_id,
                 );
+            } else {
+                Self::force_resume_waiters_for_unwind(
+                    &mut jobs,
+                    &mut active_caps,
+                    &mut active_count,
+                );
             }
 
-            if input_closed && pending.is_empty() && jobs.is_empty() && !reset_requested {
+            // The reset task is not joined directly; the shared gate is the lifetime
+            // marker that keeps the manager alive until reset_fn has finished and the
+            // executor has been reopened.
+            if input_closed && pending.is_empty() && jobs.is_empty() && !cuda_activity_gate().is_paused() {
                 break;
             }
 
-            if !reset_requested && !cuda_activity_gate().is_paused() && !pending.is_empty() && jobs.is_empty() {
+            if !cuda_activity_gate().is_paused() && !pending.is_empty() && jobs.is_empty() {
                 let exclusive = *exclusive_job_id.read();
 
                 warn!("DynamicTaskExecutor::run_manager: idle with pending jobs: pending_len={}, pending_front={:?}, exclusive_job_id={exclusive:?}, active_count={}, active_caps={active_caps:?}",pending.len(),pending.front().map(|j| (j.id, j.total_parallel_cap())),active_count,);
@@ -783,8 +828,10 @@ impl DynamicTaskExecutor {
                                 &mut active_count,
                                 global_limit.load(Ordering::Relaxed) as usize,
                                 &accepting_tx,
-                                &mut reset_requested,
-                                &mut reset_pause_ticket,
+                                &reset_fn,
+                                &accept_gate,
+                                &exclusive_job_id,
+                                tho_device_idx,
                             );
                         }
                         None => {
@@ -806,10 +853,6 @@ impl DynamicTaskExecutor {
                 }
 
                 _ = cuda_activity_gate().wait_if_paused(), if cuda_activity_gate().is_paused() => {}
-
-                gate_guard = Arc::clone(&accept_gate).write_owned(), if reset_requested && accept_gate_guard.is_none() => {
-                    accept_gate_guard = Some(gate_guard);
-                }
 
                 join_result = running.join_next(), if !running.is_empty() => {
                     if let Some(Err(err)) = join_result {
@@ -833,13 +876,12 @@ impl DynamicTaskExecutor {
         active_count: &mut usize,
         global_limit: usize,
         accepting_tx: &watch::Sender<bool>,
-        reset_requested: &mut bool,
-        reset_pause_ticket: &mut Option<CudaActivityPauseTicket>,
+        reset_fn: &ResetFn,
+        accept_gate: &Arc<tokio::sync::RwLock<()>>,
+        exclusive_job_id: &Arc<RwLock<Option<JobId>>>,
+        tho_device_idx: usize,
     ) {
-        debug!(
-            "DynamicTaskExecutor::run_manager: manager cmd={cmd:?} \
-             reset_requested={reset_requested}"
-        );
+        debug!("DynamicTaskExecutor::run_manager: manager cmd={cmd:?}");
 
         match cmd {
             ManagerCmd::Suspend { job_id, reply } => {
@@ -859,11 +901,21 @@ impl DynamicTaskExecutor {
                 );
             }
             ManagerCmd::RequestCudaReset { pause_ticket } => {
-                *reset_requested = true;
-                if reset_pause_ticket.is_none_or(|ticket| !ticket.is_owner()) {
-                    *reset_pause_ticket = Some(pause_ticket);
+                // request_cuda_reset() closes accepting before queueing this command.
+                // A non-owner ticket may be stale by the time the manager sees it; setting
+                // accepting=false here would leave the executor closed after the owner
+                // reset task already reopened it.
+                if pause_ticket.is_owner() {
+                    Self::spawn_cuda_reset_task(
+                        tho_device_idx,
+                        Arc::clone(reset_fn),
+                        accepting_tx.clone(),
+                        Arc::clone(accept_gate),
+                        Arc::clone(exclusive_job_id),
+                        pause_ticket,
+                        "request_cuda_reset",
+                    );
                 }
-                let _ = accepting_tx.send(false);
             }
             ManagerCmd::Recheck => {}
         }
@@ -877,8 +929,10 @@ impl DynamicTaskExecutor {
         active_count: &mut usize,
         global_limit: usize,
         accepting_tx: &watch::Sender<bool>,
-        reset_requested: &mut bool,
-        reset_pause_ticket: &mut Option<CudaActivityPauseTicket>,
+        reset_fn: &ResetFn,
+        accept_gate: &Arc<tokio::sync::RwLock<()>>,
+        exclusive_job_id: &Arc<RwLock<Option<JobId>>>,
+        tho_device_idx: usize,
     ) {
         use tokio::sync::mpsc::error::TryRecvError;
 
@@ -895,8 +949,10 @@ impl DynamicTaskExecutor {
                     active_count,
                     global_limit,
                     accepting_tx,
-                    reset_requested,
-                    reset_pause_ticket,
+                    reset_fn,
+                    accept_gate,
+                    exclusive_job_id,
+                    tho_device_idx,
                 ),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -1146,8 +1202,18 @@ impl DynamicTaskExecutor {
         job.waiting_resumes.push(reply);
 
         if activity_paused {
+            // While reset is paused, capacity accounting is secondary to liveness. Let
+            // already-running parents resume so they can observe the nested reset error
+            // and unwind; no new pending jobs are spawned until the shared gate reopens.
             if job.suspend_depth > 0 {
                 job.suspend_depth -= 1;
+            }
+            if job.suspend_depth == 0 {
+                if !job.active {
+                    job.active = true;
+                    Self::add_active(active_caps, active_count, job.cap);
+                }
+                Self::flush_waiting_resumes(job);
             }
             return;
         }
@@ -1185,6 +1251,25 @@ impl DynamicTaskExecutor {
             job.active = true;
             Self::add_active(active_caps, active_count, job.cap);
             Self::flush_waiting_resumes(job);
+        }
+    }
+
+    fn force_resume_waiters_for_unwind(
+        jobs: &mut HashMap<JobId, LiveJob>,
+        active_caps: &mut BTreeMap<usize, usize>,
+        active_count: &mut usize,
+    ) {
+        // Resumes queued before the pause may not receive a fresh Resume command. Flush
+        // only fully-unsuspended jobs so parent tasks that are already eligible to run
+        // are not stranded behind a reset that may be waiting for them to drop state.
+        for job in jobs.values_mut() {
+            if job.suspend_depth == 0 && !job.waiting_resumes.is_empty() {
+                if !job.active {
+                    job.active = true;
+                    Self::add_active(active_caps, active_count, job.cap);
+                }
+                Self::flush_waiting_resumes(job);
+            }
         }
     }
 
@@ -1378,6 +1463,15 @@ mod tests {
         let Err(ThoosaError {  what: Cause::ContextReset, ..}) = reset_err else {
             panic!("Unexpected result: {reset_err:?}")
         };
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if reset_calls.load(Ordering::SeqCst) == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("reset hook should start before running jobs finish");
         assert_eq!(reset_calls.load(Ordering::SeqCst), 1);
 
         let _ = release_tx1.send(());
@@ -1410,6 +1504,9 @@ mod tests {
                     async move {
                         debug!("test_nested_needs_reset_resumes_parent_after_reset: reset invoked");
 
+                        while !parent_exited.load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
                         reset_calls.fetch_add(1, Ordering::SeqCst);
                         Ok(())
                     }
@@ -1422,7 +1519,7 @@ mod tests {
             let exec_for_child = Arc::clone(&exec);
             let parent_exited = Arc::clone(&parent_exited);
             let reset_calls = Arc::clone(&reset_calls);
-            exec.submit(0, async move {
+            tokio::time::timeout(Duration::from_secs(2), exec.submit(0, async move {
                 debug!("test_nested_needs_reset_resumes_parent_after_reset: Parent job running");
                 let child_result: Result<(), ThoError> = exec_for_child.submit(
                     usize::MAX,
@@ -1446,7 +1543,7 @@ mod tests {
 
                 child_result
 
-            }, None).await
+            }, None)).await.expect("parent should resume and return reset error")
         };
 
 
@@ -1467,6 +1564,115 @@ mod tests {
 
         let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
         exec.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_external_reset_does_not_deadlock_suspended_parent() -> Result<(), ThoError> {
+        let reset_calls = Arc::new(AtomicUsize::new(0));
+        let parent_exited = Arc::new(AtomicBool::new(false));
+
+        let exec = Arc::new(DynamicTaskExecutor::new_with_reset_hook(
+            64,
+            NonZeroUsize::new(4).unwrap(),
+            1,
+            {
+                let reset_calls = Arc::clone(&reset_calls);
+                let parent_exited = Arc::clone(&parent_exited);
+                Arc::new(move |_device_idx| {
+                    let reset_calls = Arc::clone(&reset_calls);
+                    let parent_exited = Arc::clone(&parent_exited);
+                    async move {
+                        while !parent_exited.load(Ordering::SeqCst) {
+                            tokio::time::sleep(Duration::from_millis(10)).await;
+                        }
+                        reset_calls.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    }
+                    .boxed()
+                })
+            },
+        ));
+
+        let (child_started_tx, child_started_rx) = oneshot::channel();
+        let (release_child_tx, release_child_rx) = oneshot::channel();
+        let parent = {
+            let exec_for_parent = Arc::clone(&exec);
+            let parent_exited = Arc::clone(&parent_exited);
+            tokio::spawn(async move {
+                let exec_for_child = Arc::clone(&exec_for_parent);
+                exec_for_parent.submit(0, async move {
+                    let child_result: Result<(), ThoError> = exec_for_child.submit(
+                        usize::MAX,
+                        async move {
+                            let _ = child_started_tx.send(());
+                            let _ = release_child_rx.await;
+                            Ok(())
+                        },
+                        None,
+                    ).await;
+                    parent_exited.store(true, Ordering::SeqCst);
+                    child_result
+                }, None).await
+            })
+        };
+
+        let _ = child_started_rx.await;
+        exec.request_cuda_reset();
+        let _ = release_child_tx.send(());
+
+        tokio::time::timeout(Duration::from_secs(2), parent)
+            .await
+            .expect("parent task should not deadlock")??;
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while reset_calls.load(Ordering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+            .await
+            .expect("reset should finish after parent unwinds");
+
+        assert_eq!(1, reset_calls.load(Ordering::Relaxed));
+
+        let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
+        exec.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_stale_non_owner_reset_request_does_not_close_accepting() -> Result<(), ThoError> {
+        cuda_activity_gate().wait_if_paused().await;
+
+        let owner_ticket = cuda_activity_gate().request_pause();
+        let non_owner_ticket = cuda_activity_gate().request_pause();
+        cuda_activity_gate().finish_pause(owner_ticket);
+
+        let (accepting_tx, accepting_rx) = watch::channel(true);
+        let reset_fn: ResetFn = Arc::new(|_| async { Ok(()) }.boxed());
+        let accept_gate = Arc::new(tokio::sync::RwLock::new(()));
+        let exclusive_job_id = Arc::new(RwLock::new(None));
+        let mut jobs = HashMap::new();
+        let mut active_caps = BTreeMap::new();
+        let mut active_count = 0;
+
+        DynamicTaskExecutor::process_command(
+            ManagerCmd::RequestCudaReset {
+                pause_ticket: non_owner_ticket,
+            },
+            &mut jobs,
+            &mut active_caps,
+            &mut active_count,
+            4,
+            &accepting_tx,
+            &reset_fn,
+            &accept_gate,
+            &exclusive_job_id,
+            1,
+        );
+
+        assert!(*accepting_rx.borrow());
+        assert!(!cuda_activity_gate().is_paused());
         Ok(())
     }
 
