@@ -265,24 +265,24 @@ impl GlobalCtx {
     pub async fn dump_all_to_cpu<'a>(
         &'a self,
         required_ids: &HashMap<&'static str, &'a HashSet<&'a dyn CachableIdTr>>, //TODO key is used for tmp_cache
-        device_idx: usize,
+        tho_device_idx: usize,
         descr: &str,
     ) -> Result<(), ThoError> {
-        assert_ne!(device_idx, 0);
-        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} descr={descr}");
+        assert_ne!(tho_device_idx, 0);
+        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr}");
         let maps = self.caches_snapshot("GlobalCtx::dump_all_to_cpu: timed out waiting for caches read lock");
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {
             let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock").await;
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
-            entry.purger.purge_gpu(required_ids.get(type_name).map(|v| *v), device_idx, type_name).await?;
+            entry.purger.purge_gpu(required_ids.get(type_name).map(|v| *v), tho_device_idx, type_name).await?;
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name} descr={descr} done");
             collect_eta_record_completion(dump_eta_guard.id());
         }
 
-        self.is_all_on_cpu[device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::dump_all_to_cpu: device_idx={device_idx} required_ids={required_ids:?} descr={descr} done");
+        self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
+        debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
 
         Ok(())
     }
@@ -668,31 +668,65 @@ impl MockGlobalCtx {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
     use log::debug;
     use tch::kind::FLOAT_CUDA;
     use tch::Tensor;
     use thoosa_shared::ThoError;
+    use thoosa_shims::context::ThoCudaContext;
+    use thoosa_with_data::with_data;
     use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::common::RunCtx;
     use crate::runner::global_ctx::GlobalCtx;
-    //TODO
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    // async fn test_device_reset() -> Result<(), ThoError>{
-    //     unsafe {
-    //         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
-    //     }
-    //     GlobalCtx::init_devices(2);
-    //
-    //     let t_0 = DevicesWrap::wrap(Tensor::rand(&[100000], FLOAT_CUDA));
-    //     let sum_0 = t_0t_0.sum_dim_intlist(0, false, None).double_value(&[]);
-    //
-    //     GlobalCtx::reset_cuda_context(1).await?;
-    //
-    //     let sum_1 = t_0.sum_dim_intlist(0, false, None).double_value(&[]);
-    //
-    //     debug!("sum_0={sum_0} sum_1={sum_1}");
-    //
-    //
-    //     Ok(())
-    // }
+    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::global_ctx::CopyCtx;
+    use crate as thoosa_common;
+    use crate::dims::AnyDims;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::tmp_cache::TmpCached;
+    use crate::tho_tensor::ThoTensor;
+
+    // TODO
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_device_reset() -> Result<(), ThoError>{
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+        // let cu_ctx = ThoCudaContext::new(0 as i32)?;
+        // cu_ctx.reset()?;
+
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+
+        let tmp_cache:TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;
+
+        // let t_0 = Arc::new(DevicesWrap::wrap(ThoTensor::new((), Tensor::rand(&[100000], FLOAT_CUDA))?));
+
+        tmp_cache.insert(ThoTensor::new(777u32, Tensor::rand(&[100000], FLOAT_CUDA))?);
+        let t_0 = tmp_cache.get(&777u32).unwrap();
+        let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
+
+        let sum_0 = with_data!(root_ctx.branch("aaa".into(), false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
+            Ok::<_, ThoError>(t_0.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+        })?;
+        debug!("sum_0={sum_0}");
+
+        GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
+        GlobalCtx::reset_cuda_context(1).await?;
+        // let cu_ctx = ThoCudaContext::new(0 as i32)?;
+        // cu_ctx.reset()?;
+
+        let t_0 = tmp_cache.get(&777u32).unwrap();
+        let sum_1 = with_data!(root_ctx.branch("bbb".into(), false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
+            Ok::<_, ThoError>(t_0.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+        })?;
+
+        debug!("sum_1={sum_1}");
+
+        assert_eq!(sum_0, sum_1);
+
+        Ok(())
+    }
 
 }
