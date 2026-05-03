@@ -3883,7 +3883,7 @@ mod train_tests {
 
         assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
         assert_eq!(vec![child_run_id], store.list_output_run_ids(parent_run_id).await?);
-        assert_eq!(vec![(0, PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
+        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
 
         Ok(())
     }

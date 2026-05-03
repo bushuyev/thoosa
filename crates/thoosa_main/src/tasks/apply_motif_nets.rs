@@ -1338,10 +1338,7 @@ pub(crate) mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;
@@ -1489,8 +1486,7 @@ pub(crate) mod tests {
         // log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id: RunId = 1;
         let select_motifs_run_id: RunId = 2;
@@ -1584,9 +1580,7 @@ pub(crate) mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id:RunId = 1;
         let select_motifs_run_id:RunId = 2;

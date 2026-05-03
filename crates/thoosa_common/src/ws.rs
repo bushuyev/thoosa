@@ -845,6 +845,7 @@ fn _mock_simp(
     ws_mock.expect_sample_rate().return_const(sample_rate);
     ws_mock.expect_channels().return_const(channels);
     ws_mock.expect_max_input().return_const(max_input);
+    ws_mock.expect_import_tensor().return_const(Ok(ResourceStats::new(vec![20, 100])));
     ws_mock
 }
 

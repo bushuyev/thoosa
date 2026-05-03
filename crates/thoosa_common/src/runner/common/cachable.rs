@@ -402,14 +402,6 @@ where
 }
 
 
-// impl<O, S> SelectMode<S> for CpuOrGpu<O>
-// where
-//     O:Data + CopyToDevice+ WithId + Send + Sync + Select<S>,
-//     S:Clone
-// {
-// }
-
-
 impl<O> DevicesWrapCopyMode<O> for CpuOrGpu<O>
 where
     O:Data<M=Self> + CopyToDevice + WithId + Send + Sync
@@ -458,21 +450,21 @@ where
         }
     }
 
-    async fn load_from_any_device_(wrap: &DevicesWrap<O>, to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoError>
+    async fn load_from_any_device_(wrap: &DevicesWrap<O>, to_tho_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoError>
     where
         Self: Sized
     {
         //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
         //TODO add GlobalCtx::purge_lock just in case?
-        debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_device_idx}",wrap.id);
-        trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
-        assert!(wrap.cached_data.len() > to_device_idx, "Device index {to_device_idx}(cache len is {}) too big {:?}",wrap.cached_data.len(), wrap.id);
+        debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx}",wrap.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
+        assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
 
-        if to_device_idx != 0 {
+        if to_tho_device_idx != 0 {
             *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::load_from_any_device_ on_cpu_since.write") = None;
         }
 
-        let read_guard = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
+        let read_guard = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
 
         if read_guard.is_some() {
             Ok(tokio::sync::RwLockReadGuard::map(
@@ -482,49 +474,48 @@ where
         } else {
             drop(read_guard);
 
-            debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_device_idx}",wrap.id);
+            debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}",wrap.id);
 
             for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
                 let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
 
-                if source_device_idx != to_device_idx && source_read_guard.is_some() {
+                if source_device_idx != to_tho_device_idx && source_read_guard.is_some() {
                     drop(source_read_guard);
-                    return wrap.copy_and_get(source_device_idx, to_device_idx).await;
+                    return wrap.copy_and_get(source_device_idx, to_tho_device_idx).await;
                 }
             }
             Err(Cause::NotFound.into())
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a
     {
         Box::pin(async move {
-            // let mut permits_ctx = permits_ctx;
-            // if permits_ctx.acquired_permits() == 0 {
-            //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-            //     permits_ctx.add_permit(permit);
-            // }
 
-
-            match wrap.load_from_any_device_(to_device_idx).await {
+            match wrap.load_from_any_device_(to_tho_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
 
-                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                    let r =DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                    stream.synchronize()?;
-                    r
+                    if to_tho_device_idx > 0 {
+                        let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
+                        let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                        let r = DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                        stream.synchronize()?;
+                        r
+                    }  else {
+                        DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                    }
+
                 }
                 Err(e) => Err(e),
             }
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
@@ -532,12 +523,9 @@ where
         P: RunCtx
     {
         let permits_ctx = permits_ctx;
-        // if permits_ctx.acquired_permits() == 0 {
-        //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-        //     permits_ctx.add_permit(permit);
-        // }
 
-        let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
+
+        let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
 
         if read_guard.is_some() {
             let base: &O = read_guard
@@ -553,7 +541,7 @@ where
         drop(read_guard);
 
         for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-            if source_device_idx == to_device_idx {
+            if source_device_idx == to_tho_device_idx {
                 continue;
             }
 
@@ -562,15 +550,20 @@ where
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t: O = src.subview(selector.clone())?;
 
-                debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
 
-                let data = sub_t.copy_to_device(to_device_idx).await?;
+                let data = sub_t.copy_to_device(to_tho_device_idx).await?;
 
-                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                let r =DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                stream.synchronize()?;
-                return r;
+                if to_tho_device_idx > 0 {
+                    let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    stream.synchronize()?;
+                    return r;
+                } else {
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                }
+
             }
         }
 
@@ -1370,7 +1363,7 @@ mod tests {
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoError> {
 
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let data = MockDataWithId::whatever();
         let tested = super::DevicesWrap::wrap(data);

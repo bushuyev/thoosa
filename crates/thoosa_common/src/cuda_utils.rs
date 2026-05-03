@@ -918,7 +918,7 @@ mod tests {
     #[tokio::test]
     async fn roundtrip_pack_unpack_copy() -> Result<(), ThoError>{
         use tch::{Device, Kind, Tensor};
-        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
