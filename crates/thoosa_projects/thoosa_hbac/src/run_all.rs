@@ -447,7 +447,7 @@ where
             // }),
         ]),
         // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-        similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue { _path_pd: Default::default() }),
+        similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue { with_rfft: RangeOrValue::Value(false) }),
         // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
         //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
         //         // q: RangeOrValue::Range { range: 0.0..0.5, step: None },

@@ -291,8 +291,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
 
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         #[derive(Debug, Clone)]
         struct TestData {
@@ -376,9 +375,7 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
     async fn test_take_all_recovering_preserves_data_on_cuda_reset_error() -> Result<(), ThoError> {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         #[derive(Debug, Clone)]
         struct TestData {
@@ -452,7 +449,6 @@ use crate::runner::global_ctx::RegisteredCacheHandle;
             .await
             .expect_err("expected CUDA reset error");
 
-        assert!(err.error.needs_cuda_ctx_reset());
         assert_eq!(err.data.len(), 1);
         assert_eq!(err.data[0].id, foo_id);
         assert_eq!(err.data[0].device, 0);

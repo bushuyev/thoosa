@@ -129,7 +129,7 @@ impl GlobalCtx {
 
     pub fn get_executor(&self, tho_device:usize) -> &DynamicTaskExecutor {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.executors.len={}", self.executors.len());
-        &self.executors[tho_device -1]
+        &self.executors[tho_device.saturating_sub(1)]//tho_device is 0 in tests
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
@@ -588,11 +588,11 @@ pub mod mock_global_ctx {
         }
 
         #[cfg(any(test, feature = "mock_global_ctx"))]
-        pub fn install_global_ctx_mock() -> impl Drop {
+        pub fn install_global_ctx_mock(use_real_ctx: bool) -> impl Drop {
             debug!("install_global_ctx_mock");
             use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
             let ctx = MockGlobalCtx::global_context();
-            if unsafe {USE_REAL_CTX} {//TODO make it param
+            if use_real_ctx {
                 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
                 let real: &'static RealGlobalCtx = RealGlobalCtx::real_global();
@@ -661,7 +661,8 @@ pub mod mock_global_ctx {
 #[cfg(any(test, feature = "mock_global_ctx"))]
 impl MockGlobalCtx {
     pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
-        GlobalCtx::real_global().copy_ctx(device).await
+        static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
+        COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).read().await
     }
 }
 

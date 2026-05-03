@@ -241,14 +241,14 @@ where
     pd_rc: PhantomData<(RC, &'z RCC)>,
 }
 
-#[cfg(any(test, feature = "mock_global_ctx"))]
+#[cfg(test)]
 fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
-    debug!("OOMHandler::oom_executor: for mock");
+    warn!("OOMHandler::oom_executor: for mock");
     static EXECUTOR: std::sync::OnceLock<crate::runner::dyn_mpsc::DynamicTaskExecutor> = std::sync::OnceLock::new();
     EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16, std::num::NonZeroUsize::new(1).expect("non-zero")))
 }
 
-#[cfg(not(any(test, feature = "mock_global_ctx")))]
+#[cfg(not(test))]
 fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
     GlobalCtx::global().get_executor(tho_device_idx)
 }
@@ -641,18 +641,8 @@ where
     let mut task = Some(task);
     let mut run_context = Some(run_context);
 
-    debug!(
-        "OOMHandler::run: 0.  ctx_id={ctx_id:?} task={:?} os_thread_id={} input.id={input_id_dbg}",
-        task.as_ref().expect("run_with_runner_impl: missing task"),
-        os_thread_id(),
-    );
-
-    debug!(
-        "OOMHandler::run: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} acquired_permits={:?}",
-        task.as_ref().expect("run_with_runner_impl: missing task"),
-        os_thread_id(),
-        run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),
-    );
+    debug!("OOMHandler::run: 0.  ctx_id={ctx_id:?} task={:?} os_thread_id={} input.id={input_id_dbg}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id());
+    debug!("OOMHandler::run: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} acquired_permits={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
     let mut i = 0;
     let mut input_select_adjusted: Option<S> = None;
@@ -1307,7 +1297,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_task_context_once() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let input_adj_calls = Arc::new(AtomicUsize::new(0));
         let mut input_adj = MockInputAdjuster::new();
@@ -1381,7 +1371,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_task_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
@@ -1420,7 +1410,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_input_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::oom()),
@@ -1459,7 +1449,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_run_ctx_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::oom()),
@@ -1500,7 +1490,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_tasks() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let (init_task1, init_calls1) =
             mock_runnable([Err(ThoError::oom())]);

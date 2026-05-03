@@ -584,15 +584,10 @@ impl DynamicTaskExecutor {
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
-            let result = result_rx.await;
+            let result = result_rx.await?;
             suspend_guard.resume().await?;
 
-            return result.map_err(|_| {
-                ThoError::new_with_cause(
-                    "job was cancelled before producing a result",
-                    Cause::SubmitErrorClosed,
-                )
-            })?;
+            return result;
         }
     }
 
@@ -1431,7 +1426,7 @@ mod tests {
                         reset_calls.fetch_add(1, Ordering::SeqCst);
                         Ok(())
                     }
-                        .boxed()
+                    .boxed()
                 })
             },
         ));

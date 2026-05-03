@@ -831,6 +831,7 @@ mod tests {
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::common::{MockRunCtx, RunCtx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_main::data::parquet_to_tensor_by_path;
     use thoosa_main::random_non_overlapping_slices;
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -1010,7 +1011,8 @@ mod tests {
             || super::labeled_resourses(Path::new("test_data/eeg"), "train_10.csv"),
             // None::<Box<dyn Fn(String) -> Result<Tensor, ThoosaError> + Sync + Send>>,
             |key| {
-                Tensor::load(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str())
+
+                parquet_to_tensor_by_path(format!("test_data/eeg/train_eegs/{}.parquet", key).as_str(), Cpu)
                     .map_err(|e| e.into())
             },
             None,
@@ -1020,7 +1022,7 @@ mod tests {
             },
         ).await?;
 
-        let labels = store.list_labels(true).await?;
+        let labels = store.list_labels(false).await?;
 
         assert_eq!(
             vec!["seizure", "lpd", "gpd", "lrda", "grda", "other"],

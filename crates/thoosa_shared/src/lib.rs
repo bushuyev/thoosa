@@ -1259,7 +1259,9 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 impl Debug for ThoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut debug_struct = f.debug_struct("ThoosaError");
-        let mut x = debug_struct.field("msg", &self.msg);
+        let mut x = debug_struct
+            .field("msg", &self.msg)
+            .field("cause", &self.what);
 
         // #![feature(backtrace_frames)]
         for (i, frame) in self.backtrace.frames().iter().enumerate() {

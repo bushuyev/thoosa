@@ -874,8 +874,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_run_mel_path_1_channel() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
@@ -1142,8 +1141,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn heavy_run_mel_path_3_channel() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;

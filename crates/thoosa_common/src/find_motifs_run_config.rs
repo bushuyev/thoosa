@@ -302,7 +302,9 @@ pub struct PearsonCorrConfig {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
 pub struct DotProductConfig {
-
+    #[in_map]
+    #[run_config]
+    pub with_rfft: bool,
 }
 
 //TODO change to not/normalized

@@ -1693,7 +1693,7 @@ mod tests {
         F:Fn((Vec<i64>, Option<Vec<i64>>))->DistsMaskType + Send + Sync + 'static
     {
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let tensor_len = 10usize;
         let unfold_size = 2i64;

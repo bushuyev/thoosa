@@ -871,7 +871,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let mut ctx = RunCtxImpl::new(1, "test");
 
@@ -921,7 +921,7 @@ mod tests {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
         let mut ctx = RunCtxImpl::new(0, "test");
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
@@ -973,7 +973,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
         let mut ctx = RunCtxImpl::new(1, "test");
 
 

@@ -12,7 +12,7 @@ use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
 use thoosa_common::debug_plot;
-use thoosa_common::find_motifs_run_config::SimilarityMetric;
+use thoosa_common::find_motifs_run_config::{DotProductConfig, SimilarityMetric};
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2, z_norm_dims};
 use thoosa_shared::{panic_to_err, ThoError};
 use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
@@ -169,7 +169,7 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
             }
         }
         SimilarityMetric::PearsonCorr(_) => Ok(pearson_corr_distance_matrix_0_2(t_0, t_1, 1e-8)?),
-        SimilarityMetric::DotProduct(_) => {
+        SimilarityMetric::DotProduct(DotProductConfig { with_rfft }) => {
             debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?}");
 
             for slice in 0..t_0.size()[1] {
@@ -179,13 +179,16 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
                 debug_plot!(&t_1.i((0..1, slice, ..)), "rfft_input_t_1", plot_repeats=t_1.size()[1] as u64)?;
             }
 
-            let freqs_t_0 = t_0.f_totype(Float)?.f_fft_rfft(None, 2, "backward")?.f_abs()?;
-            let freqs_t_1 = t_1.f_totype(Float)?.f_fft_rfft(None, 2, "backward")?.f_abs()?;
+            let (t_0, t_1) = if with_rfft {
+                let freqs_t_0 = t_0.f_totype(Float)?.f_fft_rfft(None, 2, "backward")?.f_abs()?;
+                let freqs_t_1 = t_1.f_totype(Float)?.f_fft_rfft(None, 2, "backward")?.f_abs()?;
 
-            debug!("clc_d2_similarity: freqs_t_0={freqs_t_0:?} freqs_t_0={freqs_t_0:?}");
+                debug!("clc_d2_similarity: freqs_t_0={freqs_t_0:?} freqs_t_0={freqs_t_0:?}");
 
-            let t_1 = z_norm_2(&freqs_t_1, 2)?;
-            let t_0 = z_norm_2(&freqs_t_0, 2)?;
+                (&z_norm_2(&freqs_t_0, 2)?, &z_norm_2(&freqs_t_1, 2)?)
+            } else {
+                (t_0, t_1)
+            };
 
             debug!("clc_d2_similarity: t_0={t_0:?} t_1={t_1:?} /z_norm_2");
 

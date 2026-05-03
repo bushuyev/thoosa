@@ -2264,10 +2264,10 @@ mod cli_tests {
     }
 
     #[test]
-    fn test_mel_patch_command_parses() {
+    fn test_bucket_command_parses() {
         let cli = Cli::parse_from([
             "thoosa_main",
-            "mel-patch",
+            "bucket",
             "--resources", "group:find",
             "--run-config-cnt", "{bucket_count:256,min_slices:10,max_slices:100}",
         ]);
@@ -2285,7 +2285,7 @@ mod cli_tests {
     fn test_mel_patch_opt_command_parses() {
         let cli = Cli::parse_from([
             "thoosa_main",
-            "mel-patch-opt",
+            "bucket-opt",
             "--resources", "group:find",
             "--run-config-cnt", "{bucket_count:{range:{start:64,end:256},step:null},min_slices:10,max_slices:100}",
             "--opt-max-evals", "12",
@@ -2495,8 +2495,7 @@ mod cli_tests {
     async fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
 
         GlobalCtx::init_devices(2);
-        // unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let (pulse_triangle_t, intervals, _) = resource_tensor_two_easy_motifs(
             1000,
