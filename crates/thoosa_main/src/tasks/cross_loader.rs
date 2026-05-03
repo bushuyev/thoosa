@@ -1452,7 +1452,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_loader_adjuster() -> Result<(), ThoError> {
-        let ctx = GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ca = CacheArea::new(1);
         let batch_0_len = 2;
@@ -1506,6 +1507,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_loader_adjuster_degrades_to_slice() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         type AdjusterStage = mock_cross_loader_clc::MockCrossLoaderClc<TestBatchOutput, RunCtxImpl>;
 
@@ -1575,6 +1577,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_cross_loader_adjuster_slice_advances_resources() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         type AdjusterStage = mock_cross_loader_clc::MockCrossLoaderClc<TestBatchOutput, RunCtxImpl>;
 
@@ -1891,6 +1894,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let resource_a: Resource = (1, 1, "resource_a", 2).into();
         let resource_b: Resource = (2, 1, "resource_b", 2).into();
@@ -2063,6 +2067,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_flushes_before_large_resource() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let resource_small: Resource = (1, 1, "resource_small", 2).into();
         let resource_large: Resource = (2, 1, "resource_large", 8).into();
@@ -2181,6 +2186,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_cross_loader_splits_large_tensor() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let tensor_len = 8usize;
         let chunk_size = 3usize;

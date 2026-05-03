@@ -15,6 +15,7 @@ use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_ERROR_ASSERT, CUDA_ERROR_ILLEGAL_ADDRESS, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
 use crate::copy_ctx::CopyCtx;
+use crate::runner::global_ctx::GlobalCtx;
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
@@ -932,7 +933,7 @@ mod tests {
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
         let packed_mask = pack_bits_bool(&mask)?;
-        let packed = CopyCtx::instance(Cuda(0)).copy(&packed_mask, 0, Uint8).await?;
+        let packed = GlobalCtx::global().copy_ctx(Cuda(0)).await.copy(&packed_mask, 0, Uint8).await?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
@@ -977,7 +978,7 @@ where
     }
 
     let cuda_device = (tho_device_idx - 1) as i32;
-    let stream = CopyCtx::instance(0).acquire_stream().await;//ThoCudaStream::from_pool(cuda_device, high_pri)?;//
+    let stream = GlobalCtx::global().copy_ctx(0).await.acquire_stream().await;//ThoCudaStream::from_pool(cuda_device, high_pri)?;//
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
     Ok((out, Some(stream)))
 }

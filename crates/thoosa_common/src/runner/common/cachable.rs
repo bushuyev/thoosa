@@ -1,6 +1,8 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
 use crate as thoosa_common;
+
+use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
@@ -10,7 +12,7 @@ use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
 use log::{debug, error, trace, warn};
-use mockall_double::double;
+
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;

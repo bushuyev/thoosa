@@ -87,28 +87,6 @@ impl CopyCtx {
         self.bufs_pool = Self::build_pool(buffs, self.buf_size, &self.cu_ctx)
     }
 
-    pub fn instance<D:Into<ThoDevice>>(device: D) -> &'static CopyCtx {
-        let device:ThoDevice = device.into();
-
-        assert_ne!(device, ThoDevice::from(Cpu), "CopyCtx expects cuda device");
-        static INSTANCE: OnceLock<Vec<CopyCtx>> = OnceLock::new();
-
-        let gpu_device_ordinal = device.gpu_ordinal();
-        debug!("CopyCtx::instance: device={device:?} device.gpu_ordinal={}", gpu_device_ordinal);
-
-        INSTANCE.get_or_init(|| {
-            // #[cfg(test)]
-            // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
-
-            let num_gpu_devices = GlobalCtx::global().device_count() - 1;
-            debug!("CopyCtx::instance, init: num_gpu_devices={num_gpu_devices}");
-
-            // Self::make_instance(2.0, 64)
-            (0..num_gpu_devices).map(|_|Self::make_instance(0.2, 16)).collect()//MAX 32,  leave 16 for clc https://github.com/pytorch/pytorch/issues/34878
-
-        }).get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}"))
-    }
-
     //TODO these are 'exec' streams, not for copy
     pub async fn acquire_stream(&self) -> Guard<ThoCudaStream> {
         self.stream_pool.acquire().await

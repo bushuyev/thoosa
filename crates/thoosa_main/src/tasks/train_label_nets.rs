@@ -764,6 +764,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::batches::AsyncDataBatch;
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
@@ -1025,6 +1026,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_resources_batch() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let resources_1_train = Arc::new(vec![
             Resource::new(0, 1, "aaa_1_tr", 10),
@@ -1105,6 +1107,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_1_resource_batch() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let resources_1_train = Arc::new(vec![
             Resource::new(0, 1, "aaa_1_tr", 10),

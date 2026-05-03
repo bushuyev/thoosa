@@ -108,7 +108,7 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_0() {
+    async fn test_streams() {
 
         fn run_tensor_ops(label:&str) {
             let inst = Instant::now();
