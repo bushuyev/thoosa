@@ -713,7 +713,7 @@ mod tests {
         debug!("sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-        GlobalCtx::reset_cuda_context(1).await?;
+        // GlobalCtx::reset_cuda_context(1).await?;
         // let cu_ctx = ThoCudaContext::new(0 as i32)?;
         // cu_ctx.reset()?;
 

@@ -576,6 +576,7 @@ mod tests {
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::Simple;
     use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
     use thoosa_common::ws::mock_ws_simp;
@@ -719,6 +720,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_seq_scan_stage_runs() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+
         let resources = vec![Resource::new(1, 1, "r0", 6), Resource::new(2, 1, "r1", 6)];
         let resources_group = ResourceType::List(resources.iter().map(|resource| resource.file_stem().to_string()).collect());
         let store = Arc::new(
