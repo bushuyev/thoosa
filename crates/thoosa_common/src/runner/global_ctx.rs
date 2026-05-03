@@ -91,12 +91,10 @@ impl GlobalCtx {
 
         assert!(num_devices > 0);//TODO test if it works without GPU
 
-
-
         Self {
             num_devices,
-            executors: (1..num_devices).map(|device_idx| {
-                DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(16).unwrap(), device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+            executors: (1..num_devices).map(|tho_device_idx| {
+                DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(16).unwrap(), tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             })
             .collect(),
 
@@ -115,21 +113,16 @@ impl GlobalCtx {
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
         async move {
-            info!("DynamicTaskExecutor::reset_cuda_context: tho_device_idx={tho_device_idx}");
+            info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
             GlobalCtx::global().drop_device(tho_device_idx, "drop").await?;
 
             let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
             cu_ctx.reset()?;
-            // let (buffs, buf_size) = {
-            //     let copy_ctx = GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].read().await;
-            //     (copy_ctx.buffs, copy_ctx.buf_size)
-            // };
-            // *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::new(buffs, buf_size);
+
             *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance(0.2, 16);
 
-
-            info!("DynamicTaskExecutor::reset_cuda_context: done");
+            info!("GlobalCtx::reset_cuda_context: done");
             Ok(())
         }.boxed()
     }

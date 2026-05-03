@@ -196,9 +196,8 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
-        //train_label_nets_run_id set in TrainLabelNetsOutput::save
-        let mut input_run_ids = self.train_label_nets_run_id.map(|train_label_nets_run_id| vec![train_label_nets_run_id]).expect("no train_label_nets_run_id");
 
+        let mut input_run_ids = self.train_label_nets_run_id.map(|train_label_nets_run_id| vec![train_label_nets_run_id]).expect("no train_label_nets_run_id");
 
         let run_config_id = store.save_run_config(
             Some(input_run_ids.as_slice()),//it's used as input for TrainLabelNetsOutput
@@ -214,6 +213,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
                 &self.var_store,
                 &self.label_node_params,
             )?;
+
         debug!("TrainLabelNetsRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
         store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss, Some(self.motif_nets_ids.clone())).await?;
@@ -267,8 +267,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         ).await?;
 
         ws.read()
-            .save_final_net(run_config_id, &self.var_store, &self.final_node_params)
-            .expect("save_final_model failed");
+            .save_final_net(run_config_id, &self.var_store, &self.final_node_params)?;
 
         Ok(run_config_id)
     }
@@ -400,9 +399,9 @@ DO: Dims + Send + 'static {
 
         let mut var_store = VarStore::new(ThoDevice::from(dst_device).into());
 
-        let module = builder(&var_store.root()).expect("module builder failed while copying to device");
+        let module = builder(&var_store.root())?;
 
-        var_store.copy(&self.var_store).expect("failed to copy VarStore weights");
+        var_store.copy(&self.var_store)?;
 
         var_store.freeze();
 
@@ -907,22 +906,6 @@ impl MotifNetParams {
 
     pub fn new_cosine(num_features: u32, a: f64, b: f64) -> Self {
         Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b)))
-    }
-
-
-    pub fn from_properties_map(properties: HashMap<String, Val>) -> Self {
-        MotifNetParams::new(
-            properties
-                .get("num_features")
-                .expect(format!("no num_features in {:?}", properties).as_str())
-                .try_into()
-                .expect("num_features as_i64"),
-            1,
-            1,
-            100,
-            32,
-            10,
-        )
     }
 
     pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
