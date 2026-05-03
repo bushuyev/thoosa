@@ -451,9 +451,6 @@ where
         job_id_to_rerun: Option<u64>,
     ) -> Result<R::Out, ThoError>;
 
-    fn requires_all_done(&self) -> bool {
-        false
-    }
 }
 
 struct SharedRunnerRetryAdapter<W, Run> {
@@ -524,9 +521,6 @@ where
         }
     }
 
-    fn requires_all_done(&self) -> bool {
-        true
-    }
 }
 
 async fn apply_adjuster<'a, R, IC, RC, RCC, S>(
@@ -737,9 +731,6 @@ where
                                 contexts.input.add_partial_output(v).await;
 
                                 let all_done = contexts.input.all_done();
-                                if runner.requires_all_done() {
-                                    assert!(all_done, "not yet all_done");
-                                }
 
                                 debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
