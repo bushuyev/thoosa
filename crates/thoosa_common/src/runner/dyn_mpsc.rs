@@ -283,6 +283,8 @@ impl Debug for DynamicTaskExecutor {
 }
 
 impl DynamicTaskExecutor {
+
+    #[cfg(any(test, feature = "mock_global_ctx"))]
     pub fn new(queue_capacity: usize, initial_limit: NonZeroUsize) -> Self {
         Self::new_inner(
             queue_capacity,
@@ -295,10 +297,10 @@ impl DynamicTaskExecutor {
     pub fn new_with_reset_hook(
         queue_capacity: usize,
         initial_limit: NonZeroUsize,
-        device_idx: usize,
+        tho_device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
-        Self::new_inner(queue_capacity, initial_limit, device_idx, reset_fn)
+        Self::new_inner(queue_capacity, initial_limit, tho_device_idx, reset_fn)
     }
 
     fn new_inner(
@@ -307,10 +309,7 @@ impl DynamicTaskExecutor {
         tho_device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
-        debug!(
-            "DynamicTaskExecutor::new_inner: queue_capacity={queue_capacity} \
-             initial_limit={initial_limit} tho_device_idx={tho_device_idx}"
-        );
+        debug!("DynamicTaskExecutor::new_inner: queue_capacity={queue_capacity} initial_limit={initial_limit} tho_device_idx={tho_device_idx}");
 
         let (tx, rx) = mpsc::channel(queue_capacity);
         let (limit_tx, limit_rx) = watch::channel(initial_limit.get());
@@ -336,8 +335,7 @@ impl DynamicTaskExecutor {
                 accept_gate_for_manager,
                 tho_device_idx,
                 reset_fn_for_manager,
-            )
-                .await;
+            ).await;
         });
 
         Self {
@@ -352,14 +350,6 @@ impl DynamicTaskExecutor {
             reset_fn,
         }
     }
-
-    //  fn reset_cuda_context(device_idx: usize) -> Result<(), ThoError> {
-    //     let cu_ctx = ThoCudaContext::new((device_idx - 1) as i32).map_err(ThoError::new)?;
-    //     cu_ctx.reset()?;
-    //
-    //     warn!("DynamicTaskExecutor::reset_cuda_context: done");
-    //     Ok(())
-    // }
 
     fn closed_error(msg: impl Into<String>) -> ThoError {
         ThoError::new_with_cause(msg.into(), Cause::SubmitErrorClosed)
@@ -413,12 +403,9 @@ impl DynamicTaskExecutor {
     {
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
         let job_id = job_id_to_rerun.unwrap_or_else(|| NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed));
-        let mut fut = Some(fut);
 
-        debug!(
-            "DynamicTaskExecutor::submit: job_id={job_id} \
-             max_other_parallel={max_other_parallel:?} parent={parent:?}"
-        );
+
+        debug!("DynamicTaskExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         loop {
             self.wait_until_accepting(parent.as_ref()).await?;
@@ -510,48 +497,47 @@ impl DynamicTaskExecutor {
             let reset_fn = Arc::clone(&self.reset_fn);
             let tho_device_idx = self.tho_device_idx;
 
-            let fut = fut.take().expect("future must only be moved into a submitted job");
+
             let wrapped = async move {
                 let result = fut.await;
 
-                let needs_reset = result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset());
-                if needs_reset {
-                    warn!("DynamicTaskExecutor::submit: job_id={job_id} needs CUDA reset");
+                if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
+                    if tho_device_idx > 0 {
+                        warn!("DynamicTaskExecutor::submit: job_id={job_id} needs CUDA reset");
 
-                    if rerun_job_id == Some(job_id) {
-                        let mut exclusive = exclusive_job_id.write();
-                        if exclusive.as_ref() == Some(&job_id) {
-                            warn!("DynamicTaskExecutor::submit: clearing exclusive_job_id={job_id} because rerun requested CUDA reset");
-                            exclusive.take();
-                        }
-                    }
-
-                    let pause_ticket = cuda_activity_gate().request_pause();
-                    let _ = accepting_tx.send(false);
-
-                    if pause_ticket.is_owner() {
-                        let reset_result = if tho_device_idx > 0 {
-                            reset_fn(tho_device_idx).await
-                        } else {
-                            warn!("DynamicTaskExecutor::submit: reset requested on CPU/test executor");
-                            Ok(())
-                        };
-
-                        if let Err(e) = reset_result {
-                            error!("DynamicTaskExecutor::submit: CUDA context reset failed for device_idx={tho_device_idx}: e={e:?}");
-                        } else {
-                            info!("DynamicTaskExecutor::submit: CUDA context was reset for device_idx={tho_device_idx}");
+                        if rerun_job_id == Some(job_id) {
+                            let mut exclusive = exclusive_job_id.write();
+                            if exclusive.as_ref() == Some(&job_id) {
+                                warn!("DynamicTaskExecutor::submit: clearing exclusive_job_id={job_id} because rerun requested CUDA reset");
+                                exclusive.take();
+                            }
                         }
 
-                        cuda_activity_gate().finish_pause(pause_ticket);
+                        let pause_ticket = cuda_activity_gate().request_pause();
+                        let _ = accepting_tx.send(false);
+
+                        if pause_ticket.is_owner() {
+                            let reset_result = reset_fn(tho_device_idx).await;
+
+                            if let Err(e) = reset_result {
+                                error!("DynamicTaskExecutor::submit: CUDA context reset failed for tho_device_idx={tho_device_idx}: e={e:?}");
+                            } else {
+                                info!("DynamicTaskExecutor::submit: CUDA context was reset for tho_device_idx={tho_device_idx}");
+                            }
+
+                            cuda_activity_gate().finish_pause(pause_ticket);
+                        } else {
+                            cuda_activity_gate().wait_for_pause_to_finish(pause_ticket).await;
+                        }
+
+                        let _ = accepting_tx.send(true);
+                        let _ = result_tx.send(result);
+                        return JobFeedback::Neutral;
                     } else {
-                        cuda_activity_gate().wait_for_pause_to_finish(pause_ticket).await;
+                        warn!("DynamicTaskExecutor::submit: reset requested on CPU/test executor");
                     }
+                };
 
-                    let _ = accepting_tx.send(true);
-                    let _ = result_tx.send(result);
-                    return JobFeedback::Neutral;
-                }
                 let is_oom = result.as_ref().is_err_and(|e| e.is_oom());
                 let is_ok = result.is_ok();
 

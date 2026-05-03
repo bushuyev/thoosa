@@ -6,7 +6,7 @@ It's important to keep big tensors (or big number of small tensors) between asyn
 The app’s entry point is run_cli (crates/thoosa_main/src/cli.rs), which is invoked from the sample projects (crates/thoosa_projects/thoosa_hbac/src/main.rs and thoosa_projects/thoosa_hbac/src/main.rs).
 Currently, the only implemented workflow is time series classification, located in crates/thoosa_main/src/tasks.
 async engine is Tokio, rayon is used to parallel sync functions. 
-Data (run  resources, labels, configuration parameters etc) is kept in sqlite database, schema can be found in SqlStore::create_tables (crates/thoosa_store/src/lib.rs:2737).
+Data (run  resources, labels, configuration parameters etc) is kept in sqlite database, schema can be found in SqlStore::create_tables (crates/thoosa_store/src/lib.rs).
 
 
 ## Important Agent Rules
