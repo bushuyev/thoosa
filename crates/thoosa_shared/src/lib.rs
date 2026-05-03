@@ -216,6 +216,7 @@ impl CudaActivityGate {
     }
 
     pub fn request_pause(&self) -> CudaActivityPauseTicket {
+        debug!("CudaActivityGate::request_pause: self={self:?}");
         let mut state = self.state.lock();
         let ticket = CudaActivityPauseTicket {
             generation: state.generation,
@@ -231,6 +232,7 @@ impl CudaActivityGate {
     }
 
     pub fn finish_pause(&self, ticket: CudaActivityPauseTicket) {
+        debug!("CudaActivityGate::finish_pause: self={self:?}");
         if !ticket.owner {
             return;
         }
@@ -244,6 +246,7 @@ impl CudaActivityGate {
     }
 
     pub async fn wait_if_paused(&self) {
+        debug!("CudaActivityGate::wait_if_paused: self={self:?}");
         loop {
             let notified = {
                 let state = self.state.lock();
@@ -257,6 +260,7 @@ impl CudaActivityGate {
     }
 
     pub async fn wait_for_pause_to_finish(&self, ticket: CudaActivityPauseTicket) {
+        debug!("CudaActivityGate::wait_for_pause_to_finish: self={self:?}");
         loop {
             let notified = {
                 let state = self.state.lock();
@@ -270,6 +274,7 @@ impl CudaActivityGate {
     }
 
     pub async fn wait_until_paused(&self) {
+        debug!("CudaActivityGate::wait_until_paused: self={self:?}");
         loop {
             let notified = {
                 let state = self.state.lock();
@@ -487,7 +492,8 @@ pub enum Cause {
     NotFound,
     SubmitErrorClosed,
     SubmitErrorCancelled,
-    JobError{job_id:u64, inner:Box<ThoosaError>}
+    JobError{job_id:u64, inner:Box<ThoosaError>},
+    ContextReset
 }
 
 pub struct ThoError {

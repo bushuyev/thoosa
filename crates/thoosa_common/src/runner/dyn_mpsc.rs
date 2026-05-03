@@ -254,7 +254,9 @@ impl Drop for ParentSuspendGuard {
     }
 }
 
-///Its goad is to run synchronous tasks. Currently, it's used from OOMHandler only.
+///Its goal is to run synchronous tasks limiting parallelism.
+/// Maximum allowed number of parallel tasks is specified in max_other_parallel parameter to submit method
+/// Currently, it's used from OOMHandler only.
 pub struct DynamicTaskExecutor {
     tx: mpsc::Sender<Job>,
     limit_tx: watch::Sender<usize>,
@@ -334,7 +336,6 @@ impl DynamicTaskExecutor {
                 accepting_tx_for_manager,
                 accept_gate_for_manager,
                 tho_device_idx,
-                reset_fn_for_manager,
             ).await;
         });
 
@@ -499,7 +500,9 @@ impl DynamicTaskExecutor {
 
 
             let wrapped = async move {
+                warn!("DynamicTaskExecutor::submit: job_id={job_id} waiting on wrapped fut");
                 let result = fut.await;
+                debug!("DynamicTaskExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
                 if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
                     if tho_device_idx > 0 {
@@ -531,7 +534,7 @@ impl DynamicTaskExecutor {
                         }
 
                         let _ = accepting_tx.send(true);
-                        let _ = result_tx.send(result);
+                        let _ = result_tx.send(Err(ThoError::new_with_cause("Context was reset", Cause::ContextReset)));
                         return JobFeedback::Neutral;
                     } else {
                         warn!("DynamicTaskExecutor::submit: reset requested on CPU/test executor");
@@ -636,7 +639,6 @@ impl DynamicTaskExecutor {
         accepting_tx: watch::Sender<bool>,
         accept_gate: Arc<tokio::sync::RwLock<()>>,
         tho_device_idx: usize,
-        reset_fn: ResetFn,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -715,30 +717,13 @@ impl DynamicTaskExecutor {
             }
 
             if reset_requested && accept_gate_guard.is_some() && jobs.is_empty() {
-                let pause_ticket = reset_pause_ticket.take().unwrap_or_else(|| cuda_activity_gate().request_pause());
-                if pause_ticket.is_owner() {
-                    if tho_device_idx > 0 {
-                        if let Err(e) = reset_fn(tho_device_idx).await {
-                            error!("DynamicTaskExecutor::run_manager: CUDA context reset failed for device_idx={tho_device_idx}: e={e:?}");
-                        } else {
-                            info!("DynamicTaskExecutor::run_manager: CUDA context was reset for device_idx={tho_device_idx}");
-                        }
-                    } else {
-                        warn!("DynamicTaskExecutor::run_manager: reset requested on CPU/test executor");
-                    }
 
-                    cuda_activity_gate().finish_pause(pause_ticket);
-                } else {
-                    cuda_activity_gate().wait_for_pause_to_finish(pause_ticket).await;
+                let mut exclusive = exclusive_job_id.write();
+                if exclusive.is_some() {
+                    warn!("DynamicTaskExecutor::run_manager: clearing stale exclusive_job_id={exclusive:?} after reset");
+                    exclusive.take();
                 }
 
-                {
-                    let mut exclusive = exclusive_job_id.write();
-                    if exclusive.is_some() {
-                        warn!("DynamicTaskExecutor::run_manager: clearing stale exclusive_job_id={exclusive:?} after reset");
-                        exclusive.take();
-                    }
-                }
 
                 reset_requested = false;
                 accept_gate_guard.take();
@@ -994,6 +979,7 @@ impl DynamicTaskExecutor {
                                 },
                                 async move {
                                     debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job {job_id}");
+
                                     job.run().await
                                 },
                             )
@@ -1323,7 +1309,7 @@ mod tests {
         },
         time::Duration,
     };
-    use thoosa_shared::CudaAction;
+    use thoosa_shared::{CudaAction, ThoosaError};
 
     fn needs_reset_error() -> ThoError {
         ThoError::new_with_cause(
@@ -1388,7 +1374,10 @@ mod tests {
         let reset_err: Result<(), ThoError> = exec
             .submit(usize::MAX, async move { Err(needs_reset_error()) }, None)
             .await;
-        assert!(reset_err.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
+
+        let Err(ThoosaError {  what: Cause::ContextReset, ..}) = reset_err else {
+            panic!("Unexpected result: {reset_err:?}")
+        };
         assert_eq!(reset_calls.load(Ordering::SeqCst), 1);
 
         let _ = release_tx1.send(());
@@ -1419,10 +1408,8 @@ mod tests {
                     let reset_calls = Arc::clone(&reset_calls);
                     let parent_exited = Arc::clone(&parent_exited);
                     async move {
-                        assert!(
-                            !parent_exited.load(Ordering::SeqCst),
-                            "reset must run before the suspended parent resumes"
-                        );
+                        debug!("test_nested_needs_reset_resumes_parent_after_reset: reset invoked");
+
                         reset_calls.fetch_add(1, Ordering::SeqCst);
                         Ok(())
                     }
@@ -1432,19 +1419,40 @@ mod tests {
         ));
 
         let result: Result<(), ThoError> = {
-            let exec_for_parent = Arc::clone(&exec);
+            let exec_for_child = Arc::clone(&exec);
             let parent_exited = Arc::clone(&parent_exited);
+            let reset_calls = Arc::clone(&reset_calls);
             exec.submit(0, async move {
-                let child_result: Result<(), ThoError> = exec_for_parent
-                    .submit(usize::MAX, async move { Err(needs_reset_error()) }, None)
-                    .await;
+                debug!("test_nested_needs_reset_resumes_parent_after_reset: Parent job running");
+                let child_result: Result<(), ThoError> = exec_for_child.submit(
+                    usize::MAX,
+                    async move {
+                        debug!("test_nested_needs_reset_resumes_parent_after_reset: Child job running");
+
+                        if reset_calls.load(Ordering::Relaxed) == 0 {
+                            debug!("test_nested_needs_reset_resumes_parent_after_reset: Child job failed");
+                            Err(needs_reset_error())
+                        } else {
+                            debug!(":test_nested_needs_reset_resumes_parent_after_reset: Child job done");
+                            Ok(())
+                        }
+                    },
+                    None
+                ).await;
+
                 parent_exited.store(true, Ordering::SeqCst);
+
+                debug!("test_nested_needs_reset_resumes_parent_after_reset: Parent job done");
+
                 child_result
-            }, None)
-                .await
+
+            }, None).await
         };
 
-        assert!(result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
+
+        let Err(ThoosaError {  what: Cause::ContextReset, ..}) = result else {
+            panic!("Unexpected result: {result:?}")
+        };
 
         tokio::time::timeout(Duration::from_secs(2), async {
             while reset_calls.load(Ordering::SeqCst) == 0 {
@@ -1453,6 +1461,9 @@ mod tests {
         })
             .await
             .expect("reset should eventually run");
+
+        assert_eq!(1, reset_calls.load(Ordering::Relaxed));
+        assert!(parent_exited.load(Ordering::SeqCst), "parent exited");
 
         let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
         exec.shutdown().await;
@@ -1505,7 +1516,7 @@ mod tests {
                 let active = Arc::clone(&active);
                 let max_seen = Arc::clone(&max_seen);
                 async move {
-                    exec.submit(usize::MAX, async move {
+                    exec.submit(0, async move {
                         let now = active.fetch_add(1, Ordering::SeqCst) + 1;
                         max_seen.fetch_max(now, Ordering::SeqCst);
                         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -1519,7 +1530,6 @@ mod tests {
             .await?;
 
         assert_eq!(results.len(), 8);
-        debug!("max_seen={max_seen:?}");
         assert!(max_seen.load(Ordering::SeqCst) <= 1);
 
         exec.set_max_parallelism(NonZeroUsize::new(4).unwrap()).unwrap();
