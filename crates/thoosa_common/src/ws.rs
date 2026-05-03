@@ -355,10 +355,7 @@ impl Workspace for FsWorkspace {
         vs: &VarStore,
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError> {
-        debug!(
-            "FsWorkspace::save_final_net: run_id={run_id}  params={params:?} final_models_path={:?}",
-            self.final_nets_path
-        );
+        debug!("FsWorkspace::save_final_net: run_id={run_id}  params={params:?} final_models_path={:?}",self.final_nets_path);
 
         let net_id = PathBuf::from(format!("{run_id}"));
         let base_path = self.final_nets_path.join(&net_id);
