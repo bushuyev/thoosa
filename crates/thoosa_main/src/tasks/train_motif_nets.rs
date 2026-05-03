@@ -509,6 +509,7 @@ mod tests {
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_common::dims::MotifSlices;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
@@ -520,6 +521,7 @@ mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
         let find_motifs_run_id:RunId = 1;

@@ -1109,8 +1109,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
     async fn test_load_motifs() -> Result<(), ThoError> {
         // set_max_level(Trace);
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
         let find_motifs_run_id = 1;
@@ -1180,14 +1179,13 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
             "MotifLoader::test_load_motif/ctx_write_for_data",
         )
         .branch(Some("motif_loader_test_data"), false);
-        let r = motif.with_data_ref(0,
-            ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, _ctx|{
-                        let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
+        let r = motif.with_data_ref(0, ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, _ctx|{
+            let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
-                        trace!("motif.t={} dist={dist}", t.data().t_ref());
+            trace!("motif.t={} dist={dist}", t.data().t_ref());
 
-                        Ok(true)
-                    }).await?;
+            Ok(true)
+        }).await?;
 
         assert_eq!(r, true);
         //TODO check data

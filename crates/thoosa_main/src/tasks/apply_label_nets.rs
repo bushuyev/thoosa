@@ -471,8 +471,7 @@ mod tests {
     async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
         // set_max_level(Trace);
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         let batch = 3;
         let train_motif_nets_run_id = 10;
         let train_label_nets_run_id = 20;

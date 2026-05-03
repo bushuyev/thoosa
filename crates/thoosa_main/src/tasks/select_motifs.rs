@@ -1656,8 +1656,7 @@ pub mod tests {
         // log::set_max_level(LevelFilter::Debug);
         // reset_print_options();
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
 
 
@@ -1733,8 +1732,7 @@ pub mod tests {
         log::set_max_level(LevelFilter::Info);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
 
@@ -1812,7 +1810,7 @@ pub mod tests {
         reset_print_options();
         GlobalCtx::init_devices(2);
         unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
 
@@ -1912,8 +1910,7 @@ pub mod tests {
         log::set_max_level(LevelFilter::Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
 
@@ -2052,8 +2049,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_by_criteria_filters_by_slices_and_score() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id: RunId = 11;
         let select_motifs_run_id: RunId = 22;
@@ -2112,8 +2108,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_by_norm_thickness() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id: RunId = 11;
         let select_motifs_run_id: RunId = 22;
@@ -2163,8 +2158,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_filter_motifs_requires_each_criterion_to_meet_min() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id: RunId = 41;
         let select_motifs_run_id: RunId = 42;
@@ -2217,8 +2211,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_select_motifs_run_reuses_criterion_scores_for_constraint_metrics() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let find_motifs_run_id: RunId = 31;
         let select_motifs_run_id: RunId = 32;
@@ -2355,8 +2348,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_clc_stacked_motifs_statistics_duplicates_and_pads_with_min() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         let find_motifs_run_id = 7u32;
@@ -2432,8 +2424,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_uses_existing_slices_when_extend_config_is_none() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         // reset_print_options();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
@@ -2513,8 +2504,7 @@ pub mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_run_filters_motifs_by_criteria_min() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         reset_print_options();
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));

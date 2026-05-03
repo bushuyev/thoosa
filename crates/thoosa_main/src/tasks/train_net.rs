@@ -794,6 +794,7 @@ mod tests {
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::train_nets::AdamWRangeOrValue;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
@@ -866,6 +867,7 @@ mod tests {
 
 
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let net_fn = |_rc: &DummyRunConfig, vs: &VarStore| {
             let net: Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>> =

@@ -12,7 +12,10 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, WithId};
 use torch_sys::IntList;
 use log::{debug, info, trace};
+use mockall::automock;
+use mockall_double::double;
 use thoosa_shared::copy_mode::CpuOrGpu;
+#[double]
 use crate::runner::global_ctx::GlobalCtx;
 
 impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {

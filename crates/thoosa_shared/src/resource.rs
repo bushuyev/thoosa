@@ -217,6 +217,7 @@ fn build_resource_maps_with_rng<R: rand::Rng + ?Sized>(
 }
 
 //TODO mean, std per channel
+#[derive(Debug, Clone)]
 pub struct ResourceStats {
     size: Vec<u32>,
     length_dim: usize,

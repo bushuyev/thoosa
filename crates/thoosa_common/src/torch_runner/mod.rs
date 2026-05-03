@@ -560,8 +560,7 @@ mod tests {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
 
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
 
@@ -577,8 +576,7 @@ mod tests {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
 
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
 
@@ -653,9 +651,7 @@ mod tests {
         }
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
@@ -740,9 +736,7 @@ mod tests {
         }
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
@@ -791,9 +785,7 @@ mod tests {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let device_idx = 1;
 
@@ -846,9 +838,7 @@ mod tests {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let device_idx = 1;
 
@@ -903,9 +893,7 @@ mod tests {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let device_idx = 1;
         const MUL_K: f64 = 2.;
@@ -960,9 +948,7 @@ mod tests {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let device_idx = 1;
 
@@ -1150,9 +1136,7 @@ mod tests {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Kind::Int64;
@@ -1225,9 +1209,7 @@ mod tests {
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
         RealGlobalCtx::init_devices(2);
-
-        unsafe { mock_global_ctx::USE_REAL_CTX = true; }
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         
         let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test").await;
 

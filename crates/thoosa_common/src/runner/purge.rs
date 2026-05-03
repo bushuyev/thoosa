@@ -357,7 +357,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn tasks_are_throttled_and_complete() -> Result<(), ThoError> {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
 
         let map: DashMap<
@@ -428,7 +428,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn purge_gpu_skips_required_ids() -> Result<(), ThoError> {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let keep_key = DummyCachableId::from("keep");
         let drop_key = DummyCachableId::from("drop");
