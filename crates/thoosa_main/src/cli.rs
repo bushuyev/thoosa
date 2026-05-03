@@ -1951,18 +1951,18 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> Result<u128, ThoError> {
         let mut tensors = Vec::with_capacity(num_tensors);
 
-        let ctx = CopyCtx::instance(Cuda(0));
+        let ctx = thoosa_common::runner::global_ctx::GlobalCtx::global().copy_ctx(Cuda(0)).await;
 
         let t_0 = Instant::now();
         for i in 0..num_tensors {
 
 
             let t = Tensor::f_stack(&[
-                make_t(&dim_1, &(i as i64), 0.1, ctx, cuda_first).await?,
-                make_t(&dim_1, &(i as i64), 0.2, ctx, cuda_first).await?,
-                make_t(&dim_1, &(i as i64), 0.3, ctx, cuda_first).await?,
-                make_t(&dim_1, &(i as i64), 0.4, ctx, cuda_first).await?,
-                make_t(&dim_1, &(i as i64), 0.5, ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.1, &ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.2, &ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.3, &ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.4, &ctx, cuda_first).await?,
+                make_t(&dim_1, &(i as i64), 0.5, &ctx, cuda_first).await?,
             ], 0)?
                 .f_unfold(1, 1000, 100)?;
 

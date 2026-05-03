@@ -103,44 +103,22 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
         }
     }
 
-    let invoke_closure = if await_closure {
-        quote! { (#closure)(__with_data_ctx #(, #arg_refs)*).await }
-    } else {
+    let invoke_closure = quote! {
 
-        quote! {
-            let stream = thoosa_common::copy_ctx::CopyCtx::instance(1).acquire_stream().await;
-            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-            let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
-            stream.synchronize()?;
-            r
-        }
+        let stream = GlobalCtx::global().copy_ctx(1/*TODO*/).await.acquire_stream().await;
+        let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+        let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
+        stream.synchronize()?;
+        r
     };
 
-    let permits = if await_closure {
-        quote! {
-            //let permit =
-            if __with_data_ctx.acquired_permits() == 0 {
-                // Some(thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?)
-                __with_data_ctx.add_permit(thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?);
-            }/* else {
-                None
-            };*/
-        }
-    } else {
-        quote! {
-            //let permit =
-            if __with_data_ctx.acquired_permits() == 0 {
-                // Some(thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?)
-                __with_data_ctx.add_permit(thoosa_shared::runner::global_ctx::GlobalCtx::global().acquire_one(__device_idx, ::std::sync::Arc::new(__with_data_ctx.id().clone())).await?);
-            }/* else {
-                None
-            };*/
-        }
-    };
+
     quote! {
         {
             use thoosa_shared::traits::WithId;
-            // use thoosa_shared::runner::common::PermitsCtx;
+            use mockall_double::double;
+            #[double]
+            use thoosa_common::runner::global_ctx::GlobalCtx;
 
             let mut __with_data_ctx = #ctx_expr;
             let __device_idx = __with_data_ctx.device_idx();
