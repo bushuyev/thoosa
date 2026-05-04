@@ -88,7 +88,7 @@ use thoosa_motifs::distance::{average_euclidean_distance, EucDistConfig, EucDist
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_hook, SyncMakeWriter, PERF};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOMHandler};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
