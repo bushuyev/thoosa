@@ -1782,7 +1782,7 @@ mod tests {
                 let mask = (sum_0.unsqueeze(2) - sum_1.unsqueeze(1)).lt(0.0);
                 let mask_size = mask.size();
                 let dists_size = Some(dists.size());
-                Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)), None)?)
+                Ok(DistsMask::new(mask, Some(dists), mask_type((mask_size, dists_size)))?)
             },
         );
         let batch_clc = Arc::new(CrossUnfoldClc::new(

@@ -308,7 +308,6 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
                             Tensor::f_concat(&channel_masks_motif_ids.0, 2)?, //1 dim - resources
                             None,
                             DistsMaskType::AsIs,
-                            None,
                         )?,
                         channel_masks_motif_ids.1
                     ),
@@ -2907,7 +2906,6 @@ pub mod tests {
                                 mask_0,
                                 None,
                                 DistsMaskType::MaskPacked(mask_0_size, None),
-                                None,
                             )?,
                             vec![
                                 (0u32, "motif_id").into()
@@ -2937,7 +2935,6 @@ pub mod tests {
                                 mask_1,
                                 None,
                                 DistsMaskType::MaskPacked(mask_1_size, None),
-                                None,
                             )?,
                             vec![
                                 (0u32, "motif_id").into()

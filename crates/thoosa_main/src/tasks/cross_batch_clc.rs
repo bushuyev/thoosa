@@ -591,7 +591,7 @@ mod tests {
                 } else {
                     DistsMaskType::MaskPacked(mask.size(), Some(dists.size()))
                 };
-                Ok(DistsMask::new(mask, Some(dists), mask_type, None)?)
+                Ok(DistsMask::new(mask, Some(dists), mask_type)?)
             },
         );
         let cross_batch_clc = Arc::new(CrossUnfoldClc::new(
