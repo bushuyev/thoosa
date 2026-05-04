@@ -278,7 +278,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                4,
+                8,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
@@ -663,9 +663,9 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 min_slices: RangeOrValue::Value(3),
                 max_slices: RangeOrValue::Value(10000),
                 bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
-                    band_hz: RangeOrValue::Value(10.0),
+                    band_hz: RangeOrValue::Value(160.0),
                     aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),
-                    apply_hann_window: RangeOrValue::Value(false),
+                    apply_hann_window: RangeOrValue::Value(true),
                     remove_dc_offset: RangeOrValue::Value(true),
                     normalize_lsh: RangeOrValue::Value(true),
                 })
