@@ -46,7 +46,11 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
-    pub max_slices: Option<MaxSlices>
+    pub max_slices: Option<MaxSlices>,
+
+    #[run_config]
+    #[in_map]
+    pub dummy_bucketing:bool
 }
 
 //keys which affect motif statistics - avg distance etc - used to cache random motifs
@@ -187,7 +191,7 @@ impl FindMotifsRunConfig {
     }
 
     pub fn new(id: Option<RunId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
-        Self { id, step, window, freq_filter, similarity_metric, slices_filter, max_slices }
+        Self { id, step, window, freq_filter, similarity_metric, slices_filter, max_slices, dummy_bucketing: false }
     }
 }
 impl FindMotifsRunConfig {
@@ -209,6 +213,7 @@ impl FindMotifsRunConfig {
                 aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
             }),
             max_slices: None,
+            dummy_bucketing: false,
         }
     }
 
@@ -228,6 +233,7 @@ impl FindMotifsRunConfig {
             similarity_metric: SimilarityMetric::default(),
             slices_filter: SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
             max_slices: None,
+            dummy_bucketing: false,
         }
     }
 
@@ -455,6 +461,7 @@ mod tests {
                 AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
             ),
             max_slices: None,
+            dummy_bucketing: RangeOrValue::Value(false),
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
         let grid = rc.grid_run_configs().expect("FindMotifsRunConfigRangeOrValue::grid_run_configs should not fail");
@@ -575,7 +582,7 @@ mod tests {
 
     #[test]
     fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), similarity_metric: SimilarityMetric::default(), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })) };
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), similarity_metric: SimilarityMetric::default(), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })), dummy_bucketing: false };
 
         let keys = run_config.to_stats_keys();
         
@@ -601,6 +608,7 @@ mod tests {
             similarity_metric: SimilarityMetric::default(),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
+            dummy_bucketing: false,
         };
 
         let keys = run_config.to_stats_keys();
@@ -627,6 +635,7 @@ mod tests {
             similarity_metric: SimilarityMetric::default(),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
+            dummy_bucketing: false,
         };
 
         let keys = run_config.to_stats_keys();
@@ -653,6 +662,7 @@ mod tests {
             similarity_metric: SimilarityMetric::default(),
             slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
+            dummy_bucketing: false,
         };
 
         let keys = run_config.to_stats_keys();

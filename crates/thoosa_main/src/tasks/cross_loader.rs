@@ -167,8 +167,9 @@ where
         Out = (),
         Ctx=C
     > + Stage<Ctx=C> + Send + Sync + 'static,
+
 {
-    find_motifs_run_config_id: RunId,
+    pub(crate) find_motifs_run_config_id: RunId,
     configured_loader: Arc<L>,
     store: Arc<Box<dyn Store>>,
     cross_unfold_clc: Arc<CLC>,

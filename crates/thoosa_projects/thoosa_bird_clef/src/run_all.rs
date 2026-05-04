@@ -491,6 +491,7 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
                 }),
                 max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+                dummy_bucketing: RangeOrValue::Value(false),
             },
             select_motifs_run_config: SelectMotifsRunConfigRangeOrValue {
                 id: None,
@@ -671,6 +672,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.5) }),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+            dummy_bucketing: RangeOrValue::Value(false),
         },
 
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
