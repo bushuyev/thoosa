@@ -1,5 +1,6 @@
 #![allow(unexpected_cfgs)]
 
+use std::collections::HashSet;
 use std::future::ready;
 use std::marker::PhantomData;
 use std::path::Path;
@@ -28,6 +29,7 @@ use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::dims::{Batch, Dims, MotifProbability, MotifSlices, Slice, ThoBatch};
+use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields};
@@ -40,10 +42,10 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
-use thoosa_shared::val::{NamedRange, NamedVal};
+use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_shared::comp_id::SynKey;
@@ -167,6 +169,73 @@ where
 
 }
 
+async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs_run_ids: &[RunId]) -> Result<Vec<CompletedTrial>, ThoError> {
+    let mut train_parent_ids = Vec::new();
+    let mut seen_parent_candidates = HashSet::new();
+    for select_motifs_run_id in select_motifs_run_ids {
+        for output_run_id in store.list_output_run_ids(*select_motifs_run_id).await? {
+            if seen_parent_candidates.insert(output_run_id) {
+                train_parent_ids.push(output_run_id);
+            }
+        }
+    }
+
+    if train_parent_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let train_parent_ids = store
+        .list_run_configs_by_ids(&train_parent_ids)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.run_config_type == TrainMotifsNetsRunConfig::type_name() && entry.descr == "TrainMotifsNetsResult")
+        .map(|entry| entry.id)
+        .collect::<Vec<_>>();
+
+    let mut child_ids = Vec::new();
+    let mut seen_child_candidates = HashSet::new();
+    for train_parent_id in train_parent_ids {
+        for output_run_id in store.list_output_run_ids(train_parent_id).await? {
+            if seen_child_candidates.insert(output_run_id) {
+                child_ids.push(output_run_id);
+            }
+        }
+    }
+
+    if child_ids.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let child_entries = store
+        .list_run_configs_by_ids(&child_ids)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.run_config_type == TrainMotifsNetsRunConfig::type_name() && entry.descr == "TrainMotifNetResult")
+        .collect::<Vec<_>>();
+
+    let mut trials = Vec::new();
+    for child_entry in child_entries {
+        let values = store.list_run_config_values(child_entry.id).await?;
+        let Some(loss) = values.get("loss").and_then(val_to_f32) else {
+            continue;
+        };
+        if loss.is_finite() {
+            trials.push(CompletedTrial::new(loss, values));
+        }
+    }
+    Ok(trials)
+}
+
+fn val_to_f32(val: &Val) -> Option<f32> {
+    match val {
+        Val::Real(v) => Some(*v as f32),
+        Val::Int(v) => Some(*v as f32),
+        Val::UInt(v) => Some(*v as f32),
+        Val::Str(v) => v.parse().ok(),
+        Val::Bool(_) => None,
+    }
+}
+
 impl <L, C> AsyncStage for TrainMotifNets<L, C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -225,6 +294,8 @@ where
         };
         let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
         debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_ids_len={motifs_rates_selected_motifs_run_ids_len}");
+        let reusable_completed_trials = completed_train_motif_trials(&self.store, &select_motifs_run_ids).await?;
+        debug!("TrainMotifNets::run: reusable_completed_trials.len={}", reusable_completed_trials.len());
 
         let futures = motifs_rates_selected_motifs_run_ids.into_iter()
         .map(|(motif_id_rate, select_motifs_run_id)|{
@@ -236,6 +307,7 @@ where
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
             let store = Arc::clone(&self.store);
             let epoch_size = self.epoch_size;
+            let reusable_completed_trials = reusable_completed_trials.clone();
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = motif_loader.run(
@@ -295,7 +367,7 @@ where
                     },
                     1,
                     format!("motif_{}", motif_id_rate.0)
-                ));
+                ).with_reusable_completed_trials(reusable_completed_trials));
 
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
@@ -596,6 +668,7 @@ mod tests {
                 .with_list_selected_motifs([
                     (select_motifs_run_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
                 ])
+                .with_list_output_run_ids([(select_motifs_run_id, Ok(vec![]))])
                 .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_id)))])
 
                 .build());

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
+use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
 use thoosa_common::copy_ctx::CopyCtx;
@@ -46,6 +47,7 @@ use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
+use thoosa_properties_map::ToHashmap;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
@@ -146,6 +148,7 @@ where
     epochs:FC,
     validation_step: u32,
     descr:String,
+    reusable_completed_trials: Vec<CompletedTrial>,
     pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
 
@@ -183,7 +186,12 @@ where
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     pub fn new(batch:BF, net:NF, opt_config:Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >, loss_fn:LossFp, optimizer:FO, x_f:XF, epochs:FC, validation_step: u32, descr: String) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs, validation_step, descr }
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs, validation_step, descr, reusable_completed_trials: vec![] }
+    }
+
+    pub fn with_reusable_completed_trials(mut self, reusable_completed_trials: Vec<CompletedTrial>) -> Self {
+        self.reusable_completed_trials = reusable_completed_trials;
+        self
     }
 
     fn run_inner(
@@ -392,7 +400,7 @@ where
     B:AsyncDataBatch<DX, DY, C> + 'static,
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
-    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
+    RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
     NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
@@ -405,6 +413,7 @@ where
 
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.device_idx();
+        let reusable_completed_trials = self.reusable_completed_trials.clone();
 
         debug!("TrainNet::run: self.descr={:?}", self.descr);
 
@@ -433,6 +442,7 @@ where
                 run_config_source,
                 ThoDevice::from(device_idx).into(),
                 &self.descr,
+                reusable_completed_trials,
             ).await?;
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
