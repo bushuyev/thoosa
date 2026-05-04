@@ -3,7 +3,7 @@ use std::ops::Add;
 use std::sync::Arc;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use futures_util::{stream, StreamExt, TryStreamExt};
-use log::{debug, warn, error};
+use log::debug;
 use mockall::predicate::ne;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
@@ -75,11 +75,11 @@ impl Drop for PinnedHostBuffer {
 
 
 //free_mem, total_mem
-pub fn cuda_mem() -> (usize, usize) {
+pub fn cuda_mem_for_device(cuda_device: usize) -> (usize, usize) {
     use cust::sys::cuMemGetInfo_v2;
 
     //TODO replace with shim
-    let ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+    let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
     ctx
         .bind_to_thread()
         .expect("failed to bind CUDA context while querying memory usage");
@@ -91,6 +91,10 @@ pub fn cuda_mem() -> (usize, usize) {
         // assert_eq!(res, sys::CUresult::CUDA_SUCCESS);
     }
     (free, total)
+}
+
+pub fn cuda_mem() -> (usize, usize) {
+    cuda_mem_for_device(0)
 }
 
 ///for cases when only size and type is known
@@ -239,12 +243,7 @@ pub async fn copy_d2h_from_ptr(
 
                         debug!("copy_d2h_from_ptr: tho_cu_memcpy_dtoh_async r={result:?}");
 
-                        match stream.synchronize() {
-                            Ok(_) => {}
-                            Err(e) => {
-                                error!("stream.synchronize: e={e:?}")
-                            }
-                        }
+                        stream.synchronize()?;
 
                         std::ptr::copy_nonoverlapping(
                             buf_ptr as *mut _,
@@ -399,7 +398,7 @@ pub async fn copy_h2d_from_ptr(
                             debug!("tho_cu_memcpy_htod_async failed at chunk {i} with {result:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={c_buf_size}");
                             check_cuda_status(result, "tho_cu_memcpy_htod_async")?;
                         }
-                        let _ = buf_stream.1.synchronize();
+                        buf_stream.1.synchronize()?;
                         drop(buf_stream); // return buffer/stream to pool
                         debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={c_buf_size} thread_name={:?} done", os_thread_id());
 
@@ -962,7 +961,7 @@ mod tests {
 /// 2 => CUDA:1
 pub async fn with_pooled_cuda_stream<F, R>(
     tho_device_idx: usize,
-    high_pri: bool,
+    _high_pri: bool,
     f: F,
 ) -> Result<(R, Option<Guard<ThoCudaStream>>), ThoError>
 where
@@ -972,8 +971,7 @@ where
         return Ok((f(None), None));
     }
 
-    let cuda_device = (tho_device_idx - 1) as i32;
-    let stream = GlobalCtx::global().copy_ctx(0).await.acquire_stream().await;//ThoCudaStream::from_pool(cuda_device, high_pri)?;//
+    let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_stream().await;
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
     Ok((out, Some(stream)))
 }

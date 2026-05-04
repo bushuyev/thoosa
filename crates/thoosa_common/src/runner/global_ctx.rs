@@ -107,7 +107,7 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            copy_ctx: (1..num_devices).map(|device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).collect()
+            copy_ctx: (1..num_devices).map(|device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(device_idx - 1, 0.2, 16))).collect()
         }
     }
 
@@ -120,7 +120,7 @@ impl GlobalCtx {
             // let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
             // cu_ctx.reset()?;
 
-            *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance(0.2, 16);
+            *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
 
             info!("GlobalCtx::reset_cuda_context: done");
             Ok(())
