@@ -697,7 +697,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             batch_size: RangeOrValue::Value(2),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
+            patience: RangeOrValue::Value(3),
             min_delta: RangeOrValue::Value(1e-4_f32),
 
             optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{

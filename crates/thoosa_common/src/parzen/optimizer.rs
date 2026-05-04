@@ -1,6 +1,6 @@
 use log::{debug, trace};
 use std::cmp::{Ordering, Reverse};
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BinaryHeap, HashMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 // use rand_distr::{Uniform, Distribution};
@@ -498,6 +498,24 @@ mod tree_structured_parzen_estimator_tests {
 
 const TPE_LOSS_METRIC: &str = "loss";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StudyDirection {
+    Minimize,
+    Maximize,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletedTrial {
+    pub objective: f32,
+    pub params: HashMap<String, Val>,
+}
+
+impl CompletedTrial {
+    pub fn new(objective: f32, params: HashMap<String, Val>) -> Self {
+        Self { objective, params }
+    }
+}
+
 trait TPEObjectiveResult: Debug {
     fn loss(&self) -> f32;
     fn constraint_loss(&self, constraint_name: &str) -> Option<f32>;
@@ -538,6 +556,7 @@ where
     constraint_keys: Vec<String>,
     n_init: u32,
     max_evals: u32,
+    queued_configs: VecDeque<Vec<Val>>,
     tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
     _pd: PhantomData<(T, R)>,
     descr: String
@@ -584,9 +603,22 @@ where
             constraint_keys,
             n_init,
             max_evals,
+            queued_configs: VecDeque::new(),
             tpe_samplers,
             descr: descr.to_string(),
             _pd: PhantomData::default(),
+        }
+    }
+
+    fn enqueue_configs<I>(&mut self, configs: I)
+    where
+        I: IntoIterator<Item = Vec<Val>>,
+    {
+        for config in configs {
+            match self.cs.normalize_ordered_config(&config) {
+                Some(config) => self.queued_configs.push_back(config),
+                None => debug!("AsyncTPEOptimizerImpl::enqueue_configs: dropping incompatible config={config:?}"),
+            }
         }
     }
 
@@ -596,7 +628,10 @@ where
 
         let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.max_evals as usize, 1);
         for i in 0..self.max_evals {
-            let eval_config = if i < self.n_init {
+            let eval_config = if let Some(config) = self.queued_configs.pop_front() {
+                debug!("AsyncTPEOptimizerImpl::optimize: i={i} queued sample");
+                config
+            } else if i < self.n_init {
                 debug!("AsyncTPEOptimizerImpl::optimize: i={i} random sample");
                 self.cs.random_sample()
             } else {
@@ -716,6 +751,13 @@ where
     pub async fn optimize(&mut self) -> Vec<Val> {
         self.inner.optimize().await
     }
+
+    pub fn enqueue_configs<I>(&mut self, configs: I)
+    where
+        I: IntoIterator<Item = Vec<Val>>,
+    {
+        self.inner.enqueue_configs(configs);
+    }
 }
 
 #[allow(dead_code)]
@@ -756,6 +798,13 @@ where
     pub async fn optimize(&mut self) -> Vec<Val> {
         self.inner.optimize().await
     }
+
+    pub fn enqueue_configs<I>(&mut self, configs: I)
+    where
+        I: IntoIterator<Item = Vec<Val>>,
+    {
+        self.inner.enqueue_configs(configs);
+    }
 }
 fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
     let num_rows = input[0].len();
@@ -773,9 +822,10 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 #[cfg(test)]
 mod tpe_optimizer_tests {
     use crate::parzen::optimizer::Val::Int;
-    use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, ConfigurationSpace, Val, stack_params};
+    use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection, Val, stack_params};
     use log::debug;
     use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
     use tch::Tensor;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::NamedVal;
@@ -816,7 +866,7 @@ mod tpe_optimizer_tests {
     #[tokio::test]
     async fn test_optimize_numeric() {
         let sphere = sphere(300);
-        let mut opt = AsyncTPEOptimizer::new(
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
             ConfigurationSpace::new(
                 (0..3)
@@ -843,7 +893,7 @@ mod tpe_optimizer_tests {
     #[tokio::test]
     async fn test_optimize_numeric_int() {
         let sphere = sphere(300);
-        let mut opt = AsyncTPEOptimizer::new(
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
             async move |params| sphere(params),
             ConfigurationSpace::new(
                 (0..3)
@@ -963,6 +1013,96 @@ mod tpe_optimizer_tests {
         assert!((<&Val as TryInto<f32>>::try_into(&best_config[1]).unwrap()) <= 1.0);
     }
 
+    #[tokio::test]
+    async fn test_enqueued_configs_are_evaluated() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_obj = Arc::clone(&calls);
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |params| {
+                calls_for_obj
+                    .lock()
+                    .unwrap()
+                    .push(params.iter().map(|param| param.val().clone()).collect::<Vec<_>>());
+                0.0
+            },
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 10.0,
+            }]),
+            2,
+            0,
+            "n/a",
+        );
+        opt.enqueue_configs(vec![vec![Val::Real(1.0)], vec![Val::Real(2.0)]]);
+
+        let _best_config = opt.optimize().await;
+
+        assert_eq!(vec![vec![Val::Real(1.0)], vec![Val::Real(2.0)]], *calls.lock().unwrap());
+    }
+
+    #[test]
+    fn test_reusable_configs_validate_sort_dedupe_and_cap() {
+        let cs: ConfigurationSpace<String> = ConfigurationSpace::new(vec![
+            Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 1.0,
+            },
+            Hyperparameter::UniformInt {
+                name: "layers".into(),
+                lower: 1,
+                upper: 4,
+            },
+            Hyperparameter::Categorical {
+                name: "kind".into(),
+                values: vec!["a", "b"],
+            },
+        ]);
+        let trials = vec![
+            CompletedTrial::new(0.0, HashMap::from([
+                ("lr".to_string(), Val::Real(2.0)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Int(0)),
+            ])),
+            CompletedTrial::new(0.05, HashMap::from([
+                ("lr".to_string(), Val::Real(0.4)),
+                ("kind".to_string(), Val::Int(0)),
+            ])),
+            CompletedTrial::new(0.07, HashMap::from([
+                ("lr".to_string(), Val::Real(0.4)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Str("z".to_string())),
+            ])),
+            CompletedTrial::new(0.1, HashMap::from([
+                ("lr".to_string(), Val::Real(0.2)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Int(0)),
+                ("unused_old_param".to_string(), Val::Bool(true)),
+            ])),
+            CompletedTrial::new(0.2, HashMap::from([
+                ("lr".to_string(), Val::Real(0.2)),
+                ("layers".to_string(), Val::Int(2)),
+                ("kind".to_string(), Val::Int(0)),
+            ])),
+            CompletedTrial::new(0.3, HashMap::from([
+                ("lr".to_string(), Val::Int(0)),
+                ("layers".to_string(), Val::Str("3".to_string())),
+                ("kind".to_string(), Val::Str("b".to_string())),
+            ])),
+        ];
+
+        let reusable_configs = cs.reusable_configs_from_completed_trials(trials, StudyDirection::Minimize, 2);
+
+        assert_eq!(
+            vec![
+                vec![Val::Real(0.2), Val::Int(2), Val::Int(0)],
+                vec![Val::Real(0.0), Val::Int(3), Val::Int(1)],
+            ],
+            reusable_configs
+        );
+    }
+
     fn sphere(d_x: i64) -> impl Fn(&[NamedVal<String>]) -> f32 {
         move |params| {
             debug!("params={params:?}");
@@ -1041,6 +1181,139 @@ impl<T: FieldName> ConfigurationSpace<T> {
             .iter()
             .map(|hp| hp.random_sample())
             .collect()
+    }
+
+    pub fn reusable_configs_from_completed_trials<I>(&self, trials: I, direction: StudyDirection, max_total: usize) -> Vec<Vec<Val>>
+    where
+        I: IntoIterator<Item = CompletedTrial>,
+    {
+        let param_keys = self.hyperparameters.iter().map(|hp| hp.name().to_string()).collect::<Vec<_>>();
+        self.reusable_configs_from_completed_trials_with_param_keys(trials, direction, max_total, &param_keys)
+    }
+
+    pub fn reusable_configs_from_completed_trials_with_param_keys<I>(&self, trials: I, direction: StudyDirection, max_total: usize, param_keys: &[String]) -> Vec<Vec<Val>>
+    where
+        I: IntoIterator<Item = CompletedTrial>,
+    {
+        if max_total == 0 {
+            return vec![];
+        }
+        if param_keys.len() != self.hyperparameters.len() {
+            debug!("ConfigurationSpace::reusable_configs_from_completed_trials_with_param_keys: param_keys.len={} search_space.len={}", param_keys.len(), self.hyperparameters.len());
+            return vec![];
+        }
+
+        let mut trials = trials
+            .into_iter()
+            .filter(|trial| trial.objective.is_finite())
+            .collect::<Vec<_>>();
+        match direction {
+            StudyDirection::Minimize => trials.sort_by(|left, right| left.objective.partial_cmp(&right.objective).unwrap_or(Ordering::Equal)),
+            StudyDirection::Maximize => trials.sort_by(|left, right| right.objective.partial_cmp(&left.objective).unwrap_or(Ordering::Equal)),
+        }
+
+        let mut seen = HashSet::new();
+        let mut configs = Vec::new();
+        for trial in trials {
+            let Some(config) = self.normalize_trial_config(&trial.params, param_keys) else {
+                continue;
+            };
+            let key = Self::config_dedupe_key(&config);
+            if seen.insert(key) {
+                configs.push(config);
+                if configs.len() >= max_total {
+                    break;
+                }
+            }
+        }
+
+        configs
+    }
+
+    fn normalize_trial_config(&self, params: &HashMap<String, Val>, param_keys: &[String]) -> Option<Vec<Val>> {
+        let mut config = Vec::with_capacity(self.hyperparameters.len());
+        for (hp, param_key) in self.hyperparameters.iter().zip(param_keys) {
+            let val = params.get(param_key)?;
+            config.push(Self::normalize_hyperparameter_value(hp, val)?);
+        }
+        Some(config)
+    }
+
+    fn normalize_ordered_config(&self, config: &[Val]) -> Option<Vec<Val>> {
+        if config.len() != self.hyperparameters.len() {
+            return None;
+        }
+
+        self.hyperparameters
+            .iter()
+            .zip(config)
+            .map(|(hp, val)| Self::normalize_hyperparameter_value(hp, val))
+            .collect()
+    }
+
+    fn normalize_hyperparameter_value(hp: &Hyperparameter<T>, val: &Val) -> Option<Val> {
+        match hp {
+            Hyperparameter::UniformFloat { lower, upper, .. } => {
+                let v = Self::val_to_f64(val)?;
+                (v.is_finite() && *lower <= v && v <= *upper).then_some(Val::Real(v))
+            }
+            Hyperparameter::UniformInt { lower, upper, .. } => {
+                let v = Self::val_to_i64_exact(val)?;
+                (*lower <= v && v <= *upper).then_some(Val::Int(v))
+            }
+            Hyperparameter::Categorical { values, .. } => {
+                let idx = Self::categorical_index(values, val)?;
+                (idx < values.len()).then_some(Val::Int(idx as i64))
+            }
+        }
+    }
+
+    fn val_to_f64(val: &Val) -> Option<f64> {
+        match val {
+            Val::Real(v) => Some(*v),
+            Val::Int(v) => Some(*v as f64),
+            Val::UInt(v) => Some(*v as f64),
+            Val::Str(v) => v.parse().ok(),
+            Val::Bool(_) => None,
+        }
+    }
+
+    fn val_to_i64_exact(val: &Val) -> Option<i64> {
+        match val {
+            Val::Real(v) if v.is_finite() && (*v - v.trunc()).abs() <= f64::EPSILON => Some(*v as i64),
+            Val::Int(v) => Some(*v),
+            Val::UInt(v) => (*v).try_into().ok(),
+            Val::Str(v) => v.parse().ok(),
+            _ => None,
+        }
+    }
+
+    fn categorical_index(values: &[&'static str], val: &Val) -> Option<usize> {
+        match val {
+            Val::Int(v) => (*v >= 0).then_some(*v as usize),
+            Val::UInt(v) => Some(*v as usize),
+            Val::Real(v) if v.is_finite() && *v >= 0.0 && (*v - v.trunc()).abs() <= f64::EPSILON => Some(*v as usize),
+            Val::Str(v) => values.iter().position(|candidate| *candidate == v).or_else(|| v.parse().ok()),
+            Val::Bool(v) => {
+                let label = if *v { "TRUE_CAT" } else { "FALSE_CAT" };
+                values.iter().position(|candidate| *candidate == label)
+            }
+            _ => None,
+        }
+    }
+
+    fn config_dedupe_key(config: &[Val]) -> String {
+        config.iter().map(Self::val_dedupe_key).collect::<Vec<_>>().join("\u{1f}")
+    }
+
+    fn val_dedupe_key(val: &Val) -> String {
+        match val {
+            Val::Real(v) => format!("r:{}", v.to_bits()),
+            Val::Int(v) => format!("i:{v}"),
+            Val::UInt(v) => format!("u:{v}"),
+            Val::Str(v) => format!("s:{v}"),
+            Val::Bool(v) => format!("b:{v}"),
+        }
     }
 
     fn len(&self) -> usize {

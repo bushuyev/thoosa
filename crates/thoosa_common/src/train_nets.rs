@@ -4,7 +4,7 @@
 use crate::builder::{Node, SeqBuilder};
 use crate::batches::BatchLengths;
 use crate::my_tch::{BinaryHeadPool, ThoModule};
-use crate::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
+use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
 use crate::utils::{pad_to, plot_series, ListenerResponse, TrainListener};
@@ -1857,16 +1857,85 @@ impl SavableResult for TrainMotifNetResult {
     }
 }
 
+fn opt_param_property_keys<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], cs: &ConfigurationSpace<P>) -> Vec<String>
+where
+    P: FieldName + 'static,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+{
+    let base_opt_vals = cs
+        .into_iter()
+        .map(|hp| NamedVal::new(hp.name().clone(), opt_param_base_value(hp)))
+        .collect::<Vec<_>>();
+    let base_map = run_config_property_map::<P, R>(const_vals, grid_vals, &base_opt_vals);
+
+    cs.into_iter()
+        .enumerate()
+        .map(|(idx, hp)| {
+            let fallback = hp.name().to_string();
+            let Some(alt_value) = opt_param_alt_value(hp) else {
+                return fallback;
+            };
+
+            let mut alt_opt_vals = base_opt_vals.clone();
+            alt_opt_vals[idx] = NamedVal::new(hp.name().clone(), alt_value);
+            let alt_map = run_config_property_map::<P, R>(const_vals, grid_vals, &alt_opt_vals);
+            changed_property_key(&base_map, &alt_map).unwrap_or_else(|| {
+                debug!("opt_param_property_keys: could not resolve property key for hp={hp:?}; falling back to display key {fallback}");
+                fallback
+            })
+        })
+        .collect()
+}
+
+fn run_config_property_map<P, R>(const_vals: &[NamedVal<P>], grid_vals: &[NamedVal<P>], opt_vals: &[NamedVal<P>]) -> HashMap<String, Val>
+where
+    P: FieldName + 'static,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
+{
+    let run_config: R = [const_vals, grid_vals, opt_vals].concat().into_iter().into();
+    run_config.to_properties_iter(None).collect()
+}
+
+fn changed_property_key(base_map: &HashMap<String, Val>, alt_map: &HashMap<String, Val>) -> Option<String> {
+    let mut changed = alt_map
+        .iter()
+        .filter(|(key, val)| base_map.get(*key) != Some(*val))
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    changed.extend(base_map.keys().filter(|key| !alt_map.contains_key(*key)).cloned());
+    changed.sort();
+    changed.dedup();
+    (changed.len() == 1).then(|| changed.remove(0))
+}
+
+fn opt_param_base_value<P: FieldName>(hp: &Hyperparameter<P>) -> Val {
+    match hp {
+        Hyperparameter::UniformFloat { lower, .. } => Val::Real(*lower),
+        Hyperparameter::UniformInt { lower, .. } => Val::Int(*lower),
+        Hyperparameter::Categorical { .. } => Val::Int(0),
+    }
+}
+
+fn opt_param_alt_value<P: FieldName>(hp: &Hyperparameter<P>) -> Option<Val> {
+    match hp {
+        Hyperparameter::UniformFloat { lower, upper, .. } if upper > lower => Some(Val::Real(lower + ((upper - lower) / 2.0))),
+        Hyperparameter::UniformInt { lower, upper, .. } if upper > lower => Some(Val::Int(lower + 1)),
+        Hyperparameter::Categorical { values, .. } if values.len() > 1 => Some(Val::Int(1)),
+        _ => None,
+    }
+}
+
 pub async fn opt_train<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
     device: Device,
     descr: &str,
+    reusable_completed_trials: Vec<CompletedTrial>,
 ) -> Result<(VarStore, N, R, f32), ThoError>
 where
     P: FieldName + 'static,
-    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone,
+    R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
     F: for<'a, 'b> AsyncFnMut(
             Arc<Mutex<VarStore>>,
             R,
@@ -1892,6 +1961,18 @@ where
 
         let min_var_store_clone = Arc::clone(&min_var_store);
         let min_loss_moved = Arc::clone(&min_loss);
+        let config_space = ConfigurationSpace::new(opt_params);
+        let reusable_configs = if reusable_completed_trials.is_empty() {
+            vec![]
+        } else {
+            let reusable_param_keys = opt_param_property_keys::<P, R>(const_vals.as_slice(), grid_vals.as_slice(), &config_space);
+            config_space.reusable_configs_from_completed_trials_with_param_keys(
+                reusable_completed_trials.iter().cloned(),
+                StudyDirection::Minimize,
+                opt_config.opt_max_evals as usize,
+                &reusable_param_keys,
+            )
+        };
 
         let mut opt = AsyncTPEOptimizer::new(
             async move |opt_vals| {
@@ -1936,11 +2017,12 @@ where
 
                 loss
             },
-            ConfigurationSpace::new(opt_params),
+            config_space,
             opt_config.opt_max_evals,
             opt_config.opt_num_init,
             descr,
         );
+        opt.enqueue_configs(reusable_configs);
         info!("opt_train: wait on optimize ");
         let best_config = opt.optimize().await;
 
