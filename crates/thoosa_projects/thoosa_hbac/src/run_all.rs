@@ -3,8 +3,7 @@ use std::sync::Arc;
 use log::info;
 use parking_lot::RwLock;
 use tch::Device::Cpu;
-use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SimilarityMetricRangeOrValue, SlicesFilterRangeOrValue};
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter;
+use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -12,6 +11,7 @@ use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
+use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot, FindAndSelect, RunAllArgs};
 use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
@@ -20,6 +20,7 @@ use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindA
 use thoosa_main::tasks::motif_loader::MotifLoader;
 use thoosa_main::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
+use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_shared::run_configs::RunId;
@@ -446,23 +447,24 @@ where
             //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
-        // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-        similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue { with_rfft: RangeOrValue::Value(false) }),
-        // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-        //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-        //         // q: RangeOrValue::Range { range: 0.0..0.5, step: None },
-        //         q: RangeOrValue::Value (2.0),
-        //     }),
-        // }),
-        slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                q: RangeOrValue::Range { range: 0.0..0.5, step: None },
-                // q: RangeOrValue::Value (0.1),
+        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+            // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+            similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue { with_rfft: RangeOrValue::Value(false) }),
+            // slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+            //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+            //         // q: RangeOrValue::Range { range: 0.0..0.5, step: None },
+            //         q: RangeOrValue::Value (2.0),
+            //     }),
+            // }),
+            slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Range { range: 0.0..0.5, step: None },
+                    // q: RangeOrValue::Value (0.1),
+                }),
+                slices: RangeOrValue::Value(1000),
             }),
-            slices: RangeOrValue::Value(1000),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-        dummy_bucketing: RangeOrValue::Value(false),
     }
 }
 
@@ -552,8 +554,7 @@ mod tests {
     use rand::{rng, RngExt};
     use tch::{Device, Tensor};
     use thoosa_common::{debug_plot, train_nets};
-    use thoosa_common::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, EucDistConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SimilarityMetricRangeOrValue, SlicesFilterRangeOrValue};
-    use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::BandPassFilter;
+    use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tch_test_utils::{resource_tensor_two_easy_motifs, Interval};
@@ -561,10 +562,12 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+    use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
     use thoosa_common::ws::FsWorkspace;
     use thoosa_main::cli::{import_resources, FindAndSelect, RunAllArgs};
     use thoosa_main::RawTensorLoader;
     use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
+    use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_shared::comp_id::SynKey;
@@ -924,13 +927,14 @@ mod tests {
                 stride: RangeOrValue::Value(1),
                 padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             })]),
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
-                slices: RangeOrValue::Value(100),
+            finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
+                    slices: RangeOrValue::Value(100),
+                }),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
-            dummy_bucketing: RangeOrValue::Value(false),
         }
     }
 

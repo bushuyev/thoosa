@@ -403,7 +403,7 @@ mod tests {
     use tch::{Device, Kind, Tensor};
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, LabelProbability, MotifsNetsSelectionDims, Slice};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::runs::{Logits, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;

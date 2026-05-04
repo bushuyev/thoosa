@@ -11,9 +11,11 @@ use tch::Kind;
 use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
+use serde::Deserialize;
 use thoosa_common::debug_plot;
-use thoosa_common::find_motifs_run_config::{DotProductConfig, SimilarityMetric};
 use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2, z_norm_dims};
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{panic_to_err, ThoError};
 use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 
@@ -906,10 +908,10 @@ pub fn average_euclidean_distance(t: &Tensor) -> Result<f32, ThoError> {
 
 #[cfg(test)]
 mod distance_tests {
-    use crate::distance::MaskMaker::{Diagonal, Le, LeQuantile, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
+    use crate::distance::MaskMaker::{Diagonal, Le, LeAccumulatedMean, LeAccumulatedQuantile, LeQuantile, LocalMin, Tril};
     use crate::distance::{
-        MaskMaker, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask,
-        local_min_mask_suppressed, accumulating_mean_mask, slice_t, z_normalized_euclidean,
+        accumulating_mean_mask, average_euclidean_distance, clc_d2_similarity_and_mask, clc_dist_d2, local_min_mask,
+        local_min_mask_suppressed, slice_t, z_normalized_euclidean, MaskMaker,
     };
     use chrono::Utc;
     use log::__private_api::enabled;
@@ -929,19 +931,19 @@ mod distance_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
     use tch::{Device, IndexOp, Kind};
     use thoosa_common::builder::Node::Par;
-    use thoosa_common::find_motifs_run_config::{SimilarityMetric, DotProductConfig, EucDistConfig, PearsonCorrConfig};
+    use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
     use thoosa_common::loader::SyncWrapper;
     use thoosa_shared::panic_to_err;
     use thoosa_common::utils::{
-         from, hist_1_dim, lin_iter,
+        from, hist_1_dim, lin_iter,
         lin_t, plot_series, plot_series_with_points, reset_print_options,
         skewness_kurtosis_1_dim, three_sigs_tensor, to_vec_f32, z_norm_dims,
     };
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::{
-        ThoError, comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp,
-        sin_v,
+        comp_sin_k_v, pulse_in_rand, saw, sig_one_imp, sig_three_imp, sig_two_imp, sin_v,
+        ThoError,
     };
 
     #[ctor::ctor]
@@ -2294,5 +2296,39 @@ mod distance_tests {
         println!("eq={}", eq);
 
         assert!(eq);
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct EucDistConfig {
+    #[in_map]
+    #[run_config]
+    pub z_normalize: bool,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct PearsonCorrConfig {
+
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
+pub struct DotProductConfig {
+    #[in_map]
+    #[run_config]
+    pub with_rfft: bool,
+}
+
+//TODO change to not/normalized
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
+pub enum SimilarityMetric {
+    #[run_config_default]
+    EucDist(EucDistConfig),
+    PearsonCorr(PearsonCorrConfig),
+    DotProduct(DotProductConfig),
+}
+
+impl Default for SimilarityMetric {
+    fn default() -> Self {
+        Self::EucDist(EucDistConfig::default())
     }
 }

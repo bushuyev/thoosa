@@ -11,7 +11,7 @@ use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
 use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{Dims, MotifSlices};
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, Metrics};
+use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, Metrics};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_common::ws::Workspace;

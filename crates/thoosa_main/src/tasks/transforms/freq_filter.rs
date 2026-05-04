@@ -11,7 +11,7 @@ use cached_derive::Cached;
 use thoosa_common::debug_plot;
 use thoosa_named_derive::Named;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::OutId;
@@ -20,7 +20,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, Dims};
-use thoosa_common::find_motifs_run_config::InputFilter;
+use thoosa_common::transforms::filters::InputFilter;
 
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
 use thoosa_shared::{mono_key, CopyToDevice, ThoError};
@@ -596,8 +596,8 @@ mod tests {
     use tch::Tensor;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::runnable::{AsyncStage, SyncStage};
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
-    use thoosa_common::transforms::filters::{BandPassFilterParams, MedianFilterParams, AverageFilterParams, Padding, SavGolFilterParams};
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
     use thoosa_shared::ThoError;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::from;

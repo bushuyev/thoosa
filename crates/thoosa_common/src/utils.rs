@@ -32,16 +32,19 @@ use thoosa_store::Store;
 use crate::batches::BatchLengths;
 use crate::builder::SeqBuilder;
 use crate::dims::Dims;
-use crate::find_motifs_run_config::FindMotifsRunConfig;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use sha2::{Digest, Sha256};
-use thoosa_shared::run_configs::RunId;
+use thoosa_properties_map::FromHashmap;
+use thoosa_shared::run_configs::{RunConfig, RunId};
 use crate::copy_ctx::CopyCtx;
 
-pub async fn load_run_config(store: &Arc<Box<dyn Store>>, find_motifs_run_id: RunId) -> Result<FindMotifsRunConfig, ThoError> {
+pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_run_id: RunId) -> Result<FH, ThoError>
+where
+    FH: FromHashmap + RunConfig + Debug
+{
     let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
         find_motifs_run_id
     } else {
@@ -49,10 +52,17 @@ pub async fn load_run_config(store: &Arc<Box<dyn Store>>, find_motifs_run_id: Ru
         *find_motifs_run_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id}")))?
     };
 
-    FindMotifsRunConfig::from_properties_map_with_id(
-        real_find_motifs_run_id,
-        &store.list_run_config_values(real_find_motifs_run_id).await?,
-    )
+    // FindMotifsRunConfig::from_properties_map_with_id(
+    //     real_find_motifs_run_id,
+    //     &store.list_run_config_values(real_find_motifs_run_id).await?,
+    // )
+    let mut find_motifs_run_config = FH::from_properties_map(None, &store.list_run_config_values(real_find_motifs_run_id).await?)?;
+
+    debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
+
+    find_motifs_run_config.set_id(real_find_motifs_run_id);
+
+    Ok(find_motifs_run_config)
 }
 
 #[macro_export]

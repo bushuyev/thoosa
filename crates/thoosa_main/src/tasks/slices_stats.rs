@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use tch::Kind;
 use tch::Tensor;
-pub use thoosa_common::find_motifs_run_config::{Aggr, CommonStatsMetric, Metrics};
+pub use crate::tasks::find_motifs_run_config::{Aggr, CommonStatsMetric, Metrics};
 use thoosa_common::utils::z_norm_dims;
 use tracing::debug;
 use thoosa_motifs::common_stats::Stats as CommonStatsValue;
@@ -271,7 +271,7 @@ mod tests {
     use tch::{Device, Kind, Tensor};
 
     use super::{aggregate_distances, metric_scalar_for_motif, Aggr, Metrics};
-    use thoosa_common::find_motifs_run_config::{MeanAggr, MinAggr, MaxAggr, QuantileAggr, PeriodicityAcfRunConfig};
+    use crate::tasks::find_motifs_run_config::{MeanAggr, MinAggr, MaxAggr, QuantileAggr, PeriodicityAcfRunConfig};
 
     #[test]
     fn test_aggregate_distances() {

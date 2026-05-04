@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tch::kind::Kind;
 use tch::Device::Cpu;
 use tch::Tensor;
-use thoosa_common::find_motifs_run_config::InputFilter;
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
@@ -572,7 +572,7 @@ mod tests {
     use std::sync::Arc;
     use tch::Tensor;
     use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::find_motifs_run_config::InputFilter;
+    use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;

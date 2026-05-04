@@ -154,7 +154,7 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use parking_lot::RwLock;
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_shared::ThoError;

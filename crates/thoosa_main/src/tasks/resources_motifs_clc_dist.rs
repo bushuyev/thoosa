@@ -152,6 +152,9 @@ where
         let channel_masks_dists_ids = {
 
 
+            let find_motifs_run_config = input.stacked_motifs_output.motifs.extra().1.as_ref();
+            let cross_loader_run_config = find_motifs_run_config.cross_loader_run_config().ok_or_else(|| ThoError::new(format!("ClcResourcesMotifsDist::run: find_motifs_run_config_id={:?} is not a CrossLoader config", find_motifs_run_config.id)))?;
+
             let (mask, dists)  = thoosa_motifs::distance::clc_d2_similarity_and_mask(
                 input
                         .stacked_motifs_output
@@ -159,7 +162,7 @@ where
                         .data()
                         .t_ref(),
                 &batch_1_t,
-                input.stacked_motifs_output.motifs.extra().1.similarity_metric,
+                cross_loader_run_config.similarity_metric,
                 true,
                 &mut mask_makers,
                 )?;
