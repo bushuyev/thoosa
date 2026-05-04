@@ -65,7 +65,7 @@ type CrossUnfoldMaskStage<C> = CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, M
 type DistsTrackerStage<C> = DistsTracker<C>;
 
 
-//TODO remove - use cross_loader directly?
+
 #[derive(Debug)]
 struct FindMotifsStages<RC, L, C>
 where
@@ -73,7 +73,7 @@ where
     L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    run_config: Arc<FindMotifsRunConfig>,
+
     cross_loader: Arc<CrossLoader<
             RC,
         L,
@@ -86,12 +86,11 @@ where
 
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(
-        run_config: FindMotifsRunConfig,
         cross_loader: Arc<CrossLoader<
             RC,
             L,
@@ -102,10 +101,18 @@ where
         >>
     ) -> Result<Self, ThoError> {
         Ok(Self {
-            run_config: Arc::new(run_config),
             cross_loader
         })
     }
+
+    pub fn id(&self) -> &RunId{
+        &self.cross_loader.find_motifs_run_config_id
+    }
+
+    pub async fn run(&self, input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>, ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
+        Arc::clone(&self.cross_loader).run(input, ctx).await
+    }
+
 }
 
 pub enum MasksCtx {
@@ -171,7 +178,7 @@ where
 
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
-    RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync+ Debug + Clone + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -338,7 +345,6 @@ where
                     debug!("FindMotifsStage::new: ctx.id={:?} done", ctx_id);
 
                     FindMotifsStages::new(
-                        run_config,
                         Arc::new(CrossLoader::new(
                             find_motifs_run_config_id,
                             configured_loader,
@@ -446,11 +452,11 @@ where
             .run_config_stages
             .iter()
             .map(|stage|{
-                info!("running find motifs on run config {:?}", stage.run_config.id);
+                info!("running find motifs on run config {:?}", stage.id());
 
-                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.run_config.id.expect("no run_config"))), true);
+                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.id())), true);
 
-                Arc::clone(&stage.cross_loader).run(Arc::clone(&input), ctx_for_stage)
+                stage.run(Arc::clone(&input), ctx_for_stage)
             });
 
         let _/*cross loader's out is ()*/ = collect_futures_with_progress(
