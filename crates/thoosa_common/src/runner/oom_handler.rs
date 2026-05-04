@@ -372,27 +372,6 @@ where
 
 }
 
-#[derive(Debug)]
-pub struct AsyncOOMHandler<'a, 'z, R, IC, RC, RCC, S>
-where
-    R: AsyncStage + Adjustable,
-    R::Ctx: Adjustable,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + 'static,
-    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + CopyToDevice + Send + Sync + 'static,
-    for<'i> <<R as Stage>::In<'i> as Data>::M: DevicesWrapCopyMode<R::In<'i>>,
-    <R as Stage>::In<'static>: Select<S, Output = <R as Stage>::In<'static>>,
-    R::Out: Data + CopyToDevice + WithId + Send + Sync + 'static,
-    <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
-{
-    adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
-    #[allow(dead_code)]
-    statistics: Option<&'a Arc<Statistics>>,
-    pd_rc: PhantomData<(RC, &'z RCC)>,
-}
-
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="pref_oom_count"))]
 fn pref_oom_count(){
 
@@ -1199,7 +1178,7 @@ mod tests {
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestInput, TestOutput};
-    use super::{AdjusterError, Adjusters, AsyncOOMHandler, Contexts, OOMHandler};
+    use super::{AdjusterError, Adjusters, Contexts, OOMHandler};
     use crate::runner::common::cachable::DevicesWrap;
     // use crate::common::runnable::Runnable;
     use crate::runner::common::{DropIf, MockRunCtx, OutId};
