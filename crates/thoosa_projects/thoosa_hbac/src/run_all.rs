@@ -462,6 +462,7 @@ where
             slices: RangeOrValue::Value(1000),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        dummy_bucketing: RangeOrValue::Value(false),
     }
 }
 
@@ -929,6 +930,7 @@ mod tests {
                 slices: RangeOrValue::Value(100),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100) })),
+            dummy_bucketing: RangeOrValue::Value(false),
         }
     }
 

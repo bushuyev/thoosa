@@ -1024,6 +1024,7 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
             }),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+        dummy_bucketing: RangeOrValue::Value(false),
     }
 }
 
@@ -2324,6 +2325,7 @@ mod cli_tests {
                 }),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+            dummy_bucketing: RangeOrValue::Value(false),
         };
         let freq_filter = config.freq_filter.as_ref().expect("find-and-select sample config should include freq_filter");
 
@@ -2377,6 +2379,7 @@ mod cli_tests {
                 }),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+            dummy_bucketing: RangeOrValue::Value(false),
         };
 
 
