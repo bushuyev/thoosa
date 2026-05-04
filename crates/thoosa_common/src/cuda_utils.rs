@@ -956,11 +956,6 @@ mod tests {
 
 }
 
-
-tokio::task_local! {
-    pub static CURRENT_GUARD: ThoStreamGuard;
-}
-
 /// Your old "tho device index" shape:
 /// 0 => CPU / no CUDA stream
 /// 1 => CUDA:0

@@ -15,6 +15,7 @@ use thoosa_shared::ThoError;
 
 use crate::tho_device::ThoDevice;
 
+//TODO to be renamed to StreamCtx?
 pub struct CopyCtx {
     cu_ctx: Arc<ThoCudaContext>,
     pub(crate) buffs: usize,

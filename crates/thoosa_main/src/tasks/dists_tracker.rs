@@ -27,8 +27,6 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_shims::stream::ThoCudaStream;
-use thoosa_shims::stream::ThoStreamGuard;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
 
@@ -38,7 +36,6 @@ pub struct DistsMask {
     mask: Tensor,
     dists: Option<Tensor>,
     mask_type: DistsMaskType,
-    stream_to_sync: Option<ThoCudaStream>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,7 +484,6 @@ impl DistsMask {
         mask: Tensor,
         dists: Option<Tensor>,
         mask_type: DistsMaskType,
-        stream_to_sync: Option<ThoCudaStream>,
     ) -> Result<Self, ThoError> {
         debug!("DistsMask::new: mask={mask:?} dists={dists:?} mask_type={mask_type:?}");
 
@@ -503,15 +499,6 @@ impl DistsMask {
             assert_eq!(dists.size(), mask_size, "DistsMask::new: mask/dists size mismatch");
         }
 
-        let _guard = if stream_to_sync.is_some() && mask.device().ne(&Cpu) {
-            // Some(ThoStreamGuard::set(
-            //     stream_to_sync.as_ref().expect("guard stream missing"),
-            // ))
-            Some(ThoStreamGuard::new(stream_to_sync.as_ref().expect("guard stream missing")).unwrap())
-        } else {
-            None
-        };
-
         match mask_type {
             DistsMaskType::AsIs => {
                 assert!(mask.device().eq(&Cpu), "DistsMask::new: AsIs expects CPU mask");
@@ -522,7 +509,6 @@ impl DistsMask {
                     mask,
                     dists,
                     mask_type: DistsMaskType::AsIs,
-                    stream_to_sync,
                 })
             }
             DistsMaskType::MaskPacked(_, _) => {
@@ -539,7 +525,6 @@ impl DistsMask {
                         mask_size.clone(),
                         dists_size,
                     ),
-                    stream_to_sync,
                 })
             }
             DistsMaskType::MaskIndexes(_) => {
@@ -581,7 +566,6 @@ impl DistsMask {
                     mask: flat,
                     dists,
                     mask_type: DistsMaskType::MaskIndexes(mask_size),
-                    stream_to_sync,
                 })
             }
         }
@@ -590,10 +574,6 @@ impl DistsMask {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsMask::to_cpu"))]
     pub async fn to_cpu(self) -> Result<Self, ThoError>  {
         debug!("DistsMask::to_cpu: self.mask.device={:?}", self.mask.device());
-
-        if let Some(stream) = self.stream_to_sync.as_ref() {
-            stream.synchronize()?;
-        }
 
         match self.mask_type {
             DistsMaskType::AsIs => {
@@ -606,7 +586,6 @@ impl DistsMask {
                     mask: self.mask,
                     dists: self.dists,
                     mask_type: DistsMaskType::AsIs,
-                    stream_to_sync: None,
                 })
             }
             mask_type @ (DistsMaskType::MaskPacked(_, _) | DistsMaskType::MaskIndexes(_)) => {
@@ -642,7 +621,6 @@ impl DistsMask {
                     mask,
                     dists,
                     mask_type,
-                    stream_to_sync: None,
                 })
             }
         }
@@ -667,7 +645,6 @@ impl DistsMask {
             mask,
             dists,
             mask_type,
-            ..
         } = self;
 
 
@@ -892,24 +869,15 @@ impl CrossClcResultMerge for DistsMask {
         let left = self;
         let right = other;
 
-        if let Some(stream) = left.stream_to_sync.as_ref() {
-            stream.synchronize()?;
-        }
-        if let Some(stream) = right.stream_to_sync.as_ref() {
-            stream.synchronize()?;
-        }
-
         let DistsMask {
             mask: left_mask,
             dists: left_dists,
             mask_type: left_type,
-            ..
         } = left;
         let DistsMask {
             mask: right_mask,
             dists: right_dists,
             mask_type: right_type,
-            ..
         } = right;
 
         match (left_type, right_type) {
@@ -925,7 +893,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask,
                     dists,
                     mask_type: DistsMaskType::AsIs,
-                    stream_to_sync: None,
                 })
             }
             (
@@ -993,7 +960,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask: packed_mask,
                     dists,
                     mask_type: DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes),
-                    stream_to_sync: None,
                 })
             }
             (DistsMaskType::MaskIndexes(left_size), DistsMaskType::MaskIndexes(right_size)) => {
@@ -1069,7 +1035,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask: indices,
                     dists,
                     mask_type: DistsMaskType::MaskIndexes(merged_size),
-                    stream_to_sync: None,
                 })
             }
             _ => Err(ThoError::new("DistsMask merge: type mismatch")),
@@ -1086,12 +1051,6 @@ impl CrossClcResultMerge for DistsMask {
         let mut parts = Vec::with_capacity(others.len() + 1);
         parts.push(self);
         parts.extend(others);
-
-        for part in &parts {
-            if let Some(stream) = part.stream_to_sync.as_ref() {
-                stream.synchronize()?;
-            }
-        }
 
         let first_type = parts[0].mask_type.clone();
         match first_type {
@@ -1181,7 +1140,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask: mask_out,
                     dists,
                     mask_type: DistsMaskType::AsIs,
-                    stream_to_sync: None,
                 })
             }
             DistsMaskType::MaskPacked(base_sizes, base_dists_size) => {
@@ -1324,7 +1282,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask: packed_mask,
                     dists,
                     mask_type: DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes),
-                    stream_to_sync: None,
                 })
             }
             DistsMaskType::MaskIndexes(_) => {
@@ -1355,7 +1312,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask: first_mask,
                     dists: first_dists,
                     mask_type: first_type,
-                    ..
                 } = first;
 
                 assert!(!base_size.is_empty(), "DistsMask merge: size mismatch");
@@ -1393,7 +1349,6 @@ impl CrossClcResultMerge for DistsMask {
                         mask,
                         dists,
                         mask_type,
-                        ..
                     } = part;
 
                     let size = match mask_type {
@@ -1458,7 +1413,6 @@ impl CrossClcResultMerge for DistsMask {
                     mask: indices,
                     dists,
                     mask_type: DistsMaskType::MaskIndexes(merged_size),
-                    stream_to_sync: None,
                 })
             }
         }
@@ -1734,13 +1688,11 @@ mod tests {
             left_mask,
             Some(left_dists),
             DistsMaskType::MaskPacked(vec![1, 1, 2], Some(vec![1, 1, 2])),
-            None,
         )?;
         let right = DistsMask::new(
             right_mask,
             Some(right_dists),
             DistsMaskType::MaskPacked(vec![1, 1, 2], Some(vec![1, 1, 2])),
-            None,
         )?;
 
         let merged = left.merge_batch_1(right)?;
@@ -1761,8 +1713,8 @@ mod tests {
         let left_mask = Tensor::from_slice(&[0.0f32]).view([1, 1, 1]).lt(0.5);
         let right_mask = Tensor::from_slice(&[1.0f32, 0.0]).view([1, 1, 2]).lt(0.5);
 
-        let left = DistsMask::new(left_mask, None, DistsMaskType::AsIs, None)?;
-        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs, None)?;
+        let left = DistsMask::new(left_mask, None, DistsMaskType::AsIs)?;
+        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs)?;
 
         let merged = left.merge_batch_1(right)?;
         let (mask, dists) = merged.unpack()?;
@@ -1780,8 +1732,8 @@ mod tests {
         let right_mask = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]).lt(0.5);
         let left_dists = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]);
 
-        let left = DistsMask::new(left_mask, Some(left_dists), DistsMaskType::AsIs, None)?;
-        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs, None)?;
+        let left = DistsMask::new(left_mask, Some(left_dists), DistsMaskType::AsIs)?;
+        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs)?;
 
         let err = left.merge_batch_1(right).expect_err("expected dists mismatch");
         match err.what() {
@@ -1809,9 +1761,8 @@ mod tests {
             left_mask,
             None,
             DistsMaskType::MaskPacked(vec![1, 1, 1], None),
-            None,
         )?;
-        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs, None)?;
+        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs)?;
 
         let err = left.merge_batch_1(right).expect_err("expected pack mismatch");
         match err.what() {
@@ -1850,19 +1801,16 @@ mod tests {
             left_mask,
             Some(left_dists),
             DistsMaskType::MaskPacked(vec![1, 1, 2], Some(vec![1, 1, 2])),
-            None,
         )?;
         let mid = DistsMask::new(
             mid_mask,
             Some(mid_dists),
             DistsMaskType::MaskPacked(vec![1, 1, 2], Some(vec![1, 1, 2])),
-            None,
         )?;
         let right = DistsMask::new(
             right_mask,
             Some(right_dists),
             DistsMaskType::MaskPacked(vec![1, 1, 2], Some(vec![1, 1, 2])),
-            None,
         )?;
 
         let merged = left.merge_batch_1_many(vec![mid, right])?;
@@ -1885,9 +1833,9 @@ mod tests {
         let mid_mask = Tensor::from_slice(&[1.0f32, 0.0]).view([1, 1, 2]).lt(0.5);
         let right_mask = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]).lt(0.5);
 
-        let left = DistsMask::new(left_mask, None, DistsMaskType::AsIs, None)?;
-        let mid = DistsMask::new(mid_mask, None, DistsMaskType::AsIs, None)?;
-        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs, None)?;
+        let left = DistsMask::new(left_mask, None, DistsMaskType::AsIs)?;
+        let mid = DistsMask::new(mid_mask, None, DistsMaskType::AsIs)?;
+        let right = DistsMask::new(right_mask, None, DistsMaskType::AsIs)?;
 
         let merged = left.merge_batch_1_many(vec![mid, right])?;
         let (mask, dists) = merged.unpack()?;
@@ -1907,8 +1855,8 @@ mod tests {
         let mid_mask = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]).lt(0.5);
         let left_dists = Tensor::from_slice(&[1.0f32]).view([1, 1, 1]);
 
-        let left = DistsMask::new(left_mask, Some(left_dists), DistsMaskType::AsIs, None)?;
-        let mid = DistsMask::new(mid_mask, None, DistsMaskType::AsIs, None)?;
+        let left = DistsMask::new(left_mask, Some(left_dists), DistsMaskType::AsIs)?;
+        let mid = DistsMask::new(mid_mask, None, DistsMaskType::AsIs)?;
 
         let err = left
             .merge_batch_1_many(vec![mid])
@@ -1938,9 +1886,8 @@ mod tests {
             left_mask,
             None,
             DistsMaskType::MaskPacked(vec![1, 1, 1], None),
-            None,
         )?;
-        let mid = DistsMask::new(mid_mask, None, DistsMaskType::AsIs, None)?;
+        let mid = DistsMask::new(mid_mask, None, DistsMaskType::AsIs)?;
 
         let err = left
             .merge_batch_1_many(vec![mid])
@@ -1962,7 +1909,7 @@ mod tests {
             .lt(0.5);
         let dists = Tensor::from_slice(&[1.0f32, 2.0, 3.0]).view([1, 1, 3]);
 
-        let mask = DistsMask::new(mask, Some(dists), DistsMaskType::AsIs, None)?;
+        let mask = DistsMask::new(mask, Some(dists), DistsMaskType::AsIs)?;
         let mut matches = mask.into_indices_iter()?;
         let mut idx_values = Vec::new();
         let mut dists_values = Vec::new();
@@ -2005,7 +1952,7 @@ mod tests {
         debug!("mask=\n{mask}");
 
 
-        let dists_masks = DistsMask::new(mask, Some(dists), DistsMaskType::MaskIndexes(vec![3, 3, 3]), None)?.to_cpu().await?;
+        let dists_masks = DistsMask::new(mask, Some(dists), DistsMaskType::MaskIndexes(vec![3, 3, 3]))?.to_cpu().await?;
 
 
         let mut iter = dists_masks.into_indices_iter()?;

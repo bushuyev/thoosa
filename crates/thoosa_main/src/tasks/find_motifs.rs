@@ -382,8 +382,7 @@ where
                                     } else {
                                         DistsMaskType::AsIs
                                     };
-                                    // let stream = if device_idx > 0 { motifs_stream } else { None };
-                                    Ok(DistsMask::new(mask, dists, mask_type, None)?)
+                                    Ok(DistsMask::new(mask, dists, mask_type)?)
                                 }),
                                 masks_ctx,
                                 UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),

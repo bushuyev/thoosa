@@ -186,7 +186,7 @@ where
 
                         Ok(Some((
                             //unsqueeze is to put back dimension for channel removed before folding
-                            DistsMask::new(mask.f_unsqueeze(0)?, dists.map(|t| t.f_unsqueeze(0)).transpose()?, mask_type, None)?,
+                            DistsMask::new(mask.f_unsqueeze(0)?, dists.map(|t| t.f_unsqueeze(0)).transpose()?, mask_type)?,
                             ids.iter()
                                 .fold((vec![], HashSet::new()), |mut acc, d| {
                                     if !acc.1.contains(d) {
