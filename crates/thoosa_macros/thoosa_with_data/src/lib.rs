@@ -105,11 +105,15 @@ fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::T
 
     let invoke_closure = quote! {
 
-        let stream = GlobalCtx::global().copy_ctx(1/*TODO*/).await.acquire_stream().await;
-        let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-        let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
-        stream.synchronize()?;
-        r
+        if __device_idx > 0 {
+            let stream = GlobalCtx::global().copy_ctx(__device_idx).await.acquire_stream().await;
+            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+            let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
+            stream.synchronize()?;
+            r
+        } else {
+            (#closure)(__with_data_ctx #(, #arg_refs)*)
+        }
     };
 
 
