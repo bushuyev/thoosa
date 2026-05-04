@@ -1,21 +1,36 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
-use crate::transforms::filters::*;
+use thoosa_common::transforms::filters::*;
 use log::debug;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::f64;
 use std::hash::Hash;
 use std::str::FromStr;
 use std::sync::Arc;
 use clap::Subcommand;
+use async_trait::async_trait;
+use parking_lot::RwLock;
+use thoosa_common::runs::SavableResult;
+use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::distance::{EucDistConfig, SimilarityMetric};
 use thoosa_properties_map::{FromHashmap, ToHashmap};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::F64BitsKey;
+use thoosa_shared::{F64BitsKey, ThoError};
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::run_configs::{RunConfig, RunId};
-use thoosa_shared::traits::Named;
+use thoosa_shared::traits::{Named, WithId};
 use thoosa_shared::val::Val;
+use thoosa_store::Store;
+use crate::tasks::bucketing::BucketRunConfig;
+use thoosa_motifs::distance::SimilarityMetricRangeOrValue;
+use thoosa_motifs::distance::SimilarityMetricFields;
+use thoosa_motifs::distance::SimilarityMetricBuilder;
+use crate::tasks::bucketing::BucketRunConfigRangeOrValue;
+use crate::tasks::bucketing::BucketRunConfigFields;
+use crate::tasks::bucketing::BucketRunConfigBuilder;
 
 //TODO move to find, + nets move out of common
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
@@ -38,19 +53,37 @@ pub struct FindMotifsRunConfig {
 
     #[run_config]
     #[in_map]
+    pub max_slices: Option<MaxSlices>,
+
+    #[run_config]
+    #[in_map]
+    pub finder_kind: FinderKind,
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+pub enum FinderKind {
+    CrossLoader(CrossLoaderRunConfig),
+    Bucket(BucketRunConfig)
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, PartialEq, Debug)]
+pub struct CrossLoaderRunConfig {
+    #[run_config]
+    #[in_map]
     pub similarity_metric: SimilarityMetric,
 
     #[run_config]
     #[in_map]
     pub slices_filter: SlicesFilter,
+}
 
-    #[run_config]
-    #[in_map]
-    pub max_slices: Option<MaxSlices>,
-
-    #[run_config]
-    #[in_map]
-    pub dummy_bucketing:bool
+impl CrossLoaderRunConfig {
+    pub fn new(similarity_metric: SimilarityMetric, slices_filter: SlicesFilter) -> Self {
+        Self {
+            similarity_metric,
+            slices_filter,
+        }
+    }
 }
 
 //keys which affect motif statistics - avg distance etc - used to cache random motifs
@@ -175,10 +208,14 @@ impl FindMotifsRunConfig {
     }
 
     pub fn to_stats_keys(&self) -> StatsKeys {
+        let comparison_method = match &self.finder_kind {
+            FinderKind::CrossLoader(cross_loader_config) => Some(StatsKey::ComparisonMethod(cross_loader_config.similarity_metric)),
+            FinderKind::Bucket(_) => None,
+        };
 
         StatsKeys {
             keys: std::iter::once(StatsKey::Window(self.window))
-                .chain(std::iter::once(StatsKey::ComparisonMethod(self.similarity_metric)))
+                .chain(comparison_method)
                 .chain(
                 self.freq_filter
                     .as_deref()
@@ -190,8 +227,15 @@ impl FindMotifsRunConfig {
         }
     }
 
+    pub fn cross_loader_run_config(&self) -> Option<&CrossLoaderRunConfig> {
+        match &self.finder_kind {
+            FinderKind::CrossLoader(cross_loader_run_config) => Some(cross_loader_run_config),
+            FinderKind::Bucket(_) => None,
+        }
+    }
+
     pub fn new(id: Option<RunId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
-        Self { id, step, window, freq_filter, similarity_metric, slices_filter, max_slices, dummy_bucketing: false }
+        Self { id, step, window, freq_filter, max_slices, finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(similarity_metric, slices_filter)) }
     }
 }
 impl FindMotifsRunConfig {
@@ -208,12 +252,13 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
-            similarity_metric: SimilarityMetric::default(),
-            slices_filter: SlicesFilter::Accumulate(AccumulateStats {
-                aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
-            }),
             max_slices: None,
-            dummy_bucketing: false,
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(
+                SimilarityMetric::default(),
+                SlicesFilter::Accumulate(AccumulateStats {
+                    aggr: Aggr::Mean(MeanAggr { k: mean_k.unwrap_or(0.5) }),
+                }),
+            )),
         }
     }
 
@@ -230,10 +275,11 @@ impl FindMotifsRunConfig {
             step,
             window,
             freq_filter,
-            similarity_metric: SimilarityMetric::default(),
-            slices_filter: SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
             max_slices: None,
-            dummy_bucketing: false,
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(
+                SimilarityMetric::default(),
+                SlicesFilter::Precalculate(PrecalculateStats { aggr: Aggr::Mean(MeanAggr { k }), slices}),
+            )),
         }
     }
 
@@ -262,71 +308,6 @@ impl FindMotifsRunConfig {
     }
 }
 
-#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
-pub enum InputFilter {
-    NotchBandFilter(NotchBandFilterParams),
-    BandPassFilter(BandPassFilterParams),
-    SavGolFilter(SavGolFilterParams),
-    MedianFilter(MedianFilterParams),
-    AverageFilter(AverageFilterParams),
-    Abs(AbsFilterParams),
-}
-
-impl FromStr for InputFilter {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json5::from_str(s).map_err(|e| format!("parse InputFilter from `{s}`: {e}"))
-    }
-}
-
-impl InputFilterLengthAdjuster for InputFilter {
-    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
-        match self {
-            InputFilter::NotchBandFilter(filter) => filter.adjust_length(),
-            InputFilter::BandPassFilter(filter) => filter.adjust_length(),
-            InputFilter::SavGolFilter(filter) => filter.adjust_length(),
-            InputFilter::MedianFilter(filter) => filter.adjust_length(),
-            InputFilter::AverageFilter(filter) => filter.adjust_length(),
-            InputFilter::Abs(filter) => filter.adjust_length(),
-        }
-    }
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
-pub struct EucDistConfig {
-    #[in_map]
-    #[run_config]
-    pub z_normalize: bool,
-}
-
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
-pub struct PearsonCorrConfig {
-
-}
-
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy, Default)]
-pub struct DotProductConfig {
-    #[in_map]
-    #[run_config]
-    pub with_rfft: bool,
-}
-
-//TODO change to not/normalized
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
-pub enum SimilarityMetric {
-    #[run_config_default]
-    EucDist(EucDistConfig),
-    PearsonCorr(PearsonCorrConfig),
-    DotProduct(DotProductConfig),
-}
-
-impl Default for SimilarityMetric {
-    fn default() -> Self {
-        Self::EucDist(EucDistConfig::default())
-    }
-}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
 pub enum Aggr {
@@ -423,18 +404,21 @@ pub struct ExactStats {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfig, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraint, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfig, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
-    use crate::find_motifs_run_config::InputFilter::{BandPassFilter, MedianFilter, AverageFilter, NotchBandFilter, SavGolFilter};
-    use crate::transforms::filters::{BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, MedianFilterParamsRangeOrValue, AverageFilterParams, AverageFilterParamsRangeOrValue, NotchBandFilterParams, SavGolFilterParams, Padding, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+    use std::collections::HashMap;
+    use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FinderKind, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfig, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraint, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfig, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
+    use thoosa_common::transforms::filters::InputFilter::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
+    use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParams, MedianFilterParamsRangeOrValue, NotchBandFilterParams, Padding, PaddingRangeOrValue, SavGolFilterParams, ZeroPaddingRangeOrValue};
     use log::debug;
     use tch::Tensor;
+    use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue};
     use thoosa_properties_map::{FromHashmap, ToHashmap};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{F64BitsKey, RangeOrValue};
-    use crate::find_motifs_run_config::Aggr::Mean;
-    use crate::find_motifs_run_config::MaxSlices::Abs;
-    use crate::find_motifs_run_config::SlicesFilter::Precalculate;
-    use crate::find_motifs_run_config::StatsKey::Window;
+    use thoosa_shared::val::Val;
+    use crate::tasks::find_motifs_run_config::Aggr::Mean;
+    use crate::tasks::find_motifs_run_config::MaxSlices::Abs;
+    use crate::tasks::find_motifs_run_config::SlicesFilter::Precalculate;
+    use crate::tasks::find_motifs_run_config::StatsKey::Window;
 
     #[ctor::ctor]
     fn test_init() {
@@ -456,12 +440,13 @@ mod tests {
                     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
                 },
             ), InputFilterRangeOrValue::MedianFilter(MedianFilterParamsRangeOrValue { window: 11u32.into() })]),
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            slices_filter: SlicesFilterRangeOrValue::Accumulate(
-                AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
-            ),
+            finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(
+                    AccumulateStatsRangeOrValue { aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: 0.5.into() }) },
+                ),
+            }),
             max_slices: None,
-            dummy_bucketing: RangeOrValue::Value(false),
         };
         // debug!("{:#}", serde_json5::to_string(&rc).unwrap());
         let grid = rc.grid_run_configs().expect("FindMotifsRunConfigRangeOrValue::grid_run_configs should not fail");
@@ -582,7 +567,7 @@ mod tests {
 
     #[test]
     fn test_to_stats_keys(){
-        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), similarity_metric: SimilarityMetric::default(), slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })), dummy_bucketing: false };
+        let run_config = FindMotifsRunConfig { id: Some(246), step: 100, window: 1000, freq_filter: Some(vec![BandPassFilter(BandPassFilterParams { low_hz: 20.0, band_hz: 2.0, kernel_size: 10, stride: 10, padding: Padding::zero() }), NotchBandFilter(NotchBandFilterParams { low_hz: 59.0, high_hz: 62.0 })]), max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })), finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))) };
 
         let keys = run_config.to_stats_keys();
         
@@ -605,10 +590,8 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![SavGolFilter(SavGolFilterParams { window_len: 11, poly_order: 2, stride: 1, padding: Padding::reflect() })]),
-            similarity_metric: SimilarityMetric::default(),
-            slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
-            dummy_bucketing: false,
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
         };
 
         let keys = run_config.to_stats_keys();
@@ -632,10 +615,8 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![MedianFilter(MedianFilterParams { window: 11 })]),
-            similarity_metric: SimilarityMetric::default(),
-            slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
-            dummy_bucketing: false,
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
         };
 
         let keys = run_config.to_stats_keys();
@@ -659,10 +640,8 @@ mod tests {
             step: 100,
             window: 1000,
             freq_filter: Some(vec![AverageFilter(AverageFilterParams { window: 11, step: 1 })]),
-            similarity_metric: SimilarityMetric::default(),
-            slices_filter: Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }),
             max_slices: Some(Abs(MaxSlicesAbs { count: 1000 })),
-            dummy_bucketing: false,
+            finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(SimilarityMetric::default(), Precalculate(PrecalculateStats { aggr: Mean(MeanAggr { k: 0.09006707 }), slices: 1000 }))),
         };
 
         let keys = run_config.to_stats_keys();
@@ -683,35 +662,35 @@ mod tests {
     fn test_motif_criteria_constraints_keep_interesting_variants() {
         let criteria = vec![
             MotifCriterionConstraint {
-                metric: Metrics::InterestingAmp01(crate::find_motifs_run_config::InterestingAmp01RunConfig { q_lo: 0.05, q_hi: 0.95, a0: 0.1, eps: 1e-8 }),
+                metric: Metrics::InterestingAmp01(crate::tasks::find_motifs_run_config::InterestingAmp01RunConfig { q_lo: 0.05, q_hi: 0.95, a0: 0.1, eps: 1e-8 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::InterestingTvNorm01(crate::find_motifs_run_config::InterestingTvNorm01RunConfig { amp_q_lo: 0.05, amp_q_hi: 0.95, tv0: 0.2, eps: 1e-8 }),
+                metric: Metrics::InterestingTvNorm01(crate::tasks::find_motifs_run_config::InterestingTvNorm01RunConfig { amp_q_lo: 0.05, amp_q_hi: 0.95, tv0: 0.2, eps: 1e-8 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::InterestingCurvatureNorm01(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig { amp_q_lo: 0.05, amp_q_hi: 0.95, curv0: 0.3, eps: 1e-8 }),
+                metric: Metrics::InterestingCurvatureNorm01(crate::tasks::find_motifs_run_config::InterestingCurvatureNorm01RunConfig { amp_q_lo: 0.05, amp_q_hi: 0.95, curv0: 0.3, eps: 1e-8 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::InterestingTurningPointsRatio(crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig { peak: 4 }),
+                metric: Metrics::InterestingTurningPointsRatio(crate::tasks::find_motifs_run_config::InterestingTurningPointsRatioRunConfig { peak: 4 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::InterestingBandEnergyRatio01(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig { fs: 100.0, f_lo: 5.0, f_hi: 20.0, eps: 1e-8 }),
+                metric: Metrics::InterestingBandEnergyRatio01(crate::tasks::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig { fs: 100.0, f_lo: 5.0, f_hi: 20.0, eps: 1e-8 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::InterestingEntropyGauss01(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig { h0: 0.6, sigma: 0.2, eps: 1e-8 }),
+                metric: Metrics::InterestingEntropyGauss01(crate::tasks::find_motifs_run_config::InterestingEntropyGauss01RunConfig { h0: 0.6, sigma: 0.2, eps: 1e-8 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::InterestingEntropyBand01(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig { h_min: 0.2, h_max: 0.8, eps: 1e-8 }),
+                metric: Metrics::InterestingEntropyBand01(crate::tasks::find_motifs_run_config::InterestingEntropyBand01RunConfig { h_min: 0.2, h_max: 0.8, eps: 1e-8 }),
                 min: Metrics::DEFAULT_CRITERION_MIN,
             },
             MotifCriterionConstraint {
-                metric: Metrics::PeriodicityAcf(crate::find_motifs_run_config::PeriodicityAcfRunConfig {
+                metric: Metrics::PeriodicityAcf(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig {
                     struct_lag_max: 1./64.0,
                     lag_min: 1./32.0,
                     lag_max: 0.5,
@@ -738,7 +717,7 @@ mod tests {
     #[test]
     fn test_motif_criteria_periodicity_acf_roundtrips_properties() {
         let criteria = vec![MotifCriterionConstraint {
-            metric: Metrics::PeriodicityAcf(crate::find_motifs_run_config::PeriodicityAcfRunConfig {
+            metric: Metrics::PeriodicityAcf(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig {
                     struct_lag_max: 1./64.,
                     lag_min: 1./32.,
                     lag_max: 0.5,
@@ -759,67 +738,67 @@ mod tests {
 
     #[test]
     fn test_default_metric_params_use_safe_non_zero_values() {
-        let norm = crate::find_motifs_run_config::NormThicknessRunConfig::default();
+        let norm = crate::tasks::find_motifs_run_config::NormThicknessRunConfig::default();
         assert_eq!(norm.eps, 1e-8);
-        assert_eq!(crate::find_motifs_run_config::NormThicknessRunConfig::default().eps, norm.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::NormThicknessRunConfig::default().eps, norm.eps);
 
-        let inlier = crate::find_motifs_run_config::InlierRatioRunConfig::default();
+        let inlier = crate::tasks::find_motifs_run_config::InlierRatioRunConfig::default();
         assert_eq!(inlier.k, 4.5);
         assert_eq!(inlier.eps, 1e-8);
-        assert_eq!(crate::find_motifs_run_config::InlierRatioRunConfig::default().k, inlier.k);
-        assert_eq!(crate::find_motifs_run_config::InlierRatioRunConfig::default().eps, inlier.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InlierRatioRunConfig::default().k, inlier.k);
+        assert_eq!(crate::tasks::find_motifs_run_config::InlierRatioRunConfig::default().eps, inlier.eps);
 
-        let coherence = crate::find_motifs_run_config::CoherenceRunConfig::default();
+        let coherence = crate::tasks::find_motifs_run_config::CoherenceRunConfig::default();
         assert_eq!(coherence.k, 10.0);
         assert_eq!(coherence.eps, 1e-8);
-        assert_eq!(crate::find_motifs_run_config::CoherenceRunConfig::default().k, coherence.k);
-        assert_eq!(crate::find_motifs_run_config::CoherenceRunConfig::default().eps, coherence.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::CoherenceRunConfig::default().k, coherence.k);
+        assert_eq!(crate::tasks::find_motifs_run_config::CoherenceRunConfig::default().eps, coherence.eps);
 
-        let amp = crate::find_motifs_run_config::InterestingAmp01RunConfig::default();
+        let amp = crate::tasks::find_motifs_run_config::InterestingAmp01RunConfig::default();
         assert_eq!((amp.q_lo, amp.q_hi, amp.a0, amp.eps), (0.05, 0.95, 1.0, 1e-8));
-        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().q_lo, amp.q_lo);
-        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().q_hi, amp.q_hi);
-        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().a0, amp.a0);
-        assert_eq!(crate::find_motifs_run_config::InterestingAmp01RunConfig::default().eps, amp.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingAmp01RunConfig::default().q_lo, amp.q_lo);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingAmp01RunConfig::default().q_hi, amp.q_hi);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingAmp01RunConfig::default().a0, amp.a0);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingAmp01RunConfig::default().eps, amp.eps);
 
-        let tv = crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default();
+        let tv = crate::tasks::find_motifs_run_config::InterestingTvNorm01RunConfig::default();
         assert_eq!((tv.amp_q_lo, tv.amp_q_hi, tv.tv0, tv.eps), (0.05, 0.95, 1.0, 1e-8));
-        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().amp_q_lo, tv.amp_q_lo);
-        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().amp_q_hi, tv.amp_q_hi);
-        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().tv0, tv.tv0);
-        assert_eq!(crate::find_motifs_run_config::InterestingTvNorm01RunConfig::default().eps, tv.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingTvNorm01RunConfig::default().amp_q_lo, tv.amp_q_lo);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingTvNorm01RunConfig::default().amp_q_hi, tv.amp_q_hi);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingTvNorm01RunConfig::default().tv0, tv.tv0);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingTvNorm01RunConfig::default().eps, tv.eps);
 
-        let curvature = crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default();
+        let curvature = crate::tasks::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default();
         assert_eq!((curvature.amp_q_lo, curvature.amp_q_hi, curvature.curv0, curvature.eps), (0.05, 0.95, 1.0, 1e-8));
-        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().amp_q_lo, curvature.amp_q_lo);
-        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().amp_q_hi, curvature.amp_q_hi);
-        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().curv0, curvature.curv0);
-        assert_eq!(crate::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().eps, curvature.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().amp_q_lo, curvature.amp_q_lo);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().amp_q_hi, curvature.amp_q_hi);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().curv0, curvature.curv0);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingCurvatureNorm01RunConfig::default().eps, curvature.eps);
 
-        let turns = crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig::default();
+        let turns = crate::tasks::find_motifs_run_config::InterestingTurningPointsRatioRunConfig::default();
         assert_eq!(turns.peak, 4);
-        assert_eq!(crate::find_motifs_run_config::InterestingTurningPointsRatioRunConfig::default().peak, turns.peak);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingTurningPointsRatioRunConfig::default().peak, turns.peak);
 
-        let band = crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default();
+        let band = crate::tasks::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default();
         assert_eq!((band.fs, band.f_lo, band.f_hi, band.eps), (250.0, 8.0, 30.0, 1e-8));
-        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().fs, band.fs);
-        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().f_lo, band.f_lo);
-        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().f_hi, band.f_hi);
-        assert_eq!(crate::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().eps, band.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().fs, band.fs);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().f_lo, band.f_lo);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().f_hi, band.f_hi);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingBandEnergyRatio01RunConfig::default().eps, band.eps);
 
-        let entropy_gauss = crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default();
+        let entropy_gauss = crate::tasks::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default();
         assert_eq!((entropy_gauss.h0, entropy_gauss.sigma, entropy_gauss.eps), (0.6, 0.15, 1e-8));
-        assert_eq!(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().h0, entropy_gauss.h0);
-        assert_eq!(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().sigma, entropy_gauss.sigma);
-        assert_eq!(crate::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().eps, entropy_gauss.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().h0, entropy_gauss.h0);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().sigma, entropy_gauss.sigma);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingEntropyGauss01RunConfig::default().eps, entropy_gauss.eps);
 
-        let entropy_band = crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default();
+        let entropy_band = crate::tasks::find_motifs_run_config::InterestingEntropyBand01RunConfig::default();
         assert_eq!((entropy_band.h_min, entropy_band.h_max, entropy_band.eps), (0.3, 0.85, 1e-8));
-        assert_eq!(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().h_min, entropy_band.h_min);
-        assert_eq!(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().h_max, entropy_band.h_max);
-        assert_eq!(crate::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().eps, entropy_band.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().h_min, entropy_band.h_min);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().h_max, entropy_band.h_max);
+        assert_eq!(crate::tasks::find_motifs_run_config::InterestingEntropyBand01RunConfig::default().eps, entropy_band.eps);
 
-        let periodicity = crate::find_motifs_run_config::PeriodicityAcfRunConfig::default();
+        let periodicity = crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default();
         assert_eq!(
             (
                 periodicity.struct_lag_max,
@@ -832,13 +811,38 @@ mod tests {
             ),
             (1.0 / 64.0, 1.0 / 32.0, 0.5, 0.2, 0.25, 0.65, 1e-8),
         );
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct_lag_max, periodicity.struct_lag_max);
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().lag_min, periodicity.lag_min);
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().lag_max, periodicity.lag_max);
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct0, periodicity.struct0);
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().peak_good, periodicity.peak_good);
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().peak_bad, periodicity.peak_bad);
-        assert_eq!(crate::find_motifs_run_config::PeriodicityAcfRunConfig::default().eps, periodicity.eps);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct_lag_max, periodicity.struct_lag_max);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().lag_min, periodicity.lag_min);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().lag_max, periodicity.lag_max);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().struct0, periodicity.struct0);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().peak_good, periodicity.peak_good);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().peak_bad, periodicity.peak_bad);
+        assert_eq!(crate::tasks::find_motifs_run_config::PeriodicityAcfRunConfig::default().eps, periodicity.eps);
+    }
+
+    #[test]
+    fn test_find_motifs_run_config_to_from_map() {
+        let params = FindMotifsRunConfig::new_with_running_mean(
+            Some(0),
+            10,
+            10,
+            Some(vec![InputFilter::BandPassFilter(BandPassFilterParams {
+                low_hz: 0.0,
+                band_hz: 100.0,
+                kernel_size: 10,
+                stride: 1,
+                padding: thoosa_common::transforms::filters::Padding::zero(),
+            })]),
+            Some(0.01),
+        );
+
+        let properties: HashMap<String, Val> = params.to_properties_iter(None).collect();
+
+        let loaded_params = FindMotifsRunConfig::from_properties_map_with_id(0, &properties).unwrap();
+
+        debug!("loaded_params={:?}", loaded_params);
+
+        assert_eq!(params, loaded_params);
     }
 
 }
@@ -1405,4 +1409,92 @@ impl SelectMotifsRunConfig {
         Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), vec![])
     }
 
+}
+
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
+pub struct SelectMotifsRunResult {
+    pub run_config: SelectMotifsRunConfig,
+    pub selected_motif_ids_scores: Vec<(u32, f64)>,
+    pub constraint_metrics: Option<HashMap<String, f32>>,
+}
+
+impl SelectMotifsRunResult {
+    pub fn new(
+        run_config: SelectMotifsRunConfig,
+        selected_motif_ids_scores: Vec<(u32, f64)>,
+        constraint_metrics: Option<HashMap<String, f32>>,
+    ) -> Self {
+        Self {
+            run_config,
+            selected_motif_ids_scores,
+            constraint_metrics,
+        }
+    }
+}
+
+#[derive(Debug, Clone, DummyData)]
+#[dummy_data(clone)]
+pub struct SelectMotifsSavableResult {
+    dummy_id:RunId,
+    run_results: Vec<SelectMotifsRunResult>,
+}
+
+impl Output for SelectMotifsSavableResult {}
+
+impl WithId for SelectMotifsSavableResult {
+    type ID = RunId;
+
+    fn id(&self) -> &Self::ID {
+        &self.dummy_id
+    }
+}
+
+impl SelectMotifsSavableResult {
+    pub fn new(
+        run_results: Vec<SelectMotifsRunResult>,
+    ) -> Self {
+        Self {
+            dummy_id: 0,
+            run_results,
+        }
+    }
+
+    //to be used from opt FindAndSelectMotifsStage
+    pub fn score_sum(&self) -> f64 {
+        //always one - from run_find_and_select
+        assert_eq!(self.run_results.len(), 1, "expected one run config");
+        self.run_results[0].selected_motif_ids_scores.iter().map(|v| v.1).sum::<f64>() / self.run_results[0].selected_motif_ids_scores.len() as f64
+    }
+
+    pub fn selected_motif_ids_scores(&self) -> &[(u32, f64)] {
+        assert_eq!(self.run_results.len(), 1, "expected one run config");
+        self.run_results[0].selected_motif_ids_scores.as_slice()
+    }
+
+    pub fn constraint_metrics(&self) -> Option<&HashMap<String, f32>> {
+        assert_eq!(self.run_results.len(), 1, "expected one run config");
+        self.run_results[0].constraint_metrics.as_ref()
+    }
+}
+
+#[async_trait]
+impl SavableResult for SelectMotifsSavableResult {
+
+    async fn save(
+        &mut self,
+        store: &Arc<Box<dyn Store>>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+    ) -> Result<u32, ThoError> {
+
+        for run_result in &self.run_results {
+            store.save_selected_motifs(
+                run_result.run_config.id.expect("should be pre saved in run_grid"),
+                run_result.selected_motif_ids_scores.clone()
+            ).await?;
+        }
+
+        //RunConfig is pre saved in run_grid
+        Ok(0)
+    }
 }

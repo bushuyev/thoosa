@@ -1,5 +1,5 @@
 use crate::cli::Commands::{
-    FindMotifs, ImportResources, Infer, Bucket, BucketOpt, MotifsToTensor, PlotData, RunAll,
+     FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
@@ -42,7 +42,7 @@ use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use thoosa_common::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, DotProductConfigRangeOrValue, EucDistConfig, EucDistConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PearsonCorrConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
+use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::loader::{LoadRunner, SyncWrapper};
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -50,7 +50,7 @@ use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, S
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::utils::{ from, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
+use thoosa_common::utils::{from, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
@@ -77,19 +77,19 @@ use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
 
-use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
-use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::AsyncStage;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_motifs::distance::average_euclidean_distance;
+use thoosa_motifs::distance::{average_euclidean_distance, EucDistConfig, EucDistConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue};
 use thoosa_shared::colors_iter::DistinctColorIter;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::perf_logging::{format_perf_map, init_tracing, install_panic_hook, SyncMakeWriter, PERF};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, AsyncOOMHandler, OOMHandler};
+use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use thoosa_store::rusqlite::Transaction;
@@ -98,7 +98,7 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
-use crate::tasks::bucketing::{MelPatchResourcesInput, BucketRunConfig, BucketingStage, BucketRunConfigRangeOrValue};
+use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingStage, MelPatchResourcesInput};
 use crate::tasks::bucketing_opt::BucketingOptStage;
 use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
@@ -297,8 +297,6 @@ pub enum Commands {
     ImportResources(ImportResourcesArgs),
     FindMotifs(FindMotifsArgs),
     SeqScan(SeqScanArgs),
-    Bucket(BucketArgs),
-    BucketOpt(BucketOptArgs),
     PlotData(PlotDataArgs),
     MotifsToTensor(MotifsToTensorArgs),
     SelectMotifs(SelectMotifsArgs),
@@ -605,74 +603,6 @@ where
             ).await?;
 
             info!("SeqScan done, run_ids={run_ids:?}");
-        }
-
-        Some(Bucket(bucket_args)) => {
-            debug!("MelPatch: mel_patch_args={bucket_args:?}");
-
-            let bucket_config_range_or_value: BucketRunConfigRangeOrValue = serde_json5::from_str(&bucket_args.run_config_cnt).expect("MelPatchRunConfig");
-
-            let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(bucket_args.resource_config()).check(&store).await?));
-
-            let find_motifs_run_id = store.save_run_config(
-                None,
-                &FindMotifsRunConfig::type_name(),
-                "FindMotifsRunConfig",
-                FindMotifsRunConfig::new(None, 0, 8000, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
-            ).await?;
-
-
-            let run_ids = run_grid(
-                Some(vec![find_motifs_run_id]),
-                bucket_config_range_or_value,
-                input_wrapper,
-                &ws,
-                &store,
-                |run_configs| async {
-                    Arc::new(BucketingStage::<Simple, RawTensorLoader<RunCtxImpl>, ChannelsData2, SynKey, RunCtxImpl>::new(
-                        &ws,
-                        &store,
-                        loader,
-                        run_configs
-                    ).expect("BucketingStage::new failed"))
-                },
-                || root_ctx.branch(Some("mel patch"), true),
-            ).await?;
-
-            info!("MelPatch done, run_ids={run_ids:?}");
-        }
-
-        Some(BucketOpt(mel_patch_opt_args)) => {
-            debug!("MelPatchOpt: mel_patch_opt_args={mel_patch_opt_args:?}");
-
-            let mel_patch_run_config_range_or_value: BucketRunConfigRangeOrValue =
-                serde_json5::from_str(&mel_patch_opt_args.run_config_cnt).expect("MelPatchRunConfig");
-
-            let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(mel_patch_opt_args.resource_config()).check(&store).await?));
-            let init_loader = Arc::clone(&loader);
-            let init_ws = Arc::clone(&ws);
-            let init_store = Arc::clone(&store);
-            let opt_config = Arc::new(mel_patch_opt_args.opt_config.clone());
-
-            let run_ids = run_opt::<_, _, BucketRunConfig, _, _>(
-                None,
-                mel_patch_run_config_range_or_value,
-                input_wrapper,
-                &ws,
-                &store,
-                move |run_configs| async move {
-                    Ok(Arc::new(BucketingOptStage::new(
-                        init_loader,
-                        &init_ws,
-                        &init_store,
-                        run_configs,
-                        opt_config,
-                    )))
-                },
-                || root_ctx.branch(Some("mel patch opt"), true),
-            ).await?;
-
-            info!("MelPatchOpt done, run_ids={run_ids:?}");
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
@@ -1016,15 +946,16 @@ fn run_all_find_motifs_config_grid_0(min_k:u32, max_k:u32, steps:u32) -> FindMot
             //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
             // }),
         ]),
-        similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-        slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-            aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                q: RangeOrValue::Value(0.05),
-                // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+        finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                    q: RangeOrValue::Value(0.05),
+                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                }),
             }),
         }),
         max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-        dummy_bucketing: RangeOrValue::Value(false),
     }
 }
 
@@ -1652,7 +1583,7 @@ pub async fn plot_resource<C>(
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     channels: Option<Vec<u32>>,
-    freq_filters: Option<Vec<thoosa_common::find_motifs_run_config::InputFilter>>,
+    freq_filters: Option<Vec<InputFilter>>,
     resolution: Resolution,
     print_to_stdout: bool,
     mut ctx: C,
@@ -1710,7 +1641,7 @@ where
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
     let (store_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
 
-    let find_motifs_run_config = load_run_config(store, find_motifs_run_id).await?;
+    let find_motifs_run_config:FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
 
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
@@ -2070,8 +2001,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use thoosa_common::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, EucDistConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InputFilter, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SimilarityMetricRangeOrValue, SlicesFilterRangeOrValue};
-    use thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::{AverageFilter, BandPassFilter, NotchBandFilter};
+    use crate::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::my_tch::ThoModule;
@@ -2081,7 +2011,7 @@ mod cli_tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{lin_motif_node, CommonTrainingRunConfig, InferArgs, MotifCosineNetParams, MotifNetParams, MotifNetTypeParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-    use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, MedianFilterParams, NotchBandFilterParamsRangeOrValue, Padding};
+    use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParams, NotchBandFilterParamsRangeOrValue, Padding};
     use thoosa_common::debug_plot;
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
@@ -2110,6 +2040,8 @@ mod cli_tests {
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
+    use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_shared::traits::{Data, DataId};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
@@ -2265,46 +2197,6 @@ mod cli_tests {
     }
 
     #[test]
-    fn test_bucket_command_parses() {
-        let cli = Cli::parse_from([
-            "thoosa_main",
-            "bucket",
-            "--resources", "group:find",
-            "--run-config-cnt", "{bucket_count:256,min_slices:10,max_slices:100}",
-        ]);
-
-        match cli.command {
-            Some(crate::cli::Commands::Bucket(args)) => {
-                assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
-                assert_eq!(args.run_config_cnt, "{bucket_count:256,min_slices:10,max_slices:100}");
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_mel_patch_opt_command_parses() {
-        let cli = Cli::parse_from([
-            "thoosa_main",
-            "bucket-opt",
-            "--resources", "group:find",
-            "--run-config-cnt", "{bucket_count:{range:{start:64,end:256},step:null},min_slices:10,max_slices:100}",
-            "--opt-max-evals", "12",
-            "--opt-num-init", "4",
-        ]);
-
-        match cli.command {
-            Some(crate::cli::Commands::BucketOpt(args)) => {
-                assert_eq!(args.resources, ResourceType::Group("find".to_owned()));
-                assert_eq!(args.run_config_cnt, "{bucket_count:{range:{start:64,end:256},step:null},min_slices:10,max_slices:100}");
-                assert_eq!(args.opt_config.opt_max_evals, 12);
-                assert_eq!(args.opt_config.opt_num_init, 4);
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
     fn test_run_all_config_0_preserves_dynamic_find_and_select_fields() {
         let config =     FindMotifsRunConfigRangeOrValue {
             id: None,
@@ -2318,19 +2210,20 @@ mod cli_tests {
                 }),
 
             ]),
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                    q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+            finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                        q: RangeOrValue::Range { range: 0.0..0.05, step: None },
+                    }),
                 }),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-            dummy_bucketing: RangeOrValue::Value(false),
         };
         let freq_filter = config.freq_filter.as_ref().expect("find-and-select sample config should include freq_filter");
 
         let median_window = match &freq_filter[0] {
-            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter(params) => &params.window,
+            AverageFilter(params) => &params.window,
             other => panic!("expected median filter in find-and-select sample config, got {other:?}"),
         };
 
@@ -2371,15 +2264,16 @@ mod cli_tests {
                     step: RangeOrValue::Value(10),
                 }),
             ]),
-            similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
-                    q: RangeOrValue::Value(0.05),
-                    // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+            finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+                similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+                slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue {
+                        q: RangeOrValue::Value(0.05),
+                        // q: RangeOrValue::Range { range: 0.0..0.1, step: Some((0.05, 2)) },
+                    }),
                 }),
             }),
             max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-            dummy_bucketing: RangeOrValue::Value(false),
         };
 
 
@@ -2387,7 +2281,7 @@ mod cli_tests {
         let freq_filter = config.freq_filter.as_ref().expect("grid sample config should include freq_filter");
 
         let median_window = match &freq_filter[0] {
-            thoosa_common::find_motifs_run_config::InputFilterRangeOrValue::AverageFilter(params) => &params.window,
+            InputFilterRangeOrValue::AverageFilter(params) => &params.window,
             other => panic!("expected median filter in grid sample config, got {other:?}"),
         };
 

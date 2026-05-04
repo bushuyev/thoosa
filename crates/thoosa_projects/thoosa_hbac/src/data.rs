@@ -805,12 +805,12 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, InputFilter};
+    use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifsNetsRunConfigFields};
-    use thoosa_common::transforms::filters::{NotchBandFilterParams, Padding, SavGolFilterParams};
+    use thoosa_common::transforms::filters::{InputFilter, NotchBandFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::{assert_close, from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32};
     use thoosa_common::ws::Workspace;
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace};

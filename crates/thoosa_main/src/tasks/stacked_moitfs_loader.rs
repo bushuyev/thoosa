@@ -14,7 +14,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
+use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, SelectMotifsRunConfig};
 use thoosa_common::utils::pad_to;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;

@@ -6,7 +6,7 @@ use std::sync::Arc;
 use clap::Args;
 use log::debug;
 use parking_lot::RwLock;
-use thoosa_common::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
+use crate::tasks::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -114,18 +114,19 @@ struct MotifComparisonConfig {
 }
 
 impl MotifComparisonConfig {
-    fn from_find_motifs_run_config(run_config: &FindMotifsRunConfig) -> Self {
-        let aggr = match run_config.slices_filter {
+    fn from_find_motifs_run_config(run_config: &FindMotifsRunConfig) -> Result<Self, ThoError> {
+        let cross_loader_run_config = run_config.cross_loader_run_config().ok_or_else(|| ThoError::new(format!("MotifComparisonConfig::from_find_motifs_run_config: find_motifs_run_config_id={:?} is not a CrossLoader config", run_config.id)))?;
+        let aggr = match cross_loader_run_config.slices_filter {
             SlicesFilter::Accumulate(ref v) => find_motifs_aggr_to_stats(v.aggr),
             SlicesFilter::Precalculate(ref v) => find_motifs_aggr_to_stats(v.aggr),
             // Exact thresholds do not carry an aggregation parameter, so use unscaled mean compactness for merge comparisons.
             SlicesFilter::ExactS(_) => Aggr::Mean(MeanAggr { k: 1.0 }),
         };
 
-        Self {
+        Ok(Self {
             stats_keys: run_config.to_stats_keys(),
-            metric: Metrics::from_similarity_metric(run_config.similarity_metric, aggr),
-        }
+            metric: Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, aggr),
+        })
     }
 
     fn is_compatible_with(&self, other: &Self) -> bool {
@@ -215,7 +216,7 @@ where
                     candidates_by_channel[channel_idx].push(SelectedMotifCandidate {
                         key: SelectedMotifKey::new(*select_run_id, motif_id),
                         channel: channel_idx,
-                        comparison: MotifComparisonConfig::from_find_motifs_run_config(find_motifs_run_config),
+                        comparison: MotifComparisonConfig::from_find_motifs_run_config(find_motifs_run_config)?,
                     });
                 }
             }

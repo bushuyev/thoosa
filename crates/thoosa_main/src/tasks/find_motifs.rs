@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::tasks::bucketing::{BucketingStage, MelPatchResourcesInput};
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
@@ -28,7 +29,7 @@ use tch::kind::FLOAT_CPU;
 use tokio::runtime::Handle;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
-use thoosa_common::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, MaxSlices, SlicesFilter};
+use crate::tasks::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, FinderKind, MaxSlices, SlicesFilter};
 use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
@@ -67,30 +68,37 @@ type DistsTrackerStage<C> = DistsTracker<C>;
 
 
 #[derive(Debug)]
-struct FindMotifsStages<RC, L, C>
+enum FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-
-    cross_loader: Arc<CrossLoader<
+    CrossLoader {
+        id: RunId,
+        cross_loader: Arc<CrossLoader<
             RC,
-        L,
+            L,
             CrossUnfoldMaskStage<C>,
             DistsTrackerStage<C>,
             DistsMask,
             C,
         >>
+    },
+    Bucketing {
+        id: RunId,
+        bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData2, SynKey, C>>,
+    },
 }
 
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> Cached<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(
+    pub fn new_cross_loader(
+        id: RunId,
         cross_loader: Arc<CrossLoader<
             RC,
             L,
@@ -100,17 +108,40 @@ where
             C,
         >>
     ) -> Result<Self, ThoError> {
-        Ok(Self {
+        Ok(Self::CrossLoader {
+            id,
             cross_loader
         })
     }
 
-    pub fn id(&self) -> &RunId{
-        &self.cross_loader.find_motifs_run_config_id
+    pub fn new_bucketing(
+        id: RunId,
+        bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData2, SynKey, C>>,
+    ) -> Result<Self, ThoError> {
+        Ok(Self::Bucketing {
+            id,
+            bucketing_stage,
+        })
     }
 
-    pub async fn run(&self, input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>, ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
-        Arc::clone(&self.cross_loader).run(input, ctx).await
+    pub fn id(&self) -> &RunId{
+        match self {
+            Self::CrossLoader { id, .. } => id,
+            Self::Bucketing { id, .. } => id,
+        }
+    }
+
+    pub async fn run(&self, input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>, mut ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
+        match self {
+            Self::CrossLoader { cross_loader, .. } => Arc::clone(cross_loader).run(input, ctx).await,
+            Self::Bucketing { bucketing_stage, .. } => {
+                let input = with_data!(ctx.branch(Some("find_motifs_bucketing_input"), false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
+                    Ok::<_, ThoError>(MelPatchResourcesInput::new(input.resources_config().clone()))
+                })?;
+                Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx).await?;
+                Ok(Arc::new(DevicesWrap::wrap(())))
+            }
+        }
     }
 
 }
@@ -216,176 +247,199 @@ where
                 async move {
                     let ctx_id = ctx.id().clone();
                     debug!("FindMotifsStage::new: run_config={run_config:?} ctx.id={:?}", ctx.id());
-                    let channels = thoosa_shared::with_perf_log(
-                        || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels(),
-                        "FindMotifsStage::new/ws_read_channels",
-                    );
+                    let find_motifs_run_config_id = run_config.id.expect("find motif run config without id");
+                    let configured_loader = config_to_stage(&loader, &run_config, ws)?;
 
-                    let filter = run_config.slices_filter.clone();
+                     Ok(match &run_config.finder_kind {
+                        FinderKind::Bucket(bucket_run_config) => {
+                            let mut bucket_run_config = bucket_run_config.clone();
+                            bucket_run_config.id = Some(find_motifs_run_config_id);
 
-                    let masks_ctx = match &filter {
-                        SlicesFilter::Accumulate(v) => {
-                            match v.aggr {
-                                FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist { k: aggr.k, ctx: MeanDistsCtx::new(channels, device.into())? },
-                                FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
-                                FilterAggr::Max(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Max is not supported for SlicesFilter::AccumulateStats")),
-                                FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist { q: aggr.q, ctx: QuantileDistsCtx::new(channels, device.into())? },
-                            }
+                            debug!("FindMotifsStage::new: using BucketingStage for run_config_id={find_motifs_run_config_id} ctx.id={:?}", ctx_id);
+                            FindMotifsStages::new_bucketing(
+                                find_motifs_run_config_id,
+                                Arc::new(BucketingStage::new(
+                                    ws,
+                                    &store,
+                                    configured_loader,
+                                    bucket_run_config,
+                                    run_config.window,
+                                    run_config.step,
+                                )?),
+                            )?
                         }
-                        SlicesFilter::Precalculate(v) => {
-                            debug!("FindMotifsStage::new: SlicesFilter::Precalculate ctx.id={:?}", ctx_id);
+                        FinderKind::CrossLoader(cross_loader_run_config) => {
+                            let cross_loader_run_config = cross_loader_run_config.clone();
+                            let channels = thoosa_shared::with_perf_log(
+                                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels(),
+                                "FindMotifsStage::new/ws_read_channels",
+                            );
 
-                            let comparison_metric = Metrics::from_similarity_metric(run_config.similarity_metric, to_stats_aggr(v.aggr));
-                            //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                            let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()]))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+                            let filter = cross_loader_run_config.slices_filter.clone();
 
-                            debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
+                            let masks_ctx = match &filter {
+                                SlicesFilter::Accumulate(v) => {
+                                    match v.aggr {
+                                        FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist { k: aggr.k, ctx: MeanDistsCtx::new(channels, device.into())? },
+                                        FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
+                                        FilterAggr::Max(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Max is not supported for SlicesFilter::AccumulateStats")),
+                                        FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist { q: aggr.q, ctx: QuantileDistsCtx::new(channels, device.into())? },
+                                    }
+                                }
+                                SlicesFilter::Precalculate(v) => {
+                                    debug!("FindMotifsStage::new: SlicesFilter::Precalculate ctx.id={:?}", ctx_id);
 
-                            let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
+                                    let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
+                                    //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
+                                    let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()]))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+
+                                    debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
+
+                                    let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
                                 let metric_val = t.channels_motifs_dists(&comparison_metric)?;
                                 let metric_val_id = metric_val.id().clone();
                                 debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 
                                 ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.device_idx()).into())?)
                             })?;
-                            MasksCtx::PrecalculatedDist { dists }
-                        }
-                        SlicesFilter::ExactS(v) => {
-                            let exact_stats_t = Tensor::f_from_slice(&[v.euc_dist])?
-                                .f_to_device(ThoDevice::from(ctx.device_idx()).into())?
-                                .f_broadcast_to([channels as i64, 1])?;
-                            debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
-                            MasksCtx::PrecalculatedDist { //rename to PreSet
-                                dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
-                            }
-                        }
-                    };
-                    let radius = run_config.step() as u64 * 2;
-
-                    debug!("FindMotifsStage::new: masks_ctx done  ctx.id={:?}", ctx_id);
-
-                    let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
-                        Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
-                            let device_idx = ctx.device_idx();
-                            let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
-
-                            let mut mask_makers = match &masks_ctx {
-                                MasksCtx::AccumulatedMeanDist { k, ctx } => {
-
-                                    vec![
-                                        LocalMin { dim: 1, radius },
-                                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
-                                        LeAccumulatedMean {
-                                            k: *k,
-                                            avg: &ctx.means_acc,
-                                            total_samples: &ctx.total_samples,
-                                        },
-                                    ]
+                                    MasksCtx::PrecalculatedDist { dists }
                                 }
-                                MasksCtx::AccumulatedQuantileDist { q, ctx } => {
-                                    vec![
-                                        LocalMin { dim: 1, radius },
-                                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
-                                        LeAccumulatedQuantile {
-                                            q: *q,
-                                            quantiles: &ctx.quantiles_acc,
-                                            total_samples: &ctx.total_samples,
-                                        },
-                                    ]
+                                SlicesFilter::ExactS(v) => {
+                                    let exact_stats_t = Tensor::f_from_slice(&[v.euc_dist])?
+                                        .f_to_device(ThoDevice::from(ctx.device_idx()).into())?
+                                        .f_broadcast_to([channels as i64, 1])?;
+                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
+                                    MasksCtx::PrecalculatedDist { //rename to PreSet
+                                        dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
+                                    }
                                 }
-                                MasksCtx::PrecalculatedDist { dists } => {
-                                    vec![
-                                        LocalMin { dim: 1, radius },
-                                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
-                                        Le {
-                                            v: &dists.t,
+                            };
+                            let radius = run_config.step() as u64 * 2;
+
+                            debug!("FindMotifsStage::new: masks_ctx done  ctx.id={:?}", ctx_id);
+
+                            let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
+                                Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
+                                    let device_idx = ctx.device_idx();
+                                    let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
+
+                                    let mut mask_makers = match &masks_ctx {
+                                        MasksCtx::AccumulatedMeanDist { k, ctx } => {
+
+                                            vec![
+                                                LocalMin { dim: 1, radius },
+                                                // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                                                LeAccumulatedMean {
+                                                    k: *k,
+                                                    avg: &ctx.means_acc,
+                                                    total_samples: &ctx.total_samples,
+                                                },
+                                            ]
                                         }
-                                    ]
-                                }
-                            };
+                                        MasksCtx::AccumulatedQuantileDist { q, ctx } => {
+                                            vec![
+                                                LocalMin { dim: 1, radius },
+                                                // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                                                LeAccumulatedQuantile {
+                                                    q: *q,
+                                                    quantiles: &ctx.quantiles_acc,
+                                                    total_samples: &ctx.total_samples,
+                                                },
+                                            ]
+                                        }
+                                        MasksCtx::PrecalculatedDist { dists } => {
+                                            vec![
+                                                LocalMin { dim: 1, radius },
+                                                // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                                                Le {
+                                                    v: &dists.t,
+                                                }
+                                            ]
+                                        }
+                                    };
 
-                            if is_diag {
-                                mask_makers.push(Tril);
-                            }
+                                    if is_diag {
+                                        mask_makers.push(Tril);
+                                    }
 
-                            //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
-                            debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
+                                    //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
+                                    debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
-                            //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
-                            let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask( //stream is set in CrossInputSelectorWrap/with_[select]_data_ref + with_data
-                                     &t_0,
-                                     &t_1,
-                                     run_config.similarity_metric,
-                                     fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
-                                     &mut mask_makers,
-                            )?;
+                                    //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
+                                    let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask( //stream is set in CrossInputSelectorWrap/with_[select]_data_ref + with_data
+                                         &t_0,
+                                         &t_1,
+                                         cross_loader_run_config.similarity_metric,
+                                         fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
+                                         &mut mask_makers,
+                                    )?;
 
 
-                            trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
-                            debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
-                            let mask_type = if device_idx > 0 {
-                                DistsMaskType::MaskIndexes(mask.size())
-                            } else {
-                                DistsMaskType::AsIs
-                            };
-                            // let stream = if device_idx > 0 { motifs_stream } else { None };
-                            Ok(DistsMask::new(mask, dists, mask_type, None)?)
-                        }),
-                        masks_ctx,
-                        UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
-                    ));
-                    debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
+                                    trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
+                                    debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
+                                    let mask_type = if device_idx > 0 {
+                                        DistsMaskType::MaskIndexes(mask.size())
+                                    } else {
+                                        DistsMaskType::AsIs
+                                    };
+                                    // let stream = if device_idx > 0 { motifs_stream } else { None };
+                                    Ok(DistsMask::new(mask, dists, mask_type, None)?)
+                                }),
+                                masks_ctx,
+                                UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
+                            ));
+                            debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
 
-                    let configured_loader = config_to_stage(&loader, &run_config, ws)?;
-                    let run_config_clone = run_config.clone();
-                    let step = cross_unfold_clc.as_ref().unfold_params.step();
+                            let run_config_clone = run_config.clone();
+                            let step = cross_unfold_clc.as_ref().unfold_params.step();
 
-                    let find_motifs_run_config_id = run_config_clone.id.expect("find motif run config without id");
+                            debug!("FindMotifsStage::new: ctx.id={:?} done", ctx_id);
 
-                    debug!("FindMotifsStage::new: ctx.id={:?} done", ctx_id);
-
-                    FindMotifsStages::new(
-                        Arc::new(CrossLoader::new(
-                            find_motifs_run_config_id,
-                            configured_loader,
-                            &store,
-                            Arc::clone(&cross_unfold_clc),
-                            {
-                                let ws = Arc::clone(ws);
-                                let store = Arc::clone(store);
-                                let run_config = run_config_clone.clone();
-                                let fixed_config = fixed_config.clone();
-                                move |resources: &[Arc<Resource>]| {
-                                    debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
-                                    Arc::new(DistsTracker::<C>::new(
-                                        &ws,
-                                        &store,
-                                        &run_config,
-                                        &fixed_config,
-                                        run_config.max_slices.as_ref().map(|max_slices| {
-                                            match max_slices {
-                                                MaxSlices::ByResourcesCount(max_by_resources) => { resources.len() as u32 * max_by_resources.k }
-                                                MaxSlices::Abs(max_slices_ab) => max_slices_ab.count
-                                            }
-                                        }),
-                                    ))
-                                }
-                            },
-                            fixed_config.max_chunk_size as usize,
-                            |batch| {
-                                async { batch.to_cpu().await }.boxed()
-                            },
-                            |receiver| {
-                                let dists_tracker = Arc::clone(receiver);
-                                async move {
-                                    dists_tracker.build_groups().await
-                                }
-                                    .boxed()
-                            },
-                            CrossUnfoldClcOutputMergeMode::CpuMerge,
-                            step as u32,
-                        )),
-                    )
+                            FindMotifsStages::new_cross_loader(
+                                find_motifs_run_config_id,
+                                Arc::new(CrossLoader::new(
+                                    find_motifs_run_config_id,
+                                    configured_loader,
+                                    &store,
+                                    Arc::clone(&cross_unfold_clc),
+                                    {
+                                        let ws = Arc::clone(ws);
+                                        let store = Arc::clone(store);
+                                        let run_config = run_config_clone.clone();
+                                        let fixed_config = fixed_config.clone();
+                                        move |resources: &[Arc<Resource>]| {
+                                            debug!("FindMotifsStages::new: new DistsTracker, resources.len={}", resources.len());
+                                            Arc::new(DistsTracker::<C>::new(
+                                                &ws,
+                                                &store,
+                                                &run_config,
+                                                &fixed_config,
+                                                run_config.max_slices.as_ref().map(|max_slices| {
+                                                    match max_slices {
+                                                        MaxSlices::ByResourcesCount(max_by_resources) => { resources.len() as u32 * max_by_resources.k }
+                                                        MaxSlices::Abs(max_slices_ab) => max_slices_ab.count
+                                                    }
+                                                }),
+                                            ))
+                                        }
+                                    },
+                                    fixed_config.max_chunk_size as usize,
+                                    |batch| {
+                                        async { batch.to_cpu().await }.boxed()
+                                    },
+                                    |receiver| {
+                                        let dists_tracker = Arc::clone(receiver);
+                                        async move {
+                                            dists_tracker.build_groups().await
+                                        }
+                                            .boxed()
+                                    },
+                                    CrossUnfoldClcOutputMergeMode::CpuMerge,
+                                    step as u32,
+                                )),
+                            )?
+                        }
+                    })
                 }
 
             });
@@ -526,7 +580,7 @@ mod tests {
     use tch::kind::INT64_CPU;
     use thoosa_common::runner::common::cachable::Cached;
     use thoosa_common::tho_device::ThoDevice;
-    use thoosa_common::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
+    use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::{debug_plot, tch_test_utils};

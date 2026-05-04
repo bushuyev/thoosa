@@ -1,9 +1,5 @@
 #![allow(non_snake_case, unused_assignments, unused_variables, non_camel_case_types)]
 
-#[cfg(test)]
-pub use crate::find_motifs_run_config::{FindMotifsRunConfigRangeOrValue, InputFilterRangeOrValue};
-#[cfg(test)]
-pub use thoosa_shared::RangeOrValue;
 
 use crate::builder::{Node, SeqBuilder};
 use crate::batches::BatchLengths;
@@ -2284,11 +2280,10 @@ mod train_tests {
         AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
         ThoBatch,
     };
-    use crate::find_motifs_run_config::FindMotifsRunConfig;
     use crate::loader::{LoadRunner, OfMemSize, SyncWrapper};
     use crate::my_tch::ThoModule;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, FindMotifsRunConfigRangeOrValue, LinNetArgs, ConvNetParams, InputFilterRangeOrValue, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, RangeOrValue, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
