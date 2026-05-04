@@ -57,6 +57,7 @@ Notes:
 
 ## Misc info
 masks for tensors of all sorts expected to contain false for padded (zeros)) values and true for actual values.
+tho_device_idx and ThoDevice (crates/thoosa_common/src/tho_device.rs) represent the devices used by the application during the current run. The CPU is always at index 0, followed by GPUs or, in the future, other devices. Therefore, GPU(0) usually corresponds to tho_device_idx - 1.
 
 ## Motif Search Notes
 - For HBAC motif exploration, `plot-data --stdout` is the most useful inspection path because it emits machine-readable JSON. Redirect stderr separately because CUDA/libtorch setup can still print noise there even when stdout is clean JSON.

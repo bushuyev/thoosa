@@ -37,7 +37,7 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig};
 use thoosa_common::runs::{Labeled, Simple};
-use thoosa_common::utils::pad_to;
+use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -856,18 +856,7 @@ where
 
 
         for find_motifs_run_id in find_motifs_run_ids {
-            let real_find_motifs_run_id = if store.run_config_descr(*find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-                *find_motifs_run_id
-            } else {
-                let find_motifs_run_id = store.get_input_run_ids(*find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-                // TODO check if all find run configs have same properties - for merged motifs
-                *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id:?}")))?
-            };
-
-            find_motifs_run_configs.push(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
-                real_find_motifs_run_id,
-                &store.list_run_config_values(real_find_motifs_run_id).await?,
-            )?));
+            find_motifs_run_configs.push(Arc::new(load_run_config(store, *find_motifs_run_id).await?));
         }
             let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
@@ -1621,7 +1610,7 @@ pub mod tests {
     use thoosa_shared::traits::DataId;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_store::{IdSlice, MockStore, MockStoreBuilder, Store};
+    use thoosa_store::{IdSlice, MockStore, MockStoreBuilder, RunConfigRow, Store};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_motifs::find::SelectMotifsSavableResult;
     use crate::tasks::cross_dims::ChannelsData2;
@@ -1651,6 +1640,18 @@ pub mod tests {
 
     fn select_input_with_constraint_metrics(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
         Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
+    }
+
+    fn find_motifs_run_config_descr(run_id: RunId) -> (RunId, Result<RunConfigRow, ThoError>) {
+        (
+            run_id,
+            Ok(RunConfigRow {
+                id: run_id,
+                r#type: "FindMotifsRunConfig".to_string(),
+                descr: "test find motifs".to_string(),
+                run_on: "2026-01-01 00:00:00".to_string(),
+            }),
+        )
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1686,6 +1687,7 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
@@ -1762,6 +1764,7 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
@@ -1839,6 +1842,7 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
@@ -1979,6 +1983,7 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
@@ -2815,6 +2820,7 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([find_motifs_run_config_descr(run_id)])
                 .with_list_run_config_values(
                     run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 10, 100, None, None).to_properties_iter(None).collect()),

@@ -426,7 +426,7 @@ mod tests {
     use thoosa_shared::val::NamedVal;
     use thoosa_shared::val::Val;
     use thoosa_shared::{mono_key, ThoError};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
 
     fn const_label_net(motif_nets: u32, slices_len: u32, k: f64, device: Device) -> (Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>> + Sync + Send + 'static>) {
@@ -520,6 +520,15 @@ mod tests {
                     (0, Ok((0usize, 0))),
                     (1, Ok((1usize, 0))),
                 ])
+                .with_run_config_descr([(
+                    0,
+                    Ok(RunConfigRow {
+                        id: 0,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_run_config_values(
                     0,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(0), 10, 100, None, None).to_properties_iter(None).collect()),

@@ -55,7 +55,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::utils::tensor_digest;
+use thoosa_common::utils::{load_run_config, tensor_digest};
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
@@ -538,20 +538,10 @@ where
             .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
             .await?;
 
-        let real_find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-            find_motifs_run_id
-        } else {
-            let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-            // TODO check if all find run configs have same properties - for merged motifs
-            *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))? 
-        };
+        let find_motifs_run_config = load_run_config(&self.store, find_motifs_run_id).await?;
+        let real_find_motifs_run_id = find_motifs_run_config.id.unwrap_or(find_motifs_run_id);
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={real_find_motifs_run_id}");
-
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-            real_find_motifs_run_id,
-            &self.store.list_run_config_values(real_find_motifs_run_id).await?,
-        )?;
 
         let window = find_motifs_run_config.window;
         let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
@@ -689,18 +679,7 @@ where
 
         let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
 
-        let real_find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {////TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-            find_motifs_run_id
-        } else {
-            let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-            // TODO check if all find run configs have same properties - for merged motifs
-            *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
-        };
-
-        let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-            real_find_motifs_run_id,
-            &self.store.list_run_config_values(real_find_motifs_run_id).await?,
-        )?;
+        let find_motifs_run_config = load_run_config(&self.store, find_motifs_run_id).await?;
 
 
         debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
@@ -890,18 +869,7 @@ where
     let device_idx = ctx.device_idx();
     debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} slices={slices:?} descr={descr}");
 
-    let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-        find_motifs_run_id
-    } else {
-        let find_motifs_run_id = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-        // TODO check if all find run configs have same properties - for merged motifs
-        *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id:?}")))?
-    };
-
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-        real_find_motifs_run_id,
-        &store.list_run_config_values(real_find_motifs_run_id).await?,
-    )?;
+    let find_motifs_run_config = load_run_config(&store, find_motifs_run_id).await?;
 
     let resource_ids_slices = slices
         .iter()
@@ -1230,6 +1198,15 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                 (1, resource_a.clone()),
                 (2, resource_b.clone())
             ]))))
+            .with_run_config_descr([(
+                run_id,
+                Ok(RunConfigRow {
+                    id: run_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
             .with_list_run_config_values(
                 run_id,
                 Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())

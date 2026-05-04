@@ -9,6 +9,10 @@
 namespace {
 
 // Opaque holder for the real PyTorch RAII guard.
+///https://github.com/pytorch/pytorch/blob/v2.7.0-rc5/c10/cuda/CUDAStream.h
+///  prefer using 'CUDAStreamGuard' instead
+///  * (which will switch both your current device and current stream in the way you
+///  * expect, and reset it back to its original state afterward
 struct ThoCudaStreamGuard {
   c10::cuda::CUDAStreamGuard guard;
   explicit ThoCudaStreamGuard(c10::cuda::CUDAStream s) : guard(s) {}

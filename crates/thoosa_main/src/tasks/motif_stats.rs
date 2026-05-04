@@ -1257,7 +1257,7 @@ mod tests {
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1278,6 +1278,15 @@ mod tests {
         let store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_random_resources([(None, Ok(resources.clone()))])
+                .with_run_config_descr([(
+                    run_id,
+                    Ok(RunConfigRow {
+                        id: run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_run_config_values(
                     run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, motif_width, None, None)

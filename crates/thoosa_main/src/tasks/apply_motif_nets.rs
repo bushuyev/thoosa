@@ -27,7 +27,7 @@ use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
-use thoosa_common::utils::{pad_to, stretch};
+use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -340,18 +340,7 @@ where
             })?;
 
             let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-            let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
-                find_motifs_run_id
-            } else {
-                let find_motifs_run_id = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-                // TODO check if all find run configs have same properties - for merged motifs
-                *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
-            };
-
-            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-                real_find_motifs_run_id,
-                &store.list_run_config_values(real_find_motifs_run_id).await?,
-            )?;
+            let find_motifs_run_config = load_run_config(store, find_motifs_run_id).await?;
 
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_id.get(&find_motifs_run_id) {
                 freq_filter.clone()
@@ -1307,7 +1296,7 @@ pub(crate) mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, valid_partial_output_len, ApplyMotifNets};
     use crate::tasks::tensor_loader::mock_tensor_loader;
@@ -1387,6 +1376,15 @@ pub(crate) mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([(
+                    find_motifs_run_id,
+                    Ok(RunConfigRow {
+                        id: find_motifs_run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
@@ -1531,6 +1529,15 @@ pub(crate) mod tests {
 
         let store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([(
+                    find_motifs_run_id,
+                    Ok(RunConfigRow {
+                        id: find_motifs_run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
@@ -1619,6 +1626,15 @@ pub(crate) mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+            .with_run_config_descr([(
+                find_motifs_run_id,
+                Ok(RunConfigRow {
+                    id: find_motifs_run_id,
+                    r#type: "FindMotifsRunConfig".to_string(),
+                    descr: "test find motifs".to_string(),
+                    run_on: "2026-01-01 00:00:00".to_string(),
+                }),
+            )])
             .with_list_run_config_values(
                 find_motifs_run_id,
                 Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),

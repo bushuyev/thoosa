@@ -10,6 +10,7 @@ use thoosa_common::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRu
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
@@ -206,18 +207,7 @@ where
                     }
 
                     if !run_config_cache.contains_key(&find_motifs_run_id) {
-                        let real_find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-                            find_motifs_run_id
-                        } else {
-                            let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-                            // TODO check if all find run configs have same properties - for merged motifs
-                            *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
-                        };
-
-                        let run_config = FindMotifsRunConfig::from_properties_map_with_id(
-                            real_find_motifs_run_id,
-                            &self.store.list_run_config_values(real_find_motifs_run_id).await?,
-                        )?;
+                        let run_config = load_run_config(&self.store, find_motifs_run_id).await?;
                         run_config_cache.insert(find_motifs_run_id, run_config);
                     }
 
@@ -416,7 +406,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_store::{CheckGroups, MockStoreBuilder};
+    use thoosa_store::{CheckGroups, MockStoreBuilder, RunConfigRow};
     use thoosa_shared::TensorIdSliceIdx;
 
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
@@ -451,6 +441,15 @@ mod tests {
                     (1u32, Ok((0usize, find_run_id))),
                     (2u32, Ok((0usize, find_run_id))),
                 ])
+                .with_run_config_descr([(
+                    find_run_id,
+                    Ok(RunConfigRow {
+                        id: find_run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_run_config_values(
                     find_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_run_id), 1, 3, None, Some(1.0)).to_properties_iter(None).collect()),

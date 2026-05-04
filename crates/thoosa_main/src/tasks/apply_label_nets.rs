@@ -387,7 +387,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::ApplyLabelNets;
     use crate::tasks::cross_dims::ChannelsData2;
@@ -517,6 +517,15 @@ mod tests {
                 .with_get_input_run_ids([
                     (train_label_nets_run_id, Ok(vec![train_motif_nets_run_id])),
                 ])
+                .with_run_config_descr([(
+                    find_motifs_run_id,
+                    Ok(RunConfigRow {
+                        id: find_motifs_run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_get_motif_meta([
                     (0, Ok((0usize, find_motifs_run_id))),
                     (1, Ok((0usize, find_motifs_run_id))),
