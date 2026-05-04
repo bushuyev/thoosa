@@ -505,7 +505,7 @@ mod tests {
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::dims::{Batch, MotifProbability, Slice};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::tch_test_utils;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifsNetsResult, TrainMotifsNetsRunConfigFields};
     use thoosa_common::debug_plot;

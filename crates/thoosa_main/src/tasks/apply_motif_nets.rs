@@ -23,7 +23,7 @@ use thoosa_common::batches::BatchLengths;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
-use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
@@ -340,7 +340,7 @@ where
             })?;
 
             let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-            let find_motifs_run_config = load_run_config(store, find_motifs_run_id).await?;
+            let find_motifs_run_config:FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
 
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_id.get(&find_motifs_run_id) {
                 freq_filter.clone()
@@ -1276,7 +1276,7 @@ pub(crate) mod tests {
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::builder::SeqBuilder;
     use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::tch_test_utils;
     use thoosa_common::tho_tensor::ThoTensor;

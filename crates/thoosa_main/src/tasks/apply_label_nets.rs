@@ -373,7 +373,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_common::batches::BatchLengths;
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};

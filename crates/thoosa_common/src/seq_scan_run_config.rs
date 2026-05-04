@@ -1,6 +1,6 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
-use crate::find_motifs_run_config::{InputFilter, InputFilterBuilder, InputFilterFields, InputFilterRangeOrValue};
+use crate::transforms::filters::{InputFilter, InputFilterBuilder, InputFilterFields, InputFilterRangeOrValue};
 use crate::transforms::filters::InputFilterLengthAdjuster;
 use log::debug;
 use serde::Deserialize;
@@ -120,9 +120,8 @@ impl Default for MeanPowerSeqScanMetricConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::find_motifs_run_config::InputFilterRangeOrValue;
     use crate::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, MeanPowerSeqScanMetricConfigRangeOrValue, SeqScanMetric, SeqScanMetricRangeOrValue, SeqScanRunConfig, SeqScanRunConfigRangeOrValue};
-    use crate::transforms::filters::AverageFilterParamsRangeOrValue;
+    use crate::transforms::filters::{AverageFilterParamsRangeOrValue, InputFilterRangeOrValue};
     use log::debug;
     use std::collections::HashMap;
     use thoosa_properties_map::ToHashmap;

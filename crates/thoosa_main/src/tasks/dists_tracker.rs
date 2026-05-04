@@ -12,7 +12,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Uint8};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
-use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::loader::rayon_pool;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::tensor_mem_size;

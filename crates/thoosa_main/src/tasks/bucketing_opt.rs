@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
-use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, EucDistConfig, FindMotifsRunConfig, MaxAggr, SimilarityMetric, SlicesFilter};
+use crate::tasks::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, SlicesFilter};
 use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
@@ -14,6 +14,7 @@ use thoosa_common::runs::{SavableResult, Simple};
 use thoosa_common::train_nets::OptConfig;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_motifs::distance::{EucDistConfig, SimilarityMetric};
 use thoosa_properties_map::ToHashmap;
 use thoosa_run_config_args::OptRunConfigSource;
 use thoosa_shared::applicables_runner::Output;
@@ -27,9 +28,12 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::cross_dims::ChannelsData2;
-use crate::tasks::bucketing::{MelPatchOutput, MelPatchResourcesInput, BucketRunConfig, BucketingStage, BucketRunConfigRangeOrValue, BucketRunConfigFields};
+use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigFields, BucketRunConfigRangeOrValue, BucketingStage, MelPatchOutput, MelPatchResourcesInput};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_shared::comp_id::SynKey;
+
+const DEFAULT_BUCKET_OPT_WINDOW: u32 = 1024;
+const DEFAULT_BUCKET_OPT_STEP: u32 = 320;
 
 impl OptRunConfigSource for BucketRunConfigRangeOrValue<BucketRunConfigFields> {
     type P = BucketRunConfigFields;
@@ -164,20 +168,16 @@ impl BucketingOptStage {
         Ok(run_id)
     }
 
-    fn mel_patch_window_samples(run_config: &BucketRunConfig) -> Result<u32, ThoError> {
-        run_config.window_samples()
-    }
-
-    fn find_motifs_run_config_for_mel_patch(run_config: &BucketRunConfig) -> Result<FindMotifsRunConfig, ThoError> {
-        Ok(FindMotifsRunConfig::new(
+    fn find_motifs_run_config_for_mel_patch(_run_config: &BucketRunConfig) -> FindMotifsRunConfig {
+        FindMotifsRunConfig::new(
             None,
-            0,
-            Self::mel_patch_window_samples(run_config)?,
+            DEFAULT_BUCKET_OPT_STEP,
+            DEFAULT_BUCKET_OPT_WINDOW,
             None,
             SimilarityMetric::EucDist(EucDistConfig { z_normalize: true }),
             SlicesFilter::Accumulate(AccumulateStats { aggr: Aggr::Max(MaxAggr { k: 0.0 }) }),
             None,
-        ))
+        )
     }
 
     async fn run_mel_patch(
@@ -188,7 +188,7 @@ impl BucketingOptStage {
         resources_config: &Simple,
         mut ctx: RunCtxImpl,
     ) -> Result<MelPatchOptEvalMetrics, ThoError> {
-        let mut find_motifs_run_config = Self::find_motifs_run_config_for_mel_patch(run_config)?;
+        let mut find_motifs_run_config = Self::find_motifs_run_config_for_mel_patch(run_config);
         let find_run_id = Self::save_run_config_with_input(
             store,
             None,
@@ -209,7 +209,9 @@ impl BucketingOptStage {
             ws,
             store,
             loader,
-            vec![run_config.clone()],
+            run_config.clone(),
+            find_motifs_run_config.window,
+            find_motifs_run_config.step,
         )?);
 
         let output = mel_patch_stage
@@ -221,12 +223,7 @@ impl BucketingOptStage {
 
         let motif_count = with_data!(ctx.branch(Some("mel_patch_opt_output"), false), output; |_ctx, output: &MelPatchOutput| {
             Ok::<_, ThoError>(
-                output
-                    .run_ids_motif_ids()
-                    .iter()
-                    .find(|(output_run_id, _)| *output_run_id == run_id)
-                    .map(|(_, motif_ids)| motif_ids.len())
-                    .unwrap_or(0)
+                output.motif_ids.1.len()
             )
         })?;
 

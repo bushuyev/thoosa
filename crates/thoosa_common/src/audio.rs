@@ -2,201 +2,15 @@ use std::cmp::Ordering;
 use log::debug;
 use serde::Deserialize;
 use tch::{Device, Kind, TchError, Tensor};
+
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{panic_to_err, ThoError};
 
 pub const LOG_EPS:f64 = 1e-6;
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
-pub struct LogMelPatchConfig {
 
-    /// FFT/window size in samples, e.g. 1024.
-    #[run_config]
-    #[in_map]
-    pub time_size: i64,
-
-    /// STFT hop in samples, e.g. 320 for 20 ms at 16 kHz.
-    #[run_config]
-    #[in_map]
-    pub time_step: i64,
-
-    /// Number of mel bands, e.g. 64 or 128.
-    #[run_config]
-    #[in_map]
-    pub n_mels: i64,
-
-    /// Lowest mel frequency.
-    #[run_config]
-    #[in_map]
-    pub f_min: f64,
-
-    /// Highest mel frequency. If <= 0.0, sample_rate / 2.0 is used.
-    #[run_config]
-    #[in_map]
-    pub f_max: f64,
-
-    /// Number of STFT frames per output patch.
-    #[run_config]
-    #[in_map]
-    pub mel_patch_size: i64,
-
-    /// Step between patches in STFT frames.
-    #[run_config]
-    #[in_map]
-    pub mel_patch_step: i64,
-
-
-}
-
-impl Default for LogMelPatchConfig {
-    fn default() -> Self {
-        Self {
-            time_size: 1024,
-            time_step: 320,
-            n_mels: 128,
-            f_min: 20.0,
-            f_max: 16_000.0,
-            mel_patch_size: 64,
-            mel_patch_step: 32,
-        }
-    }
-}
-
-/// Convert audio `[channels, samples]` into log-mel patches:
-///
-/// Output shape:
-///
-/// `[channels, patches, n_mels, patch_frames]`
-pub fn audio_to_log_mel_patches(
-    audio: &Tensor,
-    cfg: &LogMelPatchConfig,
-    sample_rate: f64,
-) -> Result<Tensor, ThoError> {
-    debug!("audio_to_log_mel_patches: audio={audio:?} cfg={cfg:?}");
-
-    let size = audio.size();
-
-    if size.len() != 2 {
-        return Err(ThoError::new(format!("expected audio shape [channels, samples], got {size:?}")));
-    }
-
-    let channels = size[0];
-    let samples = size[1];
-
-    if samples < cfg.time_size {
-        return Err(ThoError::new(format!("audio too short: samples={samples}, n_fft={}", cfg.time_size)));
-    }
-
-    if cfg.time_size <= 0 || cfg.time_step <= 0 || cfg.n_mels <= 0 {
-        return Err(ThoError::new(format!("invalid config: n_fft={}, hop_length={}, n_mels={}", cfg.time_size, cfg.time_step, cfg.n_mels)));
-    }
-
-    if cfg.mel_patch_size <= 0 || cfg.mel_patch_step <= 0 {
-        return Err(ThoError::new(format!("invalid patch config: patch_frames={}, patch_step={}", cfg.mel_patch_size, cfg.mel_patch_step)));
-    }
-
-    let device = audio.device();
-
-    // Work in float.
-    let audio = audio.f_to_kind(Kind::Float)?;
-
-    // ---------------------------------------------------------------------
-    // 1. Frame audio with unfold.
-    //
-    // audio:  [C, samples]
-    // frames: [C, frames, n_fft]
-    // ---------------------------------------------------------------------
-    let frames = audio.f_unfold(1, cfg.time_size, cfg.time_step)?;
-    debug!("audio_to_log_mel_patches: frames={frames:?}");
-    // ---------------------------------------------------------------------
-    // 2. Apply Hann window.
-    //
-    // window: [n_fft]
-    // frames: [C, frames, n_fft]
-    // ---------------------------------------------------------------------
-    let hann = Tensor::f_hann_window(cfg.time_size, (Kind::Float, device))?;
-    debug!("audio_to_log_mel_patches: hann={hann:?}");
-
-    let frames = frames.f_mul(&hann.f_view([1, 1, cfg.time_size])?)?;
-    debug!("audio_to_log_mel_patches: frames x hann={frames:?}");
-
-    // ---------------------------------------------------------------------
-    // 3. RFFT over the last dimension.
-    //
-    // spectrum: [C, frames, freq_bins] complex
-    // power:    [C, frames, freq_bins] real
-    // ---------------------------------------------------------------------
-    let spectrum = frames.f_fft_rfft(None, -1, "backward")?;
-    debug!("audio_to_log_mel_patches: spectrum={spectrum:?}");
-
-    let power = spectrum.f_abs()?.f_pow_tensor_scalar(2.0)?;
-
-    debug!("audio_to_log_mel_patches: power={power:?}");
-
-    let freq_bins = cfg.time_size / 2 + 1;
-
-    // ---------------------------------------------------------------------
-    // 4. Mel projection.
-    //
-    // power:        [C, frames, F]
-    // mel_fb:       [M, F]
-    // power_flat:   [C * frames, F]
-    // mel_flat:     [C * frames, M]
-    // mel:          [C, M, frames]
-    // ---------------------------------------------------------------------
-    //called once per RunConfig
-    let mel_fb = build_mel_filterbank(
-        sample_rate,
-        cfg.time_size,
-        cfg.n_mels,
-        cfg.f_min,
-        cfg.f_max,
-        device,
-    )?;
-
-    debug!("audio_to_log_mel_patches: mel_fb=\n{mel_fb}");
-
-    let n_frames = power.size()[1];
-
-    let power_flat = power.f_view([channels * n_frames, freq_bins])?;
-
-    debug!("audio_to_log_mel_patches: power_flat={power_flat:?}");
-
-    let mel_flat = power_flat.f_matmul(&mel_fb.f_transpose(0, 1)?)?;
-
-    debug!("audio_to_log_mel_patches: mel_flat={mel_flat:?}");
-
-    let mel = mel_flat
-        .f_view([channels, n_frames, cfg.n_mels])?
-        .f_transpose(1, 2)?; // [C, M, frames]
-
-    debug!("audio_to_log_mel_patches: mel={mel:?}");
-    // ---------------------------------------------------------------------
-    // 5. Log compression.
-    //
-    // log_mel: [C, M, frames]
-    // ---------------------------------------------------------------------
-    let log_mel = mel.f_clamp_min(LOG_EPS)?.f_log()?;
-
-    // ---------------------------------------------------------------------
-    // 6. Slice time axis into patches.
-    //
-    // log_mel: [C, M, frames]
-    // patches: [C, M, patches, patch_frames]
-    // output:  [C, patches, M, patch_frames]
-    // ---------------------------------------------------------------------
-    if log_mel.size()[2] < cfg.mel_patch_size {
-        return Err(ThoError::new(format!("not enough STFT frames for one patch: frames={}, patch_frames={}", log_mel.size()[2], cfg.mel_patch_size)));
-    }
-
-    let patches = log_mel.f_unfold(2, cfg.mel_patch_size, cfg.mel_patch_step)?;
-    let patches = patches.f_permute(&[0, 2, 1, 3])?;
-
-    Ok(patches)
-}
-
-fn build_mel_filterbank(
+pub fn build_mel_filterbank(
     sample_rate: f64,
     n_fft: i64,
     n_mels: i64,
@@ -497,41 +311,6 @@ fn hash_bit_row_with_channel_salt(bits: &[i64], channel: u64) -> u64 {
     h
 }
 
-/// For patches shaped [channels, patches, n_mels, patch_frames],
-/// returns [channels x patches, (sample_start, sample_end)].
-pub fn patch_sample_ranges_flat(
-    patches: &Tensor,
-    cfg: &LogMelPatchConfig,
-) -> Result<Vec<Vec<(usize, usize)>>, TchError> {
-    let size = patches.size();
-
-    if size.len() != 4 {
-        return Err(TchError::Shape(format!(
-            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
-        )));
-    }
-
-    let channels = size[0];
-    let n_patches = size[1];
-
-    // let mut values = Vec::<i64>::with_capacity((channels * n_patches * 4) as usize);
-    let mut values = vec![vec![]; channels as usize];
-
-    for c in 0..channels {
-        for p in 0..n_patches {
-            let first_frame = p * cfg.mel_patch_step;
-            let last_frame = first_frame + cfg.mel_patch_size - 1;
-
-            let sample_start = first_frame * cfg.time_step;
-            let sample_end = last_frame * cfg.time_step + cfg.time_size;
-
-
-            values[c as usize].push((sample_start as usize, sample_end as usize))
-        }
-    }
-
-    Ok(values)
-}
 
 #[derive(Debug, Clone)]
 pub struct FreqPeak {
@@ -1382,7 +1161,7 @@ mod tests {
     use thoosa_shared::audio_utils::compose_freqs;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_shared::ThoError;
-    use crate::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes, make_lsh_planes_for_buckets, patch_sample_ranges_flat, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation, LogMelPatchConfig};
+    use crate::audio::{assign_lsh_buckets_per_channel, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes, make_lsh_planes_for_buckets, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation};
     use crate::debug_plot;
     use crate::utils::{debug_plot_impl, debug_plot_impl_wh, reset_print_options};
 

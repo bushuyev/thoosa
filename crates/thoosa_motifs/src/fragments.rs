@@ -23,11 +23,8 @@ use tch::Device::Cpu;
 use tch::IndexOp;
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::find_motifs_run_config::{
-    FindMotifsRunConfig,
-    InputFilter,
-};
 use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::panic_to_err;
 use thoosa_common::utils::*;
 use thoosa_common::ws::Workspace;
@@ -380,7 +377,6 @@ impl MotifsToTensorArgs {
 mod motifs_tests {
     use super::{DataBy, PlotDataArgs, Resolution};
     use std::path::PathBuf;
-    use thoosa_common::find_motifs_run_config::InputFilter;
     use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::ops::Index;
@@ -395,9 +391,9 @@ mod motifs_tests {
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::utils::*;
     use thoosa_common::ws::{Workspace, mock_ws_simp};
     use thoosa_shared::MotifSlice;

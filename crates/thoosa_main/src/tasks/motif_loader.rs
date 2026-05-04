@@ -23,7 +23,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices, Slice};
-use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
@@ -538,7 +538,7 @@ where
             .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
             .await?;
 
-        let find_motifs_run_config = load_run_config(&self.store, find_motifs_run_id).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_id).await?;
         let real_find_motifs_run_id = find_motifs_run_config.id.unwrap_or(find_motifs_run_id);
 
         debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={real_find_motifs_run_id}");
@@ -679,7 +679,7 @@ where
 
         let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
 
-        let find_motifs_run_config = load_run_config(&self.store, find_motifs_run_id).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_id).await?;
 
 
         debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
@@ -869,7 +869,7 @@ where
     let device_idx = ctx.device_idx();
     debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} slices={slices:?} descr={descr}");
 
-    let find_motifs_run_config = load_run_config(&store, find_motifs_run_id).await?;
+    let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&store, find_motifs_run_id).await?;
 
     let resource_ids_slices = slices
         .iter()
@@ -1069,7 +1069,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::utils::lin_t;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::{TensorIdSliceIdx, ThoError};

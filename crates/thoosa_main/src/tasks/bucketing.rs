@@ -12,10 +12,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use log::{debug, info, warn};
-use tch::{Device, Kind, Tensor};
+use tch::{Device, Kind, TchError, Tensor};
 use serde::Deserialize;
-use thoosa_common::audio::{assign_lsh_buckets_per_channel, audio_to_log_mel_patches, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes_for_buckets, patch_sample_ranges_flat, BandAggregation, LogMelPatchConfig};
-use thoosa_common::audio::{LogMelPatchConfigRangeOrValue, LogMelPatchConfigFields, LogMelPatchConfigBuilder};
+use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes_for_buckets, BandAggregation, LOG_EPS};
 use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -99,16 +98,16 @@ impl<RC> Input for MelPatchResourcesInput<RC> where RC: ResourcesConfig + Debug 
 
 #[derive(Debug, Clone)]
 pub struct MelPatchOutput {
-    run_ids_motif_ids: Vec<(RunId, Vec<u32>)>,
+    pub(crate) motif_ids: (RunId, Vec<u32>),
 }
 
 impl MelPatchOutput {
-    fn new(run_ids_motif_ids: Vec<(RunId, Vec<u32>)>) -> Self {
-        Self { run_ids_motif_ids }
+    fn new(run_ids_motif_ids: (RunId, Vec<u32>)) -> Self {
+        Self { motif_ids: run_ids_motif_ids }
     }
 
-    pub fn run_ids_motif_ids(&self) -> &[(RunId, Vec<u32>)] {
-        &self.run_ids_motif_ids
+    pub fn run_ids_motif_ids(&self) -> &(RunId, Vec<u32>) {
+        &self.motif_ids
     }
 }
 
@@ -237,7 +236,9 @@ where
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
-    run_configs: Vec<BucketRunConfig>,
+    run_config: BucketRunConfig,
+    window: i64,
+    step: i64,
     pd: PhantomData<(RC, D, Id, C)>,
 }
 
@@ -253,30 +254,33 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
-        run_configs: Vec<BucketRunConfig>,
+        run_config: BucketRunConfig,
+        window: u32,
+        step: u32,
     ) -> Result<Self, ThoError> {
-        if run_configs.is_empty() {
-            return Err(ThoError::new("BucketingStage::new: run_configs should not be empty"));
+
+
+        if run_config.bucket_count == 0 {
+            return Err(ThoError::new("BucketingStage::new: bucket_count must be positive"));
+        }
+        if run_config.bucket_count > u16::MAX as u32 + 1 {
+            return Err(ThoError::new(format!("BucketingStage::new: bucket_count={} exceeds u16 group ord capacity", run_config.bucket_count)));
+        }
+        if run_config.min_slices > run_config.max_slices {
+            return Err(ThoError::new(format!("BucketingStage::new: min_slices={} exceeds max_slices={}", run_config.min_slices, run_config.max_slices)));
+        }
+        if window == 0 || step == 0 {
+            return Err(ThoError::new(format!("BucketingStage::new: window={window} step={step} must be positive")));
         }
 
-        for run_config in &run_configs {
-            run_config.run_id()?;
-            if run_config.bucket_count == 0 {
-                return Err(ThoError::new("BucketingStage::new: bucket_count must be positive"));
-            }
-            if run_config.bucket_count > u16::MAX as u32 + 1 {
-                return Err(ThoError::new(format!("BucketingStage::new: bucket_count={} exceeds u16 group ord capacity", run_config.bucket_count)));
-            }
-            if run_config.min_slices > run_config.max_slices {
-                return Err(ThoError::new(format!("BucketingStage::new: min_slices={} exceeds max_slices={}", run_config.min_slices, run_config.max_slices)));
-            }
-        }
 
         Ok(Self {
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             loader,
-            run_configs,
+            run_config,
+            window: i64::from(window),
+            step: i64::from(step),
             pd: PhantomData,
         })
     }
@@ -291,8 +295,8 @@ where
         sample_rate: f64,
     ) -> Result<(), ThoError> {
         let mel_config = run_config.log_mel_config()?;
-        let patches = audio_to_log_mel_patches(audio, mel_config, sample_rate)?;
-        let patch_ranges = patch_sample_ranges_flat(&patches, mel_config)?;
+        let patches = audio_to_log_mel_patches(audio, mel_config, sample_rate, self.window, self.step)?;
+        let patch_ranges = patch_sample_ranges_flat(&patches, mel_config, self.window, self.step)?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, run_config.bucket_count_i64())?;
 
         if patch_ranges.len() != channels_bucket_ids.len() {
@@ -330,6 +334,8 @@ where
         run_config: &BucketRunConfig,
         plain_config: &PlainConfig,
         sample_rate: f64,
+        window: i64,
+        step: i64,
     ) -> Result<(), ThoError> {
         if temp_stores.len() != run_config.bucket_count as usize {
             return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: temp stores={} bucket_count={}", temp_stores.len(), run_config.bucket_count)));
@@ -339,14 +345,14 @@ where
         if audio_size.len() != 2 {
             return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: expected audio shape [channels, samples], got {audio_size:?}")));
         }
-        if plain_config.slice_size <= 0 || plain_config.slice_step <= 0 {
-            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: invalid plain_config={plain_config:?}")));
+        if window <= 0 || step <= 0 {
+            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: invalid window={window} step={step} plain_config={plain_config:?}")));
         }
-        if audio_size[1] < plain_config.slice_size {
-            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: audio too short samples={} slice_size={}", audio_size[1], plain_config.slice_size)));
+        if audio_size[1] < window {
+            return Err(ThoError::new(format!("BucketingStage::save_resource_plain_buckets: audio too short samples={} window={window}", audio_size[1])));
         }
 
-        let slices = audio.f_unfold(1, plain_config.slice_size, plain_config.slice_step)?;
+        let slices = audio.f_unfold(1, window, step)?;
         debug!("save_resource_plain_buckets: slices={slices:?}");
 
         let channels_slices_freqamp = fft_band_amplitudes_sliced(&slices, sample_rate, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset)?;
@@ -364,7 +370,7 @@ where
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
             for (slice_idx, bucket) in bucket_ids.iter().enumerate() {
                 let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("BucketingStage::save_resource_plain_buckets: bucket={bucket} does not fit into u16")))?;
-                let sample_start = (slice_idx as i64).checked_mul(plain_config.slice_step).ok_or_else(|| ThoError::new("BucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
+                let sample_start = (slice_idx as i64).checked_mul(step).ok_or_else(|| ThoError::new("BucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
                 let slice_start = u32::try_from(sample_start).map_err(|_| ThoError::new(format!("BucketingStage::save_resource_plain_buckets: sample_start={sample_start} does not fit into u32")))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(resource.id(), slice_start));
             }
@@ -378,6 +384,180 @@ where
         Ok(())
     }
 }
+
+/// Convert audio `[channels, samples]` into log-mel patches:
+///
+/// Output shape:
+///
+/// `[channels, patches, n_mels, patch_frames]`
+pub fn audio_to_log_mel_patches(
+    audio: &Tensor,
+    cfg: &LogMelPatchConfig,
+    sample_rate: f64,
+    window: i64,
+    step: i64,
+) -> Result<Tensor, ThoError> {
+    debug!("audio_to_log_mel_patches: audio={audio:?} cfg={cfg:?} window={window} step={step}");
+
+    let size = audio.size();
+
+    if size.len() != 2 {
+        return Err(ThoError::new(format!("expected audio shape [channels, samples], got {size:?}")));
+    }
+
+    let channels = size[0];
+    let samples = size[1];
+
+    if samples < window {
+        return Err(ThoError::new(format!("audio too short: samples={samples}, n_fft={window}")));
+    }
+
+    if window <= 0 || step <= 0 || cfg.n_mels <= 0 {
+        return Err(ThoError::new(format!("invalid config: n_fft={window}, hop_length={step}, n_mels={}", cfg.n_mels)));
+    }
+
+    if cfg.mel_patch_size <= 0 || cfg.mel_patch_step <= 0 {
+        return Err(ThoError::new(format!("invalid patch config: patch_frames={}, patch_step={}", cfg.mel_patch_size, cfg.mel_patch_step)));
+    }
+
+    let device = audio.device();
+
+    // Work in float.
+    let audio = audio.f_to_kind(Kind::Float)?;
+
+    // ---------------------------------------------------------------------
+    // 1. Frame audio with unfold.
+    //
+    // audio:  [C, samples]
+    // frames: [C, frames, n_fft]
+    // ---------------------------------------------------------------------
+    let frames = audio.f_unfold(1, window, step)?;
+    debug!("audio_to_log_mel_patches: frames={frames:?}");
+    // ---------------------------------------------------------------------
+    // 2. Apply Hann window.
+    //
+    // window: [n_fft]
+    // frames: [C, frames, n_fft]
+    // ---------------------------------------------------------------------
+    let hann = Tensor::f_hann_window(window, (Kind::Float, device))?;
+    debug!("audio_to_log_mel_patches: hann={hann:?}");
+
+    let frames = frames.f_mul(&hann.f_view([1, 1, window])?)?;
+    debug!("audio_to_log_mel_patches: frames x hann={frames:?}");
+
+    // ---------------------------------------------------------------------
+    // 3. RFFT over the last dimension.
+    //
+    // spectrum: [C, frames, freq_bins] complex
+    // power:    [C, frames, freq_bins] real
+    // ---------------------------------------------------------------------
+    let spectrum = frames.f_fft_rfft(None, -1, "backward")?;
+    debug!("audio_to_log_mel_patches: spectrum={spectrum:?}");
+
+    let power = spectrum.f_abs()?.f_pow_tensor_scalar(2.0)?;
+
+    debug!("audio_to_log_mel_patches: power={power:?}");
+
+    let freq_bins = window / 2 + 1;
+
+    // ---------------------------------------------------------------------
+    // 4. Mel projection.
+    //
+    // power:        [C, frames, F]
+    // mel_fb:       [M, F]
+    // power_flat:   [C * frames, F]
+    // mel_flat:     [C * frames, M]
+    // mel:          [C, M, frames]
+    // ---------------------------------------------------------------------
+    //called once per RunConfig
+    let mel_fb = build_mel_filterbank(
+        sample_rate,
+        window,
+        cfg.n_mels,
+        cfg.f_min,
+        cfg.f_max,
+        device,
+    )?;
+
+    debug!("audio_to_log_mel_patches: mel_fb=\n{mel_fb}");
+
+    let n_frames = power.size()[1];
+
+    let power_flat = power.f_view([channels * n_frames, freq_bins])?;
+
+    debug!("audio_to_log_mel_patches: power_flat={power_flat:?}");
+
+    let mel_flat = power_flat.f_matmul(&mel_fb.f_transpose(0, 1)?)?;
+
+    debug!("audio_to_log_mel_patches: mel_flat={mel_flat:?}");
+
+    let mel = mel_flat
+        .f_view([channels, n_frames, cfg.n_mels])?
+        .f_transpose(1, 2)?; // [C, M, frames]
+
+    debug!("audio_to_log_mel_patches: mel={mel:?}");
+    // ---------------------------------------------------------------------
+    // 5. Log compression.
+    //
+    // log_mel: [C, M, frames]
+    // ---------------------------------------------------------------------
+    let log_mel = mel.f_clamp_min(LOG_EPS)?.f_log()?;
+
+    // ---------------------------------------------------------------------
+    // 6. Slice time axis into patches.
+    //
+    // log_mel: [C, M, frames]
+    // patches: [C, M, patches, patch_frames]
+    // output:  [C, patches, M, patch_frames]
+    // ---------------------------------------------------------------------
+    if log_mel.size()[2] < cfg.mel_patch_size {
+        return Err(ThoError::new(format!("not enough STFT frames for one patch: frames={}, patch_frames={}", log_mel.size()[2], cfg.mel_patch_size)));
+    }
+
+    let patches = log_mel.f_unfold(2, cfg.mel_patch_size, cfg.mel_patch_step)?;
+    let patches = patches.f_permute(&[0, 2, 1, 3])?;
+
+    Ok(patches)
+}
+
+/// For patches shaped [channels, patches, n_mels, patch_frames],
+/// returns [channels x patches, (sample_start, sample_end)].
+pub fn patch_sample_ranges_flat(
+    patches: &Tensor,
+    cfg: &LogMelPatchConfig,
+    window: i64,
+    step: i64,
+) -> Result<Vec<Vec<(usize, usize)>>, TchError> {
+    let size = patches.size();
+
+    if size.len() != 4 {
+        return Err(TchError::Shape(format!(
+            "expected [channels, patches, n_mels, patch_frames], got {size:?}"
+        )));
+    }
+
+    let channels = size[0];
+    let n_patches = size[1];
+
+    // let mut values = Vec::<i64>::with_capacity((channels * n_patches * 4) as usize);
+    let mut values = vec![vec![]; channels as usize];
+
+    for c in 0..channels {
+        for p in 0..n_patches {
+            let first_frame = p * cfg.mel_patch_step;
+            let last_frame = first_frame + cfg.mel_patch_size - 1;
+
+            let sample_start = first_frame * step;
+            let sample_end = last_frame * step + window;
+
+
+            values[c as usize].push((sample_start as usize, sample_end as usize))
+        }
+    }
+
+    Ok(values)
+}
+
 
 impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
@@ -420,14 +600,12 @@ where
             (ws.channels(), ws.sample_rate())
         };
 
-        let mut temp_stores_by_run: Vec<Vec<MelPatchTempStore>> = self.run_configs.iter()
-            .map(|run_config|
-                (0..run_config.bucket_count).map(|bucket| {
-                    let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
-                    MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
-                })
-                    .collect::<Result<Vec<_>, ThoError>>()
-            ).collect::<Result<Vec<_>, ThoError>>()?;
+        let mut temp_stores_by_bucket: Vec<MelPatchTempStore> =
+            (0..self.run_config.bucket_count).map(|bucket| {
+                let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+                MelPatchTempStore::new(&tmp_path, self.run_config.id.expect("no run id").clone(), bucket)
+            })
+                .collect::<Result<Vec<_>, ThoError>>()?;
 
         for resource in &resources {
             let loaded = Arc::clone(&self.loader)
@@ -438,14 +616,14 @@ where
                 .await?;
 
             match with_data!(ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false), loaded; |_ctx, tensor: &ThoTensor<D, Id>| {
-                for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.iter_mut()) {
-                    match run_config.mel_config() {
-                        BucketingConfig::Mel(_) => self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config, sample_rate as f64)?,
-                        BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(resource, tensor.t_ref(), temp_stores, run_config, plain_config, sample_rate as f64)?,
+
+                    match self.run_config.mel_config() {
+                        BucketingConfig::Mel(_) => self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores_by_bucket.as_mut_slice(), &self.run_config, sample_rate as f64)?,
+                        BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(resource, tensor.t_ref(), temp_stores_by_bucket.as_mut_slice(), &self.run_config, plain_config, sample_rate as f64, self.window, self.step)?,
                     }
-                }
+
                 Ok::<_, ThoError>(())
-            }){
+            }) {
                 Ok(_) => {}
                 Err(e) => {
                     warn!("BucketingStage::run e={e}");
@@ -453,37 +631,35 @@ where
             };
         }
 
-        let mut run_configs_motifs = Vec::with_capacity(self.run_configs.len());
-        for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.into_iter()) {
-            // self.store.up
-            let run_id = run_config.run_id()?;
-            let mut motif_ids = Vec::new();
-            let mut groups_by_channel = (0..channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
-            for (bucket, mut temp_store) in temp_stores.into_iter().enumerate() {
-                let group = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
-                for (channel, slices) in temp_store.load_channel_groups(group)? {
-                    let channel = usize::try_from(channel).map_err(|_| ThoError::new(format!("BucketingStage::run: channel={channel} does not fit into usize")))?;
-                    if channel >= groups_by_channel.len() {
-                        return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={channels}")));
-                    }
-                    groups_by_channel[channel].entry(group).or_default().extend(slices);
+
+        // self.store.up
+        let run_id = self.run_config.run_id()?;
+        let mut motif_ids = Vec::new();
+        let mut groups_by_channel = (0..channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
+        for (bucket, mut temp_store) in temp_stores_by_bucket.into_iter().enumerate() {
+            let group = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+            for (channel, slices) in temp_store.load_channel_groups(group)? {
+                let channel = usize::try_from(channel).map_err(|_| ThoError::new(format!("BucketingStage::run: channel={channel} does not fit into usize")))?;
+                if channel >= groups_by_channel.len() {
+                    return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={channels}")));
                 }
-                temp_store.remove()?;
+                groups_by_channel[channel].entry(group).or_default().extend(slices);
             }
-
-            for (channel, groups) in groups_by_channel.into_iter().enumerate() {
-                let groups = filter_mel_patch_groups(groups, run_config.min_slices_usize(), run_config.max_slices_usize());
-                let group_motif_ids = self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
-                motif_ids.extend(group_motif_ids);
-            }
-
-            debug!("BucketingStage::run: run_id={run_id} resources={} motif_ids={motif_ids:?}", resources.len());
-            run_configs_motifs.push((run_id, motif_ids));
+            temp_store.remove()?;
         }
 
-        info!("BucketingStage::run: run_configs_motifs={run_configs_motifs:?}");
+        for (channel, groups) in groups_by_channel.into_iter().enumerate() {
+            let groups = filter_mel_patch_groups(groups, self.run_config.min_slices_usize(), self.run_config.max_slices_usize());
+            let group_motif_ids = self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
+            motif_ids.extend(group_motif_ids);
+        }
 
-        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new(run_configs_motifs))))
+        debug!("BucketingStage::run: run_id={run_id} resources={} motif_ids={motif_ids:?}", resources.len());
+
+
+        info!("BucketingStage::run: run_id={run_id:?} done");
+
+        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new((run_id, motif_ids)))))
     }
 }
 
@@ -578,14 +754,6 @@ pub struct PlainBandAggregationMean {}
 pub struct PlainConfig {
     #[run_config]
     #[in_map]
-    pub slice_size: i64,
-
-    #[run_config]
-    #[in_map]
-    pub slice_step: i64,
-
-    #[run_config]
-    #[in_map]
     pub band_hz: f64,
 
     #[run_config]
@@ -608,8 +776,6 @@ pub struct PlainConfig {
 impl Default for PlainConfig {
     fn default() -> Self {
         Self {
-            slice_size: 3000,
-            slice_step: 3000,
             band_hz: 1000.0,
             aggregation: PlainBandAggregation::default(),
             apply_hann_window: false,
@@ -687,23 +853,21 @@ impl BucketRunConfig {
     }
 
 
-    pub fn window_samples(&self) -> Result<u32, ThoError> {
+    pub fn window_samples(&self, window: u32, step: u32) -> Result<u32, ThoError> {
         match &self.bucket_config {
             BucketingConfig::Mel(mel_config) => {
-                if mel_config.time_size <= 0 || mel_config.time_step <= 0 || mel_config.mel_patch_size <= 0 {
-                    return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid mel_config={mel_config:?}")));
+                if window == 0 || step == 0 || mel_config.mel_patch_size <= 0 {
+                    return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid window={window} step={step} mel_config={mel_config:?}")));
                 }
-                let n_fft = u32::try_from(mel_config.time_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: n_fft={} does not fit into u32", mel_config.time_size)))?;
-                let hop_length = u32::try_from(mel_config.time_step).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: hop_length={} does not fit into u32", mel_config.time_step)))?;
                 let patch_frames = u32::try_from(mel_config.mel_patch_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: patch_frames={} does not fit into u32", mel_config.mel_patch_size)))?;
 
-                hop_length.checked_mul(patch_frames.saturating_sub(1)).and_then(|tail| tail.checked_add(n_fft)).ok_or_else(|| ThoError::new(format!("BucketRunConfig::window_samples: sample span overflow for mel_config={mel_config:?}")))
+                step.checked_mul(patch_frames.saturating_sub(1)).and_then(|tail| tail.checked_add(window)).ok_or_else(|| ThoError::new(format!("BucketRunConfig::window_samples: sample span overflow for window={window} step={step} mel_config={mel_config:?}")))
             }
             BucketingConfig::Plain(plain_config) => {
-                if plain_config.slice_size <= 0 {
-                    return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid plain_config={plain_config:?}")));
+                if window == 0 {
+                    return Err(ThoError::new(format!("BucketRunConfig::window_samples: invalid window={window} plain_config={plain_config:?}")));
                 }
-                u32::try_from(plain_config.slice_size).map_err(|_| ThoError::new(format!("BucketRunConfig::window_samples: slice_size={} does not fit into u32", plain_config.slice_size)))
+                Ok(window)
             }
         }
     }
@@ -739,9 +903,8 @@ mod tests {
     use rand::random_range;
     use tch::{Device, Tensor};
     use tch::Device::Cuda;
-    use thoosa_common::audio::{LogMelPatchConfig, LogMelPatchConfigRangeOrValue};
     use thoosa_common::dims::MotifSlices;
-    use thoosa_common::find_motifs_run_config::{AccumulateStats, Aggr, EucDistConfig, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SimilarityMetric, SlicesFilter};
+    use crate::tasks::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
     use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::RunCtx;
@@ -755,11 +918,11 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::OptConfig;
     use thoosa_common::ws::{FsWorkspace, Workspace};
-    use thoosa_motifs::distance::clc_d2_similarity;
+    use thoosa_motifs::distance::{clc_d2_similarity, EucDistConfig, SimilarityMetric};
     use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
-    use super::{filter_mel_patch_groups, BucketingConfig, BucketingConfigRangeOrValue, MelPatchTempStore, BucketRunConfig, BucketingStage, MelPatchResourcesInput, BucketRunConfigRangeOrValue};
+    use super::{filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, MelPatchResourcesInput, MelPatchTempStore};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
@@ -839,8 +1002,6 @@ mod tests {
             min_slices: 10u32.into(),
             max_slices: 100u32.into(),
             bucket_config: BucketingConfigRangeOrValue::Mel(LogMelPatchConfigRangeOrValue {
-                time_size: default_log_mel_patch_config.time_size.into(),
-                time_step: default_log_mel_patch_config.time_step.into(),
                 n_mels: default_log_mel_patch_config.n_mels.into(),
                 f_min: default_log_mel_patch_config.f_min.into(),
                 f_max: default_log_mel_patch_config.f_max.into(),
@@ -934,6 +1095,8 @@ mod tests {
         ));
 
         let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
+        let window = 64;
+        let step = 4;
 
         let mut patch_run_config = BucketRunConfig {
             id: None,
@@ -943,8 +1106,6 @@ mod tests {
             max_slices: 100,
 
             bucket_config: BucketingConfig::Mel(LogMelPatchConfig {
-                time_size: 64,
-                time_step: 4,
                 n_mels: 32,
                 mel_patch_size: 18,
                 mel_patch_step: 32,
@@ -956,7 +1117,7 @@ mod tests {
             None,
             &FindMotifsRunConfig::type_name(),
             "FindMotifsRunConfig",
-            FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+            FindMotifsRunConfig::new(None, step, window, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
         ).await?;
 
 
@@ -969,10 +1130,7 @@ mod tests {
 
         patch_run_config.id = Some(id);
 
-        let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), vec![
-            patch_run_config
-
-        ])?);
+        let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
         let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
 
@@ -1020,8 +1178,6 @@ mod tests {
             min_slices: RangeOrValue::Value(2),
             max_slices: RangeOrValue::Value(100),
             bucket_config: BucketingConfigRangeOrValue::Mel(LogMelPatchConfigRangeOrValue {
-                time_size: RangeOrValue::Range { range: Range {start:4000, end:16000}, step: None },
-                time_step: RangeOrValue::Range { range: Range {start:32, end:640}, step: None },
                 n_mels: RangeOrValue::Range { range: Range {start:64, end:256}, step: None },
                 f_min: RangeOrValue::Value(20.0),
                 f_max: RangeOrValue::Value(16000.0),
@@ -1206,6 +1362,8 @@ mod tests {
         ));
 
         let mut ctx = RunCtxImpl::new(1, "heavy_run_mel_path");
+        let window = 32;
+        let step = 4;
 
         let mut patch_run_config = BucketRunConfig {
             id: None,
@@ -1215,8 +1373,6 @@ mod tests {
             max_slices: 100,
 
             bucket_config: BucketingConfig::Mel(LogMelPatchConfig {
-                time_size: 32,
-                time_step: 4,
                 n_mels: 16,
                 mel_patch_size: 9,
                 mel_patch_step: 32,
@@ -1228,7 +1384,7 @@ mod tests {
             None,
             &FindMotifsRunConfig::type_name(),
             "FindMotifsRunConfig",
-            FindMotifsRunConfig::new(None, 0, 64, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
+            FindMotifsRunConfig::new(None, step, window, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
         ).await?;
 
 
@@ -1241,10 +1397,7 @@ mod tests {
 
         patch_run_config.id = Some(id);
 
-        let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), vec![
-            patch_run_config
-
-        ])?);
+        let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
         let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
 
@@ -1328,4 +1481,46 @@ mod tests {
         Ok(())
     }
 
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+pub struct LogMelPatchConfig {
+    /// Number of mel bands, e.g. 64 or 128.
+    #[run_config]
+    #[in_map]
+    pub n_mels: i64,
+
+    /// Lowest mel frequency.
+    #[run_config]
+    #[in_map]
+    pub f_min: f64,
+
+    /// Highest mel frequency. If <= 0.0, sample_rate / 2.0 is used.
+    #[run_config]
+    #[in_map]
+    pub f_max: f64,
+
+    /// Number of STFT frames per output patch.
+    #[run_config]
+    #[in_map]
+    pub mel_patch_size: i64,
+
+    /// Step between patches in STFT frames.
+    #[run_config]
+    #[in_map]
+    pub mel_patch_step: i64,
+
+
+}
+
+impl Default for LogMelPatchConfig {
+    fn default() -> Self {
+        Self {
+            n_mels: 128,
+            f_min: 20.0,
+            f_max: 16_000.0,
+            mel_patch_size: 64,
+            mel_patch_step: 32,
+        }
+    }
 }

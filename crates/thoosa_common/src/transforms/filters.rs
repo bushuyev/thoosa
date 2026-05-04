@@ -1,5 +1,6 @@
 #![allow(non_snake_case, unused_variables, unused_assignments, non_camel_case_types)]
 
+use std::str::FromStr;
 use clap::{Args, Subcommand};
 use crate::utils::from;
 use serde::Deserialize;
@@ -416,15 +417,8 @@ impl InputFilterLengthAdjuster for AbsFilterParams {
 #[cfg(test)]
 #[allow(unused_imports)]
 mod tests {
-    use crate::transforms::filters::{band_pass_filter, clc_frequencies, hann_window};
+    use crate::transforms::filters::{band_pass_filter, clc_frequencies};
     use crate::transforms::utils::sin_t;
-    use crate::utils::{from, plot_series, to_vec_f32};
-    use log::debug;
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
-    use std::f64;
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::*;
     use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_shared::ThoError;
     use thoosa_shared::test_utils::are_close;
@@ -529,4 +523,35 @@ mod tests {
         Ok(())
     }
 
+}
+
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+pub enum InputFilter {
+    NotchBandFilter(NotchBandFilterParams),
+    BandPassFilter(BandPassFilterParams),
+    SavGolFilter(SavGolFilterParams),
+    MedianFilter(MedianFilterParams),
+    AverageFilter(AverageFilterParams),
+    Abs(AbsFilterParams),
+}
+
+impl FromStr for InputFilter {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        serde_json5::from_str(s).map_err(|e| format!("parse InputFilter from `{s}`: {e}"))
+    }
+}
+
+impl InputFilterLengthAdjuster for InputFilter {
+    fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
+        match self {
+            InputFilter::NotchBandFilter(filter) => filter.adjust_length(),
+            InputFilter::BandPassFilter(filter) => filter.adjust_length(),
+            InputFilter::SavGolFilter(filter) => filter.adjust_length(),
+            InputFilter::MedianFilter(filter) => filter.adjust_length(),
+            InputFilter::AverageFilter(filter) => filter.adjust_length(),
+            InputFilter::Abs(filter) => filter.adjust_length(),
+        }
+    }
 }

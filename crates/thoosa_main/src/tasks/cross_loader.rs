@@ -1334,7 +1334,7 @@ mod tests {
     use tch::Device::Cuda;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Kind::{Float, Uint8};
-    use thoosa_common::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::ws::FsWorkspace;
     use thoosa_motifs::find::FixedFindMotifsConfig;

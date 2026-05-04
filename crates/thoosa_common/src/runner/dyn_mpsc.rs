@@ -501,7 +501,7 @@ impl DynamicTaskExecutor {
 
 
             let wrapped = async move {
-                warn!("DynamicTaskExecutor::submit: job_id={job_id} waiting on wrapped fut");
+                debug!("DynamicTaskExecutor::submit: job_id={job_id} waiting on wrapped fut");
                 let result = fut.await;
                 debug!("DynamicTaskExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
