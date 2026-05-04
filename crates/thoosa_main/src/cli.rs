@@ -610,7 +610,7 @@ where
         Some(Bucket(bucket_args)) => {
             debug!("MelPatch: mel_patch_args={bucket_args:?}");
 
-            let mel_patch_run_config_range_or_value: BucketRunConfigRangeOrValue = serde_json5::from_str(&bucket_args.run_config_cnt).expect("MelPatchRunConfig");
+            let bucket_config_range_or_value: BucketRunConfigRangeOrValue = serde_json5::from_str(&bucket_args.run_config_cnt).expect("MelPatchRunConfig");
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(bucket_args.resource_config()).check(&store).await?));
 
@@ -624,7 +624,7 @@ where
 
             let run_ids = run_grid(
                 Some(vec![find_motifs_run_id]),
-                mel_patch_run_config_range_or_value,
+                bucket_config_range_or_value,
                 input_wrapper,
                 &ws,
                 &store,
@@ -1708,6 +1708,20 @@ where
 
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
     let (store_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
+
+    let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
+        find_motifs_run_id
+    } else {
+        let find_motifs_run_id = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+        // TODO check if all find run configs have same properties - for merged motifs
+        *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
+    };
+
+    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
+        real_find_motifs_run_id,
+        &store.list_run_config_values(real_find_motifs_run_id).await?,
+    )?;
+
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
     }
@@ -1719,10 +1733,7 @@ where
         plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-        find_motifs_run_id,
-        &store.list_run_config_values(find_motifs_run_id).await?,
-    )?;
+
 
     let filtered_or_raw = if let Some(freq_filters) = find_motifs_run_config.freq_filter.clone() {
         let filtered = Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_id)?)

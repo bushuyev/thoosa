@@ -853,10 +853,20 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
     async fn load_stacked_motifs(store:&Arc<Box<dyn Store>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
         let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_ids.len());
+
+
         for find_motifs_run_id in find_motifs_run_ids {
+            let real_find_motifs_run_id = if store.run_config_descr(*find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
+                *find_motifs_run_id
+            } else {
+                let find_motifs_run_id = store.get_input_run_ids(*find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+                // TODO check if all find run configs have same properties - for merged motifs
+                *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id:?}")))?
+            };
+
             find_motifs_run_configs.push(Arc::new(FindMotifsRunConfig::from_properties_map_with_id(
-                *find_motifs_run_id,
-                &store.list_run_config_values(*find_motifs_run_id).await?,
+                real_find_motifs_run_id,
+                &store.list_run_config_values(real_find_motifs_run_id).await?,
             )?));
         }
             let find_motifs_run_configs_len = find_motifs_run_configs.len();

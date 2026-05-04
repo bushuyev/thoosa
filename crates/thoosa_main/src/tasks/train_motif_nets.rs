@@ -187,6 +187,7 @@ where
         )
         .channels();
 
+        debug!("TrainMotifNets::run: motifs_by={motifs_by:?} opt_config={opt_config:?}");
 
         let (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids) = match motifs_by {
             MotifsBy::SelectMotifsRunIds { select_motifs_run_ids } => {
@@ -223,6 +224,8 @@ where
             }
         };
         let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
+        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_ids_len={motifs_rates_selected_motifs_run_ids_len}");
+
         let futures = motifs_rates_selected_motifs_run_ids.into_iter()
         .map(|(motif_id_rate, select_motifs_run_id)|{
             let motif_loader = Arc::clone(&self.motif_loader);
@@ -251,8 +254,12 @@ where
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
 
+                debug!("TrainMotifNets::run: motif={motif:?}");
+
                 let train_net = Arc::new(TrainNet::new(
                     move |ctx:C, rc:&TrainMotifsNetsRunConfig| {
+                        debug!("TrainMotifNets::run: batch, rc={rc:?}");
+
                         let motif = Arc::clone(&motif);
                         let random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
                         async move {
@@ -290,6 +297,8 @@ where
                     format!("motif_{}", motif_id_rate.0)
                 ));
 
+                debug!("TrainMotifNets::run: train_net={train_net:?}");
+
                 let result = Arc::into_inner(train_net.run(
                     Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
                     ctx.branch(Some("train_motif_net"), false)
@@ -317,7 +326,7 @@ where
         let results = collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_ids_len,
-            crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
+            2, //crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "train motif",
         ).await;
@@ -401,6 +410,8 @@ where
         let random_slices = self.current_random_slices(ctx.branch(Some("motifs_batch_random_slices"), false)).await?;
         let num_slices = (self.batch_size / 2) as i64;
 
+        debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
+
         with_data!(ctx.branch(Some("motifs_batch_make"), false), motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
             debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
 
@@ -453,6 +464,8 @@ where
     C: RunCtx + Adjustable,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+        debug!("MotifsBatch::train_batch_stream: self.epoch_size={}", self.epoch_size);
+
         futures_util::stream::once(self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train", ctx))
             .take(self.epoch_size as usize)
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
@@ -460,6 +473,7 @@ where
     }
 
     fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+
         futures_util::stream::once(self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id, "valid", ctx))
             .take(self.epoch_size as usize)
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))

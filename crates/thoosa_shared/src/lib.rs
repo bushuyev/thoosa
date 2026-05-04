@@ -516,6 +516,12 @@ impl Clone for ThoError {
     }
 }
 
+impl Display for ThoError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "ThoError: {}, cause={:?}", self.msg, self.what)
+    }
+}
+
 unsafe impl Send for ThoError {}
 
 impl ThoError {
