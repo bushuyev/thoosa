@@ -1110,7 +1110,7 @@ impl DynamicTaskExecutor {
         exclusive_job_id: Option<JobId>,
     ) -> bool {
         if exclusive_job_id.is_some_and(|exclusive_job_id| exclusive_job_id != job_id) {
-            warn!("DynamicTaskExecutor::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
+            debug!("DynamicTaskExecutor::can_activate_now: blocked by exclusive job current_job_id={job_id} exclusive_job_id={exclusive_job_id:?}");
             return false;
         }
 

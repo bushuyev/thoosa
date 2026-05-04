@@ -538,7 +538,7 @@ where
             .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
             .await?;
 
-        let find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
+        let real_find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
             find_motifs_run_id
         } else {
             let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
@@ -546,11 +546,11 @@ where
             *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))? 
         };
 
-        debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
+        debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={real_find_motifs_run_id}");
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-            find_motifs_run_id,
-            &self.store.list_run_config_values(find_motifs_run_id).await?,
+            real_find_motifs_run_id,
+            &self.store.list_run_config_values(real_find_motifs_run_id).await?,
         )?;
 
         let window = find_motifs_run_config.window;
@@ -563,7 +563,7 @@ where
         let loaded_resources = load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
-            find_motifs_run_id,
+            real_find_motifs_run_id,
             resources_map,
             resource_ids_slices,
             configurable_loader,
@@ -577,7 +577,7 @@ where
             input_id.clone(),
             motif_id_value,
             select_motifs_run_id_for_key,
-            find_motifs_run_id,
+            real_find_motifs_run_id,
             channel,
             window,
             loaded_resources,
@@ -689,10 +689,17 @@ where
 
         let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
 
+        let real_find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {////TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
+            find_motifs_run_id
+        } else {
+            let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+            // TODO check if all find run configs have same properties - for merged motifs
+            *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
+        };
 
         let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-            find_motifs_run_id,
-            &self.store.list_run_config_values(find_motifs_run_id).await?,
+            real_find_motifs_run_id,
+            &self.store.list_run_config_values(real_find_motifs_run_id).await?,
         )?;
 
 
@@ -883,9 +890,17 @@ where
     let device_idx = ctx.device_idx();
     debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} slices={slices:?} descr={descr}");
 
+    let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
+        find_motifs_run_id
+    } else {
+        let find_motifs_run_id = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+        // TODO check if all find run configs have same properties - for merged motifs
+        *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id:?}")))?
+    };
+
     let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-        find_motifs_run_id,
-        &store.list_run_config_values(find_motifs_run_id).await?,
+        real_find_motifs_run_id,
+        &store.list_run_config_values(real_find_motifs_run_id).await?,
     )?;
 
     let resource_ids_slices = slices

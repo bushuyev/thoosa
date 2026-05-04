@@ -1029,16 +1029,16 @@ net.closure(
     //     "motif_first_head",
     //     2,1
     // )?
-  .closure(
-      Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-          let r = t.shallow_clone();
-
-          debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
-
-          Ok(r)
-      })),
-      None,
-  )?
+  // .closure(
+  //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+  //         let r = t.shallow_clone();
+  //
+  //         debug!("conv_motif_node, after motif_first_head: t.size={:?} r.size={:?}", t.size(), r.size());
+  //
+  //         Ok(r)
+  //     })),
+  //     None,
+  // )?
     // .linear("motif_first_head")?
     .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 

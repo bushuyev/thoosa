@@ -286,6 +286,10 @@ where
             selected_nets.extend(store.list_selected_nets(*train_motif_nets_run_id, max_loss, selected_nets_limit).await?);
         }
 
+        if selected_nets.is_empty() {
+            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motif_nets_run_ids:?}")));
+        };
+
         let selected_nets_len = selected_nets.len();
         //this defines order in which motif nets should be applied to a resource before running label net
         let futures = selected_nets
@@ -321,6 +325,9 @@ where
         .flatten()
         .collect::<Vec<_>>();
 
+        if loaded_motif_nets.is_empty() {
+            return  Err(ThoError::new(format!("No motif nets for train_motif_nets_run_ids={train_motif_nets_run_ids:?}")));
+        };
 
         let mut motif_widths = HashSet::new();
         let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
@@ -332,14 +339,24 @@ where
                 Ok::<_, ThoError>((v.extra().motif_id(), motif_width))
             })?;
 
-            let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
+            let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
+            let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
+                find_motifs_run_id
+            } else {
+                let find_motifs_run_id = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+                // TODO check if all find run configs have same properties - for merged motifs
+                *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
+            };
+
+            let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
+                real_find_motifs_run_id,
+                &store.list_run_config_values(real_find_motifs_run_id).await?,
+            )?;
+
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_id.get(&find_motifs_run_id) {
                 freq_filter.clone()
             } else {
-                let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-                    find_motifs_run_id,
-                    &store.list_run_config_values(find_motifs_run_id).await?,
-                )?;
+
                 let freq_filter = find_motifs_run_config
                     .freq_filter
                     .as_ref()
@@ -358,7 +375,6 @@ where
             warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} run_ids={train_motif_nets_run_ids:?}. Will run per-net and pad outputs for concat.");
         }
 
-        //gpt TODO!! if no motif nets load, these expects will panic; consider returning a structured error.
         let Some(motif_width) = motif_widths.iter().copied().max() else {
             return  Err(ThoError::new("no motif_width"));
         };
@@ -1113,7 +1129,7 @@ pub fn apply_motif_net_forward(
     let t = if t.size()[0] >= motif_width {
         t
     } else {
-        debug!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
+        warn!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
         pad_to(&t, &[motif_width], 0.0)?
     };
 
