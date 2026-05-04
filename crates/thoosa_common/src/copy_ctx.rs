@@ -1,4 +1,4 @@
-use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem, move_d2h, move_h2d, PinnedHostBuffer};
+use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
 use log::debug;
@@ -36,15 +36,16 @@ impl Debug for CopyCtx {
 }
 
 impl CopyCtx {
-    pub fn new(buffs: usize, buf_size: usize) -> Self {
-        let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
+    pub fn new(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
+        let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
         let bufs_pool = Self::build_pool(buffs, buf_size, &cu_ctx);
+        let device = cu_ctx.ordinal() as i32;
 
         Self {
             cu_ctx,
             buffs,
             buf_size,
-            stream_pool: Arc::new(Pool::from_iter((0..32).map(|i|ThoCudaStream::from_pool(0/*TODO device*/, false).unwrap()))),//TODO unwrap)),
+            stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(device, false).unwrap()))),//TODO unwrap)),
             bufs_pool,
         }
     }
@@ -84,7 +85,7 @@ impl CopyCtx {
         )));
 
         self.buffs = buffs;
-        self.buf_size = Self::clc_buff_size(mem_k, buffs);
+        self.buf_size = Self::clc_buff_size(self.cu_ctx.ordinal(), mem_k, buffs);
         self.bufs_pool = Self::build_pool(buffs, self.buf_size, &self.cu_ctx)
     }
 
@@ -94,13 +95,17 @@ impl CopyCtx {
     }
 
     pub fn make_instance(mem_k: f64, buffs: usize) -> CopyCtx {
-        let buf_size = Self::clc_buff_size(mem_k, buffs);
-
-        CopyCtx::new(buffs, buf_size)
+        Self::make_instance_for_cuda_device(0, mem_k, buffs)
     }
 
-    fn clc_buff_size(mem_k: f64, buffs: usize) -> usize {
-        let (_free_mem, total_mem) = cuda_mem();
+    pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> CopyCtx {
+        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
+
+        CopyCtx::new(cuda_device, buffs, buf_size)
+    }
+
+    fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize) -> usize {
+        let (_free_mem, total_mem) = cuda_mem_for_device(cuda_device);
 
         let init_type = Int64;
 

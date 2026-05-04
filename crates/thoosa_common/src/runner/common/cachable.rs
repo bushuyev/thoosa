@@ -530,14 +530,23 @@ where
         let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
 
         if read_guard.is_some() {
-            let base: &O = read_guard
-                .as_ref()
-                .expect("no value behind guard");
-
-
-            let data: O = base.subview(selector.clone())?;
-
-            return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+            if to_tho_device_idx > 0 {
+                let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                let base: &O = read_guard
+                    .as_ref()
+                    .expect("no value behind guard");
+                let data: O = base.subview(selector.clone())?;
+                let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                stream.synchronize()?;
+                return r;
+            } else {
+                let base: &O = read_guard
+                    .as_ref()
+                    .expect("no value behind guard");
+                let data: O = base.subview(selector.clone())?;
+                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+            }
         }
 
         drop(read_guard);
@@ -589,14 +598,23 @@ where
             let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
 
             if read_guard.is_some() {
-                let base: &O = read_guard
-                    .as_ref()
-                    .expect("no value behind guard");
-
-
-                let data: O = base.subview(selector.clone())?;
-
-                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                if to_device_idx > 0 {
+                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let base: &O = read_guard
+                        .as_ref()
+                        .expect("no value behind guard");
+                    let data: O = base.subview(selector.clone())?;
+                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    stream.synchronize()?;
+                    return r;
+                } else {
+                    let base: &O = read_guard
+                        .as_ref()
+                        .expect("no value behind guard");
+                    let data: O = base.subview(selector.clone())?;
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                }
             }
 
             drop(read_guard);
@@ -615,13 +633,17 @@ where
 
                     let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    if to_device_idx > 0 {
+                        let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                        let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                        let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
 
-                    stream.synchronize()?;
+                        stream.synchronize()?;
 
-                    return r;
+                        return r;
+                    } else {
+                        return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    }
                 }
             }
 
@@ -646,12 +668,23 @@ where
         let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
 
         if read_guard.is_some() {
-            let data = read_guard
-                .as_ref()
-                .expect("no value behind guard")
-                .subview(selector.clone())?;
-
-            return do_run(data, &permits_ctx);
+            if to_device_idx > 0 {
+                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                let data = read_guard
+                    .as_ref()
+                    .expect("no value behind guard")
+                    .subview(selector.clone())?;
+                let r = do_run(data, &permits_ctx);
+                stream.synchronize()?;
+                return r;
+            } else {
+                let data = read_guard
+                    .as_ref()
+                    .expect("no value behind guard")
+                    .subview(selector.clone())?;
+                return do_run(data, &permits_ctx);
+            }
         }
 
         drop(read_guard);
@@ -669,7 +702,15 @@ where
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
-                return do_run(data, &permits_ctx);
+                if to_device_idx > 0 {
+                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                    let r = do_run(data, &permits_ctx);
+                    stream.synchronize()?;
+                    return r;
+                } else {
+                    return do_run(data, &permits_ctx);
+                }
             }
         }
 
