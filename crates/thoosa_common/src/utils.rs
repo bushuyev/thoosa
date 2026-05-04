@@ -27,10 +27,12 @@ use tch::Kind::Float;
 use tch::{nn, Device, IndexOp, Kind, TchError, Tensor};
 use thoosa_shared::{cdt_for_dir, gauss_i, panic_to_err, pulse_in_rand, pulse_v, pulses_in_const, saw, ThoError};
 use torch_sys::cuda::atc_cuda_device_count;
+use thoosa_store::Store;
 
 use crate::batches::BatchLengths;
 use crate::builder::SeqBuilder;
 use crate::dims::Dims;
+use crate::find_motifs_run_config::FindMotifsRunConfig;
 use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use lazy_static::lazy_static;
@@ -38,6 +40,20 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 use sha2::{Digest, Sha256};
 use thoosa_shared::run_configs::RunId;
 use crate::copy_ctx::CopyCtx;
+
+pub async fn load_run_config(store: &Arc<Box<dyn Store>>, find_motifs_run_id: RunId) -> Result<FindMotifsRunConfig, ThoError> {
+    let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
+        find_motifs_run_id
+    } else {
+        let find_motifs_run_ids = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+        *find_motifs_run_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id}")))?
+    };
+
+    FindMotifsRunConfig::from_properties_map_with_id(
+        real_find_motifs_run_id,
+        &store.list_run_config_values(real_find_motifs_run_id).await?,
+    )
+}
 
 #[macro_export]
 macro_rules! debug_plot {

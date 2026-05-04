@@ -534,7 +534,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::{cdt_for_dir, sig_one_imp, sig_three_imp, sig_two_imp, ResourceType, ThoError};
-    use thoosa_store::{CheckGroups, MockStoreBuilder, SqlStore};
+    use thoosa_store::{CheckGroups, MockStoreBuilder, RunConfigRow, SqlStore};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
@@ -595,6 +595,15 @@ mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
+                .with_run_config_descr([(
+                    find_motifs_run_id,
+                    Ok(RunConfigRow {
+                        id: find_motifs_run_id,
+                        r#type: "FindMotifsRunConfig".to_string(),
+                        descr: "test find motifs".to_string(),
+                        run_on: "2026-01-01 00:00:00".to_string(),
+                    }),
+                )])
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),

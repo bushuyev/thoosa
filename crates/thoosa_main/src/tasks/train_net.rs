@@ -189,7 +189,7 @@ where
     fn run_inner(
         self: Arc<Self>,
         mut ctx: C,
-        device_idx: usize,
+        tho_device_idx: usize,
         vs: Arc<Mutex<VarStore>>,
         run_config: RC,
         validation_step: u32,
@@ -217,24 +217,19 @@ where
             }
         };
 
-        let device = Device::from(ThoDevice::from(device_idx));
+        let device = Device::from(ThoDevice::from(tho_device_idx));
         let epochs = (self.epochs)(&run_config);
-        let x_f = {
-            let this = Arc::clone(&self);
-            Arc::new(move |batch: ThoBatch<DX>| (this.x_f)(batch))
-        };
 
+        let self_x_f = Arc::clone(&self);
         let train_step = Arc::new(TrainStep::new(
             device,
             node,
             optimizer,
-            x_f,
+            Arc::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)),
             self.loss_fn,
         ));
         let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
-
-
 
         let mut bad_epochs = 0u32;
         let patience = run_config.as_ref().patience;
@@ -243,7 +238,7 @@ where
         Box::pin(async move {
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false), &run_config).await?;
-            debug!("TrainNet::run_inner: descr={descr} device={:?} cycles={}", train_step.as_ref().device(), epochs);
+            debug!("TrainNet::run_inner: descr={descr} device={:?} epochs={}", train_step.as_ref().device(), epochs);
 
             let oom_handler = OOMHandler::new(
                 vec![
@@ -266,15 +261,14 @@ where
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             for idx in 0..epochs {
 
-                debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?}",maybe_cuda_mem(&device));
+                debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?} epoch={idx}",maybe_cuda_mem(&device));
 
                 let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
                 let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
 
-                debug!("TrainNet::run_inner, train: descr={descr}  next={:?}", batches.next().await);
-
+                // debug!("TrainNet::run_inner, train: descr={descr}  next={:?}", batches.next().await);
 
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
@@ -300,8 +294,6 @@ where
                     collect_eta_record_completion(batch_eta_guard.id());
 
                 }
-
-                //TODO config validation_step
 
                 if idx % validation_step == 0 || idx == epochs - 1 {
 
@@ -798,6 +790,7 @@ mod tests {
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
+    use log::debug;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::train_nets::AdamWRangeOrValue;
     use thoosa_shared::comp_id::SynKey;
@@ -815,24 +808,25 @@ mod tests {
     static X_F_CALLS: AtomicUsize = AtomicUsize::new(0);
     static LOSS_FN_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-    fn mock_x_f(t: ThoBatch<DummyX>) -> ThoBatch<DummyX> {
+    fn dummy_x_f(t: ThoBatch<DummyX>) -> ThoBatch<DummyX> {
+        debug!("dummy_x_f: X_F_CALLS={X_F_CALLS:?}");
         X_F_CALLS.fetch_add(1, Ordering::SeqCst);
         t
     }
 
-    fn mock_loss_fn(pred: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
+    fn dummy_loss_fn(pred: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
         LOSS_FN_CALLS.fetch_add(1, Ordering::SeqCst);
         Ok(pred.f_sub(target)?.pow_tensor_scalar(2.).mean(tch::Kind::Float))
     }
 
-    fn make_batch() -> (ThoBatch<DummyX>, ThoBatch<DummyY>) {
+    fn dummy_batch() -> (ThoBatch<DummyX>, ThoBatch<DummyY>) {
         let x = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
         let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
         (x.into(), y.into())
     }
 
     fn make_stream() -> BoxStream<'static, Result<(ThoBatch<DummyX>, Option<BatchLengths>,  ThoBatch<DummyY>), ThoError>> {
-        let (x, y) = make_batch();
+        let (x, y) = dummy_batch();
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }
 
@@ -912,8 +906,8 @@ mod tests {
                 .build(&vs, 0.001)
                 .map_err(ThoError::from)
         };
-        let cycles_count = 10u32;
-        let cycles = move |_rc: &DummyRunConfig| cycles_count;
+        let epochs_count = 10u32;
+        let epochs = move |_rc: &DummyRunConfig| epochs_count;
 
         let train_stream_calls = Arc::new(AtomicUsize::new(0));
         let valid_stream_calls = Arc::new(AtomicUsize::new(0));
@@ -925,17 +919,18 @@ mod tests {
         );
         let mut ctx = mock_run_ctx::default(1);
 
+        let validation_step = 10;
         let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _>> = Arc::new(
             TrainNet::new(
                 move |c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
                 net_fn,
                 Arc::clone(&opt_config),
                 Arc::clone(&run_config),
-                mock_loss_fn,
+                dummy_loss_fn,
                 optimizer,
-                mock_x_f,
-                cycles,
-                10,
+                dummy_x_f,
+                epochs,
+                validation_step,
                 "n/a".to_string(),
             ),
         );
@@ -954,22 +949,23 @@ mod tests {
 
         // Train stream runs once per epoch; valid stream runs every 10th and the final epoch.
         let grid_runs = run_config.grid_to_vals().len();
-        let train_iters = cycles_count;
+        let train_iters = epochs_count;
         let valid_iters = (train_iters + 9) / 10;
-        let expected_train_streams =
-            grid_runs * opt_config.opt_max_evals as usize * train_iters as usize;
-        let expected_valid_streams =
-            grid_runs * opt_config.opt_max_evals as usize * valid_iters as usize;
-        let expected_batch_calls = expected_train_streams + expected_valid_streams;
+
+        let expected_train_streams = grid_runs * opt_config.opt_max_evals as usize * epochs_count as usize;
+        let expected_valid_streams = expected_train_streams / validation_step as usize + epochs_count as usize;
+
+        // let expected_batch_calls = expected_train_streams + expected_valid_streams;
 
         assert_eq!(
             expected_train_streams,
             train_stream_calls.load(Ordering::SeqCst)
         );
         assert_eq!(
-            20,
+            expected_valid_streams,
             valid_stream_calls.load(Ordering::SeqCst)
         );
+        debug!("X_F_CALLS={X_F_CALLS:?} LOSS_FN_CALLS={LOSS_FN_CALLS:?}");
         assert_eq!(120, X_F_CALLS.load(Ordering::SeqCst));
         assert_eq!(120, LOSS_FN_CALLS.load(Ordering::SeqCst));
 

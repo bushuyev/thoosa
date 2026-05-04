@@ -50,7 +50,7 @@ use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, S
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetsRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::utils::{ from, lin_t, list_devices, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
+use thoosa_common::utils::{ from, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
@@ -1709,18 +1709,7 @@ where
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
     let (store_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
 
-    let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
-        find_motifs_run_id
-    } else {
-        let find_motifs_run_id = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-        // TODO check if all find run configs have same properties - for merged motifs
-        *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
-    };
-
-    let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-        real_find_motifs_run_id,
-        &store.list_run_config_values(real_find_motifs_run_id).await?,
-    )?;
+    let find_motifs_run_config = load_run_config(store, find_motifs_run_id).await?;
 
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
