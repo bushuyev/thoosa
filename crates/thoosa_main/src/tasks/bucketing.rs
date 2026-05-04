@@ -270,7 +270,6 @@ where
             if run_config.min_slices > run_config.max_slices {
                 return Err(ThoError::new(format!("BucketingStage::new: min_slices={} exceeds max_slices={}", run_config.min_slices, run_config.max_slices)));
             }
-            run_config.validate_bucket_config()?;
         }
 
         Ok(Self {
@@ -434,11 +433,11 @@ where
             let loaded = Arc::clone(&self.loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(resource.clone())),
-                    ctx.branch(Some(&format!("mel_patch_load_resource_{}", resource.id())), false),
+                    ctx.branch(Some(&format!("BucketingStage_{}", resource.id())), false),
                 )
                 .await?;
 
-            with_data!(ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false), loaded; |_ctx, tensor: &ThoTensor<D, Id>| {
+            match with_data!(ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false), loaded; |_ctx, tensor: &ThoTensor<D, Id>| {
                 for (run_config, temp_stores) in self.run_configs.iter().zip(temp_stores_by_run.iter_mut()) {
                     match run_config.mel_config() {
                         BucketingConfig::Mel(_) => self.save_resource_patches(resource, tensor.t_ref(), &tmp_path, temp_stores, run_config, sample_rate as f64)?,
@@ -446,7 +445,12 @@ where
                     }
                 }
                 Ok::<_, ThoError>(())
-            })?;
+            }){
+                Ok(_) => {}
+                Err(e) => {
+                    warn!("BucketingStage::run e={e}");
+                }
+            };
         }
 
         let mut run_configs_motifs = Vec::with_capacity(self.run_configs.len());
@@ -598,10 +602,6 @@ pub struct PlainConfig {
 
     #[run_config]
     #[in_map]
-    pub lsh_bits: i64,
-
-    #[run_config]
-    #[in_map]
     pub normalize_lsh: bool,
 }
 
@@ -614,7 +614,6 @@ impl Default for PlainConfig {
             aggregation: PlainBandAggregation::default(),
             apply_hann_window: false,
             remove_dc_offset: true,
-            lsh_bits: 8,
             normalize_lsh: true,
         }
     }
@@ -687,18 +686,6 @@ impl BucketRunConfig {
         }
     }
 
-    pub fn validate_bucket_config(&self) -> Result<(), ThoError> {
-        if let BucketingConfig::Plain(plain_config) = &self.bucket_config {
-            if plain_config.lsh_bits <= 0 || plain_config.lsh_bits > 16 {
-                return Err(ThoError::new(format!("BucketRunConfig::validate_bucket_config: Plain lsh_bits={} must be in 1..=16", plain_config.lsh_bits)));
-            }
-            let expected_bucket_count = 1u32.checked_shl(plain_config.lsh_bits as u32).ok_or_else(|| ThoError::new(format!("BucketRunConfig::validate_bucket_config: invalid lsh_bits={}", plain_config.lsh_bits)))?;
-            if self.bucket_count != expected_bucket_count {
-                return Err(ThoError::new(format!("BucketRunConfig::validate_bucket_config: Plain bucket_count={} must equal 2^lsh_bits={expected_bucket_count}", self.bucket_count)));
-            }
-        }
-        Ok(())
-    }
 
     pub fn window_samples(&self) -> Result<u32, ThoError> {
         match &self.bucket_config {

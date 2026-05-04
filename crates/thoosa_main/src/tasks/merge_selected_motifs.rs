@@ -200,14 +200,23 @@ where
             for (channel_idx, channel_motifs) in selected_motifs.into_iter().enumerate() {
                 for (motif_id, _score) in channel_motifs {
                     let (motif_channel, find_motifs_run_id) = self.store.get_motif_meta(motif_id).await?;
+
                     if motif_channel != channel_idx {
                         return Err(ThoError::new(format!("MergeSelectedMotifs::run: motif_id={motif_id} listed under channel={channel_idx}, but store returned channel={motif_channel}")));
                     }
 
                     if !run_config_cache.contains_key(&find_motifs_run_id) {
+                        let real_find_motifs_run_id = if self.store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
+                            find_motifs_run_id
+                        } else {
+                            let find_motifs_run_id = self.store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
+                            // TODO check if all find run configs have same properties - for merged motifs
+                            *find_motifs_run_id.first().ok_or_else(|| ThoError::new(format!("MotifLoader::run: no FindMotifsRunConfig input for motif_id={motif_id}")))?
+                        };
+
                         let run_config = FindMotifsRunConfig::from_properties_map_with_id(
-                            find_motifs_run_id,
-                            &self.store.list_run_config_values(find_motifs_run_id).await?,
+                            real_find_motifs_run_id,
+                            &self.store.list_run_config_values(real_find_motifs_run_id).await?,
                         )?;
                         run_config_cache.insert(find_motifs_run_id, run_config);
                     }
