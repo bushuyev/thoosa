@@ -56,7 +56,7 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::utils::load_run_config;
-use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE};
+use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
@@ -602,12 +602,13 @@ where
     }
 }
 ///To load slices not belonging to a motif
-#[derive(Debug)]
+#[derive(cached_derive::Cached, Named, Debug)]
 pub struct RandomSlicesLoader<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
+    id: SynKey,
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
@@ -621,7 +622,14 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
-        Self { store, loader, ws:Arc::clone(&ws), sync_motif_loader: Arc::new(SyncMotifLoader::new()), pd: PhantomData::default() }
+        Self {
+            id: (RAW_TENSOR_LOADER, "RandomSlicesLoader").into(),
+            store,
+            loader,
+            ws:Arc::clone(&ws),
+            sync_motif_loader: Arc::new(SyncMotifLoader::new()),
+            pd: PhantomData::default()
+        }
     }
 }
 
@@ -655,6 +663,18 @@ where
     type Out = ThoTensor<MotifSlices, SynKey>;
 
     type Ctx = C;
+}
+
+
+impl<L, C> OutId for RandomSlicesLoader<L, C>
+where
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    C: RunCtx + Adjustable + 'static,
+
+{
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + mono_key!(input_id.id().0, "random_slices")
+    }
 }
 
 
@@ -783,8 +803,7 @@ where
             .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
             .await?;
         let channel_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
-            let raw_channel = raw_tt.t_ref().f_i((channel, ..))?;
-            let size = raw_channel.size();
+            let size = raw_tt.size();
             let mut valid_slices = Vec::with_capacity(slices.len());
 
             for &slice in &slices {
@@ -793,7 +812,7 @@ where
                     continue;
                 };
 
-                if slice_end as i64 > size[0] {
+                if slice_end as i64 > size[1] {
                     warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
                 } else {
                     valid_slices.push(slice);
@@ -802,7 +821,7 @@ where
 
             let mut dst = Tensor::f_zeros([valid_slices.len() as i64, window as i64], (raw_tt.t_ref().kind(), raw_tt.t_ref().device()))?;
             for (slice_i, slice) in valid_slices.into_iter().enumerate() {
-                let src = raw_channel.f_i(slice as i64..(slice + window) as i64)?;
+                let src = raw_tt.t.f_i((channel, slice as i64..(slice + window) as i64))?;
                 dst.f_get(slice_i as i64)?.f_copy_(&src)?;
             }
 
@@ -852,7 +871,7 @@ fn build_motif_from_loaded_resources(
     let tensor = if motif_refs.is_empty() {
         Tensor::f_zeros([0, window as i64], (Float, ThoDevice::from(device_idx).into()))?
     } else {
-        Tensor::f_cat(motif_refs.as_slice(), 0)?
+        Tensor::f_cat(motif_refs.as_slice(), 0)?.f_totype(Float)?
     };
 
     ThoTensor::new(mono_key!(*motif_id, descr).into(), tensor)
