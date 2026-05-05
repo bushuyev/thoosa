@@ -11,11 +11,10 @@ use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::{mono_key, now_ms};
+use thoosa_shared::{cdt_for_dir, mono_key, now_ms};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace, warn};
 use parking_lot::Mutex;
-use rand::random;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::io::Write;
@@ -23,6 +22,7 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
+use rand::random;
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
 use thoosa_common::parzen::optimizer::CompletedTrial;
@@ -48,6 +48,7 @@ use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_properties_map::ToHashmap;
+use thoosa_shared::tmp_file::TmpFile;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
@@ -261,9 +262,9 @@ where
 
             //TODO configure in ws
             std::fs::create_dir_all("/tmp/thoosa")?;
-            let best_checkpoint_path = PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>()));
-            let mut best_valid_loss = f32::MAX;
+            let best_checkpoint_path = TmpFile::new(PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>())));
 
+            let mut best_valid_loss = f32::MAX;
 
             let mut saved_best = false;
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
@@ -335,7 +336,7 @@ where
                             bad_epochs = 0;
                             {
                                 let mut vs_guard = thoosa_shared::with_perf_log(|| vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "TrainNet/run_inner/lock_vs");
-                                panic_to_err!(vs_guard.save(&best_checkpoint_path));//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
+                                panic_to_err!(vs_guard.save(&best_checkpoint_path))?;//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
                             }
                             saved_best = true;
                         } else {
@@ -362,7 +363,6 @@ where
                 );
                 vs_guard.load(&best_checkpoint_path)?;
                 debug!("TrainNet::run_inner: descr={descr}  final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
-                std::fs::remove_file(best_checkpoint_path)?;
             } else {
                 warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
             }
@@ -370,6 +370,8 @@ where
 
             Ok((best_valid_loss, params))
         })
+
+
     }
 }
 

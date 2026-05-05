@@ -64,6 +64,7 @@ pub mod collect_futures_eta;
 pub mod device_stats;
 pub mod math;
 pub mod audio_utils;
+pub mod tmp_file;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,

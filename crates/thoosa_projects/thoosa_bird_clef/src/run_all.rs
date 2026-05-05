@@ -228,7 +228,7 @@ pub(crate) async fn run_all(
 
                         info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
-                        //gpt Pre-create context and shared handles for label-net stage construction.
+                        //Pre-create context and shared handles for label-net stage construction.
                         let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
                         let store_in_train_labels = Arc::clone(&store);
                         let ws_in_train_labels = Arc::clone(&ws);
@@ -238,7 +238,7 @@ pub(crate) async fn run_all(
                             run_all_args.train_resource_config()
                         )/*.check(&store).await?*/));
 
-                        //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
+                        //Run a grid over label-net training configs; consumes motif nets from previous stage.
                         match run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
                             None,
                             train_label_nets_run_config_range_or_value,

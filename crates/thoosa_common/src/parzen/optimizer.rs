@@ -644,6 +644,7 @@ where
                 .zip(self.cs.hyperparameters.iter())
                 .map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone())))
                 .collect::<Vec<_>>();
+
             let results = self.obj_func.async_call_mut((&eval_config_named.as_slice(),)).await;
             let loss = results.loss();
             let is_satisfied = self.constraint_keys.iter().all(|constraint_name| {
