@@ -318,6 +318,7 @@ where
 
                 //TODO it's needed only for CosineNet
                 let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+
                     let src = motif.data().as_ref();
                     let mut dst = src.f_zeros_like()?;
                     dst.f_copy_(&src)?;
@@ -495,8 +496,8 @@ where
 
             let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
 
-            debug!("MotifsBatch::train_batch: motifs={:?} random={:?}", motifs.device(), random.device());
-            debug!("MotifsBatch::train_batch: x={:?} y={:?}", x.device(), y.device());
+            debug!("MotifsBatch::train_batch: motifs={motifs:?} random={random:?}");
+            debug!("MotifsBatch::train_batch: x={x:?} y={y:?}");
 
             Ok::<_, ThoError>((x.into(), y))
         })
@@ -549,7 +550,6 @@ where
                 let motif_id = motif_id.clone();
                 let ctx = ctx.branch(Some(&format!("train_batch_")), false);
                 async move {
-                    debug!("MotifsBatch::train_batch_stream: 1.");
 
                     self.make_batch(
                         train_motifs,
@@ -578,7 +578,6 @@ where
                 let motif_id = motif_id.clone();
                 let ctx = ctx.branch(Some(&format!("valid_batch_")), false);
                 async move {
-                    debug!("MotifsBatch::valid_batch_stream: 1.");
 
                     self.make_batch(
                         valid_motifs,
