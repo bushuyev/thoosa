@@ -398,7 +398,7 @@ where
         let results = collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_ids_len,
-            2, //crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
+            crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "train motif",
         ).await;

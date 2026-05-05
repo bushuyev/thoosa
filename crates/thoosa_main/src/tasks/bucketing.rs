@@ -27,7 +27,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{TensorIdSliceIdx, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{panic_to_err, TensorIdSliceIdx, ThoError, LOCK_TIMEOUT};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
@@ -355,16 +355,16 @@ where
         let slices = audio.f_unfold(1, window, step)?;
         debug!("save_resource_plain_buckets: slices={slices:?}");
 
-        let channels_slices_freqamp = fft_band_amplitudes_sliced(&slices, sample_rate, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset)?;
+        let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, sample_rate, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
         debug!("save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
 
-        let planes = make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device())?;
+        let planes = panic_to_err!(make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device()))?;
         debug!("save_resource_plain_buckets: planes={planes:?}");
 
-        let buckets_one_hot = lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, plain_config.normalize_lsh)?;
+        let buckets_one_hot = panic_to_err!(lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, plain_config.normalize_lsh))?;
         debug!("save_resource_plain_buckets: buckets_one_hot={buckets_one_hot:?}");
 
-        let channels_bucket_ids = bucket_ids_from_one_hot_3d(&buckets_one_hot)?;
+        let channels_bucket_ids = panic_to_err!(bucket_ids_from_one_hot_3d(&buckets_one_hot))?;
 
         for (channel, bucket_ids) in channels_bucket_ids.iter().enumerate() {
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();

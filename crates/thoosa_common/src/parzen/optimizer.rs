@@ -11,6 +11,7 @@ use tch::Tensor;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::val::{NamedVal, Val};
+use crate::train_nets::OptConfig;
 
 #[derive(Debug, Clone)]
 struct RunResult {
@@ -644,6 +645,7 @@ where
                 .zip(self.cs.hyperparameters.iter())
                 .map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone())))
                 .collect::<Vec<_>>();
+
             let results = self.obj_func.async_call_mut((&eval_config_named.as_slice(),)).await;
             let loss = results.loss();
             let is_satisfied = self.constraint_keys.iter().all(|constraint_name| {

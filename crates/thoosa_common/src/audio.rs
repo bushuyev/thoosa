@@ -802,7 +802,7 @@ pub fn fft_band_amplitudes_sliced(
     //
     // For exact amplitude reconstruction, DC/Nyquist need special handling,
     // but for band features this is usually fine.
-    let magnitude = panic_to_err!(magnitude.f_mul_scalar(2.0 / audio_len as f64))?;
+    let magnitude = magnitude.f_mul_scalar(2.0 / audio_len as f64)?;
 
     let rfft_bins = magnitude.size()[2];
 
@@ -825,7 +825,7 @@ pub fn fft_band_amplitudes_sliced(
     let band_idx_1d = bin_freqs
         .f_div_scalar(step_hz)?
         .f_to_kind(Kind::Int64)?
-        .f_clamp_max(band_count - 1)?;
+        .f_clamp_max(band_count - 1)?; //Drop for Scalar->tch::error::TchError::unwrap
 
     // Expand band indices to match magnitude shape.
     //
