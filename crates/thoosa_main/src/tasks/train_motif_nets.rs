@@ -517,7 +517,7 @@ where
         }
 
         let random_slices = Arc::clone(&self.random_slices_loader)
-            .run(
+            .run_cached(
                 Arc::new(DevicesWrap::wrap(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit))),
                 ctx.branch(Some("motifs_batch_random_slices_loader"), false),
             )
@@ -535,19 +535,60 @@ where
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable,
 {
-    fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
-        debug!("MotifsBatch::train_batch_stream: self.epoch_size={}", self.epoch_size);
+    fn train_batch_stream<'a>(&'a self, mut ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+        debug!("MotifsBatch::train_batch_stream: 0. self.epoch_size={}", self.epoch_size);
 
-        futures_util::stream::once(self.make_batch(Arc::clone(&self.train_motifs), &self.motif_id, "train", ctx))
-            .take(self.epoch_size as usize)
+
+        let train_motifs = Arc::clone(&self.train_motifs);
+        let motif_id = self.motif_id.clone();
+        let epoch_size = self.epoch_size as usize;
+
+        futures_util::stream::iter(0..epoch_size)
+            .then(move |epoch| {
+                let train_motifs = Arc::clone(&train_motifs);
+                let motif_id = motif_id.clone();
+                let ctx = ctx.branch(Some(&format!("train_batch_")), false);
+                async move {
+                    debug!("MotifsBatch::train_batch_stream: 1.");
+
+                    self.make_batch(
+                        train_motifs,
+                        &motif_id,
+                        "train",
+                        ctx,
+                    )
+                        .await
+                }
+            })
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
             .boxed()
     }
 
-    fn valid_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+    fn valid_batch_stream<'a>(&'a self, mut ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
+        debug!("MotifsBatch::valid_batch_stream: 0. self.epoch_size={}", self.epoch_size);
 
-        futures_util::stream::once(self.make_batch(Arc::clone(&self.valid_motifs), &self.motif_id, "valid", ctx))
-            .take(self.epoch_size as usize)
+
+        let valid_motifs = Arc::clone(&self.valid_motifs);
+        let motif_id = self.motif_id.clone();
+        let epoch_size = self.epoch_size as usize;
+
+        futures_util::stream::iter(0..epoch_size)
+            .then(move |_| {
+                let valid_motifs = Arc::clone(&valid_motifs);
+                let motif_id = motif_id.clone();
+                let ctx = ctx.branch(Some(&format!("valid_batch_")), false);
+                async move {
+                    debug!("MotifsBatch::valid_batch_stream: 1.");
+
+                    self.make_batch(
+                        valid_motifs,
+                        &motif_id,
+                        "valid",
+                        ctx,
+                    )
+                        .await
+                }
+            })
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
             .boxed()
     }
@@ -692,7 +733,7 @@ mod tests {
             10
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10)))));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(3, 2)))));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false);

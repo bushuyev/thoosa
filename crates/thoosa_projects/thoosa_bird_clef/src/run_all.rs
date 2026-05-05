@@ -714,23 +714,24 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     kernel: RangeOrValue::Value(10),
         // }),
 
-        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-            // step: RangeOrValue::Value(1),
-            // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
-            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-        })
-
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-        //     step: RangeOrValue::Value(100),
-        //     channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-        //     // kernel: RangeOrValue::Value(10),
-        //     kernel: RangeOrValue::Range{ range: Range {start: 1000, end: 2000}, step: None },
-        //     head_pool: None,
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+        //     // step: RangeOrValue::Value(1),
+        //     // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+        //     a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
+        //     b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
         // })
+
+        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+            // conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            conv_layers: RangeOrValue::Value(1),
+            head_layers: RangeOrValue::Value(1),
+            step: RangeOrValue::Value(1000),
+            channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+            // kernel: RangeOrValue::Value(10),
+            kernel: RangeOrValue::Range{ range: Range {start: 1000, end: 2000}, step: None },
+            head_pool: None,
+        })
 
     };
 
