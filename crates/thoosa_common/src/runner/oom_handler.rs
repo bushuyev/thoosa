@@ -1,27 +1,24 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{MaxParallelCtx, RunCtx};
-use crate::runner::common::cachable::{ConsumeData, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRefSend};
-use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
-use crate::runner::common::{DropIf, OutId};
+use crate::runner::common::cachable::{ConsumeData, WithDataRef, WithSelectDataRefSend};
+use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
+use crate::runner::common::OutId;
 use crate as thoosa_common;
-#[double]
+#[cfg(not(test))]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use log::{debug, warn};
 use mockall::automock;
-use mockall_double::double;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use plotters::coord::ranged1d::ReversibleRanged;
-use thoosa_shared::{os_thread_id, panic_to_err_async, CopyToDevice};
-use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
+use thoosa_shared::{os_thread_id, panic_to_err_async};
+use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{Cause, ThoError};
-use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -845,7 +842,8 @@ pub mod test_types {
     use crate::runner::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::WithId;
+    use thoosa_shared::traits::{Select, WithId};
+    use thoosa_shared::CopyToDevice;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     pub struct TestId(&'static str);

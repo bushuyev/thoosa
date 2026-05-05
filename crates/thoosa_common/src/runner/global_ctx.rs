@@ -1,26 +1,21 @@
-use std::backtrace::Backtrace;
 use crate::runner::purge::FuturesRunnerMapPurger;
-use log::{debug, error, info};
+use log::{debug, info};
 #[allow(unused_imports)]
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
-use std::pin::Pin;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
-use futures_util::StreamExt;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{backtrace_head_lines, with_async_perf_log, with_perf_log, Cause, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{with_async_perf_log, with_perf_log, ThoError, LOCK_TIMEOUT};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shims::context::ThoCudaContext;
 use crate::copy_ctx::CopyCtx;
-use crate::runner::adjusters::max_parallel::{MaxParallel, MAX_PARALLEL};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 use crate::tho_device::ThoDevice;
 use futures::FutureExt;
@@ -387,19 +382,9 @@ impl GlobalCtx {
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
-    use std::sync::Arc;
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
-    use thoosa_shared::Cause;
-    use thoosa_shared::ThoError;
-    use async_trait::async_trait;
     use log::debug;
-    use thoosa_shared::traits::CachableIdTr;
-    use mockall::predicate::eq;
-    use tokio::sync::Semaphore;
     use tokio::task::block_in_place;
-    use thoosa_shared::comp_id::SynKey;
-    use crate::runner::adjusters::max_parallel::MaxParallel;
-    use crate::runner::cache_areas::CacheAreaId;
     use crate::runner::global_ctx::MockGlobalCtx;
 
     #[derive(Clone, Copy, Debug)]
@@ -660,7 +645,7 @@ pub mod mock_global_ctx {
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 impl MockGlobalCtx {
-    pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
+    pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, _device:D)-> tokio::sync::RwLockReadGuard<'static, CopyCtx> {
         static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
         COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).read().await
     }

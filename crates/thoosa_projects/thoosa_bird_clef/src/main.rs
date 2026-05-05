@@ -1,4 +1,6 @@
 #![recursion_limit = "1024"] //for deep async future type - to avoid "error: queries overflow the depth limit"
+#![allow(deprecated)]
+#![allow(unused_imports, unused_variables, unused_mut, noop_method_call)]
 
 use std::fs;
 use std::sync::Arc;
@@ -7,14 +9,13 @@ use crate::labels::LABELS;
 use log::{debug, error, info};
 use std::time::Instant;
 use parking_lot::RwLock;
-use tch::Device::Cpu;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
-use thoosa_shared::{collect_futures_with_progress, StreamBuffering, ThoError};
+use thoosa_shared::ThoError;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
@@ -78,7 +79,7 @@ fn main() -> Result<(), ThoError>{
                 SqlStore::save_leaky_data_sets("J", LimitBy::Length(10_000_000), None, 0.6, 0.2, 0.9, &t)?;
 
 
-                ///shuffles randomly
+                //shuffles randomly
                 SqlStore::save_leaky_data_sets("X", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("Y", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("Z", LimitBy::None, None, 0.6, 0.2, 0.9, &t)?;
@@ -89,7 +90,7 @@ fn main() -> Result<(), ThoError>{
                 ws: &Arc<RwLock<Box<dyn Workspace>>>,
                 store: &Arc<Box<dyn Store>>,
                 loader: &Arc<RawTensorLoader<RunCtxImpl>>,
-                mut root_ctx: RunCtxImpl,
+                root_ctx: RunCtxImpl,
                 run_all_args: &RunAllArgs
             |{
                 debug!("bird_clef run all");
@@ -129,19 +130,17 @@ fn main() -> Result<(), ThoError>{
         }
     }
     std::process::exit(0x0000); //for jupyter
-
-    Ok(())
 }
 
 
-async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
+async fn infer_labels(params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
     for entry in fs::read_dir(&params.input_dir)? {
         let entry = entry?;
         let path = entry.path();
 
         if path.is_file() && path.ends_with("ogg") {
             debug!("path={path:?}");
-            let ogg_t = ogg_to_tensor(path)?;
+            let _ogg_t = ogg_to_tensor(path)?;
 
 
         }

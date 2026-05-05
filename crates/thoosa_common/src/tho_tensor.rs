@@ -1,6 +1,5 @@
 use std::borrow::Borrow;
 use crate::tho_device::ThoDevice;
-use crate::copy_ctx::CopyCtx;
 use crate::dims::{AnyDims, Dimensional, Dims};
 use thoosa_shared::{panic_to_err, simple_id};
 use async_trait::async_trait;
@@ -12,7 +11,6 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, WithId};
 use torch_sys::IntList;
 use log::{debug, info, trace};
-use mockall::automock;
 use mockall_double::double;
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]

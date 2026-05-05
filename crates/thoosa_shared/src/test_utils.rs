@@ -3,7 +3,7 @@ use crate::perf_logging::{
     init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level, PerfLayer,
     SimplelogLikeEvent,
 };
-use log::{debug, trace, LevelFilter};
+use log::{trace, LevelFilter};
 use num_traits::{Num, Signed, ToPrimitive};
 use std::env;
 use std::env::VarError;

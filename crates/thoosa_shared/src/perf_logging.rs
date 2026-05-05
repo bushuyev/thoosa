@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
 use dashmap::DashMap;
-use log::{debug, LevelFilter, Log};
+use log::{debug, LevelFilter};
 use tracing::{error, Level};
 use tracing_log::LogTracer;
 use tracing_subscriber::{
@@ -217,6 +217,7 @@ pub(crate) fn init_log_tracer(max_level: LevelFilter) {
 
 
 
+#[allow(dead_code)]
 fn init_perf_writer(
     perf_file: Option<PathBuf>,
 ) -> Result<
@@ -235,6 +236,7 @@ fn init_perf_writer(
     }
 }
 
+#[allow(dead_code)]
 fn make_file_layer<P:AsRef<Path>>(
     log_path: P,
     file_level: LevelFilter,

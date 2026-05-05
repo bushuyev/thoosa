@@ -3,17 +3,12 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
 use log::debug;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, OnceLock};
-use mockall_double::double;
+use std::sync::Arc;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
-use tch::Device::Cpu;
 use tub::{Guard, Pool};
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
 use thoosa_shared::ThoError;
 
-use crate::tho_device::ThoDevice;
 
 //TODO to be renamed to StreamCtx?
 pub struct CopyCtx {

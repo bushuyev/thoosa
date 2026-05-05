@@ -2,13 +2,11 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
 use std::sync::Arc;
-use argmin::solver::quasinewton::SR1;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use rand::distr::{Alphanumeric, SampleString};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use mockall_double::double;
-use parking_lot::RwLock;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
@@ -202,7 +200,7 @@ where
         Ok(())
     }
 
-    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+    async fn drop_gpu(&self, device_idx: usize, _name: &str) -> Result<(), ThoError> {
         debug!("TmpCached::drop_gpu: device_idx={device_idx}");
         let keys_vals: Vec<(<D as WithId>::ID, Arc<DevicesWrap<D>>)> = self
             .iter()
@@ -223,7 +221,7 @@ where
     }
 
     //it's just dropped
-    async fn purge_cpu(&self, purge_until: u64) -> usize {
+    async fn purge_cpu(&self, _purge_until: u64) -> usize {
         0
     }
 }

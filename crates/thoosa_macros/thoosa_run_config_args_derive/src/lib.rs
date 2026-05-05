@@ -311,7 +311,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                             }
                                         });
 
-                                        let expect_msg = format!("no {}", field_ident);
+                                        let _expect_msg = format!("no {}", field_ident);
                                         a.builder_assignments.push(quote!{
                                             #field_ident: {
                                                 // assert!(!self.#field_ident.is_empty(), #expect_msg); - tmp fix for empty SelectMotifsRunConfig motif_criteria in bird_clef
@@ -353,7 +353,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
                                             }
                                         });
 
-                                        let expect_msg = format!("no {}", field_ident);
+                                        let _expect_msg = format!("no {}", field_ident);
                                         let field_ident_str = field_ident.to_string();
                                         a.builder_assignments.push(quote!{
                                             #field_ident: {

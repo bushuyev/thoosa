@@ -126,7 +126,7 @@ mod tests {
         }
         const WITH_STREAM:bool = true;
         let inst = Instant::now();
-        tokio::join!(
+        let _ = tokio::join!(
             tokio::spawn(async move {
                 if WITH_STREAM {
                     with_pooled_cuda_stream(1, false, |_|{

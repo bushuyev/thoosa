@@ -1,8 +1,10 @@
-#![feature(async_fn_traits, fn_traits, unboxed_closures,  async_iterator)]
+#![feature(async_fn_traits, unboxed_closures)]
 #![feature(generic_const_exprs)]
-#![feature(macro_metavar_expr_concat)]
 #![allow(async_fn_in_trait)]
 #![allow(incomplete_features)]
+#![allow(confusable_idents)]
+#![allow(deprecated)]
+#![allow(unused_imports, unused_variables, unused_mut, dead_code)]
 extern crate core;
 
 pub mod utils;

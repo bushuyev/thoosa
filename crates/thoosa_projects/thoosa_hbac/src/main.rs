@@ -1,4 +1,6 @@
 #![recursion_limit = "256"]
+#![allow(deprecated)]
+#![allow(unused_imports, unused_variables, unused_mut, noop_method_call)]
 
 mod data;
 mod run_all;
@@ -92,7 +94,7 @@ fn main() -> Result<(), ThoError> {
             20,
             684400,
             200,
-            Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>,|{
+            Some(async |_params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn Store>>,|{
                 debug!("bird_clef: infer");
                 todo!()
             }),

@@ -1,4 +1,4 @@
-use log::{debug, info, trace, warn};
+use log::{debug, trace, warn};
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};

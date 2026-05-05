@@ -37,7 +37,7 @@ pub trait RunCtx: MaxParallelCtx + WithId {//TODO remove PermitsCtx from RunCtx
 
 #[cfg_attr(test, allow(dead_code))]
 pub mod mock_run_ctx {
-    use super::{DropIf, MaxParallelCtx, RunCtx};
+    use super::{MaxParallelCtx, RunCtx};
     use futures_util::future::BoxFuture;
     use log::debug;
     use mockall::mock;

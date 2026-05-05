@@ -3,13 +3,12 @@ use futures_util::future::BoxFuture;
 use log::{debug, warn};
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
-use std::mem;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use mockall_double::double;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use crate::runner::common::{DropIf, MaxParallelCtx, RunCtx};
+use crate::runner::common::{MaxParallelCtx, RunCtx};
 
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::{with_perf_log, ThoError, LOCK_TIMEOUT};
@@ -21,7 +20,6 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use thoosa_shared::mono_key;
 use crate::runner::adjusters::max_parallel::MaxParallel;
-use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 
 
 ///was supposed to be execution-long context, now used mostly to keep max_parallel so to avoid parallel async calls 'sharing' same permit, which may lead to deadlock, should never be passed as &mut to an async function - use RunCtx::branch instead.
