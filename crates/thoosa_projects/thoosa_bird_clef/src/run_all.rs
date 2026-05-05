@@ -804,7 +804,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
-        train_motifs_opt_config: Arc::new(OptConfig::new(30, 10)),
+        train_motifs_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
         train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
         train_final_opt_config: Arc::new(OptConfig::new(30, 10))
     }
