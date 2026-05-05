@@ -492,7 +492,7 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             },
         },
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig { opt_max_evals: 100, opt_num_init: 10 },
+        find_and_select_motifs_opt_config: OptConfig { opt_max_evals: 100, opt_num_init: 10, patience: 20, min_delta: 1e-4_f32 },
     };
 
 
