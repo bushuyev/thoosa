@@ -11,6 +11,7 @@ use tch::Tensor;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::val::{NamedVal, Val};
+use crate::train_nets::OptConfig;
 
 #[derive(Debug, Clone)]
 struct RunResult {

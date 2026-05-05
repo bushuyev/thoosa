@@ -331,7 +331,7 @@ where
                     }
                     if valid_loss_count > 0 {
                         let valid_loss = valid_loss_sum / valid_loss_count as f32;
-                        if valid_loss < best_valid_loss - min_delta {//TODO min_delta to * coefficient
+                        if valid_loss < best_valid_loss - min_delta {
                             best_valid_loss = valid_loss;
                             bad_epochs = 0;
                             {
