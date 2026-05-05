@@ -23,12 +23,12 @@ pub fn clc_conv1d_out<P:Display + ?Sized>(l_in: u32, kernel: u32, c: ConvConfig,
         return Err(ThoError::new(format!("kernel={kernel} should be bigger than 0")))
     }
     if l_in + 2 * (c.padding as u32) < c.dilation as u32  * (kernel - 1) {
-        return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} should be bigger than 2", kernel, c.dilation)))
+        return Err(ThoError::new(format!("clc_conv1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={} dilation={} padding={}", kernel, c.dilation, c.padding)))
     }
 
     if l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1{
 
-        return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={} should be bigger than 1", kernel, c.dilation)))
+        return Err(ThoError::new(format!("l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) < 1 : l_in={l_in} kernel={} dilation={}", kernel, c.dilation)))
     }
 
     let r = (l_in + 2 * c.padding as u32 - c.dilation as u32 * (kernel - 1) - 1) / c.stride as u32 + 1;
@@ -45,7 +45,7 @@ pub fn clc_max_pool1d_out(l_in: u32, kernel: u32, padding: u32, dilation: u32, s
     }
 
     if l_in + 2 * padding < dilation * (kernel - 1) - 1 {
-        return Err(ThoError::new(format!("l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} should be bigger than 2")))
+        return Err(ThoError::new(format!("clc_max_pool1d_out: l_in + 2 * padding < dilation * (kernel - 1) - 1 : l_in={l_in} kernel={kernel} dilation={dilation} padding={padding}")))
     }
 
     debug!("clc_max_pool1d_out: l_in={l_in} kernel={kernel} padding={padding} dilation={dilation} stride={stride}");
