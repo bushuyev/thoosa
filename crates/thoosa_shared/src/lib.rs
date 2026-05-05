@@ -1,9 +1,9 @@
 #![feature(backtrace_frames)]
-#![feature(async_fn_traits, fn_traits, unboxed_closures)]
-#![feature(tuple_trait)]
+#![feature(unboxed_closures)]
 #![feature(generic_const_exprs)]
 #![allow(incomplete_features)]
 #![allow(confusable_idents)]
+#![allow(deprecated)]
 
 extern crate self as thoosa_shared;
 
@@ -541,7 +541,7 @@ impl ThoError {
         Self::new_with_cause("Cuda error", cuda_cause_from_msg(msg))
     }
 
-    pub fn from_cuda_error(msg: impl Into<String> + Display, cuda_error:i32) -> Self {
+    pub fn from_cuda_error(_msg: impl Into<String> + Display, cuda_error:i32) -> Self {
         Self::new_with_cause("Cuda error", cuda_cause_from_error_code(cuda_error))
     }
 
@@ -575,13 +575,13 @@ impl ThoError {
 
     pub fn is_oom(&self) -> bool {
         match &self.what{
-            Cause::Cuda { action, msg } => {
+            Cause::Cuda { action, msg: _ } => {
                 match action {
                     CudaAction::HandleOOM => true,
                     _=> false
                 }
             }
-            Cause::JobError { job_id, inner } => {
+            Cause::JobError { job_id: _, inner } => {
                 inner.is_oom()
             },
             _=> false
@@ -592,14 +592,14 @@ impl ThoError {
 
     pub fn is_retryable_oom(&self) -> bool {
         match &self.what{
-            Cause::Cuda { action, msg } => {
+            Cause::Cuda { action, msg: _ } => {
                 match action {
                     CudaAction::HandleOOM => true,
                     _=> false
                 }
             }
             Cause::AdjusterFailed => true,
-            Cause::JobError { job_id, inner } => {
+            Cause::JobError { job_id: _, inner } => {
                 inner.is_retryable_oom()
             },
             _=> false

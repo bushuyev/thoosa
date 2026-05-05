@@ -7,7 +7,7 @@ use crate::my_tch::{BinaryHeadPool, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
 use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
-use crate::utils::{pad_to, plot_series, ListenerResponse, TrainListener};
+use crate::utils::{plot_series, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
 use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
@@ -193,7 +193,7 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
     ) -> Result<u32, ThoError> {
 
-        let mut input_run_ids = self.train_label_nets_run_id.map(|train_label_nets_run_id| vec![train_label_nets_run_id]).expect("no train_label_nets_run_id");
+        let input_run_ids = self.train_label_nets_run_id.map(|train_label_nets_run_id| vec![train_label_nets_run_id]).expect("no train_label_nets_run_id");
 
         let run_config_id = store.save_run_config(
             Some(input_run_ids.as_slice()),//it's used as input for TrainLabelNetsOutput
@@ -697,7 +697,7 @@ impl AsRef<CommonTrainingRunConfig> for TrainMotifsNetsRunConfig {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
-struct AdamW {
+pub struct AdamW {
     #[in_map]
     #[run_config]
     beta1:f32,

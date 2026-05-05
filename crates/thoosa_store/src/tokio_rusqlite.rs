@@ -17,7 +17,6 @@
     clippy::todo,
     clippy::unimplemented,
     clippy::wildcard_imports,
-    future_incompatible,
     missing_docs,
     missing_debug_implementations,
     unreachable_pub
@@ -33,11 +32,11 @@ use std::{
 };
 use tokio::sync::oneshot;
 
-pub use rusqlite::{self, *};
+pub(crate) use rusqlite::{self, *};
 
 /// Information extracted from a panic payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PanicInfo {
+pub(crate) struct PanicInfo {
     message: String,
 }
 
@@ -55,7 +54,7 @@ impl PanicInfo {
     }
 
     /// Best-effort panic message.
-    pub fn message(&self) -> &str {
+    pub(crate) fn message(&self) -> &str {
         &self.message
     }
 }
@@ -71,7 +70,7 @@ impl std::error::Error for PanicInfo {}
 /// Represents the errors specific for this library.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum Error<E = rusqlite::Error> {
+pub(crate) enum Error<E = rusqlite::Error> {
     /// The connection is closed and can no longer accept new work.
     ConnectionClosed,
 
@@ -128,7 +127,7 @@ impl From<rusqlite::Error> for Error<rusqlite::Error> {
 }
 
 /// The result returned on method calls in this crate.
-pub type Result<T, E = rusqlite::Error> = std::result::Result<T, Error<E>>;
+pub(crate) type Result<T, E = rusqlite::Error> = std::result::Result<T, Error<E>>;
 
 type CallFn = Box<dyn FnOnce(&mut rusqlite::Connection) + Send + 'static>;
 
@@ -145,24 +144,24 @@ enum DispatchError {
 
 /// A handle to call functions in a background thread.
 #[derive(Clone)]
-pub struct Connection {
+pub(crate) struct Connection {
     sender: Sender<Message>,
 }
 
 impl Connection {
     /// Open a new connection to a SQLite database.
-    pub async fn open<P: AsRef<Path>>(path: P) -> std::result::Result<Self, rusqlite::Error> {
+    pub(crate) async fn open<P: AsRef<Path>>(path: P) -> std::result::Result<Self, rusqlite::Error> {
         let path = path.as_ref().to_owned();
         start(move || rusqlite::Connection::open(path)).await
     }
 
     /// Open a new in-memory connection.
-    pub async fn open_in_memory() -> std::result::Result<Self, rusqlite::Error> {
+    pub(crate) async fn open_in_memory() -> std::result::Result<Self, rusqlite::Error> {
         start(rusqlite::Connection::open_in_memory).await
     }
 
     /// Open a new connection with flags.
-    pub async fn open_with_flags<P: AsRef<Path>>(
+    pub(crate) async fn open_with_flags<P: AsRef<Path>>(
         path: P,
         flags: OpenFlags,
     ) -> std::result::Result<Self, rusqlite::Error> {
@@ -171,7 +170,7 @@ impl Connection {
     }
 
     /// Open a new connection with flags and VFS.
-    pub async fn open_with_flags_and_vfs<P: AsRef<Path>>(
+    pub(crate) async fn open_with_flags_and_vfs<P: AsRef<Path>>(
         path: P,
         flags: OpenFlags,
         vfs: &str,
@@ -182,14 +181,14 @@ impl Connection {
     }
 
     /// Open a new in-memory connection with flags.
-    pub async fn open_in_memory_with_flags(
+    pub(crate) async fn open_in_memory_with_flags(
         flags: OpenFlags,
     ) -> std::result::Result<Self, rusqlite::Error> {
         start(move || rusqlite::Connection::open_in_memory_with_flags(flags)).await
     }
 
     /// Open a new in-memory connection with flags and VFS.
-    pub async fn open_in_memory_with_flags_and_vfs(
+    pub(crate) async fn open_in_memory_with_flags_and_vfs(
         flags: OpenFlags,
         vfs: &str,
     ) -> std::result::Result<Self, rusqlite::Error> {
@@ -225,7 +224,7 @@ impl Connection {
     ///
     /// If the closure panics via unwind, the panic is converted to `Error::Panic`
     /// and the wrapped SQLite connection stays alive for future calls.
-    pub async fn call<F, R, E>(&self, function: F) -> std::result::Result<R, Error<E>>
+    pub(crate) async fn call<F, R, E>(&self, function: F) -> std::result::Result<R, Error<E>>
     where
         F: FnOnce(&mut rusqlite::Connection) -> std::result::Result<R, E> + Send + 'static,
         R: Send + 'static,
@@ -243,7 +242,7 @@ impl Connection {
     /// worker thread stays alive.
     ///
     /// Calling this on a closed connection still panics.
-    pub async fn call_unwrap<F, R>(&self, function: F) -> R
+    pub(crate) async fn call_unwrap<F, R>(&self, function: F) -> R
     where
         F: FnOnce(&mut rusqlite::Connection) -> R + Send + 'static,
         R: Send + 'static,
@@ -263,7 +262,7 @@ impl Connection {
     /// Close the database connection.
     ///
     /// If a clone already closed it, this returns `Ok(())`.
-    pub async fn close(self) -> Result<()> {
+    pub(crate) async fn close(self) -> Result<()> {
         let (sender, receiver) = oneshot::channel::<rusqlite::Result<()>>();
 
         if self.sender.send(Message::Close(sender)).is_err() {

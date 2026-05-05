@@ -1,10 +1,7 @@
 use std::cmp::Ordering;
 use log::debug;
-use serde::Deserialize;
 use tch::{Device, Kind, TchError, Tensor};
 
-use thoosa_properties_map_derive::ThoosaPropertiesMap;
-use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{panic_to_err, ThoError};
 
 pub const LOG_EPS:f64 = 1e-6;

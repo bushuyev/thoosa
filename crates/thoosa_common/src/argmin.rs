@@ -18,8 +18,6 @@ use tch::Tensor;
 
 #[cfg(test)]
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::Named;
-use crate::dims::Dims;
 use crate::tho_tensor::ThoTensor;
 
 #[cfg(test)]

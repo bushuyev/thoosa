@@ -1,13 +1,10 @@
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use log::{debug, error, trace, warn};
-use mockall_double::double;
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
-use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
+use thoosa_shared::{panic_to_err_async, ThoError};
 
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
 
 
 

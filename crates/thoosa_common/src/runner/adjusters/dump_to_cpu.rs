@@ -4,15 +4,13 @@ use log::{debug, warn};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::sync::Arc;
 use mockall_double::double;
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
-use crate::runner::common::{DropIf, RunCtx};
+use crate::runner::common::RunCtx;
 
 use crate as thoosa_common;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
 #[derive(Debug)]
 pub struct DumpToCpu<A>
@@ -83,7 +81,7 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
 
 
-        let (device_idx)  = adjustable.device_idx();
+        let device_idx   = adjustable.device_idx();
 
         debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 
@@ -110,7 +108,7 @@ where
         Ok(adjustable.branch(None, false))
     }
 
-    fn degrade(&self, adjust_context: &mut C) -> bool {
+    fn degrade(&self, _adjust_context: &mut C) -> bool {
 
         false
     }

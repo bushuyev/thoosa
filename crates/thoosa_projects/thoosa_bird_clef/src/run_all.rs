@@ -3,35 +3,29 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use log::{debug, info};
 use tch::Device::Cpu;
-use thoosa_main::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, Aggr, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
+use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifLinNetArgs, MotifLinNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::transforms::filters::{AbsFilterParams, AbsFilterParamsRangeOrValue, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, median_window_from_find_motifs, median_window_from_find_motifs_grid, run_grid, run_opt, run_plot, FindAndSelect, RunAllArgs};
-use thoosa_main::{tasks, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
-use thoosa_main::tasks::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, BucketingStage, MelPatchResourcesInput, PlainBandAggregationMean, PlainBandAggregationMeanRangeOrValue, PlainConfig, PlainConfigRangeOrValue};
+use thoosa_main::cli::{run_grid, run_opt, run_plot, FindAndSelect, RunAllArgs};
+use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+use thoosa_main::tasks::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, PlainBandAggregationMeanRangeOrValue, PlainConfigRangeOrValue};
 use thoosa_main::tasks::bucketing::PlainBandAggregationRangeOrValue::Mean;
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
-use thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsRunConfigFields::SelectMotifsRunConfig;
-use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
-use thoosa_main::tasks::motif_loader::MotifLoader;
-use thoosa_main::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
-use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfig, PearsonCorrConfigRangeOrValue, SimilarityMetric, SimilarityMetricRangeOrValue};
+use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
-use thoosa_properties_map::ToHashmap;
 use thoosa_shared::{collect_futures_with_progress, panic_to_err_async, RangeOrValue, ResourceType, StreamBuffering, ThoError};
-use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::ResourceType::NotInGroup;
-use thoosa_shared::run_configs::{RunConfig, RunId};
+use thoosa_shared::run_configs::RunId;
 use thoosa_store::Store;
 
 pub(crate) struct AllConfigs {
@@ -40,9 +34,11 @@ pub(crate) struct AllConfigs {
 
     pub train_motif_nets_run_config_range_or_value:TrainMotifsNetsRunConfigRangeOrValue,
     pub train_label_nets_run_config_range_or_value:TrainLabelNetsRunConfigRangeOrValue,
+    #[allow(dead_code)]
     pub train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
     pub train_motifs_opt_config:Arc<OptConfig>,
     pub train_labels_opt_config:Arc<OptConfig>,
+    #[allow(dead_code)]
     pub train_final_opt_config:Arc<OptConfig>,
 }
 
@@ -73,7 +69,7 @@ pub(crate) async fn run_all(
             let train_label_nets_run_config_range_or_value = Arc::new(all_config.train_label_nets_run_config_range_or_value);
 
             let find_resources = run_all_args.find_resources.clone();
-            let select_resources = run_all_args.select_resources.clone();
+            let _select_resources = run_all_args.select_resources.clone();
 
             let futures = labels.iter().filter(|label|
                 {
@@ -87,10 +83,10 @@ pub(crate) async fn run_all(
                 let fixed_find_motif_config = fixed_find_motifs_config.clone();
 
                 let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
-                let mut init_ctx_find_motifs = label_ctx.branch(Some("init_ctx_find_motifs"), false);
+                let init_ctx_find_motifs = label_ctx.branch(Some("init_ctx_find_motifs"), false);
 
                 let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
-                let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
+                let _select_motifs_run_config = Arc::clone(&select_motifs_run_config);
                 let train_motif_nets_run_config_range_or_value = Arc::clone(&train_motif_nets_run_config_range_or_value);
                 let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
                 let train_labels_opt_config = Arc::clone(&all_config.train_labels_opt_config);
@@ -298,7 +294,7 @@ pub(crate) async fn run_all(
                 let fixed_find_motif_config = fixed_find_motifs_config.clone();
 
                 let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
-                let mut init_ctx_find_motifs = label_ctx.branch(Some("init_ctx_find_motifs"), false);
+                let _init_ctx_find_motifs = label_ctx.branch(Some("init_ctx_find_motifs"), false);
 
                 let train_motif_nets_run_config_range_or_value = Arc::new(all_config.train_motif_nets_run_config_range_or_value.clone());
                 let train_label_nets_run_config_range_or_value = Arc::new(all_config.train_label_nets_run_config_range_or_value.clone());
@@ -434,6 +430,7 @@ pub(crate) async fn run_all(
 
 }
 
+#[allow(dead_code)]
 pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
     let find_and_select =  FindAndSelect::WithOpt {

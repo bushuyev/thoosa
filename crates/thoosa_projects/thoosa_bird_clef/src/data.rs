@@ -5,10 +5,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::fs::{File, read_dir};
 use std::io::BufReader;
-use std::path::{Path, PathBuf};
-use std::ptr::eq;
+use std::path::Path;
 use polars::prelude::{col, lit, CsvParseOptions, CsvReadOptions, IntoLazy, SerReader};
-use tch::Kind::{Float, Half};
+use tch::Kind::Half;
 use tch::Tensor;
 use thoosa_shared::ThoError;
 

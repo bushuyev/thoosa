@@ -23,7 +23,7 @@ impl TmpFile {
 
 
     /// Remove immediately and disarm the guard.
-    pub fn remove_now(mut self) -> io::Result<()> {
+    pub fn remove_now(self) -> io::Result<()> {
 
         match fs::remove_file(&self.path) {
             Ok(()) => Ok(()),

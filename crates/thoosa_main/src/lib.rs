@@ -1,4 +1,4 @@
-#![feature(async_fn_traits, fn_traits, unboxed_closures)]
+#![feature(unboxed_closures)]
 #![recursion_limit = "256"]
 #![allow(
     unused_imports,
@@ -6,8 +6,10 @@
     unused_mut,
     dead_code,
     non_snake_case,
+    private_interfaces,
     redundant_semicolons,
-    noop_method_call
+    noop_method_call,
+    deprecated
 )]
 pub mod cli;
 pub mod data;

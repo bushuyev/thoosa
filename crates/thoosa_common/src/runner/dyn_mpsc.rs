@@ -131,6 +131,7 @@ enum ManagerCmd {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum SubmitError {
     Closed,
     Cancelled,

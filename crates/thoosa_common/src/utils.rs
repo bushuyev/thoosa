@@ -39,7 +39,6 @@ use thoosa_shared::colors_iter::DistinctColorIter;
 use sha2::{Digest, Sha256};
 use thoosa_properties_map::FromHashmap;
 use thoosa_shared::run_configs::{RunConfig, RunId};
-use crate::copy_ctx::CopyCtx;
 
 pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_run_id: RunId) -> Result<FH, ThoError>
 where

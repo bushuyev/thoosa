@@ -35,9 +35,11 @@ pub(crate) struct AllConfigs {
 
     pub train_motif_nets_run_config_range_or_value:TrainMotifsNetsRunConfigRangeOrValue,
     pub train_label_nets_run_config_range_or_value:TrainLabelNetsRunConfigRangeOrValue,
+    #[allow(dead_code)]
     pub train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
     pub train_motifs_opt_config:Arc<OptConfig>,
     pub train_labels_opt_config:Arc<OptConfig>,
+    #[allow(dead_code)]
     pub train_final_opt_config:Arc<OptConfig>,
 }
 
@@ -64,7 +66,7 @@ pub(crate) async fn run_all(
     ).check(&store).await?));
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
-    let train_final_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
+    let _train_final_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
         run_all_args.train_final_resource_config()).check(&store).await?));
 
 
@@ -420,7 +422,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 }
 
 
-fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F, F1>(median_window: F, dyn_step:F1) -> FindMotifsRunConfigRangeOrValue<P>
+fn run_all_find_motifs_config_opt_0<P: FieldName + 'static, F, F1>(median_window: F, _dyn_step:F1) -> FindMotifsRunConfigRangeOrValue<P>
 where
     F: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
     F1: Fn(&[NamedVal<P>]) -> RangeOrValue<u32> + Send + Sync + Clone + 'static,
@@ -469,6 +471,7 @@ where
 }
 
 
+#[allow(dead_code)]
 fn run_all_select_motifs_config_grid_0<P: FieldName + 'static>() -> SelectMotifsRunConfigRangeOrValue<P> {
     SelectMotifsRunConfigRangeOrValue {
         id: None,
