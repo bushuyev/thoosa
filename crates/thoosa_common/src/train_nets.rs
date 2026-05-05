@@ -973,11 +973,7 @@ pub fn conv_motif_node(params: &MotifConvNetParams) -> Result<Node, ThoError> {
 
 
     net = net
-        .conv_1d("motif_conv_1", params.kernel, 1, params.channels, ConvConfig {
-            stride: 1,
-            padding: 0,
-            ..ConvConfig::default()
-        }, None)?
+        .conv_1d("motif_conv_1", params.kernel, 1, params.channels, nd, None)?
         .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?;
 
     let mut net = builder

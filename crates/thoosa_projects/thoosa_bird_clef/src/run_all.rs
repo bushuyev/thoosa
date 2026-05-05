@@ -10,7 +10,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifLinNetArgs, MotifLinNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::{AbsFilterParams, AbsFilterParamsRangeOrValue, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, MedianFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::ws::Workspace;
@@ -619,8 +619,8 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 128201}, step: Some((16000, 0)) },
-            // window: RangeOrValue::Value(10000),
+            // window: RangeOrValue::Range{ range: Range {start: 2000, end: 128201}, step: Some((16000, 0)) },
+            window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
             //     AverageFilter(AverageFilterParamsRangeOrValue {
@@ -707,12 +707,24 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 amsgrad: RangeOrValue::Value(true),
             })),
         },
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-        //     step: RangeOrValue::Value(10),
-        //     channels: RangeOrValue::Value(32),
-        //     kernel: RangeOrValue::Value(10),
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::LinNet(MotifLinNetArgsRangeOrValue {
+        //     num_layers: RangeOrValue::Value(2),
+        //     step: RangeOrValue::Value(1000),
+        //     channels: RangeOrValue::Value(2),
+        //     kernel: RangeOrValue::Value(1000),
         // }),
+
+        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+            conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            // conv_layers: RangeOrValue::Value(1),
+            // head_layers: RangeOrValue::Value(1),
+            head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            step: RangeOrValue::Value(10),
+            channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+            // kernel: RangeOrValue::Value(10),
+            kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
+            head_pool: None,
+        })
 
         // net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
         //     // step: RangeOrValue::Value(1),
@@ -722,16 +734,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
         // })
 
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            // conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            conv_layers: RangeOrValue::Value(1),
-            head_layers: RangeOrValue::Value(1),
-            step: RangeOrValue::Value(1000),
-            channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-            // kernel: RangeOrValue::Value(10),
-            kernel: RangeOrValue::Range{ range: Range {start: 1000, end: 2000}, step: None },
-            head_pool: None,
-        })
+
 
     };
 
