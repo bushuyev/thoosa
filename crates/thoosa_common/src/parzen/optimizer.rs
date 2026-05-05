@@ -555,8 +555,7 @@ where
     cs: ConfigurationSpace<T>,
     constraints: HashMap<String, f32>,
     constraint_keys: Vec<String>,
-    n_init: u32,
-    max_evals: u32,
+    config: OptConfig,
     queued_configs: VecDeque<Vec<Val>>,
     tpe_samplers: HashMap<String, TreeStructuredParzenEstimator>,
     _pd: PhantomData<(T, R)>,
@@ -575,8 +574,7 @@ where
         obj_func: F,
         cs: ConfigurationSpace<T>,
         constraints: HashMap<String, f32>,
-        max_evals: u32,
-        n_init: u32,
+        config: OptConfig,
         descr: &str,
     ) -> Self {
         debug!("AsyncTPEOptimizerImpl:new: cs={cs:?} constraints={constraints:?}");
@@ -602,8 +600,7 @@ where
             cs,
             constraints,
             constraint_keys,
-            n_init,
-            max_evals,
+            config,
             queued_configs: VecDeque::new(),
             tpe_samplers,
             descr: descr.to_string(),
@@ -626,13 +623,14 @@ where
     async fn optimize(&mut self) -> Vec<Val> {
         let mut best_loss = f32::MAX;
         let mut best_config: Option<Vec<Val>> = None;
+        let mut bad_evals = 0_u32;
 
-        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.max_evals as usize, 1);
-        for i in 0..self.max_evals {
+        let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.config.opt_max_evals as usize, 1);
+        for i in 0..self.config.opt_max_evals {
             let eval_config = if let Some(config) = self.queued_configs.pop_front() {
                 debug!("AsyncTPEOptimizerImpl::optimize: i={i} queued sample");
                 config
-            } else if i < self.n_init {
+            } else if i < self.config.opt_num_init {
                 debug!("AsyncTPEOptimizerImpl::optimize: i={i} random sample");
                 self.cs.random_sample()
             } else {
@@ -660,9 +658,13 @@ where
 
             debug!("AsyncTPEOptimizerImpl::optimize: i={i} eval_config={eval_config:?} results={results:?} is_satisfied={is_satisfied}");
 
-            if is_satisfied && loss < best_loss {
+            let early_stopping_started = i + 1 > self.config.opt_num_init;
+            if is_satisfied && loss < best_loss - self.config.min_delta {
                 best_loss = loss;
                 best_config.replace(eval_config.clone());
+                bad_evals = 0;
+            } else if early_stopping_started && best_config.is_some() {
+                bad_evals += 1;
             }
 
             self.tpe_samplers
@@ -680,6 +682,11 @@ where
                     .update_observations(constraint_loss, &eval_config, None);
             }
             collect_eta_record_completion(grids_eta_guard.id());
+
+            if self.config.patience > 0 && early_stopping_started && bad_evals >= self.config.patience {
+                debug!("AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}", self.descr, self.config.patience, self.config.min_delta);
+                break;
+            }
         }
 
         best_config.unwrap_or(vec![]) //TODO
@@ -735,7 +742,7 @@ impl<F, T: FieldName> AsyncTPEOptimizer<F, T>
 where
     F: AsyncFnMut(&[NamedVal<T>]) -> f32,
 {
-    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, max_evals: u32, n_init: u32, descr: &str) -> Self {
+    pub fn new(obj_func: F, cs: ConfigurationSpace<T>, config: OptConfig, descr: &str) -> Self {
         debug!("AsyncTPEOptimizer:new: cs={cs:?}");
 
         Self {
@@ -743,8 +750,7 @@ where
                 obj_func,
                 cs,
                 HashMap::new(),
-                max_evals,
-                n_init,
+                config,
                 descr,
             ),
         }
@@ -779,8 +785,7 @@ where
         obj_func: F,
         cs: ConfigurationSpace<T>,
         constraints: HashMap<String, f32>,
-        max_evals: u32,
-        n_init: u32,
+        config: OptConfig,
         descr: &str,
     ) -> Self {
         debug!("AsyncCTPEOptimizer:new: cs={cs:?} constraints={constraints:?}");
@@ -790,8 +795,7 @@ where
                 obj_func,
                 cs,
                 constraints,
-                max_evals,
-                n_init,
+                config,
                 descr,
             ),
         }
@@ -825,6 +829,7 @@ fn stack_params<T: Clone>(input: Vec<Vec<Vec<T>>>) -> Vec<Vec<T>> {
 mod tpe_optimizer_tests {
     use crate::parzen::optimizer::Val::Int;
     use crate::parzen::optimizer::{AsyncCTPEOptimizer, AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection, Val, stack_params};
+    use crate::train_nets::OptConfig;
     use log::debug;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -879,8 +884,7 @@ mod tpe_optimizer_tests {
                     })
                     .collect(),
             ),
-            500,
-            10,
+            OptConfig::new(500, 10),
             "n/a",
         );
 
@@ -906,8 +910,7 @@ mod tpe_optimizer_tests {
                     })
                     .collect(),
             ),
-            500,
-            10,
+            OptConfig::new(500, 10),
             "n/a",
         );
 
@@ -964,8 +967,7 @@ mod tpe_optimizer_tests {
                     },
                 ],
             ),
-            500,
-            10,
+            OptConfig::new(500, 10),
             "n/a",
         );
 
@@ -1003,8 +1005,7 @@ mod tpe_optimizer_tests {
                 },
             ]),
             HashMap::from([("c1".to_string(), 0.0), ("c2".to_string(), 0.0)]),
-            300,
-            10,
+            OptConfig::new(300, 10),
             "n/a",
         );
 
@@ -1032,8 +1033,7 @@ mod tpe_optimizer_tests {
                 lower: 0.0,
                 upper: 10.0,
             }]),
-            2,
-            0,
+            OptConfig::new(2, 0),
             "n/a",
         );
         opt.enqueue_configs(vec![vec![Val::Real(1.0)], vec![Val::Real(2.0)]]);
@@ -1041,6 +1041,52 @@ mod tpe_optimizer_tests {
         let _best_config = opt.optimize().await;
 
         assert_eq!(vec![vec![Val::Real(1.0)], vec![Val::Real(2.0)]], *calls.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_optimize_stops_after_patience_without_improvement() {
+        let calls = Arc::new(Mutex::new(0_u32));
+        let calls_for_obj = Arc::clone(&calls);
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |_params| {
+                *calls_for_obj.lock().unwrap() += 1;
+                1.0
+            },
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 10.0,
+            }]),
+            OptConfig::new_with_early_stopping(20, 1, 3, 0.001),
+            "n/a",
+        );
+
+        let _best_config = opt.optimize().await;
+
+        assert_eq!(4, *calls.lock().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_optimize_early_stopping_waits_for_initial_samples() {
+        let calls = Arc::new(Mutex::new(0_u32));
+        let calls_for_obj = Arc::clone(&calls);
+        let mut opt: AsyncTPEOptimizer<_, String> = AsyncTPEOptimizer::new(
+            async move |_params| {
+                *calls_for_obj.lock().unwrap() += 1;
+                1.0
+            },
+            ConfigurationSpace::new(vec![Hyperparameter::UniformFloat {
+                name: "lr".into(),
+                lower: 0.0,
+                upper: 10.0,
+            }]),
+            OptConfig::new_with_early_stopping(20, 5, 2, 0.001),
+            "n/a",
+        );
+
+        let _best_config = opt.optimize().await;
+
+        assert_eq!(7, *calls.lock().unwrap());
     }
 
     #[test]

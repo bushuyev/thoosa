@@ -810,6 +810,12 @@ pub struct OptConfig {
 
     #[arg(long, default_value_t = 10)]
     pub opt_num_init: u32,
+
+    #[arg(long, default_value_t = 20)]
+    pub patience: u32,
+
+    #[arg(long, default_value_t = 1e-5_f32)]
+    pub min_delta: f32,
 }
 
 impl OptConfig {
@@ -817,6 +823,17 @@ impl OptConfig {
         Self {
             opt_max_evals: max_evals,
             opt_num_init: n_init,
+            patience: 0,
+            min_delta: 0.0,
+        }
+    }
+
+    pub fn new_with_early_stopping(max_evals: u32, n_init: u32, patience: u32, min_delta: f32) -> Self {
+        Self {
+            opt_max_evals: max_evals,
+            opt_num_init: n_init,
+            patience,
+            min_delta,
         }
     }
 }
@@ -2018,8 +2035,7 @@ where
                 loss
             },
             config_space,
-            opt_config.opt_max_evals,
-            opt_config.opt_num_init,
+            opt_config.as_ref().clone(),
             descr,
         );
         opt.enqueue_configs(reusable_configs);

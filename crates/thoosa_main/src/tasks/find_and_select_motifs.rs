@@ -374,8 +374,8 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
         let grid_runs = self.run_configs.grid_to_vals_and_opt_params();
-        let opt_max_evals = self.opt_config.opt_max_evals;
-        let opt_num_init = self.opt_config.opt_num_init;
+        let opt_config = self.opt_config.as_ref().clone();
+        let opt_max_evals = opt_config.opt_max_evals;
         let mut find_and_select_run_find_ctx = ctx.branch("find_and_select_run_find".into(), true);
         let device_idx = ctx.device_idx();
         let grid_runs_len = grid_runs.len();
@@ -398,6 +398,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                 let fixed_find_motifs_config = self.fixed_find_motifs_config.clone();
                 let max_chunk_size = self.max_chunk_size;
                 let mut find_and_select_run_find_ctx = find_and_select_run_find_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false);
+                let opt_config = opt_config.clone();
                 async move {
                     let mut opt = AsyncTPEOptimizer::new(
                         async |opt_vals| {
@@ -421,8 +422,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                             .1
                         },
                         ConfigurationSpace::new(opt_params),
-                        opt_max_evals,
-                        opt_num_init,
+                        opt_config,
                         &format!("find_and_select_{}", grid_idx),
                     );
 
