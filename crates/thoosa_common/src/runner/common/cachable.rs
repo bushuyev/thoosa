@@ -190,7 +190,7 @@ where
 
     async fn load_from_any_device_(
         wrap:&DevicesWrap<O>,
-        to_device_idx: usize,
+        to_tho_device_idx: usize,
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError>
     where
         Self:Sized;
@@ -972,9 +972,9 @@ where
 
     pub async fn load_from_any_device_(
         &self,
-        to_device_idx: usize,
+        to_tho_device_idx: usize,
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError> {
-        O::M::load_from_any_device_(self, to_device_idx).await
+        O::M::load_from_any_device_(self, to_tho_device_idx).await
     }
 
     pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
