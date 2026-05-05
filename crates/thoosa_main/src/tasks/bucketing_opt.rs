@@ -294,8 +294,8 @@ impl AsyncStage for BucketingOptStage {
 
         let const_vals = self.run_configs.grid_run_config_source().const_params().clone();
         let grid_runs = self.run_configs.grid_to_vals_and_opt_params();
-        let opt_max_evals = self.opt_config.opt_max_evals;
-        let opt_num_init = self.opt_config.opt_num_init;
+        let opt_config = self.opt_config.as_ref().clone();
+        let opt_max_evals = opt_config.opt_max_evals;
         let mut mel_patch_opt_ctx = ctx.branch(Some("mel_patch_opt"), true);
         let grid_runs_len = grid_runs.len();
         info!("BucketingOptStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
@@ -310,6 +310,7 @@ impl AsyncStage for BucketingOptStage {
             let loader = Arc::clone(&self.loader);
             let resources_config = resources_config.clone();
             let mut mel_patch_opt_ctx = mel_patch_opt_ctx.branch(Some(format!("grid_idx_{grid_idx}").as_str()), false);
+            let opt_config = opt_config.clone();
 
             async move {
                 let mut opt = AsyncTPEOptimizer::new(
@@ -330,8 +331,7 @@ impl AsyncStage for BucketingOptStage {
                         .1
                     },
                     ConfigurationSpace::new(opt_params),
-                    opt_max_evals,
-                    opt_num_init,
+                    opt_config,
                     &format!("mel_patch_opt_{grid_idx}"),
                 );
 
