@@ -223,7 +223,7 @@ impl thoosa_shared::CopyToDevice for LoadedMotifResource {
 impl Output for LoadedMotifResource {}
 
 #[derive(Debug)]
-struct SyncMotifLoaderLoadedInput {
+struct SyncMotifLoaderInput {
     id: SynKey,
     motif_id: DataId,
     select_motifs_run_id: Option<Vec<RunId>>,
@@ -234,7 +234,7 @@ struct SyncMotifLoaderLoadedInput {
     descr: &'static str,
 }
 
-impl SyncMotifLoaderLoadedInput {
+impl SyncMotifLoaderInput {
     fn new(
         id: SynKey,
         motif_id: DataId,
@@ -249,9 +249,9 @@ impl SyncMotifLoaderLoadedInput {
     }
 }
 
-impl Input for SyncMotifLoaderLoadedInput {}
+impl Input for SyncMotifLoaderInput {}
 
-impl WithId for SyncMotifLoaderLoadedInput {
+impl WithId for SyncMotifLoaderInput {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -259,7 +259,7 @@ impl WithId for SyncMotifLoaderLoadedInput {
     }
 }
 
-impl Data for SyncMotifLoaderLoadedInput {
+impl Data for SyncMotifLoaderInput {
     type Metrics = MonoMetrics<0, 1>;
     type M = CpuOrGpu<Self>;
 
@@ -277,7 +277,7 @@ impl Data for SyncMotifLoaderLoadedInput {
 }
 
 #[async_trait]
-impl thoosa_shared::CopyToDevice for SyncMotifLoaderLoadedInput {
+impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         let mut loaded_resources = Vec::with_capacity(self.loaded_resources.len());
         for resource in &self.loaded_resources {
@@ -302,7 +302,7 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderLoadedInput {
 }
 
 #[derive(Debug)]
-struct SyncMotifLoaderInput {
+struct SyncMotifLoaderInputWrapper {
     id: SynKey,
     motif_id: DataId,
     select_motifs_run_id: Option<Vec<RunId>>,
@@ -313,7 +313,7 @@ struct SyncMotifLoaderInput {
     descr: &'static str,
 }
 
-impl SyncMotifLoaderInput {
+impl SyncMotifLoaderInputWrapper {
     fn new(
         id: SynKey,
         motif_id: DataId,
@@ -328,7 +328,7 @@ impl SyncMotifLoaderInput {
     }
 }
 
-impl WithId for SyncMotifLoaderInput {
+impl WithId for SyncMotifLoaderInputWrapper {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -336,8 +336,8 @@ impl WithId for SyncMotifLoaderInput {
     }
 }
 
-impl ConsumeData for SyncMotifLoaderInput {
-    type O = SyncMotifLoaderLoadedInput;
+impl ConsumeData for SyncMotifLoaderInputWrapper {
+    type O = SyncMotifLoaderInput;
 
     fn consume<R, F, P>(
         self,
@@ -351,7 +351,7 @@ impl ConsumeData for SyncMotifLoaderInput {
         P: RunCtx,
     {
         async move {
-            let SyncMotifLoaderInput {
+            let SyncMotifLoaderInputWrapper {
                 id,
                 motif_id,
                 select_motifs_run_id,
@@ -366,7 +366,7 @@ impl ConsumeData for SyncMotifLoaderInput {
                 Ok(loaded_resources) => loaded_resources,
                 Err(err) => {
                     return ConsumeResult::Failed {
-                        input: SyncMotifLoaderLoadedInput::new(
+                        input: SyncMotifLoaderInput::new(
                             id,
                             motif_id,
                             select_motifs_run_id,
@@ -381,7 +381,7 @@ impl ConsumeData for SyncMotifLoaderInput {
                 }
             };
 
-            let input = SyncMotifLoaderLoadedInput::new(
+            let input = SyncMotifLoaderInput::new(
                 id,
                 motif_id,
                 select_motifs_run_id,
@@ -411,7 +411,7 @@ impl ConsumeData for SyncMotifLoaderInput {
             for resource in o.loaded_resources {
                 loaded_resources.insert(resource);
             }
-            SyncMotifLoaderInput::new(
+            SyncMotifLoaderInputWrapper::new(
                 o.id,
                 o.motif_id,
                 o.select_motifs_run_id,
@@ -465,7 +465,7 @@ impl<C> Stage for SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    type In<'a> = SyncMotifLoaderLoadedInput;
+    type In<'a> = SyncMotifLoaderInput;
     type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
     type Ctx = C;
 }
@@ -474,6 +474,8 @@ impl<C> SyncStage for SyncMotifLoader<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifLoader::consume"))]
     fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
         let motif = match build_motif_from_loaded_resources(
             input.motif_id.clone(),
@@ -563,7 +565,7 @@ where
         .await?;
         let loaded_resources_name = loaded_resources.registered_name();
 
-        let sync_input = SyncMotifLoaderInput::new(
+        let sync_input = SyncMotifLoaderInputWrapper::new(
             input_id.clone(),
             motif_id_value,
             select_motifs_run_id_for_key,
@@ -711,7 +713,7 @@ where
         )
         .await?;
         let loaded_resources_name = loaded_resources.registered_name();
-        let sync_input = SyncMotifLoaderInput::new(
+        let sync_input = SyncMotifLoaderInputWrapper::new(
             mono_key!(*motif_id_value, "random_slices_loader_input").into(),
             motif_id_value,
             None,
@@ -752,6 +754,7 @@ where
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_resource_tensors"))]
 async fn load_motif_resource_tensors<L, C>(
     motif_id: DataId,
     channel: i64,
@@ -1058,7 +1061,7 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Arc;
     use log::LevelFilter::Trace;
-    use log::{set_max_level, trace};
+    use log::{debug, set_max_level, trace};
     use parking_lot::RwLock;
     use tch::Tensor;
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
@@ -1086,6 +1089,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::distance::average_euclidean_distance;
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_store::RunConfigRow;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

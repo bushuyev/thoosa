@@ -463,6 +463,7 @@ where
                 let min_split_len = step_aligned_min_split_len.max(motif_width_i64);
                 let overlap_len = motif_width.saturating_sub(self.slice_step) as i64;
                 let input_len = input.size().dim::<1>();
+                
                 let slices = if input_len >= motif_width_i64 {
                     ((input_len - motif_width_i64) / self.slice_step as i64) + 1
                 } else {

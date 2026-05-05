@@ -110,7 +110,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all_recovering"))]
-    pub async fn take_all_recovering(mut self, device:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
+    pub async fn take_all_recovering(mut self, tho_device_idx:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all: name={}", self.name);
         let _cache_guard = self.unregister_cache().await;
 
@@ -123,19 +123,19 @@ where
                 continue;
             };
 
-            match devices_wrap.load_from_any_device_(device).await.map(|guard| drop(guard)) {
-                Ok(()) => match devices_wrap.take_data_prefer_device_or_any(device) {
+            match devices_wrap.load_from_any_device_(tho_device_idx).await.map(|guard| drop(guard)) {
+                Ok(()) => match devices_wrap.take_data_prefer_device_or_any(tho_device_idx) {
                     Ok(value) => res.push(value),
                     Err(err) => {
                         let error = Self::contextualize_take_error(&key, err);
-                        Self::recover_remaining_values(&mut res, entries, device);
+                        Self::recover_remaining_values(&mut res, entries, tho_device_idx);
                         return Err(TmpCacheTakeAllError { data: res, error });
                     }
                 }
                 Err(err) => {
                     let error = Self::contextualize_take_error(&key, err);
-                    Self::recover_owned_value(&mut res, &key, devices_wrap, device);
-                    Self::recover_remaining_values(&mut res, entries, device);
+                    Self::recover_owned_value(&mut res, &key, devices_wrap, tho_device_idx);
+                    Self::recover_remaining_values(&mut res, entries, tho_device_idx);
                     return Err(TmpCacheTakeAllError { data: res, error });
                 }
             }
