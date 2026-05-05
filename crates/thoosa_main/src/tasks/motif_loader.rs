@@ -22,7 +22,7 @@ use mockall_double::double;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
-use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices, Slice};
+use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunId;
@@ -55,7 +55,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::utils::{load_run_config, tensor_digest};
+use thoosa_common::utils::load_run_config;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
@@ -180,7 +180,7 @@ struct LoadedMotifResource {
     id: LoadedMotifResourceId,
     resource_id: ResourceId,
     slices: Vec<u32>,
-    raw_tensor: ThoTensor<Slice, SynKey>,
+    raw_tensor: ThoTensor<MotifSlices, SynKey>,
 }
 
 impl WithId for LoadedMotifResource {
@@ -192,11 +192,11 @@ impl WithId for LoadedMotifResource {
 }
 
 impl Data for LoadedMotifResource {
-    type Metrics = <ThoTensor<Slice, SynKey> as Data>::Metrics;
+    type Metrics = <ThoTensor<MotifSlices, SynKey> as Data>::Metrics;
     type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
-        <ThoTensor<Slice, SynKey> as Data>::size(&self.raw_tensor)
+        <ThoTensor<MotifSlices, SynKey> as Data>::size(&self.raw_tensor)
     }
 
     fn device(&self) -> usize {
@@ -556,6 +556,7 @@ where
             motif_id_value.clone(),
             channel,
             real_find_motifs_run_id,
+            window,
             resources_map,
             resource_ids_slices,
             configurable_loader,
@@ -705,6 +706,7 @@ where
             motif_id_value.clone(),
             channel,
             find_motifs_run_id,
+            find_motifs_run_config.window,
             resources_map,
             resource_ids_slices,
             configurable_loader,
@@ -759,6 +761,7 @@ async fn load_motif_resource_tensors<L, C>(
     motif_id: DataId,
     channel: i64,
     find_motifs_run_id: u32,
+    window: u32,
     resources_map: HashMap<ResourceId, Resource>,
     resource_ids_slices: HashMap<ResourceId, Vec<u32>>,
     configurable_loader: Arc<LoaderStageChoice<L, C>>,
@@ -780,10 +783,28 @@ where
             .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
             .await?;
         let channel_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
+            let raw_channel = raw_tt.t_ref().f_i((channel, ..))?;
+            let size = raw_channel.size();
+            let mut valid_slices = Vec::with_capacity(slices.len());
 
-            let src = raw_tt.t_ref().i((channel, ..));
-            let mut dst = src.f_zeros_like()?;
-            dst.f_copy_(&src)?;
+            for &slice in &slices {
+                let Some(slice_end) = slice.checked_add(window) else {
+                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} overflows for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                    continue;
+                };
+
+                if slice_end as i64 > size[0] {
+                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                } else {
+                    valid_slices.push(slice);
+                }
+            }
+
+            let mut dst = Tensor::f_zeros([valid_slices.len() as i64, window as i64], (raw_tt.t_ref().kind(), raw_tt.t_ref().device()))?;
+            for (slice_i, slice) in valid_slices.into_iter().enumerate() {
+                let src = raw_channel.f_i(slice as i64..(slice + window) as i64)?;
+                dst.f_get(slice_i as i64)?.f_copy_(&src)?;
+            }
 
             ThoTensor::new(raw_tt.id().clone(), dst)
         })?;
@@ -810,32 +831,8 @@ fn build_motif_from_loaded_resources(
     device_idx: usize,
     descr: &str,
 ) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
-    let total_slices = loaded_resources.iter().map(|resource| resource.slices.len()).sum::<usize>() as i64;
-    let motif_t = ThoTensor::<MotifSlices, DataId>::zeros(
-        motif_id.clone(),
-        [total_slices, window as i64],
-        (Float, ThoDevice::from(device_idx).into()),
-    )?;
-    let mut slice_i = 0i64;
-
-    for resource in loaded_resources {
-        let size = resource.raw_tensor.t_ref().size();
-
-        debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} raw_tensor={:?}", resource.resource_id);
-        // debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} raw_tensor={:?} tensor_digest={:?}", resource.resource_id, tensor_digest(resource.raw_tensor.t_ref()));
-
-        for &slice in &resource.slices {
-
-            if (slice + window) as i64 > size[0] {
-                warn!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={} in find_motifs_run_id={find_motifs_run_id} in {descr}", resource.resource_id);
-
-            } else {
-                debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} slice_i={slice_i} slice={slice:?} size={size:?} resource_id={} descr={descr}", resource.resource_id);
-                motif_t.t.f_get(slice_i)?.f_copy_(&resource.raw_tensor.t.f_i(( slice as i64..(slice + window) as i64))?)?;
-                slice_i += 1;
-            }
-        }
-    }
+    let total_slices = loaded_resources.iter().map(|resource| resource.raw_tensor.t_ref().size()[0]).sum::<i64>();
+    debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} select_motifs_run_id={select_motifs_run_id:?} find_motifs_run_id={find_motifs_run_id} channel={channel} window={window} total_slices={total_slices} loaded_resources={} device_idx={device_idx} descr={descr}", loaded_resources.len());
     /*
        select_motifs_run_id should not be used if SelectMotifsRunConfig doesn't contain extend_config
        let motif_id = select_motifs_run_id
@@ -846,10 +843,19 @@ fn build_motif_from_loaded_resources(
         })
      */
     // TODO motif can contain either only slices found during initial 'find motifs' run or also slices found during 'select motifs' ran with 'extend' config. This should be reflected in motif id
-    // let tensor = motif_t.t.f_i((0..slice_i, ..))?;
-    // debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id:?} tensor_digest={:?}", tensor_digest(&tensor));
-    // ThoTensor::new(mono_key!(*motif_id, descr).into(), tensor) //f_i - if there were skipped slices. TODO error if it's emtpy?
-    ThoTensor::new(mono_key!(*motif_id, descr).into(), motif_t.t.f_i((0..slice_i, ..))?) //f_i - if there were skipped slices. TODO error if it's emtpy?
+    let motif_refs = loaded_resources
+        .iter()
+        .filter(|resource| resource.raw_tensor.t_ref().size()[0] > 0)
+        .map(|resource| resource.raw_tensor.t_ref())
+        .collect::<Vec<_>>();
+
+    let tensor = if motif_refs.is_empty() {
+        Tensor::f_zeros([0, window as i64], (Float, ThoDevice::from(device_idx).into()))?
+    } else {
+        Tensor::f_cat(motif_refs.as_slice(), 0)?
+    };
+
+    ThoTensor::new(mono_key!(*motif_id, descr).into(), tensor)
 
 
 }
