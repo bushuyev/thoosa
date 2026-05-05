@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use dashmap::{DashMap, Entry};
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use log::{debug, error, trace, warn};
+use log::{debug, trace, warn};
 
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
@@ -21,9 +21,7 @@ use std::sync::Arc;
 use thoosa_shared::{with_async_perf_log, with_perf_log, CopyToDevice, LOCK_TIMEOUT};
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
-use crate::runner::cache_areas::CacheArea;
 use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
-use crate::runner::cache_areas::CacheAreaId;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
@@ -151,7 +149,7 @@ where
                 drop(slot);
                 shared
                     .map(|res| {
-                        if let Ok(data) = &res {
+                        if let Ok(_data) = &res {
                             #[cfg(any(debug_assertions, tho_debug))]
                             debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?}");
 
@@ -367,7 +365,7 @@ where
         }
     }
 
-    fn drop_device(wrap: &DevicesWrap<O>, device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
+    fn drop_device(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
     where
         Self: Sized
     {

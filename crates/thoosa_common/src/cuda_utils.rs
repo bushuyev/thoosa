@@ -2,9 +2,8 @@ use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, StreamExt};
 use log::debug;
-use mockall::predicate::ne;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{Cause, ThoError};
@@ -12,9 +11,8 @@ use tokio_utils::Pool;
 use tub::Guard;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_ERROR_ASSERT, CUDA_ERROR_ILLEGAL_ADDRESS, CUDA_SUCCESS};
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
-use crate::copy_ctx::CopyCtx;
 use crate::runner::global_ctx::GlobalCtx;
 
 pub struct PinnedHostBuffer {

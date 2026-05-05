@@ -1125,7 +1125,6 @@ where
         mut ctx: C,
     ) -> Result<(), ThoError> {
         let num_resources = resources.len();
-        let mut total_processed_size = 0;
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
         let mut t_1_batch_dim_0_size = 0;
@@ -1139,7 +1138,6 @@ where
                 .await?;
 
             t_1_batch_dim_0_size += t_0.size().dim_1();
-            total_processed_size += t_0.size().dim_1();
             t_1_batch.push(t_0);
             t_1_batch_resources.push(resource_0.clone());
 
@@ -1793,7 +1791,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only((mono_key!(1, "motif").into())), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
         ]).finish());
 
 
@@ -1872,7 +1870,7 @@ pub mod tests {
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only((mono_key!(1, "motif").into())), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
             (MotifLoaderInput::all_slices(DataId(motifs_ids[1])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t.shallow_clone())),
             (MotifLoaderInput::find_motif_slices_only(mono_key!(motifs_ids[1], "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t)),
         ]).finish());

@@ -56,7 +56,7 @@ pub fn async_with_data(input: TokenStream) -> TokenStream {
     expand_with_data(input, true).into()
 }
 
-fn expand_with_data(input: WithDataInput, await_closure: bool) -> proc_macro2::TokenStream {
+fn expand_with_data(input: WithDataInput, _await_closure: bool) -> proc_macro2::TokenStream {
     let ctx_expr = input.ctx;
     let closure = input.closure;
 

@@ -8,6 +8,7 @@
     redundant_semicolons,
     noop_method_call
 )]
+#![allow(deprecated)]
 extern crate core;
 
 pub mod fs_store;
