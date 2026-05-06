@@ -208,7 +208,7 @@ pub(crate) async fn run_all(
                         let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, train_motifs_opt_config)));
 
                         // Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
-                        let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+                        let train_motif_net_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
                             None,
                             train_motif_nets_run_config_range_or_value,
                             input_wrapper,
@@ -226,7 +226,7 @@ pub(crate) async fn run_all(
                             || label_ctx.branch(Some("train motif nets"), true),
                         ).await?;
 
-                        info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
+                        info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_net_run_ids:?}");
 
                         // Pre-create context and shared handles for label-net stage construction.
                         let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
@@ -247,7 +247,7 @@ pub(crate) async fn run_all(
                             &store,
                             async move |run_configs| {
                                 new_train_label_nets(
-                                    train_motif_nets_run_ids,
+                                    train_motif_net_run_ids,
                                     Arc::clone(&loader),
                                     run_configs,
                                     &ws_in_train_labels,
