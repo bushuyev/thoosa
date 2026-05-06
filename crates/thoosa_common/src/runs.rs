@@ -257,8 +257,8 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 
 #[async_trait]
 pub trait SavableResult: Sync + Send + Debug {
-    type P<'a>:Debug + Default = ();
-    type R:Debug + Default = ();
+    type P<'a>:Debug = ();
+    type R:Debug = ();
 
     async fn save(
         &mut self, //TODO consume

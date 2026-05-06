@@ -239,7 +239,7 @@ pub(crate) async fn run_all(
                         )/*.check(&store).await?*/));
 
                         // Run a grid over label-net training configs; consumes motif nets from previous stage.
-                        match run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
+                        let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
                             None,
                             train_label_nets_run_config_range_or_value,
                             train_labels_input,
@@ -269,6 +269,8 @@ pub(crate) async fn run_all(
                                 info!("train label nets failed: label={label} e={e:?}");
                             }
                         };
+
+                        info!("train label nets done: label={label} train_label_net_run_ids={train_label_net_run_ids:?}");
 
                         Ok::<_, ThoError>(())
                     })
