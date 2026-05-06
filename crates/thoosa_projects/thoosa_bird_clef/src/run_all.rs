@@ -54,6 +54,8 @@ pub(crate) async fn run_all(
 ) -> Result<(), ThoError> {
     debug!("run_all");
 
+    // Navigation note: this is the project-level run-all workflow invoked from bird_clef::main via run_cli.
+    // It fans out by label, then chains find/select motifs -> train motif nets -> train label nets.
     let labels = store.list_labels(true).await?;
     info!("run_all: labels={:?}", labels.len());
     debug!("run_all: labels={labels:?}");
@@ -63,6 +65,7 @@ pub(crate) async fn run_all(
 
     match &all_config.find_and_select {
         FindAndSelect::GridOnly { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config } => {
+            // Default BirdCLEF path: find motifs for each label/resource set, bypass SelectMotifsStage with select_all_motifs, then train motif and label nets.
             let find_motifs_run_config = Arc::new(find_motifs_run_config_range_or_value.clone());
             let select_motifs_run_config = Arc::new(select_motifs_run_config.clone());
             let train_motif_nets_run_config_range_or_value = Arc::new(all_config.train_motif_nets_run_config_range_or_value);
@@ -133,7 +136,7 @@ pub(crate) async fn run_all(
 
                         // let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
                         // let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
-                        //gpt Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
+                        // Run a grid over SelectMotifs configs; each run consumes FindMotifs outputs and produces selected motifs.
                         // let mut select_motifs_run_ids = vec![];
                         //
                         // for find_motifs_run_id in &find_motifs_run_ids {
@@ -191,6 +194,7 @@ pub(crate) async fn run_all(
                             */
 
 
+                        // select_all_motifs is a deliberate bypass: it creates selection runs that include every found motif without invoking SelectMotifsStage criteria.
                         let select_motifs_run_ids = store.select_all_motifs(&find_motifs_run_ids).await?;
 
                         info!("select motifs done: label={label} select_motifs_run_ids={select_motifs_run_ids:?}");
@@ -203,7 +207,7 @@ pub(crate) async fn run_all(
 
                         let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, train_motifs_opt_config)));
 
-                        //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
+                        // Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
                         let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
                             None,
                             train_motif_nets_run_config_range_or_value,
@@ -224,7 +228,7 @@ pub(crate) async fn run_all(
 
                         info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
-                        //Pre-create context and shared handles for label-net stage construction.
+                        // Pre-create context and shared handles for label-net stage construction.
                         let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
                         let store_in_train_labels = Arc::clone(&store);
                         let ws_in_train_labels = Arc::clone(&ws);
@@ -234,7 +238,7 @@ pub(crate) async fn run_all(
                             run_all_args.train_resource_config()
                         )/*.check(&store).await?*/));
 
-                        //Run a grid over label-net training configs; consumes motif nets from previous stage.
+                        // Run a grid over label-net training configs; consumes motif nets from previous stage.
                         match run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
                             None,
                             train_label_nets_run_config_range_or_value,
@@ -282,6 +286,7 @@ pub(crate) async fn run_all(
             Ok::<_, ThoError>(())
         }
         FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
+            // Alternative path for optimizer-driven find+select. Use this branch when debugging OptConfig/search-space behavior rather than fixed grid expansion.
             let futures = labels.iter().filter(|label|
                 {
                     labels_filter_ref
@@ -375,7 +380,7 @@ pub(crate) async fn run_all(
 
                     info!("train motif nets done: train_motif_nets_run_ids={train_motif_nets_run_ids:?}");
 
-                    //gpt Pre-create context and shared handles for label-net stage construction.
+                    // Pre-create context and shared handles for label-net stage construction.
                     let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
                     let store_in_train_labels = Arc::clone(&store);
                     let ws_in_train_labels = Arc::clone(&ws);
@@ -385,7 +390,7 @@ pub(crate) async fn run_all(
                         run_all_args.train_resource_config()
                     )/*.check(&store).await?*/));
 
-                    //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
+                    // Run a grid over label-net training configs; consumes motif nets from previous stage.
                     let train_label_nets_run_ids = run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
                         None,
                         train_label_nets_run_config_range_or_value,
@@ -612,6 +617,8 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
 pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
+    //gpt Navigation note: main.rs currently chooses this config. CLI values still enter through RunAllArgs;
+    //gpt this function owns the default search spaces for motif discovery and training.
     let find_and_select =  FindAndSelect::GridOnly {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,

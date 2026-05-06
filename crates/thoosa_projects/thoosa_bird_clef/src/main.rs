@@ -33,6 +33,8 @@ fn main() -> Result<(), ThoError>{
 
     let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
 
+    // Navigation note: each Tokio worker pins CUDA device 0 before any stage runs.
+    // CUDA init failures from BirdCLEF usually happen here or later in GlobalCtx::init_devices inside run_cli.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             //runs cuCtxSetCurrent
@@ -50,13 +52,16 @@ fn main() -> Result<(), ThoError>{
         })?;
 
     let run_result = rt.block_on(async move {
+        //gpt Navigation note: run_cli is the shared thoosa entry point. The arguments below are the
+        //gpt BirdCLEF adapters: label import, OGG->tensor loading, dataset-set seeding, run-all orchestration, and optional inference.
         run_cli(
             |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
             |t: &Transaction|{
                 SqlStore::save_all_sets(&t)?;
 
-               //resources used in previous N-set not included, sorted by size
+                //gpt This import-resources hook seeds named resource sets. Later CLI args like --find-resources=H1000000 resolve through these generated sets.
+                //resources used in previous N-set not included, sorted by size
                 SqlStore::save_leaky_data_sets("A", LimitBy::Count(1), None, 0.6, 0.2, 1.0, &t)?;
                 SqlStore::save_leaky_data_sets("A", LimitBy::Count(3), None, 0.6, 0.2, 1.0, &t)?;
                 SqlStore::save_leaky_data_sets("A", LimitBy::Count(6), None, 0.6, 0.2, 1.0, &t)?;
@@ -96,14 +101,15 @@ fn main() -> Result<(), ThoError>{
                 debug!("bird_clef run all");
                 let all_configs = run_all_grid_config_0(run_all_args);
 
-               run_all(
-                   ws,
-                   store,
-                   loader,
-                   root_ctx,
-                   run_all_args,
-                   all_configs
-               ).await?;
+                //gpt run-all starts here after run_cli has opened the workspace/store and built the RawTensorLoader over saved *.pt tensors.
+                run_all(
+                    ws,
+                    store,
+                    loader,
+                    root_ctx,
+                    run_all_args,
+                    all_configs
+                ).await?;
 
                 Ok(())
             },

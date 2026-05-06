@@ -358,6 +358,8 @@ where
     }
     // set_oom_score_adj(-1000);
 
+    //gpt Navigation note: project binaries such as thoosa_bird_clef provide the closures above.
+    //gpt This shared function handles CLI parsing, workspace/store setup, tensor cache loading, and command dispatch.
     unsafe {
         at_grad_set_enabled(0);
     };
@@ -431,6 +433,7 @@ where
     let tensors_path = ws.read().tensors_path().clone();
     let tensors_path_for_loader = tensors_path.clone();
 
+    // Creates CPU plus GPU device wrappers for the async runner. Big tensors crossing awaits should remain in run_cached/TmpCached so OOM handling can dump them to CPU.
     GlobalCtx::init_devices(2);
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
@@ -505,6 +508,8 @@ where
 
     let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
+    // ImportResources is the only command that calls the project OGG decoder directly;
+    // later commands load the persisted tensor files through RawTensorLoader.
     match &cli.command {
         Some(ImportResources(import_resources_args)) => {
             debug!("ImportResources: import_resources_params={:?}",import_resources_args);
@@ -778,8 +783,7 @@ where
         Some(RunAll(run_all_args)) => {
             debug!("RunAll: run_all_params={:?}", run_all_args);
 
-            ///////////////////////////////
-
+            // Project-specific callback supplied by thoosa_projects/thoosa_bird_clef/src/main.rs.
             run_all(
                 &ws,
                 &store,
