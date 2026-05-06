@@ -1126,6 +1126,7 @@ pub fn apply_motif_net_forward(
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
 
     debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", batch.t.size());
+    trace!("ApplyMotifNet::do_run: batch.t=\n{}", batch.t);
     let t = batch.t.f_i((c, ..))?;
     let t = if t.size()[0] >= motif_width {
         t
@@ -1143,6 +1144,7 @@ pub fn apply_motif_net_forward(
 
     let out_t = out.as_ref().f_view([-1])?.f_sigmoid()?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out_t.size={:?}", out_t.size());
+    trace!("ApplyMotifNet::do_run: out_t=\n{out_t}");
 
     debug_plot!(&t.f_view((1, -1))?, "apply_motif_net_run_input_{input_id}")?;
     debug_plot!(&out_t.f_view((1, -1))?, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
