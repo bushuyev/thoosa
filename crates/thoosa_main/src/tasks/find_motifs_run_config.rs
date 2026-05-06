@@ -1480,6 +1480,7 @@ impl SelectMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for SelectMotifsSavableResult {
+    type R = u32;
 
     async fn save(
         &mut self,
