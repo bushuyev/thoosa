@@ -117,13 +117,14 @@ impl WithId for FindAndSelectMotifsResult {
 
 #[async_trait]
 impl SavableResult for FindAndSelectMotifsResult {
+    type R = Vec<u32>;
 
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> Result<Vec<u32>, ThoError> {
 
 
         let best_run_ids = self
@@ -139,7 +140,7 @@ impl SavableResult for FindAndSelectMotifsResult {
             HashMap::from([]),
         ).await?;
 
-        Ok(id)
+        Ok(vec![id])
     }
 }
 

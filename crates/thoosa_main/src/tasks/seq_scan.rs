@@ -46,6 +46,8 @@ impl Output for SeqScanOutput {}
 
 #[async_trait]
 impl SavableResult for SeqScanOutput {
+    type R = u32;
+
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,

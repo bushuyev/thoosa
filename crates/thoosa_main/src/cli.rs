@@ -1867,7 +1867,7 @@ where
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
-    <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult,
+    <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<R=Vec<RunId>>,
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
@@ -1880,7 +1880,7 @@ where
 
     let run_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
 
-    Ok(vec![run_id])
+    Ok(run_id)
 }
 
 async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
