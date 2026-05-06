@@ -5762,6 +5762,27 @@ impl MockStoreBuilder {
         self
     }
 
+    pub fn with_list_input_nets<I>(
+        mut self,
+        inputs: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = (RunId, Result<Vec<u32>, ThoError>)> + Debug,
+    {
+        let data = inputs.into_iter().collect::<Vec<_>>();
+        debug!("with_list_trained_nets: inputs={data:?}");
+        let data = Arc::new(data);
+        self.store.expect_list_input_nets().returning(
+            move |run_id| {
+                data.iter()
+                    .find(|(expected_run_id, _)| expected_run_id == &run_id)
+                    .map(|(_, result)| result.clone())
+                    .unwrap_or_else(|| Err(ThoError::new(format!("with_list_input_nets is not configured to return  nets for run_id={run_id:?}"))))
+            }
+        );
+        self
+    }
+
     pub fn with_list_run_config_values(mut self, run_id:RunId, r:Result<HashMap<String, Val>, ThoError>) -> Self {
         self.store.expect_list_run_config_values()
             .returning(move |p_run_id| {
