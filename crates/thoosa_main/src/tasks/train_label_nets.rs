@@ -34,7 +34,7 @@ use thoosa_common::batches::{prefetch_next_batch_stream, preload_one, AsyncDataB
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetRunConfigResult};
+use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetRunConfigResult, TrainLabelNetRunConfigResultParams};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -101,6 +101,8 @@ where
     C: RunCtx + Adjustable + 'static,
     R:RunCtx + Adjustable + 'static
 {
+    let id = mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_ids.iter().map(|run_id| mono_key!(*run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>());
+
     //gpt Build a motif-net application stage to turn raw resources into motif probabilities.
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
@@ -120,9 +122,10 @@ where
     }
     let motif_nets_ids = apply_motif_nets.motif_nets_ids();
 
+
     let applied_motif_loader = Arc::new(ABStage::new(
         //train_motif_nets_run_ids are only for logging. can't get RawTensorLoader id, but it's a singleton and ABStage isn't used - A instances are cached under A::out_id key.
-        mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_ids.iter().map(|run_id| mono_key!(*run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
+        id,
         loader,
         apply_motif_nets
     ));
@@ -265,25 +268,20 @@ impl SavableResult for TrainLabelNetsOutput {
     type R = Vec<u32>;
 
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
-        // let run_id = store
-        //     .save_run_config(
-        //         Some(&self.train_motif_nets_run_ids),
-        //         TrainLabelNetsRunConfig::type_name(),
-        //         "TrainLabelNetsResult",
-        //         HashMap::new(),
-        //     )
-        //     .await?;
-        //
-        // self.id = run_id;
+
+        let mut run_ids = Vec::with_capacity(self.results.len());
 
         for result in &mut self.results {
-            //TODO add ctx to save and pass train_label_nets_run_id & motif_nets_ids as refs
-            // result.set_train_label_nets_run_id(run_id);
-            result.set_motif_nets_ids(self.motif_nets_ids.clone());
-            result.save(store, ws, ()).await?;
+
+            run_ids.push(
+                result.save(store, ws, TrainLabelNetRunConfigResultParams {
+                    train_motif_nets_run_ids:&self.train_motif_nets_run_ids,
+                    motif_nets_ids:&self.motif_nets_ids
+                }).await?
+            );
         }
 
-        Ok(vec![0])
+        Ok(run_ids)
     }
 }
 

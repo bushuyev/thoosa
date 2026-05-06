@@ -1810,7 +1810,7 @@ where
     RCRV: GridRunConfigSource + Debug,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
-    <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult,
+    for<'a> <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<P<'a>:Default>,
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
@@ -1867,7 +1867,7 @@ where
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
-    <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<R=Vec<RunId>>,
+    for<'a> <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<P<'a>:Default, R=Vec<RunId>>,
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {

@@ -280,7 +280,6 @@ where
         R:RunCtx + Adjustable + 'static
     {
 
-
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_ids.
         let motif_nets = store.list_trained_nets(train_motif_net_run_ids.clone(), max_loss, trained_nets_limit).await?;
 

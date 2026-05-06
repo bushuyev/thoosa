@@ -159,7 +159,7 @@ impl SavableResult for TrainFinalNetOutput {
     type R = Vec<u32>;
 
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
-        self.result.save(store, ws, ()).await;
+        let _ = self.result.save(store, ws, ()).await;
 
         Ok(vec![0])//TODO
     }
@@ -511,7 +511,7 @@ mod tests {
                 .with_get_input_run_ids([(train_label_nets_run_id, Ok(vec![train_motif_nets_run_id]))])
                 .with_list_trained_nets([
                     (
-                        train_motif_nets_run_id,
+                        vec![train_motif_nets_run_id],
                         Some(0.3),
                         Some(2),
                         Ok(vec![
