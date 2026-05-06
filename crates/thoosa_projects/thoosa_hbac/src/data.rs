@@ -1227,7 +1227,7 @@ mod tests {
                     Ok((0i64, find_motifs_run_id, random_slices, random_resources_by_id)),
                 )
                 .with_list_trained_nets([
-                    (train_motif_nets_run_id, None, None, Ok(vec![(0, trained_net_path.clone(), 0.01)])),
+                    (vec![train_motif_nets_run_id], None, None, Ok(vec![(0, trained_net_path.clone(), 0.01)])),
                 ])
                 .build(),
         );
