@@ -186,6 +186,7 @@ fn run_config_values_with_loss(values: impl Iterator<Item = (String, Val)>, loss
 
 #[async_trait]
 impl SavableResult for TrainLabelNetRunConfigResult {
+    type R = u32;
 
     async fn save(
         &mut self,
@@ -250,6 +251,7 @@ impl TrainFinalNetsRunConfigResult {
 
 #[async_trait]
 impl SavableResult for TrainFinalNetsRunConfigResult {
+    type R = u32;
 
     async fn save(
         &mut self,
@@ -1793,14 +1795,15 @@ impl TrainMotifsNetsResult {
 
 #[async_trait]
 impl SavableResult for TrainMotifsNetsResult {
+    type R = Vec<u32>;
 
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<u32, ThoError> {
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
 
         for r in self.train_motif_nets_results.iter_mut() {
             r.save(store, ws, self.select_motifs_run_ids.as_slice()).await?;
         }
 
-        Ok(0)
+        Ok(vec![0u32])
     }
 }
 
@@ -1830,6 +1833,7 @@ impl Output for TrainMotifsNetsResult {
 #[async_trait]
 impl SavableResult for TrainMotifNetResult {
     type P<'a> =  &'a [RunId];
+    type R = u32;
 
     async fn save(
         &mut self,

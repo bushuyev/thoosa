@@ -140,13 +140,15 @@ impl Output for MelPatchOutput {}
 
 #[async_trait]
 impl SavableResult for MelPatchOutput {
+    type R = Vec<u32>;
+
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
-        Ok(0)
+    ) -> Result<Vec<u32>, ThoError> {
+        Ok(vec![0])
     }
 }
 

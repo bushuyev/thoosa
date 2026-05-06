@@ -84,12 +84,14 @@ impl WithId for MelPatchOptResult {
 
 #[async_trait]
 impl SavableResult for MelPatchOptResult {
+    type R = Vec<u32>;
+
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
-    ) -> Result<u32, ThoError> {
+    ) -> Result<Vec<u32>, ThoError> {
         let best_run_ids = self.best_configs.iter().map(|v| v.id.expect("no mel_patch_run_config id")).collect::<Vec<_>>();
         let input_run_ids = if best_run_ids.is_empty() { None } else { Some(best_run_ids.as_slice()) };
 
@@ -100,7 +102,7 @@ impl SavableResult for MelPatchOptResult {
                 "OptMelPatchRunConfig",
                 HashMap::from([]),
             )
-            .await
+            .await.map(|v|vec![v])
     }
 }
 

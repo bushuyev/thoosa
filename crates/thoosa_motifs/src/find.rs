@@ -138,6 +138,7 @@ impl FindMotifsSavableResult {
 
 #[async_trait]
 impl SavableResult for FindMotifsSavableResult {
+    type R = u32;
 
     async fn save(
         &mut self,

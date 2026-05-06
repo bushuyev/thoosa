@@ -262,7 +262,9 @@ impl Output for TrainLabelNetsOutput {
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<u32, ThoError> {
+    type R = Vec<u32>;
+
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
         // let run_id = store
         //     .save_run_config(
         //         Some(&self.train_motif_nets_run_ids),
@@ -281,7 +283,7 @@ impl SavableResult for TrainLabelNetsOutput {
             result.save(store, ws, ()).await?;
         }
 
-        Ok(0)
+        Ok(vec![0])
     }
 }
 
