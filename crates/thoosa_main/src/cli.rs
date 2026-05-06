@@ -1838,7 +1838,7 @@ where
 
     debug!("run_grid: savable={savable:?}");
 
-    savable.save(store, ws).await?;
+    savable.save(store, ws, None).await?;
 
 
     Ok(run_ids)
@@ -1878,7 +1878,7 @@ where
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
-    let run_id = panic_to_err_async!(savable.save(store, ws))?;
+    let run_id = panic_to_err_async!(savable.save(store, ws, None))?;
 
     Ok(vec![run_id])
 }

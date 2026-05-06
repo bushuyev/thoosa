@@ -1,5 +1,6 @@
 #![feature(async_fn_traits, unboxed_closures)]
 #![feature(generic_const_exprs)]
+#![feature(associated_type_defaults)]
 #![allow(async_fn_in_trait)]
 #![allow(incomplete_features)]
 #![allow(confusable_idents)]

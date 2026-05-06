@@ -71,10 +71,10 @@ where
         for train_label_nets_run_id in &train_label_nets_run_ids {
             let label_nets = store.list_trained_nets(*train_label_nets_run_id, None, None).await?;
             assert_eq!(label_nets.len(), 1);//for now there is always single net for run_id
-            let (label_net_id, label_net_path, label_net_loss) = label_nets[0];
+            let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
 
-            store.get_input_run_ids(*train_label_nets_run_id, None).await?
-            let motif_nets = store.list_input_run_ids(&[label_net_id]).await?;
+            // store.get_input_run_ids(*train_label_nets_run_id, None).await?
+            // let motif_nets = store.list_input_run_ids(&[label_net_id]).await?;
 
             // let apply_motif_nets = Arc::new({
             //     ApplyMotifNets::from_trained_nets(

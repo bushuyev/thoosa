@@ -87,7 +87,8 @@ impl SavableResult for MelPatchOptResult {
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
-        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Option<Self::P<'_>>,
     ) -> Result<u32, ThoError> {
         let best_run_ids = self.best_configs.iter().map(|v| v.id.expect("no mel_patch_run_config id")).collect::<Vec<_>>();
         let input_run_ids = if best_run_ids.is_empty() { None } else { Some(best_run_ids.as_slice()) };

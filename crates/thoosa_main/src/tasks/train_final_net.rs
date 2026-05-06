@@ -156,8 +156,8 @@ impl Output for TrainFinalNetOutput {}
 #[async_trait]
 impl SavableResult for TrainFinalNetOutput {
 
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
-        self.result.save(store, ws).await
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Option<Self::P<'_>>) -> Result<u32, ThoError> {
+        self.result.save(store, ws, None).await
     }
 }
 
