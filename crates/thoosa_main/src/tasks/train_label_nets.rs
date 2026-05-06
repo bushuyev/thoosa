@@ -263,7 +263,7 @@ impl Output for TrainLabelNetsOutput {
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<u32, ThoError> {
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Option<Self::P<'_>>) -> Result<u32, ThoError> {
         let run_id = store
             .save_run_config(
                 Some(&self.train_motif_nets_run_ids),
@@ -279,7 +279,7 @@ impl SavableResult for TrainLabelNetsOutput {
             //TODO add ctx to save and pass train_label_nets_run_id & motif_nets_ids as refs
             result.set_train_label_nets_run_id(run_id);
             result.set_motif_nets_ids(self.motif_nets_ids.clone());
-            result.save(store, ws).await?;
+            result.save(store, ws, None).await?;
         }
 
         Ok(run_id)

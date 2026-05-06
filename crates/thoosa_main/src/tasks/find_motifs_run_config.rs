@@ -1485,6 +1485,7 @@ impl SavableResult for SelectMotifsSavableResult {
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Option<Self::P<'_>>,
     ) -> Result<u32, ThoError> {
 
         for run_result in &self.run_results {
