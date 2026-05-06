@@ -144,7 +144,7 @@ impl SavableResult for MelPatchOutput {
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Option<Self::P<'_>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         Ok(0)
     }

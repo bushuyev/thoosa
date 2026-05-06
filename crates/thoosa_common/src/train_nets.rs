@@ -191,7 +191,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Option<Self::P<'_>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
 
         let input_run_ids = self.train_label_nets_run_id.map(|train_label_nets_run_id| vec![train_label_nets_run_id]).expect("no train_label_nets_run_id");
@@ -255,7 +255,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Option<Self::P<'_>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         let run_config_id = store.save_run_config(
             Some(&self.train_label_nodes_run_ids),
@@ -1781,53 +1781,44 @@ impl TrainMotifNetResult {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainMotifsNetsResult {
-    id:RunId,
     select_motifs_run_ids: Vec<RunId>,
     pub train_motif_nets_results:Vec<TrainMotifNetResult>
 }
 
 impl TrainMotifsNetsResult {
     pub fn new(select_motifs_run_ids: Vec<RunId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
-        Self { id: 0, select_motifs_run_ids, train_motif_nets_results }
+        Self {  select_motifs_run_ids, train_motif_nets_results }
     }
 }
 
 #[async_trait]
 impl SavableResult for TrainMotifsNetsResult {
 
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Option<Self::P<'_>>) -> Result<u32, ThoError> {
-
-        // self.id = store.save_run_config(
-        //     Some(&self.select_motifs_run_ids),
-        //     &TrainMotifsNetsRunConfig::type_name(),
-        //     "TrainMotifsNetsResult",
-        //     HashMap::new(),
-        // ).await?;
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<u32, ThoError> {
 
         for r in self.train_motif_nets_results.iter_mut() {
-
-            r.save(store, ws, Some(self.select_motifs_run_ids.as_slice())).await?;
+            r.save(store, ws, self.select_motifs_run_ids.as_slice()).await?;
         }
 
-        Ok(self.id)
+        Ok(0)
     }
 }
 
-//TODO remove
-impl WithId for Box<TrainMotifsNetsResult> {
-    type ID = RunId;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
+// //TODO remove
+// impl WithId for Box<TrainMotifsNetsResult> {
+//     type ID = RunId;
+//
+//     fn id(&self) -> &Self::ID {
+//         &self.id
+//     }
+// }
 
 
 impl WithId for TrainMotifsNetsResult {
-    type ID = RunId;
+    type ID = ();
 
     fn id(&self) -> &Self::ID {
-        &self.id
+        &()
     }
 }
 
@@ -1844,14 +1835,13 @@ impl SavableResult for TrainMotifNetResult {
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Option<Self::P<'_>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
 
         debug!("TrainMotifNetResult::save: self={:?}", self);
 
-        let train_motifs_nets_run_id = p.expect("no train_motifs_nets_run_id");
         let train_motif_net_run_id = store.save_run_config(
-            p,
+            Some(p),
             &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
             run_config_values_with_loss(self.run_config_values.to_properties_iter(None), self.loss),
@@ -3968,7 +3958,7 @@ mod train_tests {
         );
         result.set_train_label_nets_run_id(parent_run_id);
 
-        let child_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, None).await?;
+        let child_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
         let run_config_values = store.list_run_config_values(child_run_id).await?;
         let trained_nets = store.list_trained_nets(parent_run_id, None, None).await?;
 
@@ -3994,7 +3984,7 @@ mod train_tests {
             TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
         );
 
-        let run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, None).await?;
+        let run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
         let run_config_values = store.list_run_config_values(run_id).await?;
 
         assert_eq!(Some(&Val::Real(0.25)), run_config_values.get("loss"));

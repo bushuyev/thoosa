@@ -268,7 +268,7 @@ where
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
-        train_motifs_nets_run_ids: Vec<RunId>,
+        train_motif_net_run_ids: Vec<RunId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
         trained_nets_limit: Option<usize>,
@@ -283,16 +283,16 @@ where
 
         //Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_ids.
         let mut motif_nets = Vec::new();
-        for train_motifs_nets_run_id in &train_motifs_nets_run_ids {
-            //TODO TrainMotifNetResult::save should save motif net under its own run_config_id rather than train_motifs_nets_run_id, so here train_motif_run_ids should be searched by first by train_motifs_nets_run_id which is input id for a train_motif_run_id
-            motif_nets.extend(store.list_trained_nets(*train_motifs_nets_run_id, max_loss, trained_nets_limit).await?);
+        for train_motif_net_run_id in &train_motif_net_run_ids {
+                //list_trained_nets always returns single
+            motif_nets.extend(store.list_trained_nets(*train_motif_net_run_id, max_loss, trained_nets_limit).await?);
         }
 
         if motif_nets.is_empty() {
-            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motifs_nets_run_ids:?}")));
+            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motif_net_run_ids:?}")));
         };
 
-        Self::from_trained_nets(&ws, &store, train_motifs_nets_run_ids, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
+        Self::from_trained_nets(&ws, &store, train_motif_net_run_ids, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
     }
 
     pub async fn from_trained_nets<R>(
