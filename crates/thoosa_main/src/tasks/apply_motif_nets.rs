@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{format, Debug};
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use async_trait::async_trait;
@@ -57,7 +58,7 @@ use thoosa_common::runner::tmp_cache::TmpCached;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
-use crate::tasks::stage_ids::APPLY_MOTIF_NET;
+use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 
 
@@ -267,10 +268,10 @@ where
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
-        train_motif_nets_run_ids: Vec<RunId>,
+        train_motifs_nets_run_ids: Vec<RunId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
-        selected_nets_limit: Option<usize>,
+        trained_nets_limit: Option<usize>,
         slice_step: u32,
         // #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
@@ -278,28 +279,46 @@ where
     where
         R:RunCtx + Adjustable + 'static
     {
-        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
 
-        //Load all motif nets matching max_loss and selected_nets_limit for the provided train_motif_nets_run_ids.
-        let mut selected_nets = Vec::new();
-        for train_motif_nets_run_id in &train_motif_nets_run_ids {
-            selected_nets.extend(store.list_selected_nets(*train_motif_nets_run_id, max_loss, selected_nets_limit).await?);
+
+        //Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_ids.
+        let mut motif_nets = Vec::new();
+        for train_motifs_nets_run_id in &train_motifs_nets_run_ids {
+            //TODO TrainMotifNetResult::save should save motif net under its own run_config_id rather than train_motifs_nets_run_id, so here train_motif_run_ids should be searched by first by train_motifs_nets_run_id which is input id for a train_motif_run_id
+            motif_nets.extend(store.list_trained_nets(*train_motifs_nets_run_id, max_loss, trained_nets_limit).await?);
         }
 
-        if selected_nets.is_empty() {
-            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motif_nets_run_ids:?}")));
+        if motif_nets.is_empty() {
+            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motifs_nets_run_ids:?}")));
         };
 
-        let selected_nets_len = selected_nets.len();
+        Self::from_trained_nets(&ws, &store, train_motifs_nets_run_ids, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
+    }
+
+    pub async fn from_trained_nets<R>(
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        store: &&Arc<Box<dyn Store>>,
+        train_motifs_nets_run_ids: Vec<RunId>,//for logging only
+        mut stage_ctx: R,
+        slice_step: u32,
+        fail_if_size_bigger_than: Option<usize>,
+        trained_nets: Vec<(u32, PathBuf, f32)>
+    ) -> Result<ApplyMotifNets<C>, ThoError>
+    where
+        R: RunCtx + Adjustable + 'static
+    {
+        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
+
+        let trained_nets_len = trained_nets.len();
+        let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
         //this defines order in which motif nets should be applied to a resource before running label net
-        let futures = selected_nets
+        let futures = trained_nets
             .into_iter()
-            .map(|(id, path, _losss)|{
+            .map(|(id, path, _loss)| {
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
                 async move {
-
                     match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path))), load_ctx).await {
                         Ok(net) => {
                             debug!("ApplyMotifNets::new: loaded net={net:?}");
@@ -315,18 +334,18 @@ where
 
         let loaded_motif_nets = collect_futures_with_progress(
             futures,
-            selected_nets_len,
+            trained_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
-            StreamBuffering::Ordered,//to keep same order as in selected_nets_ids
+            StreamBuffering::Ordered, //to keep same order as in trained_nets_ids
             "ApplyMotifNets::new/load motif nets",
         )
-        .await
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>();
+            .await
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
 
         if loaded_motif_nets.is_empty() {
-            return  Err(ThoError::new(format!("No motif nets for train_motif_nets_run_ids={train_motif_nets_run_ids:?}")));
+            return Err(ThoError::new(format!("No motif nets for train_motif_nets_run_ids={train_motifs_nets_run_ids:?}")));
         };
 
         let mut motif_widths = HashSet::new();
@@ -339,13 +358,12 @@ where
                 Ok::<_, ThoError>((v.extra().motif_id(), motif_width))
             })?;
 
-            let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;//TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-            let find_motifs_run_config:FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
+            let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?; //TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
+            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
 
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_id.get(&find_motifs_run_id) {
                 freq_filter.clone()
             } else {
-
                 let freq_filter = find_motifs_run_config
                     .freq_filter
                     .as_ref()
@@ -361,21 +379,20 @@ where
         }
 
         if motif_widths.len() > 1 {
-            warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} run_ids={train_motif_nets_run_ids:?}. Will run per-net and pad outputs for concat.");
+            warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} run_ids={train_motifs_nets_run_ids:?}. Will run per-net and pad outputs for concat.");
         }
 
         let Some(motif_width) = motif_widths.iter().copied().max() else {
-            return  Err(ThoError::new("no motif_width"));
+            return Err(ThoError::new("no motif_width"));
         };
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
 
-
         Ok(Self {
-            id: SynKey::new(train_motif_nets_run_ids.into_iter().map(|run_id| mono_key!(run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
+            id,
             ws: Arc::clone(&ws),
-            store:Arc::clone(&store),
+            store: Arc::clone(&store),
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
@@ -385,7 +402,7 @@ where
                     motif_width,
                     freq_filter_find_motifs_run_id,
                     freq_filter,
-                    slice_step,//TODO shouldn't be same as one used when training motif net
+                    slice_step, //TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
                     fail_if_size_bigger_than
                 )))).collect(),
@@ -463,7 +480,7 @@ where
                 let min_split_len = step_aligned_min_split_len.max(motif_width_i64);
                 let overlap_len = motif_width.saturating_sub(self.slice_step) as i64;
                 let input_len = input.size().dim::<1>();
-                
+
                 let slices = if input_len >= motif_width_i64 {
                     ((input_len - motif_width_i64) / self.slice_step as i64) + 1
                 } else {
@@ -532,7 +549,7 @@ where
             futures,
             apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
-            StreamBuffering::Ordered,//to keep same order as in selected_nets_ids
+            StreamBuffering::Ordered,//to keep same order as in trained_nets_ids
             "ApplyMotifNets::run",
         )
         .await
@@ -1409,7 +1426,7 @@ pub(crate) mod tests {
                         ]
                     ))
                 ])
-                .with_list_selected_nets([
+                .with_list_trained_nets([
                     (select_motifs_run_id, Some(0.3), None, Ok(vec![
                         (0, net_id_0_0.clone(), 0.1f32),
                         (0, net_id_0_1.clone(), 0.2f32),
@@ -1554,7 +1571,7 @@ pub(crate) mod tests {
                 .with_list_selected_motifs([
                     (select_motifs_run_id, Ok(vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])),
                 ])
-                .with_list_selected_nets([
+                .with_list_trained_nets([
                     (select_motifs_run_id, Some(0.3), None, Ok(vec![
                         (0, net_id_0_0.clone(), 0.1f32),
                         (0, net_id_0_1.clone(), 0.2f32),
@@ -1653,7 +1670,7 @@ pub(crate) mod tests {
                     ]
                 ))
             ])
-            .with_list_selected_nets([
+            .with_list_trained_nets([
                 (select_motifs_run_id, Some(0.3), None, Ok(vec![
                     (0, net_id_0_0.clone(), 0.1f32),
                 ]))

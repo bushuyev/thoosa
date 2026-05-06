@@ -505,7 +505,7 @@ mod tests {
         let store = Arc::new(
             MockStoreBuilder::new()
                 .with_get_input_run_ids([(train_label_nets_run_id, Ok(vec![train_motif_nets_run_id]))])
-                .with_list_selected_nets([
+                .with_list_trained_nets([
                     (
                         train_motif_nets_run_id,
                         Some(0.3),
