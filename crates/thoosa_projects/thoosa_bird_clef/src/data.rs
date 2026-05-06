@@ -33,6 +33,7 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
         }
     }
 
+    //gpt Navigation note: import-resources persists this channel-major Half tensor to ws/tensors; later RawTensorLoader reads that file instead of decoding OGG again.
     let tensor = Tensor::stack(
         &channels
             .into_iter()
@@ -72,6 +73,7 @@ pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, ThoError> {
 pub fn labeled_resourses(
     path: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
+    // Navigation note: keys are "{label}_{filename}" so resource_to_tensor can map them back to train_audio/{label}/{filename}. Keep this mapping in sync with Resource::file_stem consumers.
     let df_csv = CsvReadOptions::default()
         .with_ignore_errors(true)
         .with_has_header(true)
@@ -186,6 +188,7 @@ fn parse_secondary_labels(s: &str) -> Vec<String> {
 }
 
 pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Tensor, ThoError> {
+    //gpt The key is intentionally reversible: labeled_resourses stores "class_file.ogg", and this restores "class/file.ogg".
     Ok(ogg_to_tensor(
         source_path
             .as_ref()
