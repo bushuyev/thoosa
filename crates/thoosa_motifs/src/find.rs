@@ -143,7 +143,7 @@ impl SavableResult for FindMotifsSavableResult {
         &mut self,
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Option<Self::P<'_>>,
+        p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         //RunConfig is pre saved in run_grid and found motifs are saved by DistsTracker
         Ok(0)

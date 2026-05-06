@@ -84,7 +84,7 @@ where
 }
 
 pub async fn new_train_label_nets<L, C, R>(
-    train_motifs_nets_run_ids: Vec<RunId>,
+    train_motif_net_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -105,9 +105,9 @@ where
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
         store,
-        train_motifs_nets_run_ids.clone(),
+        train_motif_net_run_ids.clone(),
         stage_ctx,
-        max_loss,//max_loss and selected_motif_nets_limit are used to select motif_nets_ids which will be saved as label net input
+        max_loss, //max_loss and selected_motif_nets_limit are used to select motif_nets_ids which will be saved as label net input
         selected_motif_nets_limit,
         slices_step,
         // #[cfg(test)]
@@ -122,13 +122,13 @@ where
 
     let applied_motif_loader = Arc::new(ABStage::new(
         //train_motif_nets_run_ids are only for logging. can't get RawTensorLoader id, but it's a singleton and ABStage isn't used - A instances are cached under A::out_id key.
-        mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motifs_nets_run_ids.iter().map(|run_id| mono_key!(*run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
+        mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_ids.iter().map(|run_id| mono_key!(*run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
         loader,
         apply_motif_nets
     ));
 
     TrainLabelNets::new(
-        train_motifs_nets_run_ids,
+        train_motif_net_run_ids,
         motif_nets_ids,
         applied_motif_loader,
         num_nets,
@@ -220,7 +220,6 @@ impl Data for TrainLabelNetsInput {
     }
 }
 
-
 impl Input for TrainLabelNetsInput {
 
 }
@@ -263,26 +262,26 @@ impl Output for TrainLabelNetsOutput {
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
-    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Option<Self::P<'_>>) -> Result<u32, ThoError> {
-        let run_id = store
-            .save_run_config(
-                Some(&self.train_motif_nets_run_ids),
-                TrainLabelNetsRunConfig::type_name(),
-                "TrainLabelNetsResult",
-                HashMap::new(),
-            )
-            .await?;
-
-        self.id = run_id;
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<u32, ThoError> {
+        // let run_id = store
+        //     .save_run_config(
+        //         Some(&self.train_motif_nets_run_ids),
+        //         TrainLabelNetsRunConfig::type_name(),
+        //         "TrainLabelNetsResult",
+        //         HashMap::new(),
+        //     )
+        //     .await?;
+        //
+        // self.id = run_id;
 
         for result in &mut self.results {
             //TODO add ctx to save and pass train_label_nets_run_id & motif_nets_ids as refs
-            result.set_train_label_nets_run_id(run_id);
+            // result.set_train_label_nets_run_id(run_id);
             result.set_motif_nets_ids(self.motif_nets_ids.clone());
-            result.save(store, ws, None).await?;
+            result.save(store, ws, ()).await?;
         }
 
-        Ok(run_id)
+        Ok(0)
     }
 }
 
