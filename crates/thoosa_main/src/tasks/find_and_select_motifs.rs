@@ -121,7 +121,8 @@ impl SavableResult for FindAndSelectMotifsResult {
     async fn save(
         &mut self,
         store: &Arc<Box<dyn Store>>,
-        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Option<Self::P<'_>>,
     ) -> Result<u32, ThoError> {
 
 
@@ -283,7 +284,7 @@ impl FindAndSelectMotifsStage {
             .take_data(device_idx)
             .await?;
         let score_sum = select_savable.score_sum();
-        select_savable.save(store, ws).await?;
+        select_savable.save(store, ws, None).await?;
 
 
         #[allow(unexpected_cfgs)]

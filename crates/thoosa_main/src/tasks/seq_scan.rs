@@ -48,8 +48,9 @@ impl Output for SeqScanOutput {}
 impl SavableResult for SeqScanOutput {
     async fn save(
         &mut self,
-        _store: &Arc<Box<dyn Store>>,
-        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        store: &Arc<Box<dyn Store>>,
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Option<Self::P<'_>>,
     ) -> Result<u32, ThoError> {
         Ok(0)
     }

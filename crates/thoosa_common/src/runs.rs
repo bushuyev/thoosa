@@ -257,31 +257,12 @@ impl<R: ResourcesConfig> Display for NetResources<R> {
 
 #[async_trait]
 pub trait SavableResult: Sync + Send + Debug {
+    type P<'a> = ();
 
     async fn save(
-        &mut self,//TODO consume
+        &mut self, //TODO consume
         store: &Arc<Box<dyn Store>>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        p: Option<Self::P<'_>>,
     ) -> Result<u32, ThoError>;
-}
-
-#[derive(Debug)]
-pub struct DummySavableOptResult;
-
-impl DummySavableOptResult {
-    pub fn new() -> Box<dyn SavableResult> {
-        Box::new(Self)
-    }
-}
-
-#[async_trait]
-impl SavableResult for DummySavableOptResult {
-
-    async fn save(
-        &mut self,
-        _store: &Arc<Box<dyn Store>>,
-        _ws: &Arc<RwLock<Box<dyn Workspace>>>,
-    ) -> Result<u32, ThoError> {
-        Ok(0)
-    }
 }
