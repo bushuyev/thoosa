@@ -281,12 +281,8 @@ where
     {
 
 
-        //Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_ids.
-        let mut motif_nets = Vec::new();
-        for train_motif_net_run_id in &train_motif_net_run_ids {
-                //list_trained_nets always returns single
-            motif_nets.extend(store.list_trained_nets(*train_motif_net_run_id, max_loss, trained_nets_limit).await?);
-        }
+        // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_ids.
+        let motif_nets = store.list_trained_nets(train_motif_net_run_ids.clone(), max_loss, trained_nets_limit).await?;
 
         if motif_nets.is_empty() {
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motif_net_run_ids:?}")));
@@ -1427,7 +1423,7 @@ pub(crate) mod tests {
                     ))
                 ])
                 .with_list_trained_nets([
-                    (select_motifs_run_id, Some(0.3), None, Ok(vec![
+                    (vec![select_motifs_run_id], Some(0.3), None, Ok(vec![
                         (0, net_id_0_0.clone(), 0.1f32),
                         (0, net_id_0_1.clone(), 0.2f32),
                         (0, net_id_1_0.clone(), 0.25f32),
@@ -1572,7 +1568,7 @@ pub(crate) mod tests {
                     (select_motifs_run_id, Ok(vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])),
                 ])
                 .with_list_trained_nets([
-                    (select_motifs_run_id, Some(0.3), None, Ok(vec![
+                    (vec![select_motifs_run_id], Some(0.3), None, Ok(vec![
                         (0, net_id_0_0.clone(), 0.1f32),
                         (0, net_id_0_1.clone(), 0.2f32),
                     ])),
@@ -1671,7 +1667,7 @@ pub(crate) mod tests {
                 ))
             ])
             .with_list_trained_nets([
-                (select_motifs_run_id, Some(0.3), None, Ok(vec![
+                (vec![select_motifs_run_id], Some(0.3), None, Ok(vec![
                     (0, net_id_0_0.clone(), 0.1f32),
                 ]))
             ])
