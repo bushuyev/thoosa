@@ -91,7 +91,7 @@ where
                 let motif_nets = store.list_trained_nets(motif_net_ids, None, None).await?;
 
                 apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new((ApplyMotifNets::from_trained_nets(
+                    apply_motif_nets: Arc::new(ApplyMotifNets::from_trained_nets(
                         ws,
                         store,
                         stage_ctx.branch("from_trained_nets".into(), false),
@@ -99,8 +99,7 @@ where
                         None,
                         motif_nets,
                     )
-                        .await?
-                    )),
+                        .await?),
                     apply_label_nets: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_id, net)),
                 });
             }
@@ -313,13 +312,13 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::sync::Arc;
-    use log::LevelFilter::Trace;
+    use log::LevelFilter::Warn;
     use log::{debug, set_max_level, trace};
     use parking_lot::RwLock;
     use tch::{Device, Kind, Tensor};
     use tch::Kind::Float;
-    use tch::kind::FLOAT_CPU;
     use tch::nn::{self, VarStore};
     use thoosa_properties_map::ToHashmap;
     use thoosa_common::batches::BatchLengths;
@@ -327,17 +326,17 @@ mod tests {
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{LinLenNetParams, ConvNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
+    use thoosa_common::train_nets::{LinLenNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
     use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::run_configs::RunId;
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::ApplyLabelNets;
@@ -423,72 +422,207 @@ mod tests {
         Ok(out)
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
-        set_max_level(Trace);
+    fn weighted_label_net(
+        motif_nets: u32,
+        slices_len: u32,
+        weights: Vec<f64>,
+        device: Device,
+    ) -> (
+        Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
+        Box<dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>> + Sync + Send + 'static>,
+    ) {
+        (
+            Box::new(move || {
+                LabelNetParams::new(
+                    motif_nets,
+                    LabelNetTypeParams::LinNetParams(LinLenNetParams::new(slices_len, 1)),
+                )
+            }),
+            Box::new(move || {
+                let weights = weights.clone();
+                let key_weights = weights.clone();
+                let builder = Arc::new(move |_path: &nn::Path| {
+                    let weights = weights.clone();
+                    let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                        weighted_label_t(&weights, t)
+                    })));
+                    Ok(Box::new(module) as Box<dyn ThoModule<MotifsNetsSelectionDims, Batch<LabelProbability>>>)
+                });
+                let mut vs = VarStore::new(device);
+                let module = builder(&vs.root()).expect("weighted_label_net builder");
+                ThoModuleWithStore::with_factory(
+                    SynKey::new([mono_key!(format!("weighted_label_net_{key_weights:?}"), "weighted_label_net")]),
+                    module,
+                    vs,
+                    Some(builder),
+                )
+            }),
+        )
+    }
+
+    fn weighted_label_t(weights: &[f64], t: &Tensor) -> Result<Tensor, ThoError> {
+        let weights = weights.iter().map(|v| *v as f32).collect::<Vec<_>>();
+        let weights = Tensor::from_slice(&weights)
+            .f_to_device(t.device())?
+            .f_totype(t.kind())?
+            .f_view([1, weights.len() as i64, 1])?;
+        let weighted = t.f_mul(&weights)?;
+        let sum = weighted.f_sum_dim_intlist(&[1, 2][..], false, None)?;
+        Ok(sum.f_unsqueeze(1)?)
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestMotifNetSpec {
+        train_run_id: RunId,
+        trained_net_id: u32,
+        motif_id: u32,
+        channel: u32,
+        value: f64,
+        loss: f32,
+        path: PathBuf,
+    }
+
+    impl TestMotifNetSpec {
+        fn new(train_run_id: RunId, trained_net_id: u32, motif_id: u32, channel: u32, value: f64, loss: f32) -> Self {
+            Self {
+                train_run_id,
+                trained_net_id,
+                motif_id,
+                channel,
+                value,
+                loss,
+                path: PathBuf::from(format!("{channel}/{motif_id}_{train_run_id}")),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestLabelNetSpec {
+        label: String,
+        train_run_id: RunId,
+        trained_net_id: u32,
+        motif_run_ids: Vec<RunId>,
+        weights: Vec<f64>,
+        loss: f32,
+        path: PathBuf,
+    }
+
+    impl TestLabelNetSpec {
+        fn new(label: &str, train_run_id: RunId, trained_net_id: u32, motif_run_ids: Vec<RunId>, weights: Vec<f64>, loss: f32) -> Self {
+            Self {
+                label: label.to_string(),
+                train_run_id,
+                trained_net_id,
+                motif_run_ids,
+                weights,
+                loss,
+                path: PathBuf::from(format!("{}/{train_run_id}", label.to_ascii_lowercase())),
+            }
+        }
+    }
+
+    fn motif_nets_for_run_ids<'a>(motifs: &'a [TestMotifNetSpec], run_ids: &[RunId]) -> Vec<&'a TestMotifNetSpec> {
+        let mut selected = motifs
+            .iter()
+            .filter(|motif| run_ids.contains(&motif.train_run_id))
+            .collect::<Vec<_>>();
+        selected.sort_by(|a, b| a.loss.partial_cmp(&b.loss).expect("test motif losses must be comparable").then(a.trained_net_id.cmp(&b.trained_net_id)));
+        selected
+    }
+
+    fn slices_len(motif_width: u32, step: u32) -> u32 {
+        ((motif_width * 3 - motif_width) / step) + 1
+    }
+
+    fn sigmoid(v: f64) -> f64 {
+        1.0 / (1.0 + (-v).exp())
+    }
+
+    fn expected_label_value(label: &TestLabelNetSpec, motifs: &[TestMotifNetSpec], motif_width: u32, step: u32) -> f32 {
+        let motif_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids);
+        assert_eq!(label.weights.len(), motif_nets.len(), "weights must match selected motif nets for {label:?}");
+        let per_slice = motif_nets
+            .iter()
+            .zip(label.weights.iter())
+            .map(|(motif, weight)| sigmoid(motif.value) * weight)
+            .sum::<f64>();
+        (slices_len(motif_width, step) as f64 * per_slice) as f32
+    }
+
+    fn assert_values_close(actual: &[f32], expected: &[f32]) {
+        assert_eq!(actual.len(), expected.len());
+        for (actual, expected) in actual.iter().zip(expected.iter()) {
+            assert_close(*actual as f64, *expected as f64, 0.0001);
+        }
+    }
+
+    fn sorted_values(mut values: Vec<f32>) -> Vec<f32> {
+        values.sort_by(|a, b| a.partial_cmp(b).expect("test values must be comparable"));
+        values
+    }
+
+    async fn run_apply_label_case(
+        labels: &[TestLabelNetSpec],
+        motifs: &[TestMotifNetSpec],
+        motif_width: u32,
+        step: u32,
+        channels: u32,
+    ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
+        set_max_level(Warn);
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
-        let channels = 3;
-        let train_motif_nets_m1_run_id = 10;
-        let train_motif_nets_m2_run_id = 20;
-
-        let train_label_net_run_id_a_0 = 100;
-        let train_label_net_id_a_0 = 1000;
-
-        let train_label_net_run_id_a_1 = 101;
-        let train_label_net_id_a_1 = 1001;
-
-        let train_label_net_run_id_b_0 = 200;
-        let train_label_net_id_b_0 = 2000;
-
         let find_motifs_run_id = 30;
-        let motif_width = 4;
-        let step = 1;
         let device = Device::Cpu;
-        let (label_a_0_params, label_a_0_net) = sum_label_net(2, 1, 0.1, device);
-        let (label_a_1_params, label_a_1_net) = sum_label_net(2, 1, 0.2, device);
-        let (label_b_0_params, label_b_0_net) = sum_label_net(2, 1, 0.5, device);
+        let slices_len = slices_len(motif_width, step);
 
-        let (motif_0_params, motif_0_net) = const_motif_net(motif_width, step, 1.0, device);
-        let (motif_1_params, motif_1_net) = const_motif_net(motif_width, step, 2.0, device);
-        let label_net_a_0 = std::path::PathBuf::from("a/100");
-        let label_net_a_1 = std::path::PathBuf::from("a/101");
-        let label_net_b_0 = std::path::PathBuf::from("b/200");
+        let motif_ws_entries = motifs
+            .iter()
+            .map(|motif| {
+                let (params, net) = const_motif_net(motif_width, step, motif.value, device);
+                (motif.path.clone(), params, net)
+            })
+            .collect::<Vec<_>>();
 
-        let motif_net_id_0 = std::path::PathBuf::from("0/0_10");
-        let motif_net_id_1 = std::path::PathBuf::from("0/1_10");
+        let mut label_ws_entries: HashMap<String, Vec<_>> = HashMap::new();
+        for label in labels {
+            let motif_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids);
+            let (params, net) = weighted_label_net(motif_nets.len() as u32, slices_len, label.weights.clone(), device);
+            label_ws_entries.entry(label.label.clone()).or_default().push((label.train_run_id, params, net));
+        }
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 1, 100, motif_width)
-                .with_load_motif_net(vec![
-                    (motif_net_id_0.clone(), motif_0_params, motif_0_net),
-                    (motif_net_id_1.clone(), motif_1_params, motif_1_net),
-                ])
-                .with_label_nets(HashMap::from([
-                    (
-                        "A".to_string(),
-                        vec![
-                            (100, label_a_0_params, label_a_0_net),
-                            (101, label_a_1_params, label_a_1_net),
-                        ],
-                    ),
-                    (
-                        "B".to_string(),
-                        vec![
-                            (200, label_b_0_params, label_b_0_net),
-                        ],
-                    ),
-                ]))
+            WsMockBuilder::new(None, channels, 100, motif_width)
+                .with_load_motif_net(motif_ws_entries)
+                .with_label_nets(label_ws_entries)
                 .build(),
         ));
 
+        let mut list_trained_nets = labels
+            .iter()
+            .map(|label| {
+                (
+                    vec![label.train_run_id],
+                    None,
+                    None,
+                    Ok(vec![(label.trained_net_id, label.path.clone(), label.loss)]),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut seen_motif_run_sets = Vec::<Vec<RunId>>::new();
+        for label in labels {
+            if seen_motif_run_sets.iter().any(|run_ids| *run_ids == label.motif_run_ids) {
+                continue;
+            }
+            let trained_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids)
+                .into_iter()
+                .map(|motif| (motif.trained_net_id, motif.path.clone(), motif.loss))
+                .collect::<Vec<_>>();
+            list_trained_nets.push((label.motif_run_ids.clone(), None, None, Ok(trained_nets)));
+            seen_motif_run_sets.push(label.motif_run_ids.clone());
+        }
+
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_get_input_run_ids([
-                    (train_label_net_run_id_a_0, Ok(vec![train_motif_nets_m1_run_id, train_motif_nets_m2_run_id])),
-                    (train_label_net_run_id_a_1, Ok(vec![train_motif_nets_m1_run_id, train_motif_nets_m2_run_id])),
-                    (train_label_net_run_id_b_0, Ok(vec![train_motif_nets_m1_run_id, train_motif_nets_m2_run_id])),
-                ])
                 .with_run_config_descr([(
                     find_motifs_run_id,
                     Ok(RunConfigRow {
@@ -498,92 +632,120 @@ mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_get_motif_meta([
-                    (0, Ok((0usize, find_motifs_run_id))),
-                    (1, Ok((0usize, find_motifs_run_id))),
-                ])
+                .with_get_motif_meta(
+                    motifs
+                        .iter()
+                        .map(|motif| (motif.motif_id, Ok((motif.channel as usize, find_motifs_run_id))))
+                        .collect::<HashMap<_, _>>(),
+                )
                 .with_list_run_config_values(
                     find_motifs_run_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_list_trained_nets([
-                    (
-                        vec![train_label_net_run_id_a_0],
-                        None,
-                        None,
-                        Ok(vec![
-                            (train_label_net_run_id_a_0, label_net_a_0, 0.1f32),
-                        ]),
-                    ),
-                    (
-                        vec![train_label_net_run_id_a_1],
-                        None,
-                        None,
-                        Ok(vec![
-                            (train_label_net_run_id_a_1, label_net_a_1, 0.1f32),
-                        ]),
-                    ),
-                    (
-                        vec![train_label_net_run_id_b_0],
-                        None,
-                        None,
-                        Ok(vec![
-                            (train_label_net_run_id_b_0, label_net_b_0, 0.1f32),
-                        ]),
-                    ),
-
-                    (
-                        vec![train_motif_nets_m1_run_id],
-                        None,
-                        None,
-                        Ok(vec![
-                            (train_motif_nets_m1_run_id, motif_net_id_0, 0.1f32),
-                            (train_motif_nets_m1_run_id, motif_net_id_1, 0.2f32),
-                        ]),
-                    ),
-
-                ])
-                .with_list_output_run_ids([
-                    (train_label_net_run_id_a_0, Ok(vec![100, 101, 200])),
-                ])
-                .with_list_input_nets([
-                    (train_label_net_run_id_a_0, Ok(vec![train_motif_nets_m1_run_id])),
-                    (train_label_net_run_id_a_1, Ok(vec![])),
-                    (train_label_net_run_id_b_0, Ok(vec![]))
-                ])
+                .with_list_trained_nets(list_trained_nets)
+                .with_list_input_nets(
+                    labels
+                        .iter()
+                        .map(|label| (label.trained_net_id, Ok(label.motif_run_ids.clone())))
+                        .collect::<HashMap<_, _>>(),
+                )
                 .build(),
         );
 
         let apply_label_nets = Arc::new(ApplyLabelNets::new(
             &ws,
             &store,
-            vec![train_label_net_run_id_a_0],
+            labels.iter().map(|label| label.train_run_id).collect(),
             mock_run_ctx::default(0),
             step,
         ).await?);
+        assert_eq!(labels.len(), apply_label_nets.num_nets());
 
         let input = ThoTensor::<ChannelsData2, SynKey>::new(
             SynKey::new([mono_key!("input", "input")]),
-            Tensor::f_zeros(&[channels, (motif_width as i64)*3/*data*/], (Kind::Float, device))?,
+            Tensor::f_zeros(&[channels as i64, (motif_width as i64) * 3], (Kind::Float, device))?,
         )?;
 
         let mut run_ctx = mock_run_ctx::default(0);
         let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input)), run_ctx.branch(Some("apply_label_nets_run".into()), false)).await?;
-        let expected_motif_net_0 = Tensor::from_slice(&[1.;9]).sigmoid();//as at crates/thoosa_main/src/tasks/apply_motif_nets.rs:1145, 9 = ((motif_width as i64)*3 - motif_width) / 1 (step) + 1
-        debug!("expected_motif_net_0=\n{expected_motif_net_0}");
-
-        let expected_motif_net_1 = Tensor::from_slice(&[2.;9]).sigmoid();//as at crates/thoosa_main/src/tasks/apply_motif_nets.rs:1145, 9 = ((motif_width as i64)*3 - motif_width) / 1 (step) + 1
-        debug!("expected_motif_net_1=\n{expected_motif_net_1}");
-
-        let expected_label_out  = sum_label_t(0.1, &Tensor::stack(&[expected_motif_net_0, expected_motif_net_1], 0).unsqueeze(0))?;
 
         with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
             debug!("t=\n{}", out.t_ref());
+            Ok::<_, ThoError>((out.t_ref().size(), to_vec_f32(&out.t_ref().totype(Float))))
+        })
+    }
 
-            expected_label_out.totype(Float).allclose(out.t_ref(), 0.01, 0.01, false);
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_apply_label_nets_orders_and_values() -> Result<(), ThoError> {
+        let motif_width = 4;
+        let step = 1;
+        let motifs = vec![
+            TestMotifNetSpec::new(10, 1000, 0, 0, 1.0, 0.1),
+            TestMotifNetSpec::new(10, 1001, 1, 0, 2.0, 0.2),
+        ];
+        let labels = vec![
+            TestLabelNetSpec::new("A", 100, 2000, vec![10], vec![0.1, 0.1], 0.1),
+            TestLabelNetSpec::new("A", 101, 2001, vec![10], vec![0.2, 0.2], 0.1),
+        ];
 
-            Ok::<_, ThoError>(())
-        })?;
+        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
+        let expected = labels
+            .iter()
+            .map(|label| expected_label_value(label, &motifs, motif_width, step))
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![2, 1], size);
+        assert_values_close(&values, &expected);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_apply_label_nets_handles_three_motif_nets_for_one_label() -> Result<(), ThoError> {
+        let motif_width = 4;
+        let step = 1;
+        let motifs = vec![
+            TestMotifNetSpec::new(10, 1000, 0, 0, 1.0, 0.1),
+            TestMotifNetSpec::new(20, 1001, 1, 1, 2.0, 0.2),
+            TestMotifNetSpec::new(30, 1002, 2, 2, 3.0, 0.3),
+        ];
+        let labels = vec![
+            TestLabelNetSpec::new("A", 100, 2000, vec![10, 20, 30], vec![1.0, 10.0, 100.0], 0.1),
+        ];
+
+        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
+        let expected = vec![expected_label_value(&labels[0], &motifs, motif_width, step)];
+
+        assert_eq!(vec![1, 1], size);
+        assert_values_close(&values, &expected);
+
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_apply_label_nets_handles_more_labels_and_label_nets() -> Result<(), ThoError> {
+        let motif_width = 4;
+        let step = 1;
+        let motifs = vec![
+            TestMotifNetSpec::new(10, 1000, 0, 0, 1.0, 0.1),
+            TestMotifNetSpec::new(20, 1001, 1, 1, 2.0, 0.2),
+            TestMotifNetSpec::new(30, 1002, 2, 2, 3.0, 0.3),
+        ];
+        let labels = vec![
+            TestLabelNetSpec::new("A", 100, 2000, vec![10, 20, 30], vec![1.0, 10.0, 100.0], 0.1),
+            TestLabelNetSpec::new("A", 101, 2001, vec![20, 30], vec![2.0, 20.0], 0.2),
+            TestLabelNetSpec::new("B", 200, 3000, vec![10], vec![3.0], 0.3),
+            TestLabelNetSpec::new("C", 300, 4000, vec![30], vec![4.0], 0.4),
+        ];
+
+        let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;
+        let expected = labels
+            .iter()
+            .map(|label| expected_label_value(label, &motifs, motif_width, step))
+            .collect::<Vec<_>>();
+
+        assert_eq!(vec![4, 1], size);
+        assert_values_close(&sorted_values(values), &sorted_values(expected));
 
         Ok(())
     }
