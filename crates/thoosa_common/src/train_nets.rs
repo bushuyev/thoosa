@@ -2375,7 +2375,7 @@ mod train_tests {
     use crate::loader::{LoadRunner, OfMemSize, SyncWrapper};
     use crate::my_tch::ThoModule;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifsNetsRunConfig};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
@@ -3952,8 +3952,8 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", HashMap::new()).await?;
-        let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", HashMap::new()).await?;
+        let train_motif_nets_run_id = store.save_run_config(None, TrainMotifsNetsRunConfig::type_name(), "source", HashMap::new()).await?;
+
         let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
             // vec![source_run_id],
             "alpha".to_string(),
@@ -3963,17 +3963,18 @@ mod train_tests {
             VarStore::new(Cpu),
         );
 
-        let todo = vec![];
-        let child_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
-            train_motif_nets_run_ids: &todo,
-            motif_nets_ids: &todo,
+        let train_motif_nets_run_id_vec = vec![train_motif_nets_run_id];
+        let motif_nets_ids= vec![];
+        let train_label_nets_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
+            train_motif_nets_run_ids: &train_motif_nets_run_id_vec,
+            motif_nets_ids: &motif_nets_ids,
         }).await?;
-        let run_config_values = store.list_run_config_values(child_run_id).await?;
-        let trained_nets = store.list_trained_nets(vec![parent_run_id], None, None).await?;
+        let run_config_values = store.list_run_config_values(train_label_nets_run_id).await?;
+        let trained_nets = store.list_trained_nets(vec![train_label_nets_run_id], None, None).await?;
 
         assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
-        assert_eq!(vec![child_run_id], store.list_output_run_ids(parent_run_id).await?);
-        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], trained_nets);
+        assert_eq!(vec![train_label_nets_run_id], store.list_output_run_ids(train_motif_nets_run_id).await?);
+        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{train_label_nets_run_id}")), 0.125)], trained_nets);
 
         Ok(())
     }

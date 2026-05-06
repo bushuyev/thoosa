@@ -484,9 +484,9 @@ impl Workspace for FsWorkspace {
     > {
         let label_models_paths = self.label_models()?;
 
-        let train_label_nodes_run_ids_hash = train_label_nets_run_ids.map(|v| v.into_iter().collect::<HashSet<_>>());
+        let train_label_nodes_run_ids_set = train_label_nets_run_ids.map(|v| v.into_iter().collect::<HashSet<_>>());
 
-        debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nets_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_hash:?}");
+        debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nets_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_set:?}");
 
         label_models_paths
             .into_iter()
@@ -497,7 +497,7 @@ impl Workspace for FsWorkspace {
                     .filter_map(|(model_path, params_path)|
                 {
                     let run_id = FsWorkspace::net_path_to_run_id(&model_path);
-                    if train_label_nodes_run_ids_hash.as_ref().map(|set| !set.contains(&run_id)).unwrap_or(true) {
+                    if train_label_nodes_run_ids_set.as_ref().map(|set| !set.contains(&run_id)).unwrap_or(true) {
                         debug!("load_all_label_models_ws: skipping run_id={run_id}");
                         return None;
                     }
