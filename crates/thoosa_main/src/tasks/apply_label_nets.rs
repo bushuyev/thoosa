@@ -13,7 +13,7 @@ use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsS
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::ThoModuleWithStore;
+use thoosa_common::train_nets::{LabelNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
@@ -47,7 +47,6 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    // apply_motif_nets: Arc<ApplyMotifNets<C>>,
     apply_nets: Vec<ApplyNets<C>>,
     pd: PhantomData<C>,
 }
@@ -60,125 +59,55 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         train_label_nets_run_ids: Vec<RunId>,
-        stage_ctx: R,
+        mut stage_ctx: R,
         slices_step: u32,
         selected_motif_nets_limit: Option<usize>,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
     {
-        let mut apply_nets:Vec<ApplyNets<C>> = Vec::with_capacity(train_label_nets_run_ids.len());
-        for train_label_nets_run_id in &train_label_nets_run_ids {
-            let label_nets = store.list_trained_nets(vec![*train_label_nets_run_id], None, None).await?;
-            assert_eq!(label_nets.len(), 1);//for now there is always single net for run_id
-            let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
+        let tho_device_idx = stage_ctx.device_idx();
 
-            // store.get_input_run_ids(*train_label_nets_run_id, None).await?
-            // let motif_nets = store.list_input_run_ids(&[label_net_id]).await?;
+        let label_nets = thoosa_shared::with_perf_log(
+            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
+            "ApplyLabelNets/new/read_ws",
+        ).load_label_nets(Some(train_label_nets_run_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
 
-            // let apply_motif_nets = Arc::new({
-            //     ApplyMotifNets::from_trained_nets(
-            //         ws,
-            //         store,
-            //         train_motif_nets_run_ids.clone(),
-            //         stage_ctx,
-            //         slices_step,
-            //         None,
-            //         vec![]
-            //     )
-            //     .await?
-            // });
+        let mut apply_nets = vec![];
+
+        for (label, nets) in label_nets {
+
+
+            for (train_label_net_run_id, label_net_params, net) in nets {
+                let label_nets = store.list_trained_nets(vec![train_label_net_run_id], None, None).await?;
+
+                assert_eq!(label_nets.len(), 1); //for now there is always single net for run_id
+                let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
+
+                let motif_net_ids = store.list_input_nets(*label_net_id).await?;
+
+                let motif_nets = store.list_trained_nets(motif_net_ids, None, None).await?;
+
+                apply_nets.push(ApplyNets {
+                    apply_motif_nets: Arc::new((ApplyMotifNets::from_trained_nets(
+                        ws,
+                        store,
+                        stage_ctx.branch("from_trained_nets".into(), false),
+                        slices_step,
+                        None,
+                        motif_nets,
+                    )
+                        .await?
+                    )),
+                    apply_label_nets: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_id, net)),
+                });
+            }
         }
-        // let tho_device_idx = stage_ctx.device_idx();
-        //
-        // //gpt Resolve motif-net inputs by looking up train_motif_nets_run_ids used to produce the label nets.
-        // let train_motif_nets_run_ids = {
-        //     let store_guard = store;
-        //     let mut run_ids = HashSet::new();
-        //     for run_id in &train_label_nets_run_ids {
-        //         run_ids.extend(store_guard.get_input_run_ids(*run_id, None).await?);
-        //     }
-        //     let mut run_ids = run_ids.into_iter().collect::<Vec<_>>();
-        //     run_ids.sort();
-        //     run_ids
-        // };
-        // if train_motif_nets_run_ids.is_empty() {
-        //     return Err(ThoError::new("ApplyLabelNets::new: no train motif nets found"));
-        // }
-        //
-        // let apply_motif_nets = Arc::new({
-        //     ApplyMotifNets::from_trained_nets(
-        //         ws,
-        //         store,
-        //         train_motif_nets_run_ids.clone(),
-        //         stage_ctx,
-        //         slices_step,
-        //         None,
-        //         vec![]
-        //     )
-        //     .await?
-        // });
-        //
-        // let label_net_run_ids = {
-        //     let mut run_ids = HashSet::new();
-        //     for run_id in &train_label_nets_run_ids {
-        //         run_ids.extend(store.list_output_run_ids(*run_id).await?);
-        //     }
-        //     run_ids
-        // };
-        //
-        // debug!("ApplyLabelNets::new: train_label_nets_run_ids={train_label_nets_run_ids:?} label_net_run_ids={label_net_run_ids:?}");
-        //
-        // let mut label_net_run_ids = label_net_run_ids.into_iter().collect::<Vec<_>>();
-        // label_net_run_ids.sort();
-        // if label_net_run_ids.is_empty() {
-        //     return Err(ThoError::new("ApplyLabelNets::new: no label nets found"));
-        // }
-        //
-        // let label_nets = thoosa_shared::with_perf_log(
-        //     || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-        //     "ApplyLabelNets/new/read_ws",
-        // )
-        // .load_label_nets(Some(label_net_run_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
-        //
-        // let mut label_nets = label_nets
-        //     .into_iter()
-        //     .flat_map(|(label, nets)| {
-        //         nets.into_iter()
-        //             .map(move |(run_id, params, net)| (label.clone(), run_id, params, net))
-        //     })
-        //     .collect::<Vec<_>>();
-        //
-        // label_nets.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
-        //
-        // if label_nets.is_empty() {
-        //     return Err(ThoError::new("ApplyLabelNets::new: no label nets loaded"));
-        // }
-        //
-        // let apply_label_nets = label_nets
-        //     .into_iter()
-        //     .map(|(label, run_id, _params, net)| {
-        //         Arc::new(ApplyLabelNet::new(label, run_id, net))
-        //     })
-        //     .collect::<Vec<_>>();
-        //
-        // let id = SynKey::new(
-        //     apply_label_nets
-        //         .iter()
-        //         .map(|net| {
-        //             mono_key!(
-        //                 net.run_id,
-        //                 format!("label_net_{}_{}", net.label, net.run_id)
-        //             )
-        //         })
-        //         .collect::<Vec<_>>(),
-        // );
-        //
-        // debug!("ApplyLabelNets::new: label_nets.len={} run_ids={:?}",apply_label_nets.len(),label_net_run_ids);
+
 
         Ok(Self {
             id: mono_key!(0, "todo").into(),
-            apply_nets: vec![],
+            apply_nets,
             pd: PhantomData,
         })
     }
@@ -222,13 +151,13 @@ where
                 let mut ctx = ctx.branch(Some("apply_label_nets_motif_probs_0"), false);
                 async move {
 
-                //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
-                let motif_probs = Arc::clone(&apply_net.apply_motif_nets)
-                    .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false))
-                    .await?;
+                    //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
+                    let motif_probs = Arc::clone(&apply_net.apply_motif_nets)
+                        .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false))
+                        .await?;
 
-                let motif_probs = Arc::clone(&motif_probs);
-                let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_nets.label, apply_net.apply_label_nets.run_id)), false);
+                    let motif_probs = Arc::clone(&motif_probs);
+                    let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_nets.label, apply_net.apply_label_nets.train_label_net_run_id)), false);
 
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below.
@@ -285,7 +214,7 @@ where
 {
     id: SynKey,
     label: String,
-    run_id: RunId,
+    train_label_net_run_id: RunId,
     net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>>>,
     pd: PhantomData<C>,
 }
@@ -296,13 +225,13 @@ where
 {
     fn new(
         label: String,
-        run_id: RunId,
+        train_label_net_run_id: RunId,
         net: ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
     ) -> Self {
         Self {
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
-            run_id,
+            train_label_net_run_id,
             net_wrapper: Arc::new(DevicesWrap::wrap(net)),
             pd: PhantomData,
         }

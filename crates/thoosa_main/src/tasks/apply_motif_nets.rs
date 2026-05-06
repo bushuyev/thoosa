@@ -287,13 +287,12 @@ where
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motif_net_run_ids:?}")));
         };
 
-        Self::from_trained_nets(&ws, &store, train_motif_net_run_ids, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
+        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
     }
 
     pub async fn from_trained_nets<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        store: &&Arc<Box<dyn Store>>,
-        train_motifs_nets_run_ids: Vec<RunId>,//for logging only
+        store: &Arc<Box<dyn Store>>, //for logging only
         mut stage_ctx: R,
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
@@ -303,7 +302,7 @@ where
         R: RunCtx + Adjustable + 'static
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
-
+        let trained_net_ids = trained_nets.iter().map(|v|v.0).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
         //this defines order in which motif nets should be applied to a resource before running label net
@@ -340,7 +339,7 @@ where
             .collect::<Vec<_>>();
 
         if loaded_motif_nets.is_empty() {
-            return Err(ThoError::new(format!("No motif nets for train_motif_nets_run_ids={train_motifs_nets_run_ids:?}")));
+            return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
         };
 
         let mut motif_widths = HashSet::new();
@@ -374,7 +373,7 @@ where
         }
 
         if motif_widths.len() > 1 {
-            warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} run_ids={train_motifs_nets_run_ids:?}. Will run per-net and pad outputs for concat.");
+            warn!("ApplyMotifNets::new: mixed motif widths in selected nets; widths={motif_widths:?} trained_net_ids={trained_net_ids:?}. Will run per-net and pad outputs for concat.");
         }
 
         let Some(motif_width) = motif_widths.iter().copied().max() else {
@@ -544,7 +543,7 @@ where
             futures,
             apply_motif_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
-            StreamBuffering::Ordered,//to keep same order as in trained_nets_ids
+            StreamBuffering::Unordered, //it's sorted in BatchAppliedMotifNets
             "ApplyMotifNets::run",
         )
         .await
