@@ -292,7 +292,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_trained_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
 
-    async fn list_trained_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+    async fn list_trained_nets(&self, run_ids: Vec<RunId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
     async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
@@ -490,7 +490,7 @@ mock! {
         ) -> Result<(), ThoError>;
         async fn list_trained_nets(
             &self,
-            run_id: RunId,
+            run_ids: Vec<RunId>,
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
@@ -2187,37 +2187,36 @@ impl Store for SqlStore {
         })
         .await
     }
-    //TODO rename to list_nets
-    async fn list_trained_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
+
+    async fn list_trained_nets(&self, run_ids: Vec<RunId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
         self.with_reader_conn("list_trained_nets", move |conn| {
+            if run_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+
             let trained_nets = {
-                //TODO compose
-                let (query, params): (&str, Vec<rusqlite::types::Value>) = match (loss, limit) {
-                    (Some(loss), Some(limit)) => (
-                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC LIMIT ?",
-                        vec![
-                            rusqlite::types::Value::Integer(run_id as i64),
-                            rusqlite::types::Value::Real(loss as f64),
-                            rusqlite::types::Value::Integer(limit as i64),
-                        ],
-                    ),
-                    (Some(loss), None) => (
-                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC",
-                        vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
-                    ),
-                    (None, Some(limit)) => (
-                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? ORDER BY loss ASC LIMIT ?",
-                        vec![
-                            rusqlite::types::Value::Integer(run_id as i64),
-                            rusqlite::types::Value::Integer(limit as i64),
-                        ],
-                    ),
-                    (None, None) => (
-                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? ORDER BY loss ASC",
-                        vec![rusqlite::types::Value::Integer(run_id as i64)],
-                    ),
-                };
-                let mut stmt = conn.prepare(query)?;
+                let run_ids_clause = run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                let query = [
+                    "SELECT id, net_path, loss FROM trained_nets WHERE run_id IN (",
+                    &run_ids_clause,
+                    ")",
+                    if loss.is_some() { " AND loss < ?" } else { "" },
+                    " ORDER BY loss ASC",
+                    if limit.is_some() { " LIMIT ?" } else { "" },
+                ].concat();
+
+                let mut params = run_ids
+                    .iter()
+                    .map(|run_id| rusqlite::types::Value::Integer(*run_id as i64))
+                    .collect::<Vec<_>>();
+                if let Some(loss) = loss {
+                    params.push(rusqlite::types::Value::Real(loss as f64));
+                }
+                if let Some(limit) = limit {
+                    params.push(rusqlite::types::Value::Integer(limit as i64));
+                }
+
+                let mut stmt = conn.prepare(&query)?;
                 stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                     Ok((
                         row.get::<usize, u32>(0)?,
@@ -4730,28 +4729,43 @@ mod store_tests {
             store.save_trained_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
         }
 
-        let selected = store.list_trained_nets(run_id, None, None).await?;
+        let selected = store.list_trained_nets(vec![run_id], None, None).await?;
         assert_eq!(105, selected.len());
         assert_eq!(PathBuf::from("nets/000"), selected[0].1);
         assert_eq!(0.0, selected[0].2);
         assert_eq!(PathBuf::from("nets/104"), selected[104].1);
         assert_eq!(104.0, selected[104].2);
 
-        let limited = store.list_trained_nets(run_id, None, Some(3)).await?;
+        let limited = store.list_trained_nets(vec![run_id], None, Some(3)).await?;
         assert_eq!(3, limited.len());
         assert_eq!(PathBuf::from("nets/000"), limited[0].1);
         assert_eq!(PathBuf::from("nets/001"), limited[1].1);
         assert_eq!(PathBuf::from("nets/002"), limited[2].1);
 
-        let filtered = store.list_trained_nets(run_id, Some(15.0), None).await?;
+        let filtered = store.list_trained_nets(vec![run_id], Some(15.0), None).await?;
         assert_eq!(15, filtered.len());
         assert_eq!(PathBuf::from("nets/000"), filtered[0].1);
         assert_eq!(PathBuf::from("nets/014"), filtered[14].1);
 
-        let filtered_limited = store.list_trained_nets(run_id, Some(15.0), Some(5)).await?;
+        let filtered_limited = store.list_trained_nets(vec![run_id], Some(15.0), Some(5)).await?;
         assert_eq!(5, filtered_limited.len());
         assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].1);
         assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].1);
+
+        let second_run_id = store.save_run_config(
+            None,
+            &"trained_nets",
+            "trained_nets_2",
+            HashMap::new(),
+        ).await?;
+        store.save_trained_net(second_run_id, PathBuf::from("nets/second"), 0.5, None).await?;
+        let multi_run = store.list_trained_nets(vec![run_id, second_run_id], Some(1.0), None).await?;
+        assert_eq!(2, multi_run.len());
+        assert_eq!(PathBuf::from("nets/000"), multi_run[0].1);
+        assert_eq!(PathBuf::from("nets/second"), multi_run[1].1);
+
+        let empty_run_ids = store.list_trained_nets(vec![], None, None).await?;
+        assert!(empty_run_ids.is_empty());
 
         Ok(())
     }
@@ -5732,17 +5746,17 @@ impl MockStoreBuilder {
         inputs: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (RunId, Option<f32>, Option<usize>, Result<Vec<(u32,PathBuf, f32)>, ThoError>)> + Debug,
+        I: IntoIterator<Item = (Vec<RunId>, Option<f32>, Option<usize>, Result<Vec<(u32,PathBuf, f32)>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
         debug!("with_list_trained_nets: inputs={data:?}");
         let data = Arc::new(data);
         self.store.expect_list_trained_nets().returning(
-            move |run_id, loss, limit| {
+            move |run_ids, loss, limit| {
                 data.iter()
-                    .find(|(expected_run_id, expected_loss, expected_limit, _)| *expected_run_id == run_id && *expected_loss == loss && *expected_limit == limit)
+                    .find(|(expected_run_ids, expected_loss, expected_limit, _)| expected_run_ids.as_slice() == run_ids.as_slice() && *expected_loss == loss && *expected_limit == limit)
                     .map(|(_, _, _, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run id {run_id} loss={loss:?} limit={limit:?}"))))
+                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run ids {run_ids:?} loss={loss:?} limit={limit:?}"))))
             }
         );
         self
