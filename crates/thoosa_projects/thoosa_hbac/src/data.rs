@@ -1204,7 +1204,7 @@ mod tests {
 
         let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
         selected_motifs[0].push((motif_id, 1.0));
-        let selected_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
+        let trained_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
 
         let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
@@ -1226,8 +1226,8 @@ mod tests {
                     None,
                     Ok((0i64, find_motifs_run_id, random_slices, random_resources_by_id)),
                 )
-                .with_list_selected_nets([
-                    (train_motif_nets_run_id, None, None, Ok(vec![(0, selected_net_path.clone(), 0.01)])),
+                .with_list_trained_nets([
+                    (train_motif_nets_run_id, None, None, Ok(vec![(0, trained_net_path.clone(), 0.01)])),
                 ])
                 .build(),
         );
@@ -1273,7 +1273,7 @@ mod tests {
 
         let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
         let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_id, &motif_id, &train_result.vs, &train_result.params)?;
-        assert_eq!(saved_path, selected_net_path);
+        assert_eq!(saved_path, trained_net_path);
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,

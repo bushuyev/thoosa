@@ -34,7 +34,7 @@ use thoosa_common::batches::{prefetch_next_batch_stream, preload_one, AsyncDataB
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigResult};
+use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetRunConfigResult};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -56,6 +56,7 @@ use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
 use thoosa_shared::comp_id::SynKey;
+use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, LM, C>
@@ -83,7 +84,7 @@ where
 }
 
 pub async fn new_train_label_nets<L, C, R>(
-    train_motif_nets_run_ids: Vec<RunId>,
+    train_motifs_nets_run_ids: Vec<RunId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -104,9 +105,9 @@ where
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
         store,
-        train_motif_nets_run_ids.clone(),
+        train_motifs_nets_run_ids.clone(),
         stage_ctx,
-        max_loss,
+        max_loss,//max_loss and selected_motif_nets_limit are used to select motif_nets_ids which will be saved as label net input
         selected_motif_nets_limit,
         slices_step,
         // #[cfg(test)]
@@ -120,18 +121,14 @@ where
     let motif_nets_ids = apply_motif_nets.motif_nets_ids();
 
     let applied_motif_loader = Arc::new(ABStage::new(
-        SynKey::new([
-            mono_key!("Loader_with_motifs", "stage"),
-            mono_key!(format!("{train_motif_nets_run_ids:?}"), "train_motif_nets_run_ids"),
-        ]),
+        //train_motif_nets_run_ids are only for logging. can't get RawTensorLoader id, but it's a singleton and ABStage isn't used - A instances are cached under A::out_id key.
+        mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motifs_nets_run_ids.iter().map(|run_id| mono_key!(*run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>()),
         loader,
         apply_motif_nets
     ));
 
-
-
     TrainLabelNets::new(
-        train_motif_nets_run_ids,
+        train_motifs_nets_run_ids,
         motif_nets_ids,
         applied_motif_loader,
         num_nets,
@@ -243,7 +240,7 @@ pub struct TrainLabelNetsOutput {
     id: RunId,
     train_motif_nets_run_ids: Vec<RunId>,
     motif_nets_ids:Vec<u32>,
-    results: Vec<TrainLabelNetsRunConfigResult>
+    results: Vec<TrainLabelNetRunConfigResult>
 }
 impl WithId for TrainLabelNetsOutput {
     type ID = RunId;
@@ -290,7 +287,7 @@ impl SavableResult for TrainLabelNetsOutput {
 }
 
 impl TrainLabelNetsOutput {
-    pub fn new(train_motif_nets_run_ids: Vec<RunId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetsRunConfigResult>) -> Self {
+    pub fn new(train_motif_nets_run_ids: Vec<RunId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetRunConfigResult>) -> Self {
         Self {
             id: 0,
             train_motif_nets_run_ids,
@@ -508,7 +505,7 @@ where
                     debug!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
-                        TrainLabelNetsRunConfigResult::new(
+                        TrainLabelNetRunConfigResult::new(
                             label,
                             result.min_loss,
                             result.node_params,

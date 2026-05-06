@@ -69,10 +69,6 @@ where
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>,
-    //
-    //
-    // <<B as Stage>::Out as WithId>::ID: From<String>,
-    // for <'i> <<A as Stage>::In<'i> as WithId>::ID: std::fmt::Display
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID
     {
