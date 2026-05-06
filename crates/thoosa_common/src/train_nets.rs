@@ -131,7 +131,7 @@ impl TrainLabelNetsRunConfig {
 }
 
 #[derive(Debug)]
-pub struct TrainLabelNetsRunConfigResult {
+pub struct TrainLabelNetRunConfigResult {
     train_label_nets_run_id: Option<RunId>,
     pub label: String,
     pub loss: f32,
@@ -141,7 +141,7 @@ pub struct TrainLabelNetsRunConfigResult {
     motif_nets_ids:Vec<u32>
 }
 
-impl WithId for Box<TrainLabelNetsRunConfigResult> {
+impl WithId for Box<TrainLabelNetRunConfigResult> {
     type ID = SimpleId;
 
     fn id(&self) -> &Self::ID {
@@ -150,7 +150,7 @@ impl WithId for Box<TrainLabelNetsRunConfigResult> {
 }
 
 
-impl TrainLabelNetsRunConfigResult {
+impl TrainLabelNetRunConfigResult {
     pub fn new(
         label: String,
         loss: f32,
@@ -185,7 +185,7 @@ fn run_config_values_with_loss(values: impl Iterator<Item = (String, Val)>, loss
 }
 
 #[async_trait]
-impl SavableResult for TrainLabelNetsRunConfigResult {
+impl SavableResult for TrainLabelNetRunConfigResult {
 
     async fn save(
         &mut self,
@@ -210,9 +210,9 @@ impl SavableResult for TrainLabelNetsRunConfigResult {
                 &self.label_node_params,
             )?;
 
-        debug!("TrainLabelNetsRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
+        debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
-        store.save_selected_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss, Some(self.motif_nets_ids.clone())).await?;
+        store.save_trained_net(self.train_label_nets_run_id.unwrap_or(run_config_id), path, self.loss, Some(self.motif_nets_ids.clone())).await?;
 
         Ok(run_config_id)
     }
@@ -1863,7 +1863,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         )?;
 
-        store.save_selected_net(train_motifs_nets_run_id, path, self.loss, None).await?;
+        store.save_trained_net(train_motifs_nets_run_id, path, self.loss, None).await?;
 
         Ok(run_config_id)
 
@@ -3950,13 +3950,13 @@ mod train_tests {
     }
 
     #[tokio::test]
-    async fn test_save_train_label_net_result_persists_selected_net_and_loss() -> Result<(), ThoError> {
+    async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
         let store = Arc::new(SqlStore::in_mem().await?);
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
         let source_run_id = store.save_run_config(None, "TrainMotifsNetsRunConfig", "source", HashMap::new()).await?;
         let parent_run_id = store.save_run_config(Some(&[source_run_id]), TrainLabelNetsRunConfig::type_name(), "TrainLabelNetsResult", HashMap::new()).await?;
-        let mut result = crate::train_nets::TrainLabelNetsRunConfigResult::new(
+        let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
             // vec![source_run_id],
             "alpha".to_string(),
             0.125,
@@ -3968,11 +3968,11 @@ mod train_tests {
 
         let child_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws).await?;
         let run_config_values = store.list_run_config_values(child_run_id).await?;
-        let selected_nets = store.list_selected_nets(parent_run_id, None, None).await?;
+        let trained_nets = store.list_trained_nets(parent_run_id, None, None).await?;
 
         assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
         assert_eq!(vec![child_run_id], store.list_output_run_ids(parent_run_id).await?);
-        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], selected_nets);
+        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{child_run_id}")), 0.125)], trained_nets);
 
         Ok(())
     }

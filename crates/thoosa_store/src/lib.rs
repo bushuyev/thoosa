@@ -290,9 +290,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
-    async fn save_selected_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_run_id: Option<Vec<u32>>) -> Result<(), ThoError>;
+    async fn save_trained_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
 
-    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+    async fn list_trained_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+    async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
     #[cfg(test)]
@@ -480,19 +481,20 @@ mock! {
             motif_selection_id: RunId,
             channels: u32,
         ) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
-        async fn save_selected_net(
+        async fn save_trained_net(
             &self,
             run_id: RunId,
             path: PathBuf,
             loss: f32,
             input_nets:Option<Vec<u32>>
         ) -> Result<(), ThoError>;
-        async fn list_selected_nets(
+        async fn list_trained_nets(
             &self,
             run_id: RunId,
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+        async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
         async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
         #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
@@ -2158,18 +2160,17 @@ impl Store for SqlStore {
         })
         .await
     }
-
-    async fn save_selected_net(
+    async fn save_trained_net(//TODO there are no 'untrained' nets - it's 'trained' just to make name longer and more distinctive
         &self,
         run_id: RunId,
         path: PathBuf,
         loss: f32,
-        input_run_id: Option<Vec<u32>>,
+        input_net_ids: Option<Vec<u32>>,
     ) -> Result<(), ThoError> {
-        self.with_writer_conn("save_selected_net", move |conn| {
+        self.with_writer_conn("save_trained_net", move |conn| {
             let t = conn.transaction()?;
             t.execute(
-                "INSERT INTO selected_nets (net_path, run_id, loss) VALUES (?, ?, ?)",
+                "INSERT INTO trained_nets (net_path, run_id, loss) VALUES (?, ?, ?)",
                 rusqlite::params![path.to_string_lossy().to_string(), run_id, loss],
             )?;
 
@@ -2178,7 +2179,7 @@ impl Store for SqlStore {
             })?;
 
 
-            Self::insert_input(input_run_id, &t, net_id, "INSERT INTO selected_nets_input (id, input_id) VALUES")?;
+            Self::insert_input(input_net_ids, &t, net_id, "INSERT INTO trained_nets_input (id, input_id) VALUES")?;
 
 
             t.commit()?;
@@ -2186,14 +2187,14 @@ impl Store for SqlStore {
         })
         .await
     }
-
-    async fn list_selected_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
-        self.with_reader_conn("list_selected_nets", move |conn| {
-            let selected_nets = {
+    //TODO rename to list_nets
+    async fn list_trained_nets(&self, run_id: RunId, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
+        self.with_reader_conn("list_trained_nets", move |conn| {
+            let trained_nets = {
                 //TODO compose
                 let (query, params): (&str, Vec<rusqlite::types::Value>) = match (loss, limit) {
                     (Some(loss), Some(limit)) => (
-                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC LIMIT ?",
+                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC LIMIT ?",
                         vec![
                             rusqlite::types::Value::Integer(run_id as i64),
                             rusqlite::types::Value::Real(loss as f64),
@@ -2201,18 +2202,18 @@ impl Store for SqlStore {
                         ],
                     ),
                     (Some(loss), None) => (
-                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC",
+                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? AND loss < ? ORDER BY loss ASC",
                         vec![rusqlite::types::Value::Integer(run_id as i64), rusqlite::types::Value::Real(loss as f64)],
                     ),
                     (None, Some(limit)) => (
-                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC LIMIT ?",
+                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? ORDER BY loss ASC LIMIT ?",
                         vec![
                             rusqlite::types::Value::Integer(run_id as i64),
                             rusqlite::types::Value::Integer(limit as i64),
                         ],
                     ),
                     (None, None) => (
-                        "SELECT id, net_path, loss FROM selected_nets WHERE run_id=? ORDER BY loss ASC",
+                        "SELECT id, net_path, loss FROM trained_nets WHERE run_id=? ORDER BY loss ASC",
                         vec![rusqlite::types::Value::Integer(run_id as i64)],
                     ),
                 };
@@ -2228,9 +2229,22 @@ impl Store for SqlStore {
                 .collect::<Vec<_>>()
             };
 
-            Ok(selected_nets)
+            Ok(trained_nets)
         })
         .await
+    }
+
+    //TODO test
+    async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
+        self.with_reader_conn("list_input_nets", move |conn| {
+            let mut stmt = conn.prepare("SELECT sn.run_id, sn.net_path, sn.loss FROM trained_nets_input sni LEFT JOIN trained_nets sn ON sn.id = sni.input_id WHERE sni.id=?")?;
+
+            stmt.query_map(params![run_id], |row| {
+                row.get::<usize, u32>(0)
+            })?
+                .map(|v| v.map_err(|e|e.into()))
+                .collect::<Result<Vec<_>, ThoError>>()
+        }).await
     }
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError> {
@@ -3008,7 +3022,7 @@ impl SqlStore {
             t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_id_motif_id ON selected_motifs (run_id, motif_id);", ())?;
 
             t.execute(
-                "CREATE TABLE IF NOT EXISTS selected_nets (
+                "CREATE TABLE IF NOT EXISTS trained_nets (
                 id    INTEGER PRIMARY KEY,
                 net_path  VARCHAR(1024),
                 run_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
@@ -3019,9 +3033,9 @@ impl SqlStore {
             )?;
 
             t.execute(
-            "CREATE TABLE IF NOT EXISTS selected_nets_input (
-                input_id  NOT NULL REFERENCES selected_nets(id) ON DELETE CASCADE,
-                id NOT NULL REFERENCES selected_nets(id) ON DELETE CASCADE,
+            "CREATE TABLE IF NOT EXISTS trained_nets_input (
+                input_id  NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
+                id NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
 
                 PRIMARY KEY (input_id, id)
             )",
@@ -4702,39 +4716,39 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_save_list_selected_nets() -> Result<(), ThoError> {
+    async fn test_save_list_trained_nets() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
 
         let run_id = store.save_run_config(
             None,
-            &"selected_nets",
-            "selected_nets",
+            &"trained_nets",
+            "trained_nets",
             HashMap::new(),
         ).await?;
 
         for i in 0..105 {
-            store.save_selected_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
+            store.save_trained_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
         }
 
-        let selected = store.list_selected_nets(run_id, None, None).await?;
+        let selected = store.list_trained_nets(run_id, None, None).await?;
         assert_eq!(105, selected.len());
         assert_eq!(PathBuf::from("nets/000"), selected[0].1);
         assert_eq!(0.0, selected[0].2);
         assert_eq!(PathBuf::from("nets/104"), selected[104].1);
         assert_eq!(104.0, selected[104].2);
 
-        let limited = store.list_selected_nets(run_id, None, Some(3)).await?;
+        let limited = store.list_trained_nets(run_id, None, Some(3)).await?;
         assert_eq!(3, limited.len());
         assert_eq!(PathBuf::from("nets/000"), limited[0].1);
         assert_eq!(PathBuf::from("nets/001"), limited[1].1);
         assert_eq!(PathBuf::from("nets/002"), limited[2].1);
 
-        let filtered = store.list_selected_nets(run_id, Some(15.0), None).await?;
+        let filtered = store.list_trained_nets(run_id, Some(15.0), None).await?;
         assert_eq!(15, filtered.len());
         assert_eq!(PathBuf::from("nets/000"), filtered[0].1);
         assert_eq!(PathBuf::from("nets/014"), filtered[14].1);
 
-        let filtered_limited = store.list_selected_nets(run_id, Some(15.0), Some(5)).await?;
+        let filtered_limited = store.list_trained_nets(run_id, Some(15.0), Some(5)).await?;
         assert_eq!(5, filtered_limited.len());
         assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].1);
         assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].1);
@@ -5698,14 +5712,14 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_save_selected_net(
+    pub fn with_save_trained_net(
         mut self,
         inputs: impl IntoIterator<Item = (RunId, PathBuf, f32)> + Debug,
     ) -> Self {
-        debug!("with_save_selected_net: inputs={inputs:?}");
+        debug!("with_save_trained_net: inputs={inputs:?}");
         for (run_id, path, loss) in inputs {
             self.store
-                .expect_save_selected_net()
+                .expect_save_trained_net()
                 .with(eq(run_id), eq(path), eq(loss), eq(None))
                 .times(1)
                 .return_const(Ok(()));
@@ -5713,7 +5727,7 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_selected_nets<I>(
+    pub fn with_list_trained_nets<I>(
         mut self,
         inputs: I,
     ) -> Self
@@ -5721,9 +5735,9 @@ impl MockStoreBuilder {
         I: IntoIterator<Item = (RunId, Option<f32>, Option<usize>, Result<Vec<(u32,PathBuf, f32)>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
-        debug!("with_list_selected_nets: inputs={data:?}");
+        debug!("with_list_trained_nets: inputs={data:?}");
         let data = Arc::new(data);
-        self.store.expect_list_selected_nets().returning(
+        self.store.expect_list_trained_nets().returning(
             move |run_id, loss, limit| {
                 data.iter()
                     .find(|(expected_run_id, expected_loss, expected_limit, _)| *expected_run_id == run_id && *expected_loss == loss && *expected_limit == limit)

@@ -53,6 +53,7 @@ use crate::tasks::cross_dims::ChannelsData2;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
+use crate::tasks::stage_ids::TRAIN_MOTIF_NETS;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
@@ -68,6 +69,7 @@ where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
+    id: SynKey,
     run_configs: Arc<OptRunConfigs<
         Vec<NamedVal<TrainMotifsNetsRunConfigFields>>,
         Vec<NamedRange<TrainMotifsNetsRunConfigFields>>,
@@ -157,6 +159,7 @@ where
         ));
 
         Self {
+            id: mono_key!(TRAIN_MOTIF_NETS, "ApplyMotifNets").into(),
             motif_loader,
             random_slices_loader,
             run_configs: Arc::new(run_configs),
