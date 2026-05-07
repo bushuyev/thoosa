@@ -398,8 +398,15 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                 let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
                 let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
                 let r = do_run(input, ctx);
-                stream.synchronize().unwrap();
-                r
+                match stream.synchronize(){
+                    Ok(_) => {
+                        r
+                    }
+                    Err(e) => {
+                        r
+                    }
+                }
+
             }
         }
     }
