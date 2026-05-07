@@ -123,19 +123,21 @@ where
 {
     type O<'o> = CrossInput<'o, R>;
 
-    async fn with_data_ref<Rt, F, P>(
-        &self,
+    fn with_data_ref<'b, Rt: 'b, F, P>(
+        &'b self,
         _to_device_idx: usize,
         permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<Rt, ThoError>
+    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'b
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send + 'b,
+        P: RunCtx + 'b,
     {
-        debug!("CrossInput::with_data_ref: do_run");
-        do_run(self, &permits_ctx)
+        async move {
+            debug!("CrossInput::with_data_ref: do_run");
+            do_run(self, &permits_ctx)
+        }
     }
 
 
@@ -145,35 +147,37 @@ impl<'a, R> WithSelectDataRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Debug + Send + Sync + 'static,
 {
-    async fn with_selected_data_ref<'o, Rt, F, P>(
-        &self,
+    fn with_selected_data_ref<'b, 'o, Rt: 'b, F, P>(
+        &'b self,
         _to_device_idx: usize,
         permits_ctx: P,
         selector: CrossInputBatch1Selector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<Rt, ThoError>
+    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'b
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError>,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send + 'b,
+        P: RunCtx + 'b,
     {
-        let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
-        let batch_0_len = self.resources_0.len();
-        let batch_1_offset = batch_0_len + range.start;
-        let batch_1_end = batch_0_len + range.end;
+        async move {
+            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
+            let batch_0_len = self.resources_0.len();
+            let batch_1_offset = batch_0_len + range.start;
+            let batch_1_end = batch_0_len + range.end;
 
-        let mut selected_tensors = Vec::with_capacity(batch_0_len + (range.end - range.start));
-        selected_tensors.extend_from_slice(&self.tensors[..batch_0_len]);
-        selected_tensors.extend_from_slice(&self.tensors[batch_1_offset..batch_1_end]);
+            let mut selected_tensors = Vec::with_capacity(batch_0_len + (range.end - range.start));
+            selected_tensors.extend_from_slice(&self.tensors[..batch_0_len]);
+            selected_tensors.extend_from_slice(&self.tensors[batch_1_offset..batch_1_end]);
 
-        let input = CrossInput::new(
-            selected_tensors.as_slice(),
-            self.resources_0,
-            &self.resources_1[range.clone()],
-            self.id.clone(), // + &mono_key!(0, "todo"),
-        );
+            let input = CrossInput::new(
+                selected_tensors.as_slice(),
+                self.resources_0,
+                &self.resources_1[range.clone()],
+                self.id.clone(), // + &mono_key!(0, "todo"),
+            );
 
-        do_run(&input, &permits_ctx)
+            do_run(&input, &permits_ctx)
+        }
     }
 }
 

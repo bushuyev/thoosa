@@ -934,131 +934,102 @@ impl WithDataRef for CrossInputSelectorWrap
 {
     type O<'o> = CrossInput<'o, Arc<Resource>>;
 
-    async fn with_data_ref<Rt, F, P>(
-        &self,
+    fn with_data_ref<'a, Rt: 'a, F, P>(
+        &'a self,
         _to_device_idx: usize,
         permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<Rt, ThoError>
+    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'a
     where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send,
-            P: RunCtx,
+            for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send + 'a,
+            P: RunCtx + 'a,
     {
-        let t_0_batch= self.batch_0.clone();
-        let t_1_batch= self.batch_1.clone();
-        with_data!(permits_ctx, [t_0_batch], [t_1_batch];
-            |
-             ctx,
-             batch_0:&[&ThoTensor<ChannelsData2, SynKey>],
-             batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
-            |{
+        async move {
+            let t_0_batch= self.batch_0.clone();
+            let t_1_batch= self.batch_1.clone();
+            with_data!(permits_ctx, [t_0_batch], [t_1_batch];
+                |
+                 ctx,
+                 batch_0:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
+                |{
 
-                do_run(&CrossInput::new(
-                    [batch_0,batch_1].concat().as_slice(),
-                    self.resources_0.as_slice(),
-                    self.resources_1.as_slice(),
-                    self.id.clone()
-                ), &ctx)
+                    do_run(&CrossInput::new(
+                        [batch_0,batch_1].concat().as_slice(),
+                        self.resources_0.as_slice(),
+                        self.resources_1.as_slice(),
+                        self.id.clone()
+                    ), &ctx)
 
-        })
+            })
+        }
     }
 
 }
 
 
 impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
-    async fn with_selected_data_ref<'o, Rt, F, C>(
-        &self,
+    fn with_selected_data_ref<'a, 'o, Rt: 'a, F, C>(
+        &'a self,
         _to_device_idx: usize,
         mut run_ctx: C,
         selector: CrossInputSelector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<Rt, ThoError>
+    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'a
     where
-            for<'f> F: FnOnce(&Self::O<'f>, &C) -> Result<Rt, ThoError>,
-            C: RunCtx,
+            for<'f> F: FnOnce(&Self::O<'f>, &C) -> Result<Rt, ThoError> + Send + 'a,
+            C: RunCtx + 'a,
     {
+        async move {
 
-        debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
+            debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
 
-        let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(Some("cross_loader_batch_0_select"), false)).await?;
-        let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false)).await?;
+            let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(Some("cross_loader_batch_0_select"), false)).await?;
+            let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false)).await?;
 
-        //TODO move to RangeOrSlice::select
-        let resources_0 = match &selector.batch_0_selector {
-            RangeOrSlice::Full => self.resources_0.as_slice(),
-            RangeOrSlice::Range(range) => {
-                let range = range.start as usize..range.end as usize;
-                &self.resources_0[range.clone()]
-            }
-            RangeOrSlice::Slice((i, range)) => {
-                std::slice::from_ref(&self.resources_0[*i])
-            }
-        };
+            //TODO move to RangeOrSlice::select
+            let resources_0 = match &selector.batch_0_selector {
+                RangeOrSlice::Full => self.resources_0.as_slice(),
+                RangeOrSlice::Range(range) => {
+                    let range = range.start as usize..range.end as usize;
+                    &self.resources_0[range.clone()]
+                }
+                RangeOrSlice::Slice((i, range)) => {
+                    std::slice::from_ref(&self.resources_0[*i])
+                }
+            };
 
-        let resources_1 = match &selector.batch_1_selector {
-            RangeOrSlice::Full => self.resources_1.as_slice(),
-            RangeOrSlice::Range(range) => {
-                let range = range.start as usize..range.end as usize;
-                &self.resources_1[range.clone()]
-            }
-            RangeOrSlice::Slice((i, range)) => {
-                std::slice::from_ref(&self.resources_1[*i])
-            }
-        };
+            let resources_1 = match &selector.batch_1_selector {
+                RangeOrSlice::Full => self.resources_1.as_slice(),
+                RangeOrSlice::Range(range) => {
+                    let range = range.start as usize..range.end as usize;
+                    &self.resources_1[range.clone()]
+                }
+                RangeOrSlice::Slice((i, range)) => {
+                    std::slice::from_ref(&self.resources_1[*i])
+                }
+            };
 
-        with_data!(run_ctx, [t_0_batch], [t_1_batch];
-            |
-             ctx,
-             batch_0:&[&ThoTensor<ChannelsData2, SynKey>],
-             batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
-            |{
+            with_data!(run_ctx, [t_0_batch], [t_1_batch];
+                |
+                 ctx,
+                 batch_0:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
+                |{
 
-                debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: batch_0={batch_0:?} batch_1={batch_1:?}");
+                    debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: batch_0={batch_0:?} batch_1={batch_1:?}");
 
-                do_run(&CrossInput::new(
-                    [batch_0,batch_1].concat().as_slice(),
-                    resources_0,
-                    resources_1,
-                    self.id.clone()
-                ), &ctx)
+                    do_run(&CrossInput::new(
+                        [batch_0,batch_1].concat().as_slice(),
+                        resources_0,
+                        resources_1,
+                        self.id.clone()
+                    ), &ctx)
 
-        })
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithDataRefSend for CrossInputSelectorWrap {
-    fn with_data_ref_send<Rt, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<CrossInputSelector> for CrossInputSelectorWrap {
-    fn with_selected_data_ref_send<'o, Rt, F, C>(
-        &self,
-        to_device_idx: usize,
-        run_ctx: C,
-        selector: CrossInputSelector,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &C) -> Result<Rt, ThoError> + Send,
-        C: RunCtx,
-    {
-        async move { self.with_selected_data_ref(to_device_idx, run_ctx, selector, trace_ctx, do_run).await }
+            })
+        }
     }
 }
 
@@ -1492,10 +1463,10 @@ mod tests {
         let r = input.with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_full"), false), selector.clone(), None, |data, ctx|{
             assert_eq!(data.tensors().len(), 4);
 
-            assert!(batch_0_tensors[0].allclose(&data.tensors()[0].t.to_device(Cpu), 0.02, 0.02, false));
-            assert!(batch_0_tensors[1].allclose(&data.tensors()[1].t.to_device(Cpu), 0.02, 0.02, false));
-            assert!(batch_1_tensors[0].allclose(&data.tensors()[2].t.to_device(Cpu), 0.02, 0.02, false));
-            assert!(batch_1_tensors[1].allclose(&data.tensors()[3].t.to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t.to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].t.to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].t.to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t.to_device(Cpu), 0.02, 0.02, false));
 
             debug!("data={data:?}");
             Ok(())
