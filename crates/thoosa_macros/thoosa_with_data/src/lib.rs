@@ -102,11 +102,9 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     let invoke_closure = quote! {
 
         if __device_idx > 0 {
-            let stream = GlobalCtx::global().copy_ctx(__device_idx).await.acquire_stream().await;
-            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-            let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
-            stream.synchronize()?;
-            r
+            thoosa_common::cuda_utils::with_pooled_cuda_stream(__device_idx, |_| {
+                (#closure)(__with_data_ctx #(, #arg_refs)*)
+            }).await
         } else {
             (#closure)(__with_data_ctx #(, #arg_refs)*)
         }
@@ -116,9 +114,6 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     quote! {
         {
             use thoosa_shared::traits::WithId;
-            use mockall_double::double;
-            #[double]
-            use thoosa_common::runner::global_ctx::GlobalCtx;
 
             let mut __with_data_ctx = #ctx_expr;
             let __device_idx = __with_data_ctx.device_idx();

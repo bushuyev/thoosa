@@ -16,7 +16,10 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
-use crate::runner::global_ctx::GlobalCtx;
+use crate as thoosa_common;
+use mockall_double::double;
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 
 pub struct PinnedHostBuffer {
