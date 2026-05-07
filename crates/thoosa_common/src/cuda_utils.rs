@@ -7,6 +7,7 @@ use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use tch::nn::VarStore;
+use tokio::task::spawn_blocking;
 use thoosa_shared::{Cause, ThoError};
 use tokio_utils::Pool;
 use torch_sys::at_grad_set_enabled;
@@ -981,23 +982,22 @@ mod tests {
 
 }
 
-/// Your old "tho device index" shape:
-/// 0 => CPU / no CUDA stream
-/// 1 => CUDA:0
-/// 2 => CUDA:1
 pub async fn with_pooled_cuda_stream<F, R>(
     tho_device_idx: usize,
-    _high_pri: bool,
     f: F,
-) -> Result<(R, Option<Guard<ThoCudaStream>>), ThoError>
+) -> Result<R, ThoError>
 where
-    F: FnOnce(Option<&ThoCudaStream>) -> R,
+    F: FnOnce(Option<&ThoCudaStream>) -> Result<R, ThoError>,
 {
     if tho_device_idx == 0 {
-        return Ok((f(None), None));
+        return f(None);
     }
 
     let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_stream().await;
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
-    Ok((out, Some(stream)))
+    spawn_blocking(move || {
+        stream.synchronize()
+    }).await??;
+
+    out
 }

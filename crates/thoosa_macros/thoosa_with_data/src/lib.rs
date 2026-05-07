@@ -47,16 +47,12 @@ impl Parse for WithDataInput {
 #[proc_macro]
 pub fn with_data(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as WithDataInput);
-    expand_with_data(input, false).into()
+    expand_with_data(input ).into()
 }
 
-#[proc_macro]
-pub fn async_with_data(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as WithDataInput);
-    expand_with_data(input, true).into()
-}
 
-fn expand_with_data(input: WithDataInput, _await_closure: bool) -> proc_macro2::TokenStream {
+
+fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     let ctx_expr = input.ctx;
     let closure = input.closure;
 

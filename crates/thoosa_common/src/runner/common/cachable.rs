@@ -27,7 +27,7 @@ use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
-
+use crate::cuda_utils::with_pooled_cuda_stream;
 
 async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
     with_async_perf_log(
@@ -475,6 +475,13 @@ where
                     let data = v.deref();
 
                     if to_tho_device_idx > 0 {
+                        /*
+
+                         with_pooled_cuda_stream(to_tho_device_idx, move |_|{
+                            DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                        }).await
+
+                         */
                         let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
                         let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
                         let r = DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);

@@ -46,7 +46,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::run_configs::RunId;
-use thoosa_with_data::{async_with_data, with_data};
+use thoosa_with_data::with_data;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
 
