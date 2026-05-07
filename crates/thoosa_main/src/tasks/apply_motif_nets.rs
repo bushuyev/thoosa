@@ -1131,7 +1131,7 @@ pub fn apply_motif_net_forward(
     let t = if t.size()[0] >= motif_width {
         t
     } else {
-        warn!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width}", t.size());
+        warn!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width} out_id={out_id:?}", t.size());
         pad_to(&t, &[motif_width], 0.0)?
     };
 

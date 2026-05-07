@@ -23,12 +23,13 @@ use std::path::PathBuf;
 
 use tch::nn::{init, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore};
 use tch::Device::Cpu;
-use tch::{nn, Device, Kind, Tensor};
+use tch::{nn, Device, Kind, TchError, Tensor};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::ThoError;
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use torch_sys::at_grad_set_enabled;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
@@ -46,6 +47,7 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::{Data, SimpleId, WithId};
+use crate::runner::global_ctx::GlobalCtx;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -379,6 +381,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     pub fn var_store(&self) -> &VarStore {
         &self.var_store
     }
+
+
+
 }
 
 #[async_trait]
@@ -387,7 +392,7 @@ where
 DI: Dims + Send + 'static,
 DO: Dims + Send + 'static {
 
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> {
 
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
@@ -396,11 +401,12 @@ DO: Dims + Send + 'static {
             .as_ref()
             .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
 
-        let mut var_store = VarStore::new(ThoDevice::from(dst_device).into());
+        let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
 
         let module = builder(&var_store.root())?;
 
         var_store.copy(&self.var_store)?;
+        // copy_vs(&self.var_store, &var_store).await?;
 
         var_store.freeze();
 
