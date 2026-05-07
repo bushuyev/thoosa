@@ -911,35 +911,37 @@ impl WithId for ApplyMotifNetInputWrapper {
 impl WithDataRef for ApplyMotifNetInputWrapper {
     type O<'o> = ApplyMotifNetInput<'o>;
 
-    async fn with_data_ref<R, F, P>(
-        &self,
+    fn with_data_ref<'a, R: 'a, F, P>(
+        &'a self,
         _to_device_idx: usize,
         mut permits_ctx: P,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoError>
+    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
-        debug!("ApplyMotifNetInputWrapper::with_data_ref: 00. ctx.id={:?}", permits_ctx.id());
-        // let x_ctx = permits_ctx.branch(Some("xxx"), false);
+        async move {
+            debug!("ApplyMotifNetInputWrapper::with_data_ref: 00. ctx.id={:?}", permits_ctx.id());
+            // let x_ctx = permits_ctx.branch(Some("xxx"), false);
 
-        with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
-            let input = ApplyMotifNetInput::new(batch, motif_net);
+            with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+                let input = ApplyMotifNetInput::new(batch, motif_net);
 
-            debug!("ApplyMotifNetInputWrapper::with_data_ref: 0. ctx.id={:?}", ctx.id());
+                debug!("ApplyMotifNetInputWrapper::with_data_ref: 0. ctx.id={:?}", ctx.id());
 
-            let r = do_run(&input, &ctx);
+                let r = do_run(&input, &ctx);
 
-            let id = ctx.id().clone();
-            // ctx.drop_permits(DropIf::Always);
-            drop(ctx);
+                let id = ctx.id().clone();
+                // ctx.drop_permits(DropIf::Always);
+                drop(ctx);
 
-            debug!("ApplyMotifNetInputWrapper::with_data_ref: 1. ctx.id={id:?}");
+                debug!("ApplyMotifNetInputWrapper::with_data_ref: 1. ctx.id={id:?}");
 
-            r
-        })
+                r
+            })
+        }
     }
 
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
@@ -953,64 +955,33 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
 }
 
 impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
-    async fn with_selected_data_ref<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(
+        &'a self,
+        _to_device_idx: usize,
         mut permits_ctx: P,
         selector: ChannelsData2Selector,
         _trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoError>
+    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
+        async move {
 
-        with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData2, SynKey>|{
-            let b = batch.subview(selector)?;
-            let input = ApplyMotifNetInput::new(&b, motif_net);
-            debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
-            let r = do_run(&input, &ctx);
+            with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData2, SynKey>|{
+                let b = batch.subview(selector)?;
+                let input = ApplyMotifNetInput::new(&b, motif_net);
+                debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
+                let r = do_run(&input, &ctx);
 
-            let id = ctx.id().clone();
-            drop(ctx);
-            debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 1. ctx.id={id:?}");
+                let id = ctx.id().clone();
+                drop(ctx);
+                debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 1. ctx.id={id:?}");
 
-            r
-        })
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithDataRefSend for ApplyMotifNetInputWrapper {
-    fn with_data_ref_send<R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
-    fn with_selected_data_ref_send<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        selector: ChannelsData2Selector,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_selected_data_ref(to_device_idx, permits_ctx, selector, trace_ctx, do_run).await }
+                r
+            })
+        }
     }
 }
 

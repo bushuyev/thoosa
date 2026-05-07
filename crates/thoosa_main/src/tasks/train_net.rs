@@ -536,83 +536,52 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     type O<'o> = TrainStepInput<DI, DO>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_data_ref<'a, R: 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
+        async move {
 
 
-        if self.x.device_idx() == to_device_idx {
-            let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+            if self.x.device_idx() == to_device_idx {
+                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
 
-            let r = do_run(self, &permits_ctx);
-            stream.synchronize()?;
+                let r = do_run(self, &permits_ctx);
+                stream.synchronize()?;
 
-            r
+                r
 
-        } else {
+            } else {
 
-            let (x, lengths) = (
-                self.x.copy_to_device(to_device_idx).await?,
-                self.lengths.clone(),
-            );
+                let (x, lengths) = (
+                    self.x.copy_to_device(to_device_idx).await?,
+                    self.lengths.clone(),
+                );
 
-            let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
+                let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
 
-            let input = TrainStepInput::new(x, lengths, expected_y);
+                let input = TrainStepInput::new(x, lengths, expected_y);
 
-            let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-            let r = do_run(&input, &permits_ctx);
-            stream.synchronize()?;
-            r
+                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
+                let r = do_run(&input, &permits_ctx);
+                stream.synchronize()?;
+                r
+            }
         }
-    }
 
+    }
 }
 
 impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, _to_device_idx: usize, _permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, _do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
-       unimplemented!()//TODO fix OOMHandler to accept inputs without WithSelectDataRef impl
-    }
-}
-
-impl<DI: Dims, DO: Dims> thoosa_common::runner::common::cachable::WithDataRefSend for TrainStepInput<DI, DO> {
-    fn with_data_ref_send<R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
-    }
-}
-
-impl<DI: Dims, DO: Dims> thoosa_common::runner::common::cachable::WithSelectDataRefSend<()> for TrainStepInput<DI, DO> {
-    fn with_selected_data_ref_send<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        selector: (),
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_selected_data_ref(to_device_idx, permits_ctx, selector, trace_ctx, do_run).await }
+       async move { unimplemented!() }//TODO fix OOMHandler to accept inputs without WithSelectDataRef impl
     }
 }
 
