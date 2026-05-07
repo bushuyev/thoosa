@@ -417,119 +417,90 @@ impl WithId for SelectMotifsInputSelectorWrap {
 impl WithDataRef for SelectMotifsInputSelectorWrap {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_data_ref<'a, R: 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P: RunCtx,
+        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
-        let t_1_batch = self.batch.clone();
-        let stacked_motifs = Arc::clone(&self.stacked_motifs);
-        let motifs_stats = Arc::clone(&self.motifs_stats);
-        with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
-            |
-             ctx,
-             batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs:&StackedMotifsOutput,
-             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-            |{
+        async move {
+            let t_1_batch = self.batch.clone();
+            let stacked_motifs = Arc::clone(&self.stacked_motifs);
+            let motifs_stats = Arc::clone(&self.motifs_stats);
+            with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
+                |
+                 ctx,
+                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 stacked_motifs:&StackedMotifsOutput,
+                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
+                |{
 
-                do_run(&ClcResourcesMotifsDistInput::new_with_offsets(
-                    batch_v,
-                    self.resource_ids.clone(),
-                    self.resource_offsets.clone(),
-                    stacked_motifs,
-                    motifs_stats,
-                ), &ctx)
+                    do_run(&ClcResourcesMotifsDistInput::new_with_offsets(
+                        batch_v,
+                        self.resource_ids.clone(),
+                        self.resource_offsets.clone(),
+                        stacked_motifs,
+                        motifs_stats,
+                    ), &ctx)
 
-        })
+            })
+        }
     }
 }
 
 impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        P: RunCtx,
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
+        P: RunCtx + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a
     {
+        async move {
 
-        debug!("SelectMotifsInputSelectorWrap::with_selected_data_ref: selector={selector:?}");
+            debug!("SelectMotifsInputSelectorWrap::with_selected_data_ref: selector={selector:?}");
 
-        let (t_1_batch, resource_ids, resource_offsets) = match selector.batch_selector {
-            RangeOrSlice::Full => (self.batch.clone(), self.resource_ids.clone(), self.resource_offsets.clone()),
-            RangeOrSlice::Range(range) => {
-                let range = range.start as usize..range.end as usize;
-                (
-                    self.batch[range.clone()].to_vec(),
-                    self.resource_ids[range.clone()].to_vec(),
-                    self.resource_offsets[range].to_vec(),
-                )
-            }
-            RangeOrSlice::Slice((i, range)) => {
-                let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
-                let channels = t.size().dim_0();
-                let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(Some("select_motifs_input_selected_slice"), false), selector, |data, _ctx| {
-                                    Ok(data)
-                                }).await?));
-                let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
-                let range_offset = u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch slice start: {}", range.start)))?;
-                (vec![selected], vec![self.resource_ids[i]], vec![offset + range_offset])
-            }
-        };
+            let (t_1_batch, resource_ids, resource_offsets) = match selector.batch_selector {
+                RangeOrSlice::Full => (self.batch.clone(), self.resource_ids.clone(), self.resource_offsets.clone()),
+                RangeOrSlice::Range(range) => {
+                    let range = range.start as usize..range.end as usize;
+                    (
+                        self.batch[range.clone()].to_vec(),
+                        self.resource_ids[range.clone()].to_vec(),
+                        self.resource_offsets[range].to_vec(),
+                    )
+                }
+                RangeOrSlice::Slice((i, range)) => {
+                    let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
+                    let channels = t.size().dim_0();
+                    let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
+                    let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(Some("select_motifs_input_selected_slice"), false), selector, |data, _ctx| {
+                                        Ok(data)
+                                    }).await?));
+                    let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
+                    let range_offset = u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch slice start: {}", range.start)))?;
+                    (vec![selected], vec![self.resource_ids[i]], vec![offset + range_offset])
+                }
+            };
 
-        let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
-        let motifs_stats = Arc::clone(&self.motifs_stats);
+            let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
+            let motifs_stats = Arc::clone(&self.motifs_stats);
 
-        with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
-            |
-             ctx,
-             batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs_output:&StackedMotifsOutput,
-             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-            |{
-                let inpt = ClcResourcesMotifsDistInput::new_with_offsets(
-                    batch_v,
-                    resource_ids,
-                    resource_offsets,
-                    stacked_motifs_output,
-                    motifs_stats,
-                );
+            with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
+                |
+                 ctx,
+                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 stacked_motifs_output:&StackedMotifsOutput,
+                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
+                |{
+                    let inpt = ClcResourcesMotifsDistInput::new_with_offsets(
+                        batch_v,
+                        resource_ids,
+                        resource_offsets,
+                        stacked_motifs_output,
+                        motifs_stats,
+                    );
 
-                do_run(&inpt, &ctx)
-        })
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithDataRefSend for SelectMotifsInputSelectorWrap {
-    fn with_data_ref_send<R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    fn with_selected_data_ref_send<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
-        ctx: P,
-        selector: SelectMotifsInputSelector,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { self.with_selected_data_ref(to_device_idx, ctx, selector, trace_ctx, do_run).await }
+                    do_run(&inpt, &ctx)
+            })
+        }
     }
 }
 
