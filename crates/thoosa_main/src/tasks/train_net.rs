@@ -7,9 +7,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, 
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
-use mockall_double::double;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms};
 use futures_util::{future::BoxFuture, StreamExt};
@@ -536,7 +534,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
     type O<'o> = TrainStepInput<DI, DO>;
 
-    fn with_data_ref<'a, R: 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
@@ -545,13 +543,9 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
 
             if self.x.device_idx() == to_device_idx {
-                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-
-                let r = do_run(self, &permits_ctx);
-                stream.synchronize()?;
-
-                r
+                with_pooled_cuda_stream(to_device_idx, |_| {
+                    do_run(self, &permits_ctx)
+                }).await
 
             } else {
 
@@ -564,11 +558,9 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 
                 let input = TrainStepInput::new(x, lengths, expected_y);
 
-                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                let r = do_run(&input, &permits_ctx);
-                stream.synchronize()?;
-                r
+                with_pooled_cuda_stream(to_device_idx, |_| {
+                    do_run(&input, &permits_ctx)
+                }).await
             }
         }
 
@@ -576,7 +568,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
 }
 
 impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
-    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, _to_device_idx: usize, _permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, _do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, _permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, _do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,

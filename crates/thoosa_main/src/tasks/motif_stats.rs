@@ -35,7 +35,7 @@ use thoosa_common::copy_ctx;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
@@ -325,7 +325,7 @@ impl WithId for MotifStatsCalcInputWrapper {
 impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInputWrapper {
     type O<'o> = MotifStatsCalcInput<'o>;
 
-    fn with_data_ref<'a, R: 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
@@ -342,7 +342,7 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
 }
 
 impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifStatsCalcInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
@@ -455,7 +455,7 @@ impl WithId for MotifStatsTmpCachedChannelsInput {
 impl ConsumeData for MotifStatsTmpCachedChannelsInput {
     type O = MotifStatsLoadedChannelsInput;
 
-    fn consume<R, F, P>(
+    fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
         ctx: P,
@@ -489,16 +489,16 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
             if to_device_idx == 0 {
                 do_run(input, ctx)
             } else {
-                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
-                let r = do_run(input, ctx);
-                match stream.synchronize(){
-                    Ok(_) => {
-                        r
-                    }
-                    Err(e) => {
-                        r
-                    }
+                let mut r = None;
+                let stream_result = with_pooled_cuda_stream(to_device_idx, |_| {
+                    r = Some(do_run(input, ctx));
+                    Ok(())
+                }).await;
+                if let Some(r) = r {
+                    r
+                } else {
+                    stream_result.expect("with_pooled_cuda_stream failed before do_run");
+                    unreachable!("with_pooled_cuda_stream returned without running do_run")
                 }
             }
         }

@@ -675,7 +675,7 @@ impl WithId for TmpCacheWrapper {
 impl ConsumeData for TmpCacheWrapper {
     type O = BatchAppliedMotifNetsInput;
 
-    fn consume<R, F, P>(
+    fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
         ctx: P,
@@ -911,7 +911,7 @@ impl WithId for ApplyMotifNetInputWrapper {
 impl WithDataRef for ApplyMotifNetInputWrapper {
     type O<'o> = ApplyMotifNetInput<'o>;
 
-    fn with_data_ref<'a, R: 'a, F, P>(
+    fn with_data_ref<'a, R: Send + 'a, F, P>(
         &'a self,
         _to_device_idx: usize,
         mut permits_ctx: P,
@@ -955,7 +955,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
 }
 
 impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(
         &'a self,
         _to_device_idx: usize,
         mut permits_ctx: P,

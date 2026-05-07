@@ -27,7 +27,7 @@ use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
-
+use crate::cuda_utils::with_pooled_cuda_stream;
 
 async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
     with_async_perf_log(
@@ -193,13 +193,13 @@ where
     where
         Self:Sized;
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         Self:Sized,
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P:RunCtx + 'a;
 
-    fn with_selected_data_ref<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_selected_data_ref<'a, 'o, R: Send, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         Self:Sized,
         O: Select<S, Output=O>,
@@ -278,7 +278,7 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
             for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
             P: RunCtx + 'a
@@ -294,7 +294,7 @@ where
         })
     }
 
-    fn with_selected_data_ref<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_selected_data_ref<'a, 'o, R: Send, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
@@ -463,7 +463,7 @@ where
         }
     }
 
-    fn with_data_ref<'a, R, F, P>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a
@@ -475,11 +475,9 @@ where
                     let data = v.deref();
 
                     if to_tho_device_idx > 0 {
-                        let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
-                        let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                        let r = DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                        stream.synchronize()?;
-                        r
+                        with_pooled_cuda_stream(to_tho_device_idx, |_| {
+                            DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                        }).await
                     }  else {
                         DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
                     }
@@ -490,7 +488,7 @@ where
         })
     }
 
-    fn with_selected_data_ref<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_selected_data_ref<'a, 'o, R: Send, F, P, S>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
@@ -504,15 +502,14 @@ where
 
             if read_guard.is_some() {
                 if to_tho_device_idx > 0 {
-                    let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
-                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                    let base: &O = read_guard
-                        .as_ref()
-                        .expect("no value behind guard");
-                    let data: O = base.subview(selector.clone())?;
-                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                    stream.synchronize()?;
-                    return r;
+                    let selector = selector.clone();
+                    return with_pooled_cuda_stream(to_tho_device_idx, move |_| {
+                        let base: &O = read_guard
+                            .as_ref()
+                            .expect("no value behind guard");
+                        let data: O = base.subview(selector.clone())?;
+                        DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                    }).await;
                 } else {
                     let base: &O = read_guard
                         .as_ref()
@@ -539,11 +536,9 @@ where
                     let data = sub_t.copy_to_device(to_tho_device_idx).await?;
 
                     if to_tho_device_idx > 0 {
-                        let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
-                        let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                        let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                        stream.synchronize()?;
-                        return r;
+                        return with_pooled_cuda_stream(to_tho_device_idx, |_| {
+                            DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                        }).await;
                     } else {
                         return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                     }
@@ -572,15 +567,14 @@ where
 
         if read_guard.is_some() {
             if to_device_idx > 0 {
-                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                let data = read_guard
-                    .as_ref()
-                    .expect("no value behind guard")
-                    .subview(selector.clone())?;
-                let r = do_run(data, &permits_ctx);
-                stream.synchronize()?;
-                return r;
+                let selector = selector.clone();
+                return with_pooled_cuda_stream(to_device_idx, move |_| {
+                    let data = read_guard
+                        .as_ref()
+                        .expect("no value behind guard")
+                        .subview(selector.clone())?;
+                    do_run(data, &permits_ctx)
+                }).await;
             } else {
                 let data = read_guard
                     .as_ref()
@@ -606,11 +600,9 @@ where
                 let data = sub_t.copy_to_device(to_device_idx).await?;
 
                 if to_device_idx > 0 {
-                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                    let r = do_run(data, &permits_ctx);
-                    stream.synchronize()?;
-                    return r;
+                    return with_pooled_cuda_stream(to_device_idx, |_| {
+                        do_run(data, &permits_ctx)
+                    }).await;
                 } else {
                     return do_run(data, &permits_ctx);
                 }
@@ -1111,7 +1103,7 @@ where
 pub trait WithDataRef: WithId + Debug + Send + Sync {
     type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync;
 
-    fn with_data_ref<'a, R: 'a, F, P>(
+    fn with_data_ref<'a, R: Send + 'a, F, P>(
         &'a self,
         to_device_idx: usize,
         permits_ctx: P,
@@ -1138,7 +1130,7 @@ pub trait WithSelectDataRef<S>: WithDataRef
 where
     S: Clone + Debug + Send + 'static,
 {
-    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(
         &'a self,
         to_device_idx: usize,
         _permits_ctx: P,
@@ -1155,7 +1147,7 @@ where
 pub trait ConsumeData {
     type O: Data + WithId + Send + Sync;
     //it should be run from OOM OOMHandler::consume where tensors can't be dumped to cpu while being used
-    fn consume<R, F, P>(
+    fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
         permits_ctx: P,
@@ -1176,7 +1168,7 @@ where
 {
     type O<'o> = O;
 
-    fn with_data_ref<'a, R: 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
             for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
             P:RunCtx + 'a
@@ -1199,7 +1191,7 @@ where
     O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
     O::M: DevicesWrapCopyMode<O>,
 {
-    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,

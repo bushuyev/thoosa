@@ -17,9 +17,7 @@ use thoosa_named_derive::Named;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 
-use mockall_double::double;
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices};
@@ -339,7 +337,7 @@ impl WithId for SyncMotifLoaderInputWrapper {
 impl ConsumeData for SyncMotifLoaderInputWrapper {
     type O = SyncMotifLoaderInput;
 
-    fn consume<R, F, P>(
+    fn consume<R: Send, F, P>(
         self,
         to_device_idx: usize,
         ctx: P,
@@ -395,18 +393,17 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
             if to_device_idx == 0 {
                 do_run(input, ctx)
             } else {
-                let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream).unwrap();
-                let r = do_run(input, ctx);
-                match stream.synchronize(){
-                    Ok(_) => {
-                        r
-                    }
-                    Err(e) => {
-                        r
-                    }
+                let mut r = None;
+                let stream_result = with_pooled_cuda_stream(to_device_idx, |_| {
+                    r = Some(do_run(input, ctx));
+                    Ok(())
+                }).await;
+                if let Some(r) = r {
+                    r
+                } else {
+                    stream_result.expect("with_pooled_cuda_stream failed before do_run");
+                    unreachable!("with_pooled_cuda_stream returned without running do_run")
                 }
-
             }
         }
     }

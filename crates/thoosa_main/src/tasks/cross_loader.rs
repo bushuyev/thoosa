@@ -46,7 +46,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::run_configs::RunId;
-use thoosa_with_data::{async_with_data, with_data};
+use thoosa_with_data::with_data;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
 
@@ -934,7 +934,7 @@ impl WithDataRef for CrossInputSelectorWrap
 {
     type O<'o> = CrossInput<'o, Arc<Resource>>;
 
-    fn with_data_ref<'a, Rt: 'a, F, P>(
+    fn with_data_ref<'a, Rt: Send + 'a, F, P>(
         &'a self,
         _to_device_idx: usize,
         permits_ctx: P,
@@ -970,7 +970,7 @@ impl WithDataRef for CrossInputSelectorWrap
 
 
 impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
-    fn with_selected_data_ref<'a, 'o, Rt: 'a, F, C>(
+    fn with_selected_data_ref<'a, 'o, Rt: Send + 'a, F, C>(
         &'a self,
         _to_device_idx: usize,
         mut run_ctx: C,
