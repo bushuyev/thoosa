@@ -256,6 +256,7 @@ pub trait ResourcesConfig {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use log::debug;
     use rand::SeedableRng;
     use rand::rngs::StdRng;
     use super::{build_resource_maps_with_rng, Resource};
@@ -278,14 +279,15 @@ mod tests {
         ];
 
         let mut rng = StdRng::seed_from_u64(42);
-        let (labels_train_and_valid_sets, labels_others_train_valid_resources) =
-            build_resource_maps_with_rng(train.clone(), valid.clone(), &mut rng);
+        let (labels_train_and_valid_sets, labels_others_train_valid_resources) = build_resource_maps_with_rng(train.clone(), valid.clone(), &mut rng);
 
 
         assert_eq!(labels_train_and_valid_sets.get("label_a").expect("missing label_a").0, train[0].1);
         assert_eq!(labels_train_and_valid_sets.get("label_a").expect("missing label_a").1, valid[0].1);
+
         assert_eq!(labels_train_and_valid_sets.get("label_b").expect("missing label_b").0, train[1].1);
         assert_eq!(labels_train_and_valid_sets.get("label_b").expect("missing label_b").1, valid[1].1);
+
         assert_eq!(labels_train_and_valid_sets.get("label_c").expect("missing label_c").0, train[2].1);
         assert_eq!(labels_train_and_valid_sets.get("label_c").expect("missing label_c").1, valid[2].1);
 
@@ -294,7 +296,7 @@ mod tests {
 
             let (others_train, others_valid) = labels_others_train_valid_resources.get(label).expect("missing others");
 
-            // debug!("test_build_resource_maps: label={label} \nlabel_train={label_train:?} \nlabel_valid={label_valid:?} \nothers_train={others_train:?} \nothers_valid={others_valid:?}");
+            debug!("test_build_resource_maps: label={label} \nlabel_train={label_train:?} \nlabel_valid={label_valid:?} \nothers_train={others_train:?} \nothers_valid={others_valid:?}");
 
             let other_train_pool = labels_train_and_valid_sets
                 .iter()
@@ -322,4 +324,24 @@ mod tests {
             assert!(others_valid.iter().all(|resource| !label_valid_set.contains(resource)));
         }
     }
+
+    #[test]
+    fn test_build_resource_maps_single_label() {
+        let train = vec![
+            ("label_a".to_string(), vec![resource(1, "a_tr_1"), resource(2, "a_tr_2")]),
+        ];
+        let valid = vec![
+            ("label_a".to_string(), vec![resource(11, "a_vl_1")]),
+        ];
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let (labels_train_and_valid_sets, labels_others_train_valid_resources) = build_resource_maps_with_rng(train.clone(), valid.clone(), &mut rng);
+
+        let (train, valid) = labels_others_train_valid_resources.get("label_a").expect("no label_a");
+        debug!("test_build_resource_maps: labels_train_and_valid_sets={labels_train_and_valid_sets:?} labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
+        assert!(train.is_empty());
+        assert!(valid.is_empty());
+
+    }
+
 }

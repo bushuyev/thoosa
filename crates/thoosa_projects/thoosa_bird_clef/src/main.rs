@@ -19,7 +19,7 @@ use thoosa_shared::ThoError;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
-use crate::run_all::{run_all, run_all_grid_config_0};
+use crate::run_all::{run_all, run_all_2, run_all_grid_config_0};
 
 mod data;
 mod labels;
@@ -102,7 +102,7 @@ fn main() -> Result<(), ThoError>{
                 let all_configs = run_all_grid_config_0(run_all_args);
 
                 //gpt run-all starts here after run_cli has opened the workspace/store and built the RawTensorLoader over saved *.pt tensors.
-                run_all(
+                run_all_2(
                     ws,
                     store,
                     loader,

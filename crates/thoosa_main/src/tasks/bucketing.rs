@@ -33,7 +33,7 @@ use thoosa_shared::traits::{Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
-
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
 
@@ -610,6 +610,7 @@ where
             })
                 .collect::<Result<Vec<_>, ThoError>>()?;
 
+        let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len() as usize, 1);
         for resource in &resources {
             let loaded = Arc::clone(&self.loader)
                 .run_cached(
@@ -632,6 +633,7 @@ where
                     warn!("BucketingStage::run e={e}");
                 }
             };
+            collect_eta_record_completion(eta_guard.id());
         }
 
 
@@ -639,6 +641,8 @@ where
         let run_id = self.run_config.run_id()?;
         let mut motif_ids = Vec::new();
         let mut groups_by_channel = (0..channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
+
+        let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/buckets", temp_stores_by_bucket.len() as usize, 1);
         for (bucket, mut temp_store) in temp_stores_by_bucket.into_iter().enumerate() {
             let group = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
             for (channel, slices) in temp_store.load_channel_groups(group)? {
@@ -649,6 +653,7 @@ where
                 groups_by_channel[channel].entry(group).or_default().extend(slices);
             }
             temp_store.remove()?;
+            collect_eta_record_completion(eta_guard.id());
         }
 
         for (channel, groups) in groups_by_channel.into_iter().enumerate() {
