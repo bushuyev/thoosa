@@ -879,7 +879,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 id: None,
                 bucket_count: RangeOrValue::Value(100),
                 min_slices: RangeOrValue::Value(3),
-                max_slices: RangeOrValue::Value(10000),
+                max_slices: RangeOrValue::Value(100000),
                 bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
                     band_hz: RangeOrValue::Value(160.0),
                     aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),

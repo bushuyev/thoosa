@@ -382,7 +382,7 @@ where
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
                     let resources_0 = labels_others_train_valid_resources.get(label).expect(&format!("no resources not belonging to {label}"));
-                    debug!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
+                    info!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
 
                     let resources_1_train = Arc::new(resources_1.0.clone());
                     let resources_1_valid = Arc::new(resources_1.1.clone());
