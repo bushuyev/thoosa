@@ -199,15 +199,7 @@ where
         F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         P:RunCtx + 'a;
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
-    where
-        Self:Sized,
-        O: Select<S, Output=O>,
-        for <'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
-        S:Debug + Clone + 'static,
-        P:RunCtx;
-
-    fn with_selected_data_ref_send<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_selected_data_ref<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         Self:Sized,
         O: Select<S, Output=O>,
@@ -302,24 +294,7 @@ where
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
-    where
-        O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
-        S:Debug + Clone + 'static,
-        P: RunCtx
-    {
-        match wrap.load_from_any_device_(to_device_idx).await {
-            Ok(v) => {
-                let data = v.deref();
-                let sub = data.subview(selector)?;
-                do_run(&sub, &permits_ctx)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-    fn with_selected_data_ref_send<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_selected_data_ref<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
@@ -515,71 +490,7 @@ where
         })
     }
 
-    async fn with_selected_data_ref<'o, R, F, P, S>(wrap:&DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
-    where
-        O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError>,
-        S:Debug + Clone + 'static,
-        P: RunCtx
-    {
-        let permits_ctx = permits_ctx;
-
-
-        let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
-
-        if read_guard.is_some() {
-            if to_tho_device_idx > 0 {
-                let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
-                let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                let base: &O = read_guard
-                    .as_ref()
-                    .expect("no value behind guard");
-                let data: O = base.subview(selector.clone())?;
-                let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                stream.synchronize()?;
-                return r;
-            } else {
-                let base: &O = read_guard
-                    .as_ref()
-                    .expect("no value behind guard");
-                let data: O = base.subview(selector.clone())?;
-                return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-            }
-        }
-
-        drop(read_guard);
-
-        for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-            if source_device_idx == to_tho_device_idx {
-                continue;
-            }
-
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(op, "CpuOrGpu::with_selected_data_ref source read").await;
-
-            if let Some(src) = source_read_guard.as_ref() {
-                let sub_t: O = src.subview(selector.clone())?;
-
-                debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
-
-                let data = sub_t.copy_to_device(to_tho_device_idx).await?;
-
-                if to_tho_device_idx > 0 {
-                    let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
-                    let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-                    let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                    stream.synchronize()?;
-                    return r;
-                } else {
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                }
-
-            }
-        }
-
-        Err(Cause::NotFound.into())
-    }
-
-    fn with_selected_data_ref_send<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    fn with_selected_data_ref<'a, 'o, R, F, P, S>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         O: Select<S, Output=O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
@@ -588,16 +499,12 @@ where
     {
         Box::pin(async move {
             let permits_ctx = permits_ctx;
-            // if permits_ctx.acquired_permits() == 0 {
-            //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-            //     permits_ctx.add_permit(permit);
-            // }
 
-            let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
+            let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
 
             if read_guard.is_some() {
-                if to_device_idx > 0 {
-                    let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                if to_tho_device_idx > 0 {
+                    let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
                     let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
                     let base: &O = read_guard
                         .as_ref()
@@ -618,7 +525,7 @@ where
             drop(read_guard);
 
             for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-                if source_device_idx == to_device_idx {
+                if source_device_idx == to_tho_device_idx {
                     continue;
                 }
 
@@ -627,17 +534,15 @@ where
                 if let Some(src) = source_read_guard.as_ref() {
                     let sub_t: O = src.subview(selector.clone())?;
 
-                    debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
+                    debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
 
-                    let data = sub_t.copy_to_device(to_device_idx).await?;
+                    let data = sub_t.copy_to_device(to_tho_device_idx).await?;
 
-                    if to_device_idx > 0 {
-                        let stream = GlobalCtx::global().copy_ctx(to_device_idx).await.acquire_stream().await;
+                    if to_tho_device_idx > 0 {
+                        let stream = GlobalCtx::global().copy_ctx(to_tho_device_idx).await.acquire_stream().await;
                         let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
                         let r = DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-
                         stream.synchronize()?;
-
                         return r;
                     } else {
                         return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
@@ -1203,19 +1108,19 @@ where
 }
 
 ///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
-pub trait WithDataRef: WithId + Debug {
+pub trait WithDataRef: WithId + Debug + Send + Sync {
     type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync;
 
-    async fn with_data_ref<R, F, P>(
-        &self,
+    fn with_data_ref<'a, R: 'a, F, P>(
+        &'a self,
         to_device_idx: usize,
         permits_ctx: P,
         trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoError>
+    ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
-       for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P:RunCtx;
+       for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P:RunCtx + 'a;
 
 
     //shouldn't be here, used only in ClcOOMRunner which is test-only util
@@ -1231,55 +1136,19 @@ pub trait WithDataRef: WithId + Debug {
 
 pub trait WithSelectDataRef<S>: WithDataRef
 where
-    S: Clone + Debug + 'static,
+    S: Clone + Debug + Send + 'static,
 {
-    async fn with_selected_data_ref<'o, R, F, P>(
-        &self,
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(
+        &'a self,
         to_device_idx: usize,
         _permits_ctx: P,
         selector: S,
         trace_ctx: Option<&'static str>,
         do_run: F,
-    ) -> Result<R, ThoError> where
+    ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a where
      // Self::O<'o>: Select<S, Output = Self::O<'o>>,
-     for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-     P:RunCtx;
-}
-
-// OOMHandler submits sync-stage work to DynamicTaskExecutor, and submit requires the
-// whole future to be Send. The original WithDataRef stays non-Send because existing
-// call sites rely on closures/futures that do not satisfy Send. This companion trait
-// gives the executor path a Send-only entry point without tightening the base trait.
-pub trait WithDataRefSend: WithDataRef {
-    fn with_data_ref_send<R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx;
-}
-
-// Same split for selected access: OOMHandler's executor path needs a Send future,
-// while the general WithSelectDataRef API must remain available to non-Send callers.
-pub trait WithSelectDataRefSend<S>: WithDataRefSend + WithSelectDataRef<S>
-where
-    S: Clone + Debug + Send + 'static,
-{
-    fn with_selected_data_ref_send<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        selector: S,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx;
+     for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+     P:RunCtx + 'a;
 }
 
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
@@ -1307,12 +1176,12 @@ where
 {
     type O<'o> = O;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_data_ref<'a, R: 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
-            for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-            P:RunCtx
+            for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+            P:RunCtx + 'a
     {
-        O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run).await
+        O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run)
     }
 
     fn mem_size(&self) -> u64 {
@@ -1324,63 +1193,21 @@ where
     }
 }
 
-impl<O> WithDataRefSend for DevicesWrap<O>
-where
-    O: Data + WithId + Send + Sync,
-    O::M: DevicesWrapCopyMode<O>,
-{
-    fn with_data_ref_send<R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        async move { O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run).await }
-    }
-}
-
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
-where
-    S:Debug + Clone + 'static,
-    O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
-    O::M: DevicesWrapCopyMode<O>,
-{
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
-    where
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P:RunCtx
-    {
-        O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run).await
-    }
-
-}
-
-impl<O, S> WithSelectDataRefSend<S> for DevicesWrap<O>
 where
     S:Debug + Clone + Send + 'static,
     O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
     O::M: DevicesWrapCopyMode<O>,
 {
-    fn with_selected_data_ref_send<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        selector: S,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
+        Self::O<'o>: Select<S, Output=Self::O<'o>>,
+        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P:RunCtx + 'a
     {
-        async move { O::M::with_selected_data_ref_send(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run).await }
+        O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run)
     }
+
 }
 
 
