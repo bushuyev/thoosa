@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{MaxParallelCtx, RunCtx};
-use crate::runner::common::cachable::{ConsumeData, WithDataRef, WithSelectDataRefSend};
+use crate::runner::common::cachable::{ConsumeData, WithDataRef, WithSelectDataRef};
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
 use crate as thoosa_common;
@@ -283,7 +283,7 @@ where
         contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoError>
     where
-        W: WithSelectDataRefSend<S> + Send + Sync + 'static,
+        W: WithSelectDataRef<S> + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
@@ -299,7 +299,7 @@ where
                 oom_executor(device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     if let Some(selector) = selector {
                         input
-                            .with_selected_data_ref_send(
+                            .with_selected_data_ref(
                                 device_idx,
                                 run_ctx,
                                 selector,
@@ -309,7 +309,7 @@ where
                             .await
                     } else {
                         input
-                            .with_data_ref_send(
+                            .with_data_ref(
                                 device_idx,
                                 run_ctx,
                                 None,

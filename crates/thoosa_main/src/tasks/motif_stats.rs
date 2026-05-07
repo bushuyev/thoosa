@@ -325,12 +325,12 @@ impl WithId for MotifStatsCalcInputWrapper {
 impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInputWrapper {
     type O<'o> = MotifStatsCalcInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_data_ref<'a, R: 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
-        self.with_calc_input(permits_ctx, do_run).await
+        async move { self.with_calc_input(permits_ctx, do_run).await }
     }
 
     fn mem_size(&self) -> u64 {
@@ -341,49 +341,12 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
     }
 }
 
-impl thoosa_common::runner::common::cachable::WithDataRefSend for MotifStatsCalcInputWrapper {
-    fn with_data_ref_send<R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        let _ = to_device_idx;
-        let _ = trace_ctx;
-        async move { self.with_calc_input(permits_ctx, do_run).await }
-    }
-}
-
 impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifStatsCalcInputWrapper {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P: RunCtx,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
     {
-        self.with_calc_input(permits_ctx, do_run).await
-    }
-}
-
-impl thoosa_common::runner::common::cachable::WithSelectDataRefSend<()> for MotifStatsCalcInputWrapper {
-    fn with_selected_data_ref_send<'o, R, F, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        _selector: (),
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send,
-        P: RunCtx,
-    {
-        let _ = to_device_idx;
-        let _ = trace_ctx;
         async move { self.with_calc_input(permits_ctx, do_run).await }
     }
 }
