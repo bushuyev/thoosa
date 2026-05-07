@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use async_trait::async_trait;
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, RawMutex, RwLock};
 use log::{debug, info, warn};
 use tch::{Device, Kind, TchError, Tensor};
 use serde::Deserialize;
@@ -30,13 +30,14 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{panic_to_err, TensorIdSliceIdx, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{collect_futures_with_progress, panic_to_err, StreamBuffering, TensorIdSliceIdx, ThoError, LOCK_TIMEOUT};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
 
@@ -245,6 +246,10 @@ where
     run_config: BucketRunConfig,
     sync_stage: Arc<SyncBucketingStage<D, Id, C>>,
     pd: PhantomData<(RC, D, Id, C)>,
+    channels:u32,
+    sample_rate:u32,
+    tmp_path:PathBuf,
+    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>
 }
 
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
@@ -282,13 +287,33 @@ where
         let window = i64::from(window);
         let step = i64::from(step);
 
+        let (channels, sample_rate, tmp_path) = {
+            let ws = ws.try_read_for(LOCK_TIMEOUT).expect("BucketingStage::run: timed out waiting for workspace read lock");
+            (ws.channels(), ws.sample_rate(), ws.tmp_path().clone())
+        };
+
+
+
+        let temp_stores_by_bucket =
+            (0..run_config.bucket_count).map(|bucket| {
+                let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
+                MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
+            })
+                .collect::<Result<Vec<_>, ThoError>>()?;
+
+        let temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>> = Arc::new(Mutex::new(temp_stores_by_bucket));
+
         Ok(Self {
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             loader,
-            sync_stage: Arc::new(SyncBucketingStage::new(run_config.clone(), window, step)),
+            sync_stage: Arc::new(SyncBucketingStage::new(run_config.clone(), window, step, sample_rate, Arc::clone(&temp_stores_by_bucket))),
             run_config,
             pd: PhantomData,
+            channels,
+            sample_rate,
+            tmp_path,
+            temp_stores_by_bucket
         })
     }
 
@@ -302,8 +327,6 @@ where
 {
     resource_id: ResourceId,
     tensor: &'a ThoTensor<D, Id>,
-    temp_stores: Arc<Mutex<Vec<MelPatchTempStore>>>,
-    sample_rate: f64,
 }
 
 impl<'a, D, Id> BucketingSyncInput<'a, D, Id>
@@ -311,8 +334,8 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn new(resource_id: ResourceId, tensor: &'a ThoTensor<D, Id>, temp_stores: Arc<Mutex<Vec<MelPatchTempStore>>>, sample_rate: f64) -> Self {
-        Self { resource_id, tensor, temp_stores, sample_rate }
+    fn new(resource_id: ResourceId, tensor: &'a ThoTensor<D, Id>) -> Self {
+        Self { resource_id, tensor }
     }
 }
 
@@ -363,7 +386,6 @@ where
 {
     resource_id: ResourceId,
     tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>,
-    temp_stores: Arc<Mutex<Vec<MelPatchTempStore>>>,
     sample_rate: f64,
 }
 
@@ -372,8 +394,8 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn new(resource_id: ResourceId, tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>, temp_stores: Arc<Mutex<Vec<MelPatchTempStore>>>, sample_rate: f64) -> Self {
-        Self { resource_id, tensor, temp_stores, sample_rate }
+    fn new(resource_id: ResourceId, tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>, sample_rate: f64) -> Self {
+        Self { resource_id, tensor, sample_rate }
     }
 }
 
@@ -403,10 +425,10 @@ where
     {
         async move {
             let resource_id = self.resource_id;
-            let temp_stores = Arc::clone(&self.temp_stores);
+
             let sample_rate = self.sample_rate;
             self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
-                let input = BucketingSyncInput::new(resource_id, tensor, temp_stores, sample_rate);
+                let input = BucketingSyncInput::new(resource_id, tensor);
                 do_run(&input, ctx)
             }).await
         }
@@ -439,6 +461,8 @@ where
     run_config: BucketRunConfig,
     window: i64,
     step: i64,
+    sample_rate:u32,
+    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>,
     pd: PhantomData<(D, Id, C)>,
 }
 
@@ -448,13 +472,13 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    fn new(run_config: BucketRunConfig, window: i64, step: i64) -> Self {
-        Self { run_config, window, step, pd: PhantomData }
+    fn new(run_config: BucketRunConfig, window: i64, step: i64, sample_rate:u32, temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>) -> Self {
+        Self { run_config, window, step, temp_stores_by_bucket, sample_rate, pd: PhantomData }
     }
 
     fn save_resource_patches(&self, input: &BucketingSyncInput<'_, D, Id>) -> Result<(), ThoError> {
         let mel_config = self.run_config.log_mel_config()?;
-        let patches = audio_to_log_mel_patches(input.tensor.t_ref(), mel_config, input.sample_rate, self.window, self.step)?;
+        let patches = audio_to_log_mel_patches(input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
         let patch_ranges = patch_sample_ranges_flat(&patches, mel_config, self.window, self.step)?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
 
@@ -462,7 +486,7 @@ where
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), channels_bucket_ids.len())));
         }
 
-        let mut temp_stores = input.temp_stores.lock();
+        let mut temp_stores = self.temp_stores_by_bucket.lock();
         if temp_stores.len() != self.run_config.bucket_count as usize {
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_patches: temp stores={} bucket_count={}", temp_stores.len(), self.run_config.bucket_count)));
         }
@@ -505,7 +529,7 @@ where
         let slices = audio.f_unfold(1, self.window, self.step)?;
         debug!("save_resource_plain_buckets: slices={slices:?}");
 
-        let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, input.sample_rate, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
+        let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, self.sample_rate as f64, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
         debug!("save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
 
         let planes = panic_to_err!(make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], self.run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device()))?;
@@ -516,7 +540,7 @@ where
 
         let channels_bucket_ids = panic_to_err!(bucket_ids_from_one_hot_3d(&buckets_one_hot))?;
 
-        let mut temp_stores = input.temp_stores.lock();
+        let mut temp_stores = self.temp_stores_by_bucket.lock();
         if temp_stores.len() != self.run_config.bucket_count as usize {
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: temp stores={} bucket_count={}", temp_stores.len(), self.run_config.bucket_count)));
         }
@@ -792,80 +816,81 @@ where
 
         debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
 
-        let tmp_path = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(LOCK_TIMEOUT).expect("BucketingStage::run: timed out waiting for workspace read lock").tmp_path().clone(),
-            "BucketingStage::run/read_ws_tmp_path",
-        );
-        let (channels, sample_rate) = {
-            let ws = self.ws.try_read_for(LOCK_TIMEOUT).expect("BucketingStage::run: timed out waiting for workspace read lock");
-            (ws.channels(), ws.sample_rate())
-        };
 
-        let temp_stores_by_bucket =
-            (0..self.run_config.bucket_count).map(|bucket| {
-                let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
-                MelPatchTempStore::new(&tmp_path, self.run_config.id.expect("no run id").clone(), bucket)
-            })
-                .collect::<Result<Vec<_>, ThoError>>()?;
-        let temp_stores_by_bucket = Arc::new(Mutex::new(temp_stores_by_bucket));
+        let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len(), 1);
+        let futures = resources.iter().map(|resource|{
+            let mut sync_bucketing_ctx = ctx.branch(Some(&format!("BucketingStage_{}", resource.id())), false);
+            let loader = Arc::clone(&self.loader);
+            let sync_stage = Arc::clone(&self.sync_stage);
+            let sample_rate = self.sample_rate;
+            async move {
 
-        let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len() as usize, 1);
-        for resource in &resources {
-            let loaded = Arc::clone(&self.loader)
-                .run_cached(
-                    Arc::new(DevicesWrap::wrap(resource.clone())),
-                    ctx.branch(Some(&format!("BucketingStage_{}", resource.id())), false),
-                )
-                .await?;
+                let loaded = loader
+                    .run_cached(
+                        Arc::new(DevicesWrap::wrap(resource.clone())),
+                        sync_bucketing_ctx.branch(Some(&format!("mel_patch_bucket_resource_{}_loader", resource.id())), false),
+                    )
+                    .await?;
 
-            let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-            let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
-                vec![
-                    Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                    Adjusters::RunContext(Box::new(DumpToCpu::new("bucketing"))),
-                ],
-                None,
-            );
+                let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+                    vec![
+                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                        Adjusters::RunContext(Box::new(DumpToCpu::new("bucketing"))),
+                    ],
+                    None,
+                );
 
-            match oom_handler
-                .run(
-                    &self.sync_stage,
-                    Arc::new(BucketingTensorInput::new(resource.id(), loaded, Arc::clone(&temp_stores_by_bucket), sample_rate as f64)),
-                    ctx.branch(Some(&format!("mel_patch_bucket_resource_{}", resource.id())), false),
-                    Contexts::new(
-                        NoopInputContext(None),
-                        NoopRunnableContext {},
-                        MaxParallelAndDumpToCpuAdjustableContex::new(
-                            MaxParallelAdjustContextImpl::new(),
-                            DumpToCpuContextImpl::new(&required_ids),
+                match oom_handler
+                    .run(
+                        &sync_stage,
+                        Arc::new(BucketingTensorInput::new(resource.id(), loaded, sample_rate as f64)),
+                        sync_bucketing_ctx,
+                        Contexts::new(
+                            NoopInputContext(None),
+                            NoopRunnableContext {},
+                            MaxParallelAndDumpToCpuAdjustableContex::new(
+                                MaxParallelAdjustContextImpl::new(),
+                                DumpToCpuContextImpl::new(&required_ids),
+                            ),
                         ),
-                    ),
-                )
-                .await
-            {
-                Ok(_) => {}
-                Err(e) => {
-                    warn!("BucketingStage::run e={e}");
-                }
-            };
-            collect_eta_record_completion(eta_guard.id());
-        }
+                    )
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(e) => {
+                        warn!("BucketingStage::run e={e}");
+                    }
+                };
+                Ok(())
+            }
+        });
+        let loaded_motifs = collect_futures_with_progress(
+            futures,
+            resources.len(),
+            4,
+            StreamBuffering::Unordered,
+            "BucketingStage/resources",
+        )
+            .await
+            .into_iter()
+            .collect::<Vec<_>>();
 
 
         // self.store.up
         let run_id = self.run_config.run_id()?;
         let mut motif_ids = Vec::new();
-        let mut groups_by_channel = (0..channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
+        let mut groups_by_channel = (0..self.channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
 
         {
-            let mut temp_stores_by_bucket = temp_stores_by_bucket.lock();
+            let mut temp_stores_by_bucket = self.temp_stores_by_bucket.lock();
             let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/buckets", temp_stores_by_bucket.len() as usize, 1);
             for (bucket, mut temp_store) in temp_stores_by_bucket.drain(..).enumerate() {
                 let group = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
                 for (channel, slices) in temp_store.load_channel_groups(group)? {
                     let channel = usize::try_from(channel).map_err(|_| ThoError::new(format!("BucketingStage::run: channel={channel} does not fit into usize")))?;
                     if channel >= groups_by_channel.len() {
-                        return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={channels}")));
+                        return Err(ThoError::new(format!("BucketingStage::run: temp store channel={channel} exceeds workspace channels={}", self.channels)));
                     }
                     groups_by_channel[channel].entry(group).or_default().extend(slices);
                 }

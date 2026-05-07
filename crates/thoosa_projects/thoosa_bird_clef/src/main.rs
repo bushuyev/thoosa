@@ -102,7 +102,7 @@ fn main() -> Result<(), ThoError>{
                 let all_configs = run_all_grid_config_0(run_all_args);
 
                 //gpt run-all starts here after run_cli has opened the workspace/store and built the RawTensorLoader over saved *.pt tensors.
-                run_all_2(
+                run_all(
                     ws,
                     store,
                     loader,
