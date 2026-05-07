@@ -1044,31 +1044,20 @@ impl DynamicTaskExecutor {
 
                         match feedback {
                             JobFeedback::Oom => {
-                                debug!(
-                                    "DynamicTaskExecutor::try_spawn_ready_jobs: OOM job {job_id}, \
-                                     global_limit={}",
-                                    global_limit.load(Ordering::Relaxed),
-                                );
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: OOM job {job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
+
                                 if global_limit.load(Ordering::Relaxed) > 4 {
                                     global_limit.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             JobFeedback::Success => {
-                                debug!(
-                                    "DynamicTaskExecutor::try_spawn_ready_jobs: success job {job_id}, \
-                                     global_limit={}",
-                                    global_limit.load(Ordering::Relaxed),
-                                );
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job {job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
                                 if global_limit.load(Ordering::Relaxed) < 32 {
                                     global_limit.fetch_add(1, Ordering::SeqCst);
                                 }
                             }
                             JobFeedback::Neutral => {
-                                debug!(
-                                    "DynamicTaskExecutor::try_spawn_ready_jobs: neutral job {job_id}, \
-                                     global_limit={}",
-                                    global_limit.load(Ordering::Relaxed),
-                                );
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job {job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
                             }
                         }
                     });
