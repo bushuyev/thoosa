@@ -6,14 +6,17 @@ use futures_util::{stream, StreamExt};
 use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
+use tch::nn::VarStore;
 use thoosa_shared::{Cause, ThoError};
 use tokio_utils::Pool;
+use torch_sys::at_grad_set_enabled;
 use tub::Guard;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
 use crate::runner::global_ctx::GlobalCtx;
+use crate::tho_device::ThoDevice;
 
 pub struct PinnedHostBuffer {
     ptr: *mut u8,
@@ -272,10 +275,10 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     src_t: &R,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-    dst_device_idx: usize,
+    dst_tho_device_idx: usize,
 ) -> Result<Tensor, ThoError> {
     assert!(src_t.as_ref().device().eq(&Cpu));
-    assert!(dst_device_idx > 0);
+    assert!(dst_tho_device_idx > 0);
 
     let src_ptr = src_t.as_ref().data_ptr() as usize; // CPU mem
     let src_size = src_t.as_ref().size();
@@ -284,7 +287,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
         init_type,
         buf_size,
         bufs_pool,
-        dst_device_idx,
+        dst_tho_device_idx,
         src_ptr,
         &src_size,
     )
@@ -497,6 +500,31 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
 
     unsafe { std::slice::from_raw_parts(pa, nbytes) == std::slice::from_raw_parts(pb, nbytes) }
 }
+
+//TODO for var_store.copy(&self.var_store)?; in copy_to_device
+// pub async fn copy_vs(src: &VarStore, dst: &VarStore) -> Result<(), ThoError> {
+//     let mut variables = dst.variables_.lock().unwrap();
+//     let src_variables = src.variables_.lock().unwrap();
+//
+//     for name in variables.named_variables.keys() {
+//         if !src_variables.named_variables.contains_key(name) {
+//             return Err(ThoError::new(
+//                 name.to_string(),//TODO not found...
+//             ));
+//         }
+//     }
+//     let tho_device_idx = ThoDevice::from(dst.device()).ordinal();
+//     for (name, var) in variables.named_variables.iter_mut() {
+//         let src_var = src_variables.named_variables.get(name).unwrap();
+//
+//         let prev = unsafe{at_grad_set_enabled(i32::from(false))};
+//
+//         GlobalCtx::global().copy_ctx(tho_device_idx).await.copy(src_var, tho_device_idx, src_var.kind()).await?;
+//
+//         unsafe{at_grad_set_enabled(prev)};
+//     }
+//     Ok(())
+// }
 
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
