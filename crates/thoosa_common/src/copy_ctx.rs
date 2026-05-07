@@ -123,11 +123,11 @@ impl CopyCtx {
         }
     }
 
-    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
-        if dst_device == 0 {
+    pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
+        if dst_tho_device == 0 {
             copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool).await
         } else {
-            copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_device).await
+            copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_tho_device).await
         }
     }
     

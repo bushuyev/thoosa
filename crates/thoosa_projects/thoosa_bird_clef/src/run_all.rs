@@ -127,7 +127,7 @@ pub(crate) async fn run_all(
                                     ).await.expect("FindMotifsStage::new failed"),
                                 )
                             },
-                            || label_ctx.branch(Some("find_motifs"), true),
+                            || label_ctx.branch(Some("find_motifs"), false),
                         ).await?;
 
                         info!("run_all: label={label} find_motifs_run_ids={find_motifs_run_ids:?}");
@@ -223,13 +223,13 @@ pub(crate) async fn run_all(
                                     run_all_args.train_motifs_epoch_size,
                                 )))
                             },
-                            || label_ctx.branch(Some("train motif nets"), true),
+                            || label_ctx.branch(Some("train motif nets"), false),
                         ).await?;
 
                         info!("train motif nets done: label={label} train_motif_nets_run_ids={train_motif_net_run_ids:?}");
 
                         // Pre-create context and shared handles for label-net stage construction.
-                        let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), true);
+                        let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
                         let store_in_train_labels = Arc::clone(&store);
                         let ws_in_train_labels = Arc::clone(&ws);
 
@@ -260,7 +260,7 @@ pub(crate) async fn run_all(
                                     run_all_args.motif_slices_step
                                 ).await.map(|v| Arc::new(v))
                             },
-                            || label_ctx.branch(Some("train label nets"), true),
+                            || label_ctx.branch(Some("train label nets"), false),
                         ).await {
                             Ok(train_label_nets_run_ids) => {
                                 info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
@@ -280,7 +280,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                8,
+                4,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
@@ -426,7 +426,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                4,
+                1,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
@@ -625,7 +625,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            // window: RangeOrValue::Range{ range: Range {start: 2000, end: 128201}, step: Some((16000, 0)) },
+            // window: RangeOrValue::Range{ range: Range {start: 1000, end: 16001}, step: Some((15000, 0)) },
             window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
