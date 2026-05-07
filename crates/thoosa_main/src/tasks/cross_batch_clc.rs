@@ -123,7 +123,7 @@ where
 {
     type O<'o> = CrossInput<'o, R>;
 
-    fn with_data_ref<'b, Rt: 'b, F, P>(
+    fn with_data_ref<'b, Rt: Send + 'b, F, P>(
         &'b self,
         _to_device_idx: usize,
         permits_ctx: P,
@@ -147,7 +147,7 @@ impl<'a, R> WithSelectDataRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Debug + Send + Sync + 'static,
 {
-    fn with_selected_data_ref<'b, 'o, Rt: 'b, F, P>(
+    fn with_selected_data_ref<'b, 'o, Rt: Send + 'b, F, P>(
         &'b self,
         _to_device_idx: usize,
         permits_ctx: P,

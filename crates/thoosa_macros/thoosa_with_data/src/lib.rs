@@ -47,16 +47,12 @@ impl Parse for WithDataInput {
 #[proc_macro]
 pub fn with_data(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as WithDataInput);
-    expand_with_data(input, false).into()
+    expand_with_data(input ).into()
 }
 
-#[proc_macro]
-pub fn async_with_data(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as WithDataInput);
-    expand_with_data(input, true).into()
-}
 
-fn expand_with_data(input: WithDataInput, _await_closure: bool) -> proc_macro2::TokenStream {
+
+fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     let ctx_expr = input.ctx;
     let closure = input.closure;
 
@@ -106,11 +102,9 @@ fn expand_with_data(input: WithDataInput, _await_closure: bool) -> proc_macro2::
     let invoke_closure = quote! {
 
         if __device_idx > 0 {
-            let stream = GlobalCtx::global().copy_ctx(__device_idx).await.acquire_stream().await;
-            let _guard = thoosa_shims::stream::ThoStreamGuard::new(&stream)?;
-            let r = (#closure)(__with_data_ctx #(, #arg_refs)*);
-            stream.synchronize()?;
-            r
+            thoosa_common::cuda_utils::with_pooled_cuda_stream(__device_idx, |_| {
+                (#closure)(__with_data_ctx #(, #arg_refs)*)
+            }).await
         } else {
             (#closure)(__with_data_ctx #(, #arg_refs)*)
         }
@@ -120,9 +114,6 @@ fn expand_with_data(input: WithDataInput, _await_closure: bool) -> proc_macro2::
     quote! {
         {
             use thoosa_shared::traits::WithId;
-            use mockall_double::double;
-            #[double]
-            use thoosa_common::runner::global_ctx::GlobalCtx;
 
             let mut __with_data_ctx = #ctx_expr;
             let __device_idx = __with_data_ctx.device_idx();
