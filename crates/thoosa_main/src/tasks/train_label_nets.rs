@@ -736,7 +736,7 @@ where
 mod tests {
     use std::collections::HashMap;
     use tokio::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::Duration;
     use futures_util::StreamExt;
@@ -946,6 +946,12 @@ mod tests {
             .with_list_resource_random_not_labeled([
                 (train_group, Ok(resources_x.clone())),
                 (valid_group, Ok(resources_x.clone())),
+            ])
+            .with_list_trained_nets([
+                (vec![select_motifs_run_id], Some(0.3), Some(3), Ok(vec![
+                    (0, PathBuf::new(), 0.1f32),
+                    (0, PathBuf::new(), 0.2f32),
+                ])),
             ])
             .build());
 
