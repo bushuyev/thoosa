@@ -278,31 +278,32 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    async fn with_data_ref<R, F, P>(&self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_data_ref<'a, R: 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>,
-        P:RunCtx
+        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P:RunCtx + 'a
     {
-        let t_1_batch= self.batch.clone();
-        let stacked_motifs = Arc::clone(&self.stacked_motifs);
-        let motifs_stats = Arc::clone(&self.motifs_stats);
-        // let ctx = DeviceCtx::new(to_device_idx);
-        with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
-            |
-             ctx,
-             batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs:&StackedMotifsOutput,
-             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-            |{
+        async move {
+            let t_1_batch= self.batch.clone();
+            let stacked_motifs = Arc::clone(&self.stacked_motifs);
+            let motifs_stats = Arc::clone(&self.motifs_stats);
+            with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
+                |
+                 ctx,
+                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 stacked_motifs:&StackedMotifsOutput,
+                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
+                |{
 
-                do_run(&ClcResourcesMotifsDistInput::new(
-                    batch_v,
-                    self.resource_ids.clone(),
-                    stacked_motifs,
-                    motifs_stats,
-                ), &ctx)
+                    do_run(&ClcResourcesMotifsDistInput::new(
+                        batch_v,
+                        self.resource_ids.clone(),
+                        stacked_motifs,
+                        motifs_stats,
+                    ), &ctx)
 
-        })
+            })
+        }
     }
 }
 
@@ -328,36 +329,38 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
 
 impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    async fn with_selected_data_ref<'o, R, F, P>(&self, to_device_idx: usize, ctx: P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> Result<R, ThoError>
+    fn with_selected_data_ref<'a, 'o, R: 'a, F, P>(&'a self, _to_device_idx: usize, ctx: P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        P:RunCtx,
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError>
+        P:RunCtx + 'a,
+        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a
     {
+        async move {
 
-        debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
+            debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
 
 
-        let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
-        let t_1_batch= self.batch[range.clone()].to_vec();
-        let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
-        let motifs_stats = Arc::clone(&self.motifs_stats);
+            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
+            let t_1_batch= self.batch[range.clone()].to_vec();
+            let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
+            let motifs_stats = Arc::clone(&self.motifs_stats);
 
-        with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
-            |
-             ctx,
-             batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
-             stacked_motifs_output:&StackedMotifsOutput,
-             motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-            |{
-                let inpt = ClcResourcesMotifsDistInput::new(
-                    &batch_v,
-                    self.resource_ids[range].to_vec(),
-                    stacked_motifs_output,
-                    motifs_stats,
-                );
+            with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
+                |
+                 ctx,
+                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 stacked_motifs_output:&StackedMotifsOutput,
+                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
+                |{
+                    let inpt = ClcResourcesMotifsDistInput::new(
+                        &batch_v,
+                        self.resource_ids[range].to_vec(),
+                        stacked_motifs_output,
+                        motifs_stats,
+                    );
 
-                do_run(&inpt, &ctx)
-        })
+                    do_run(&inpt, &ctx)
+            })
+        }
     }
 }
 
