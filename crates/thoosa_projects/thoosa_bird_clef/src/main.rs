@@ -2,23 +2,34 @@
 #![allow(deprecated)]
 #![allow(unused_imports, unused_variables, unused_mut, noop_method_call)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::sync::Arc;
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::time::Instant;
 use parking_lot::RwLock;
+use tch::IndexOp;
+use thoosa_common::dims::LabelProbability;
+use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
+use thoosa_common::runner::common::cachable::DevicesWrap;
+use thoosa_common::runner::common::runnable::AsyncStage;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
-use thoosa_main::RawTensorLoader;
-use thoosa_shared::ThoError;
+use thoosa_main::{ChannelsData2, RawTensorLoader};
+use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
+use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
+use thoosa_with_data::with_data;
 use crate::run_all::{run_all, run_all_2, run_all_grid_config_0};
 
 mod data;
@@ -139,18 +150,70 @@ fn main() -> Result<(), ThoError>{
 }
 
 
-async fn infer_labels(params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
-    for entry in fs::read_dir(&params.input_dir)? {
+async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
+    GlobalCtx::init_devices(1);
+    let mut ctx = RunCtxImpl::new(0, "root");
+
+    // let mut labels_apply_label_nets = HashMap::new();
+    let label_models = ws.read().label_models()?;
+
+    let mut label_results = HashMap::new();
+    for entry in fs::read_dir(&params.input_dir)?.take(600) {
         let entry = entry?;
         let path = entry.path();
 
-        if path.is_file() && path.ends_with("ogg") {
-            debug!("path={path:?}");
-            let _ogg_t = ogg_to_tensor(path)?;
+
+        let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
+        debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
+
+        if path.is_file() && is_ogg {
+            let ogg_t = ogg_to_tensor(&path)?.unfold(1, 160000, 160000);
+            debug!("path: {path:?} _ogg_t.size={:?}", ogg_t.size());
+
+            for slice in 0..ogg_t.size()[1] {
+                let slice_t = ogg_t.i((..1, slice, ..));
+                debug!("path: {path:?} slice={slice} e={slice_t:?}");
 
 
+                let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, path.to_string_lossy().to_string()).into(), slice_t)?));
+
+
+                for label in &LABELS {
+                    let label_model = label_models.get(*label);
+                    let run_ids = store.list_label_nets_run_ids(label).await?;
+                    debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
+
+                    let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
+                        ws,
+                        store,
+                        run_ids,
+                        ctx.branch(Some(&format!("ctx for load {label}")), false),
+                        100, //params.input_slice_step as u32,
+                    ).await?);
+
+                    debug!("label={label:?} path={path:?} apply_label_nets loaded");
+
+                    // let input = ThoTensor::new(label.into(), _ogg_t)?;
+                    let results = apply_label_nets.run(Arc::clone(&ogg_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await?;
+                    with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
+                        label_results.insert(label.to_string(), results.as_ref().shallow_clone());
+                        Ok(())
+                    })?;
+
+                    debug!("label={label:?} path={path:?} inferred");
+                    // assert!(labels_apply_label_nets.insert(label.to_string(), apply_label_nets).is_none(), "got {label} twice");
+                    info!("path={path:?} {label:?} done");
+                }
+                info!("--------------------------path={path:?} done");
+
+            }
+
+        } else {
+            warn!("path {path:?} is not an ogg");
         }
     }
+
+    info!("label_results={}", label_results.len());
     Ok(())
 }
 
@@ -161,24 +224,34 @@ mod tests {
     use parking_lot::RwLock;
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
-    use thoosa_common::ws::WsMockBuilder;
+    use thoosa_common::ws::{FsWorkspace, WsMockBuilder};
     use thoosa_shared::ThoError;
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, SqlStore};
     use crate::infer_labels;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_0() -> Result<(), ThoError> {
-        let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 1, 100, u32::MAX)
+    async fn test_infer_labels() -> Result<(), ThoError> {
 
-            .build(),
-        ));
+        //TODO
+        // let ws = Arc::new(RwLock::new(
+        //     WsMockBuilder::new(None, 1, 100, u32::MAX)
+        //
+        //     .build(),
+        // ));
+        //
+        // let store = Arc::new(
+        //     MockStoreBuilder::new()
+        //
+        //     .build(),
+        // );
 
-        let store = Arc::new(
-            MockStoreBuilder::new()
-
-            .build(),
-        );
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(
+            "/home/bu/tmp/ws_clef",
+            1,
+            0,//not used
+            32000,
+        )?));
+        let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
         let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 0);
 

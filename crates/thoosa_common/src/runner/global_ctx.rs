@@ -88,7 +88,7 @@ impl GlobalCtx {
 
         Self {
             num_devices,
-            executors: (1..num_devices).map(|tho_device_idx| {
+            executors: (0..num_devices).map(|tho_device_idx| {
                 DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(16).unwrap(), tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             })
             .collect(),
