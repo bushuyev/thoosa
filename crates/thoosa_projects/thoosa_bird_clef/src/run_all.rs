@@ -837,8 +837,8 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 1000, end: 16001}, step: Some((15000, 0)) },
-            // window: RangeOrValue::Value(10000),
+            // window: RangeOrValue::Range{ range: Range {start: 2000, end: 100000}, step: Some((30000, 0)) },
+            window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
             //     AverageFilter(AverageFilterParamsRangeOrValue {
@@ -937,8 +937,9 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // conv_layers: RangeOrValue::Value(1),
             // head_layers: RangeOrValue::Value(1),
             head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            step: RangeOrValue::Value(10),
+            step: RangeOrValue::Value(20),
             channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+            // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
             // kernel: RangeOrValue::Value(10),
             kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
             head_pool: None,

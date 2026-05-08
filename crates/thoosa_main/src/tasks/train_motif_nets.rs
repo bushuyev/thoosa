@@ -305,7 +305,7 @@ where
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
-            let mut ctx = ctx.branch(Some(&format!("train_motif_nets_task_{}", motif_id_rate.0)), true);
+            let mut ctx = ctx.branch(Some(&format!("train_motif_nets_task_{}", motif_id_rate.0)), false);
             let opt_config = Arc::clone(&opt_config);
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
             let store = Arc::clone(&self.store);
