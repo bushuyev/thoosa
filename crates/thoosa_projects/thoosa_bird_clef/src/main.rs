@@ -158,60 +158,53 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
     let label_models = ws.read().label_models()?;
 
     let mut label_results = HashMap::new();
-    for entry in fs::read_dir(&params.input_dir)?.take(600) {
-        let entry = entry?;
-        let path = entry.path();
+    for (label_i, label) in LABELS.iter().enumerate() {
+        let label_model = label_models.get(*label);
+        let run_ids = store.list_label_nets_run_ids(label).await?;
+        debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
+
+        let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
+            ws,
+            store,
+            run_ids,
+            ctx.branch(Some(&format!("ctx for load {label}")), false),
+            100,
+        ).await?);
 
 
-        let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
-        debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
+        for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(600).enumerate() {
+            let entry = entry?;
+            let path = entry.path();
+            debug!("label={label:?} path={path:?} apply_label_nets loaded");
 
-        if path.is_file() && is_ogg {
-            let ogg_t = ogg_to_tensor(&path)?.unfold(1, 160000, 160000).view((12, 160000));
-            debug!("path: {path:?} _ogg_t.size={:?}", ogg_t.size());
+            let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
+            debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
 
-            // for slice in 0..ogg_t.size()[1] {
-            //     let slice_t = ogg_t.i((..1, slice, ..));
-            //     debug!("path: {path:?} slice={slice} e={slice_t:?}");
+            if path.is_file() && is_ogg {
+                let ogg_t = ogg_to_tensor(&path)?.unfold(1, 160000, 160000).view((12, 160000));
+                debug!("path: {path:?} _ogg_t.size={:?}", ogg_t.size());
 
 
                 let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, path.to_string_lossy().to_string()).into(), ogg_t)?));
 
 
-                for label in &LABELS {
-                    let label_model = label_models.get(*label);
-                    let run_ids = store.list_label_nets_run_ids(label).await?;
-                    debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
+                // let input = ThoTensor::new(label.into(), _ogg_t)?;
+                let results = Arc::clone(&apply_label_nets).run(Arc::clone(&ogg_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await?;
+                with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
+                    label_results.insert(label.to_string(), results.as_ref().shallow_clone());
+                    Ok(())
+                })?;
 
-                    let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
-                        ws,
-                        store,
-                        run_ids,
-                        ctx.branch(Some(&format!("ctx for load {label}")), false),
-                        100,
-                        None,
-                    ).await?);
+                debug!("label={label:?} path={path:?} inferred");
+                // assert!(labels_apply_label_nets.insert(label.to_string(), apply_label_nets).is_none(), "got {label} twice");
 
-                    debug!("label={label:?} path={path:?} apply_label_nets loaded");
-
-                    // let input = ThoTensor::new(label.into(), _ogg_t)?;
-                    let results = apply_label_nets.run(Arc::clone(&ogg_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await?;
-                    with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
-                        label_results.insert(label.to_string(), results.as_ref().shallow_clone());
-                        Ok(())
-                    })?;
-
-                    debug!("label={label:?} path={path:?} inferred");
-                    // assert!(labels_apply_label_nets.insert(label.to_string(), apply_label_nets).is_none(), "got {label} twice");
-                    info!("path={path:?} {label:?} done");
-                }
-                info!("--------------------------path={path:?} done");
-
-            // }
-
-        } else {
-            warn!("path {path:?} is not an ogg");
+                debug!("path={path:?} done");
+            } else {
+                warn!("path {path:?} is not an ogg");
+            }
+            info!("label {label:?}: {path:?}({entry_i}) done");
         }
+        info!("label {label:?} ({label_i}) done");
     }
 
     info!("label_results={}", label_results.len());
@@ -254,7 +247,8 @@ mod tests {
         )?));
         let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
-        let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 0);
+        // let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 0);
+        let params = InferArgs::new(0, "/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes".to_string(), "".to_string(), 0);
 
         infer_labels(&params, &ws, &store).await?;
 
