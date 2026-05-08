@@ -408,8 +408,7 @@ where
                                        let label = label.clone();
                                        async move {
                                            let (x, lengths, y) = with_data!(
-                                               ctx.branch(Some("train_label_nets_batch_data"), false),
-                                               [x_1_wrapped], [x_0_wrapped];
+                                               ctx.branch(Some("train_label_nets_batch_data"), false),[x_1_wrapped], [x_0_wrapped];
                                                |_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
 
                                                if x_1.is_empty() || x_1.is_empty(){

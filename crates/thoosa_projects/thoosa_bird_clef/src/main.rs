@@ -4,13 +4,16 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
 use log::{debug, error, info, warn};
 use std::time::Instant;
+use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
 use tch::IndexOp;
+use tokio::task::JoinHandle;
 use thoosa_common::dims::LabelProbability;
 use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
 use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -19,12 +22,12 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::InferArgs;
-use thoosa_common::utils::kick_register_cuda_hooks;
+use thoosa_common::utils::{kick_register_cuda_hooks, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::{ChannelsData2, RawTensorLoader};
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
@@ -154,44 +157,76 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
     GlobalCtx::init_devices(1);
     let mut ctx = RunCtxImpl::new(0, "root");
 
+
+    let mut oggs = Vec::with_capacity(600);
+    for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(600).enumerate() {
+        let entry = entry?;
+        let path = entry.path();
+        let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
+        debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
+
+        if path.is_file() && is_ogg {
+            let ogg_t = ogg_to_tensor(&path)?; //.unfold(1, 160000, 160000); //.view((12, 160000));
+
+            debug!("path: {path:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());
+
+            oggs.push((path, ogg_t));
+        } else {
+            warn!("path {path:?} is not an ogg");
+        }
+    }
+
+    debug!("loaded {} ", oggs.len());
+    let label_models = Arc::new(ws.read().label_models()?);
+
+    let ctx_0 = ctx.branch("".into(), false);
+    let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0])));
+
     // let mut labels_apply_label_nets = HashMap::new();
-    let label_models = ws.read().label_models()?;
-
-    let mut label_results = HashMap::new();
-    for (label_i, label) in LABELS.iter().enumerate() {
-        let label_model = label_models.get(*label);
-        let run_ids = store.list_label_nets_run_ids(label).await?;
-        debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
-
-        let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
-            ws,
-            store,
-            run_ids,
-            ctx.branch(Some(&format!("ctx for load {label}")), false),
-            100,
-        ).await?);
 
 
-        for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(600).enumerate() {
-            let entry = entry?;
-            let path = entry.path();
-            debug!("label={label:?} path={path:?} apply_label_nets loaded");
+    let mut label_results = Arc::new(RwLock::new(HashMap::new()));
+    for (label_i, label) in LABELS.iter().enumerate().skip(1)/*.take(20) */{
 
-            let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
-            debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
+        let apply_label_nets = next
+            .take()
+            .expect("prefetch task missing")
+            .await??;
 
-            if path.is_file() && is_ogg {
-                let ogg_t = ogg_to_tensor(&path)?.unfold(1, 160000, 160000).view((12, 160000));
-                debug!("path: {path:?} _ogg_t.size={:?}", ogg_t.size());
+            // Start loading the next item immediately.
+            // This runs while `stuff` is being used below.
+            if label_i + 1 < 600 {
+                let ctx_0 = ctx.branch("".into(), false);
+                next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &label)));
+            }
 
 
-                let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, path.to_string_lossy().to_string()).into(), ogg_t)?));
+        let futures = futures::stream::iter(oggs.iter().enumerate().map(|(entry_i, (path, ogg_t)) | {
+            let label_results = Arc::clone(&label_results);
+            let apply_label_nets = Arc::clone(&apply_label_nets);
+            let mut ctx = ctx.branch(Some("async"), false);
+            async move {
+
+                debug!("label={label:?} path={path:?} apply_label_nets loaded");
+
+                let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(entry_i, path.to_string_lossy().to_string()).into(), ogg_t.shallow_clone())?));//
 
 
                 // let input = ThoTensor::new(label.into(), _ogg_t)?;
                 let results = Arc::clone(&apply_label_nets).run(Arc::clone(&ogg_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await?;
                 with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
-                    label_results.insert(label.to_string(), results.as_ref().shallow_clone());
+
+                    let probs = to_vec_f32(results.as_ref());
+                    info!("{label_i}/{entry_i} label={label:?} path={path:?} probs={probs:?}");// slice={slice}
+                    // label_results.write().enry(label.to_string(), results.as_ref().shallow_clone());
+
+                    label_results.write()
+                        .entry(label.to_string())
+                        .or_insert(HashMap::new())
+                        .insert(path.to_string_lossy().to_string(), probs);
+                        // .or_insert(vec![])
+                        // .push(results.as_ref().f_double_value(&[]).unwrap_or(0.0));
+
                     Ok(())
                 })?;
 
@@ -199,31 +234,60 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
                 // assert!(labels_apply_label_nets.insert(label.to_string(), apply_label_nets).is_none(), "got {label} twice");
 
                 debug!("path={path:?} done");
-            } else {
-                warn!("path {path:?} is not an ogg");
+
+
+                Ok::<_, ThoError>(())
             }
-            info!("label {label:?}: {path:?}({entry_i}) done");
-        }
+        })) .buffer_unordered(3) // at most 3 spawned tasks are awaited/in-flight
+            .map(|join_result| {
+                // join_result: Result<anyhow::Result<String>, JoinError>
+                match join_result {
+                    Ok(inner_result) => Ok(inner_result),
+                    Err(join_err) => Err(ThoError::from(join_err)),
+                }
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+
         info!("label {label:?} ({label_i}) done");
     }
 
-    info!("label_results={}", label_results.len());
+
+
+    info!("label_results={}", label_results.read().len());
     Ok(())
+}
+
+async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
+    let label_model = label_models.get(&label.to_string());
+    let run_ids = store.list_label_nets_run_ids(label).await?;
+    debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
+
+    let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
+        &ws,
+        &store,
+        run_ids,
+        ctx,
+        1000,
+    ).await?);
+    Ok(apply_label_nets)
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
+    use log::info;
     use parking_lot::RwLock;
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
     use thoosa_common::ws::{FsWorkspace, WsMockBuilder};
+    use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::ThoError;
     use thoosa_store::{MockStoreBuilder, SqlStore};
     use crate::infer_labels;
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_infer_labels() -> Result<(), ThoError> {
 
         //TODO
@@ -251,6 +315,9 @@ mod tests {
         let params = InferArgs::new(0, "/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes".to_string(), "".to_string(), 0);
 
         infer_labels(&params, &ws, &store).await?;
+
+
+        info!("\n{}", format_perf_map(&PERF));
 
         Ok(())
     }

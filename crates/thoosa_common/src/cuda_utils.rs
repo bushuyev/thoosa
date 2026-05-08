@@ -530,6 +530,112 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
 //     Ok(())
 // }
 
+
+
+/// Input:
+///   scores:       [M, Slices] padded tensor
+///   real_lengths: real valid slice length for each motif detector, len == M
+///   n_chunks:     N
+///
+/// Output:
+///   chunks:       Vec of N tensors, each [M, ceil(Slices / N)]
+///   chunk_lengths: [N][M] real lengths inside every produced chunk
+///
+/// Each row m in every output chunk is compacted to the left and padded
+/// with `pad_value`.
+pub fn split_padded_motif_scores(
+    scores: &Tensor,
+    real_lengths: &[i64],
+    n_chunks: i64,
+    pad_value: f64,
+) -> Result<(Vec<Tensor>, Vec<Vec<i64>>), ThoError> {
+    let size = scores.size();
+
+    if size.len() != 2 {
+        return Err(ThoError::new(format!(
+            "expected scores shape [M, Slices], got {size:?}"
+        )));
+    }
+
+    if n_chunks <= 0 {
+        return Err(ThoError::new(format!(
+            "n_chunks must be > 0, got {n_chunks}"
+        )));
+    }
+
+    let m_count = size[0];
+    let padded_slices = size[1];
+
+    if real_lengths.len() != m_count as usize {
+        return Err(ThoError::new(format!(
+            "real_lengths.len() must be M={m_count}, got {}",
+            real_lengths.len()
+        )));
+    }
+
+    for (m, &len) in real_lengths.iter().enumerate() {
+        if len < 0 || len > padded_slices {
+            return Err(ThoError::new(format!(
+                "bad real length for motif {m}: {len}, padded_slices={padded_slices}"
+            )));
+        }
+    }
+
+    let out_width = ceil_div(padded_slices, n_chunks);
+
+    let mut chunks: Vec<Tensor> = (0..n_chunks)
+        .map(|_| {
+            Tensor::full(
+                &[m_count, out_width],
+                pad_value,
+                (scores.kind(), scores.device()),
+            )
+        })
+        .collect();
+
+    let mut chunk_lengths =
+        vec![vec![0_i64; m_count as usize]; n_chunks as usize];
+
+    for m in 0..m_count {
+        let real_len = real_lengths[m as usize];
+
+        for chunk_idx in 0..n_chunks {
+            let start = real_len * chunk_idx / n_chunks;
+            let end = real_len * (chunk_idx + 1) / n_chunks;
+            let len = end - start;
+
+            chunk_lengths[chunk_idx as usize][m as usize] = len;
+
+            if len == 0 {
+                continue;
+            }
+
+            // src shape: [1, len]
+            let src = scores
+                .f_narrow(0, m, 1)?
+                .f_narrow(1, start, len)?;
+
+            // dst shape: [1, len], points into the output chunk.
+            let mut dst = chunks[chunk_idx as usize]
+                .f_narrow(0, m, 1)?
+                .f_narrow(1, 0, len)?;
+
+            dst.f_copy_(&src)?;
+        }
+    }
+
+    Ok((chunks, chunk_lengths))
+}
+
+fn ceil_div(a: i64, b: i64) -> i64 {
+    if a == 0 {
+        0
+    } else {
+        (a + b - 1) / b
+    }
+}
+
+
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
