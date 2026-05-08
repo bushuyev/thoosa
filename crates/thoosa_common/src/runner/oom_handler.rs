@@ -287,6 +287,17 @@ where
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
+        if run_context.device_idx() == 0 {
+            return input
+                .with_data_ref(
+                    0,
+                    run_context,
+                    None,
+                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                )
+                .await;
+        }
+
         run_with_runner(
             &self.adjusters,
             Arc::clone(task),
