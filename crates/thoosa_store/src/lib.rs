@@ -190,6 +190,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         &self,
         file_stem: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError>;
+    async fn list_label_nets_run_ids(
+        &self,
+        label: &str,
+    ) -> Result<Vec<RunId>, ThoError>;
     async fn resources_by_label(
         &self,
         min_p: f32,
@@ -359,6 +363,11 @@ mock! {
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoError>;
+        async fn list_label_nets_run_ids(
+            &self,
+            label: &str,
+        ) -> Result<Vec<RunId>, ThoError>;
+
         async fn resources_by_label(
             &self,
             min_p: f32,
@@ -1146,6 +1155,24 @@ impl Store for SqlStore {
             Ok(r)
         })
         .await
+    }
+
+    async fn list_label_nets_run_ids(
+        &self,
+        label: &str,
+    ) -> Result<Vec<RunId>, ThoError> {
+        let label = label.to_string();
+
+        self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
+            let r = conn.prepare(
+                "select tn.run_id from trained_nets tn left join run_configs rc on tn.run_id=rc.id where rc.type='TrainLabelNetsRunConfig' and net_path like ? order by run_on desc limit 1"//TODO takes last one
+            )?.query_map([Value::Text(format!("{label}%"))], |row| {
+                Ok(row.get::<usize, u32>(0)?)
+            })?.map(|v| v.unwrap()).collect();
+
+            Ok(r)
+        })
+            .await
     }
 
     async fn list_resources_by_ids(
