@@ -6,6 +6,7 @@ edition.workspace = true
 
 [dependencies]
 thoosa_common = {path = "../../thoosa_common" }
+thoosa_with_data = {path = "../../thoosa_macros/thoosa_with_data" }
 thoosa_motifs = {path = "../../thoosa_motifs" }
 thoosa_store = {path = "../../thoosa_store" }
 thoosa_shared = {path = "../../thoosa_shared" }

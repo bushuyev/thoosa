@@ -7,7 +7,7 @@ use thoosa_named_derive::Named;
 use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
-
+use tch::Kind::Float;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims};
 use thoosa_common::my_tch::ThoModule;
@@ -179,23 +179,27 @@ where
         .collect::<Result<Vec<_>, ThoError>>()?;
 
         debug!("ApplyLabelNets::run: label_outputs={label_outputs:?}");
-
+        //TODO consuming SyncStage for gpu
         let out_id = self.out_id(&input_id);
-        let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
-            let stacked = Tensor::f_stack(
-                outs.iter()
-                    .map(|o| o.t_ref().shallow_clone())
-                    .collect::<Vec<_>>()
-                    .as_slice(),
-                0,
-            )?;
-            ThoTensor::new(out_id, stacked)
-        })?;
+        if label_outputs.is_empty() {
+            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.device_idx()).into())) )?)))
+        } else {
+            let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
+                let stacked = Tensor::f_stack(
+                    outs.iter()
+                        .map(|o| o.t_ref().shallow_clone())
+                        .collect::<Vec<_>>()
+                        .as_slice(),
+                    0,
+                )?;
+                ThoTensor::new(out_id, stacked)
+            })?;
 
-        #[cfg(debug_assertions)]
-        debug!("ApplyLabelNets::run: done, input={input_debug:?}");
+            #[cfg(debug_assertions)]
+            debug!("ApplyLabelNets::run: done, input={input_debug:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(tensor)))
+            Ok(Arc::new(DevicesWrap::wrap(tensor)))
+        }
     }
 }
 
