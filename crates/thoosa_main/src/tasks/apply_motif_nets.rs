@@ -1066,6 +1066,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = input.motif_net.extra().motif_id();
 
+        debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t={:?}", self.id, input.batch.t);
         trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t);
 
         #[cfg(test)]
@@ -1087,7 +1088,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
 pub fn apply_motif_net_forward(
     out_id: SynKey,
-    batch: &ThoTensor<ChannelsData2, SynKey>,
+    input: &ThoTensor<ChannelsData2, SynKey>,
     motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
     slice_step: u32,
     input_id: &SynKey,
@@ -1096,9 +1097,9 @@ pub fn apply_motif_net_forward(
     let c = motif_net.extra().channel() as i64;
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
 
-    debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", batch.t.size());
-    trace!("ApplyMotifNet::do_run: batch.t=\n{}", batch.t);
-    let t = batch.t.f_i((c, ..))?;
+    debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.t.size());
+    trace!("ApplyMotifNet::do_run: batch.t=\n{}", input.t);
+    let t = input.t.f_i((c, ..))?;
     let t = if t.size()[0] >= motif_width {
         t
     } else {

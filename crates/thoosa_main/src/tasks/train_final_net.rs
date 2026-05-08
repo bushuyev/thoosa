@@ -75,7 +75,7 @@ where
     R: RunCtx + Adjustable + 'static,
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx, slices_step).await?);
+    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx, slices_step, 0).await?);
 
     let label_loader = Arc::new(ABStage::new(
         SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_ids:?}"), "train_label_nets_run_ids")]),
@@ -481,7 +481,7 @@ mod tests {
                     (net_id_0.clone(), motif_0_params, motif_0_net),
                     (net_id_1.clone(), motif_1_params, motif_1_net),
                 ])
-                .with_label_nets(HashMap::from([
+                .with_load_label_nets(HashMap::from([
                     ("A".to_string(), vec![(100, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
                     ("B".to_string(), vec![(200, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
                 ]))

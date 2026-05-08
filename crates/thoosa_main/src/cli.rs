@@ -50,7 +50,7 @@ use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, S
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetsRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigFields, TrainMotifsNetsRunConfigRangeOrValue};
-use thoosa_common::utils::{from, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
+use thoosa_common::utils::{from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
@@ -366,12 +366,27 @@ where
 
     let cli = Cli::parse();
 
-    let ws = Arc::new(RwLock::new(FsWorkspace::new(
-        cli.ws_path.clone(),
-        channels,
-        max_input,
-        sample_rate,
-    )?));
+
+    let ws = match &cli.command {
+        Some(Infer(InferArgs{ models_dir: Some(models_dir), .. })) => {
+            info!("FsWorkspace: models_dir={models_dir:?}");
+            Arc::new(RwLock::new(FsWorkspace::new_with_models_dir(
+                cli.ws_path.clone(),
+                channels,
+                max_input,
+                sample_rate,
+                models_dir
+            )?))
+        }
+        _=> {
+            Arc::new(RwLock::new(FsWorkspace::new(
+                cli.ws_path.clone(),
+                channels,
+                max_input,
+                sample_rate,
+            )?))
+        }
+    };
 
     let cdt_for_dir = cdt_for_dir();
     let log_filename = ws.read()
@@ -415,6 +430,17 @@ where
         }
     };
 
+    /*
+    let store = match &cli.command {
+        Some(Infer(InferArgs{ sql_store_file: Some(sql_store_file), .. })) => {
+            info!("reqd-only SqlStore: sql_store_file={sql_store_file:?}");
+            Arc::new(SqlStore::from_path_readonly(sql_store_file).await?)
+        }
+        _=> {
+            Arc::new(SqlStore::from_path(ws.read().store_path()).await?)
+        }
+    };
+     */
     let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
     let devices = list_devices();
@@ -434,7 +460,12 @@ where
     let tensors_path_for_loader = tensors_path.clone();
 
     // Creates CPU plus GPU device wrappers for the async runner. Big tensors crossing awaits should remain in run_cached/TmpCached so OOM handling can dump them to CPU.
-    GlobalCtx::init_devices(2);
+    if tch::Cuda::is_available() {
+        kick_register_cuda_hooks();
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+    } else {
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(1);
+    }
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
     let metrics = Handle::current().metrics();
@@ -795,6 +826,9 @@ where
         }
 
         Some(Infer(infer_params)) => {
+            if let Some(infer) = infer {
+                infer(infer_params, &ws, &store).await?;
+            }
             // block_on(run_infer(
             //     &ws,
             //     &store,
@@ -842,7 +876,7 @@ where
             // }
             //
             // info!("tensors: {} max={:?} avg={}",lengths.len(),lengths.iter().max(),lengths.iter().sum::<i64>() / lengths.len() as i64);
-            perf_unfold_concat_cuda_vs_cpu().await?;
+            // perf_unfold_concat_cuda_vs_cpu().await?;
 
             info!("Hello");
         }

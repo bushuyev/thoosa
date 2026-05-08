@@ -28,3 +28,7 @@ cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-
 cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/  run-all --find-resources="G500000" --select-resources="group:all group" --train-resource-group="G500000_train" --valid-resource-group="G500000_valid" --motif-slices-step=1000 --max-motif-net-loss=0.3 --max-chunk-size=20000 --labels=rubthr,crbthr1
 
 cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/ plot-data --data-by=run_id:59791 --labels=crbthr1
+
+cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/ --input-dir=
+
+

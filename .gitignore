@@ -11,3 +11,4 @@
 **.venv
 **/build/
 **/cmake-build-*
+crates/thoosa_main/src/version.rs

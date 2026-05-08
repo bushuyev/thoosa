@@ -2173,17 +2173,23 @@ impl TrainFinalNetRunConfig {
 
 #[derive(Debug, Args, Clone)]
 pub struct InferArgs {
-    #[arg(long)]
+    #[arg(long, default_value_t = 0)]
     pub final_run_id: RunId,
 
     #[arg(long, default_value_t = 1000)]
-    pub input_slice_step: usize,
+    pub motif_slices_step: usize,
 
     #[arg(long)]
     pub input_dir: String,
 
     #[arg(long, default_value = "submission.csv")]
     pub output_dir: String,
+
+    #[arg(long)]
+    pub limit:Option<usize>,
+
+    #[arg(long)]
+    pub models_dir: Option<String>,
 }
 
 impl InferArgs {
@@ -2202,9 +2208,11 @@ impl InferArgs {
     ) -> Self {
         Self {
             final_run_id,
-            input_slice_step,
+            motif_slices_step: input_slice_step,
             input_dir: input_data,
             output_dir: output,
+            limit: None,
+            models_dir: None,
         }
     }
 }
