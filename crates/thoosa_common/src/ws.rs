@@ -860,6 +860,7 @@ impl WsMockBuilder {
         }
     }
 
+    #[deprecated]//use with_load_motif_net
     pub fn with_load_motif_nets(
         mut self,
         channels_motif_nets: Vec<

@@ -167,15 +167,15 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
         debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
 
         if path.is_file() && is_ogg {
-            let ogg_t = ogg_to_tensor(&path)?.unfold(1, 160000, 160000);
+            let ogg_t = ogg_to_tensor(&path)?.unfold(1, 160000, 160000).view((12, 160000));
             debug!("path: {path:?} _ogg_t.size={:?}", ogg_t.size());
 
-            for slice in 0..ogg_t.size()[1] {
-                let slice_t = ogg_t.i((..1, slice, ..));
-                debug!("path: {path:?} slice={slice} e={slice_t:?}");
+            // for slice in 0..ogg_t.size()[1] {
+            //     let slice_t = ogg_t.i((..1, slice, ..));
+            //     debug!("path: {path:?} slice={slice} e={slice_t:?}");
 
 
-                let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, path.to_string_lossy().to_string()).into(), slice_t)?));
+                let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, path.to_string_lossy().to_string()).into(), ogg_t)?));
 
 
                 for label in &LABELS {
@@ -188,7 +188,8 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
                         store,
                         run_ids,
                         ctx.branch(Some(&format!("ctx for load {label}")), false),
-                        100, //params.input_slice_step as u32,
+                        100,
+                        None,
                     ).await?);
 
                     debug!("label={label:?} path={path:?} apply_label_nets loaded");
@@ -206,7 +207,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
                 }
                 info!("--------------------------path={path:?} done");
 
-            }
+            // }
 
         } else {
             warn!("path {path:?} is not an ogg");

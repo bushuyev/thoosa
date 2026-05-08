@@ -806,6 +806,7 @@ mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let input_n_0 = 1000;
         let find_motifs_run_id:RunId = 1;
@@ -824,6 +825,7 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
+                //TODO use //use with_load_motif_net
                 .with_load_motif_nets(vec![
                     vec![
                         //channel 0

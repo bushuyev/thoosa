@@ -49,6 +49,7 @@ where
     id: SynKey,
     apply_nets: Vec<ApplyNets<C>>,
     pd: PhantomData<C>,
+    label_step: Option<u32>
 }
 
 impl<C> ApplyLabelNets<C>
@@ -60,7 +61,8 @@ where
         store: &Arc<Box<dyn Store>>,
         train_label_nets_run_ids: Vec<RunId>,
         mut stage_ctx: R,
-        slices_step: u32,
+        motif_slices_step: u32,
+        label_step: Option<u32>,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
@@ -95,7 +97,7 @@ where
                         ws,
                         store,
                         stage_ctx.branch("from_trained_nets".into(), false),
-                        slices_step,
+                        motif_slices_step,
                         None,
                         motif_nets,
                     )
@@ -109,6 +111,7 @@ where
         Ok(Self {
             id: mono_key!(0, "todo").into(),
             apply_nets,
+            label_step,
             pd: PhantomData,
         })
     }
@@ -144,7 +147,7 @@ where
         let input_debug = input.clone();
 
         debug!("ApplyLabelNets::run: label_nets={:?}", self.apply_nets);
-
+        let label_step = self.label_step.as_ref();
         let futures = self.apply_nets
             .iter()
             .map(|apply_net| {
@@ -160,10 +163,19 @@ where
                     let motif_probs = Arc::clone(&motif_probs);
                     let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_nets.label, apply_net.apply_label_nets.train_label_net_run_id)), false);
 
+                    match label_step {
+                        None => {
+                            //gpt Each label net runs independently; ordering is preserved by buffer mode below.
+                            let result = Arc::clone(&apply_net.apply_label_nets).run(motif_probs, apply_label_net_ctx).await?;
+                            Ok::<_, ThoError>(result)
+                        }
+                        Some(step) => {
+                            //gpt Each label net runs independently; ordering is preserved by buffer mode below.
+                            let result = Arc::clone(&apply_net.apply_label_nets).run(motif_probs, apply_label_net_ctx).await?;
+                            Ok::<_, ThoError>(result)
+                        }
+                    }
 
-                    //gpt Each label net runs independently; ordering is preserved by buffer mode below.
-                    let result = Arc::clone(&apply_net.apply_label_nets).run(motif_probs, apply_label_net_ctx).await;
-                    Ok::<_, ThoError>(result)
                 }
             });
 
@@ -176,7 +188,7 @@ where
         )
         .await
         .into_iter()
-        .collect::<Result<Vec<_>, ThoError>>()?;
+        .collect::<Vec<_>>();
 
         debug!("ApplyLabelNets::run: label_outputs={label_outputs:?}");
         //TODO consuming SyncStage for gpu
@@ -187,7 +199,10 @@ where
             let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
                 let stacked = Tensor::f_stack(
                     outs.iter()
-                        .map(|o| o.t_ref().shallow_clone())
+                        .map(|o| {
+                            debug!("o.size={:?}", o.t_ref().size());
+                            o.t_ref().shallow_clone()
+                        })
                         .collect::<Vec<_>>()
                         .as_slice(),
                     0,
@@ -572,7 +587,6 @@ mod tests {
         step: u32,
         channels: u32,
     ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
-        set_max_level(Warn);
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         let find_motifs_run_id = 30;
@@ -662,6 +676,7 @@ mod tests {
             labels.iter().map(|label| label.train_run_id).collect(),
             mock_run_ctx::default(0),
             step,
+            None,
         ).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 
