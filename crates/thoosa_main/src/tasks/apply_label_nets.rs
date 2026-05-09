@@ -287,11 +287,12 @@ where
 
                 // let batch_input = input.data().t_ref().f_unsqueeze(0)?;//TODO
                 let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), 12, 0.0)?;
-                let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 0)?;
+                debug!("ApplyLabelNet::run: batch_input_={batch_input_:?}");
+                let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 1)?.f_transpose(0,1)?;
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?} batch_input_.1={:?}", batch_input_.1);
 
                 let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
-                let mut lengths = BatchLengths::new(batch_input_.1[0].clone());//TODO take legths
+                let mut lengths = BatchLengths::new(batch_input_.1.iter().map(|v|v[0]).collect());//TODO take lengths
 
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?}");
                 trace!("ApplyLabelNet::run: batch_input=\n{batch_input}");

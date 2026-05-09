@@ -13,6 +13,7 @@ use std::time::Instant;
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
 use tch::IndexOp;
+use tch::Kind::Float;
 use tokio::task::JoinHandle;
 use thoosa_common::dims::LabelProbability;
 use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
@@ -167,6 +168,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
 
         if path.is_file() && is_ogg {
             let ogg_t = ogg_to_tensor(&path)?; //.unfold(1, 160000, 160000); //.view((12, 160000));
+            //let ogg_t = GlobalCtx::global().copy_ctx(1).await.copy(&ogg_to_tensor(&path)?, 1, Float).await?; //.unfold(1, 160000, 160000); //.view((12, 160000));
 
             debug!("path: {path:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());
 
@@ -176,7 +178,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
         }
     }
 
-    debug!("loaded {} ", oggs.len());
+    info!("loaded {} ", oggs.len());
     let label_models = Arc::new(ws.read().label_models()?);
 
     let ctx_0 = ctx.branch("".into(), false);
@@ -186,7 +188,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
 
 
     let mut label_results = Arc::new(RwLock::new(HashMap::new()));
-    for (label_i, label) in LABELS.iter().enumerate().skip(1)/*.take(20) */{
+    for (label_i, label) in LABELS.iter().enumerate().skip(1)/*.take(20)*/ {
 
         let apply_label_nets = next
             .take()
@@ -238,7 +240,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
 
                 Ok::<_, ThoError>(())
             }
-        })) .buffer_unordered(3) // at most 3 spawned tasks are awaited/in-flight
+        })) .buffer_unordered(32) // at most 3 spawned tasks are awaited/in-flight
             .map(|join_result| {
                 // join_result: Result<anyhow::Result<String>, JoinError>
                 match join_result {

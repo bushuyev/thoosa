@@ -912,7 +912,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(20),
-            batch_size: RangeOrValue::Value(2),
+            batch_size: RangeOrValue::Value(50),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(3),
@@ -932,26 +932,26 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     kernel: RangeOrValue::Value(1000),
         // }),
 
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            // conv_layers: RangeOrValue::Value(1),
-            // head_layers: RangeOrValue::Value(1),
-            head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            step: RangeOrValue::Value(20),
-            channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-            // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-            // kernel: RangeOrValue::Value(10),
-            kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
-            head_pool: None,
-        })
-
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-        //     // step: RangeOrValue::Value(1),
-        //     // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-        //     a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
-        //     b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     // conv_layers: RangeOrValue::Value(1),
+        //     // head_layers: RangeOrValue::Value(1),
+        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     step: RangeOrValue::Value(20),
+        //     channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+        //     // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+        //     // kernel: RangeOrValue::Value(10),
+        //     kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
+        //     head_pool: None,
         // })
+
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+            // step: RangeOrValue::Value(1),
+            // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
+            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+        })
 
 
 
@@ -986,20 +986,20 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         // }),
-        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-        //     // d_model: RangeOrValue::Value(64),
-        //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-        //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-        //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-        //     ff_mult: RangeOrValue::Value(2),
-        //     // dropout: RangeOrValue::Value(0.1),
-        //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
-        // })
-        net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
-            // num_layers: RangeOrValue::Value(4),
-            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
-            features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+            // d_model: RangeOrValue::Value(64),
+            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            ff_mult: RangeOrValue::Value(2),
+            // dropout: RangeOrValue::Value(0.1),
+            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
         })
+        // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
+        //     // num_layers: RangeOrValue::Value(4),
+        //     num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
+        //     features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+        // })
 
     };
     //////////////////////train final

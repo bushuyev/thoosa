@@ -297,7 +297,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn save_trained_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
 
     async fn list_trained_nets(&self, run_ids: Vec<RunId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
-    async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
+    async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError>;
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
     #[cfg(test)]
@@ -503,7 +503,7 @@ mock! {
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
-        async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
+        async fn list_input_nets(&self, net_id: RunId) -> Result<Vec<u32>, ThoError>;
         async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
         #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
@@ -2206,7 +2206,7 @@ impl Store for SqlStore {
             })?;
 
 
-            Self::insert_input(input_net_ids, &t, net_id, "INSERT INTO trained_nets_input (id, input_id) VALUES")?;
+            Self::insert_input(input_net_ids, &t, net_id, "INSERT INTO trained_nets_input (net_id, input_id) VALUES")?;
 
 
             t.commit()?;
@@ -2261,11 +2261,11 @@ impl Store for SqlStore {
     }
 
     //TODO test
-    async fn list_input_nets(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
+    async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError> {
         self.with_reader_conn("list_input_nets", move |conn| {
-            let mut stmt = conn.prepare("SELECT sn.run_id, sn.net_path, sn.loss FROM trained_nets_input sni LEFT JOIN trained_nets sn ON sn.id = sni.input_id WHERE sni.id=?")?;
+            let mut stmt = conn.prepare("SELECT tn.run_id, tn.net_path, tn.loss FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
 
-            stmt.query_map(params![run_id], |row| {
+            stmt.query_map(params![net_id], |row| {
                 row.get::<usize, u32>(0)
             })?
                 .map(|v| v.map_err(|e|e.into()))
@@ -3061,9 +3061,9 @@ impl SqlStore {
             t.execute(
             "CREATE TABLE IF NOT EXISTS trained_nets_input (
                 input_id  NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
-                id NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
+                net_id NOT NULL REFERENCES trained_nets(id) ON DELETE CASCADE,
 
-                PRIMARY KEY (input_id, id)
+                PRIMARY KEY (input_id, net_id)
             )",
             (),
         )?;
