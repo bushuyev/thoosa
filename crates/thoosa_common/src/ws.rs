@@ -484,52 +484,62 @@ impl Workspace for FsWorkspace {
     > {
         let label_models_paths = self.label_models()?;
 
-        let train_label_nodes_run_ids_set = train_label_nets_run_ids.map(|v| v.into_iter().collect::<HashSet<_>>());
+        let train_label_nodes_run_ids_set = train_label_nets_run_ids
+            .map(|v| v.iter().cloned().collect::<HashSet<_>>());
 
-        debug!("load_all_label_models_ws: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nets_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_set:?}");
+        debug!("load_label_nets: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nets_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_set:?}");
 
         label_models_paths
             .into_iter()
-            .try_fold(HashMap::new(), |mut a, (label, paths)| {
+            .try_fold(HashMap::new(), |mut acc, (label, paths)| {
+                let models = paths.into_iter().try_fold(
+                    Vec::new(),
+                    |mut models, (model_path, params_path)| -> Result<_, ThoError> {
+                        let run_id = FsWorkspace::net_path_to_run_id(&model_path);
 
-                let models: Vec<(RunId, LabelNetParams, ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>)> = paths
-                    .into_iter()
-                    .filter_map(|(model_path, params_path)|
-                {
-                    let run_id = FsWorkspace::net_path_to_run_id(&model_path);
-                    if train_label_nodes_run_ids_set.as_ref().map(|set| !set.contains(&run_id)).unwrap_or(true) {
-                        debug!("load_all_label_models_ws: skipping run_id={run_id}");
-                        return None;
-                    }
 
-                    let label_node_params = LabelNetParams::from_file(&params_path).expect(format!("no {params_path:?}").as_str());
+                        if train_label_nodes_run_ids_set
+                            .as_ref()
+                            .is_some_and(|set| !set.contains(&run_id))
+                        {
+                            debug!("load_label_nets: skipping run_id={run_id}");
+                            return Ok(models);
+                        }
 
-                    debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
+                        let label_node_params = LabelNetParams::from_file(&params_path)
+                            .map_err(|e| {
+                                ThoError::from_msg(format!("can't read label net params from {params_path:?}: {e}")) })?;
 
-                let params_for_builder = label_node_params.clone();
+                        debug!("load_label_nets: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
 
-                let module = ThoModuleWithStore::load(
-                    mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
-                      move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                      model_path.clone(),
-                      *device,
-                )
-                .expect(format!("can't load {model_path:?}").as_str());
+                        let params_for_builder = label_node_params.clone();
 
-                    debug!("load_all_label_models_ws: model={model_path:?} run_id={run_id} loaded");
+                        let module = ThoModuleWithStore::load(
+                            mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
+                            move |path: &nn::Path| {
+                                LabelNetParams::label_net(&params_for_builder)?
+                                    .build_tch_module(path)
+                            },
+                            model_path.clone(),
+                            *device,
+                        )
+                        .map_err(|e| {
+                            ThoError::from_msg(format!("can't load label net model from {model_path:?}: {e}"))
+                        })?;
 
-                    Some((run_id, label_node_params, module))
-                }).collect();
+                        debug!("load_label_nets: model={model_path:?} run_id={run_id} loaded");
 
-                a.insert(
-                    label,
-                    models
-                );
+                        models.push((run_id, label_node_params, module));
 
-            Ok(a)
-        })
+                        Ok(models)
+                    },
+                )?;
+
+                acc.insert(label, models);
+
+                Ok(acc)
+            })
     }
-
     /**
     returns Vec<safetensors_path, config jsonpath>
      */
@@ -1166,6 +1176,8 @@ mod tests {
         vs.freeze();
 
         let net_id = ws.save_label_net(7, &"label_0", &vs, &params)?;
+
+        debug!("test_load_label_net:net_id={net_id:?}");
 
         let (run_id, loaded_params, loaded_module) = ws.load_label_net(&net_id, &Cpu)?;
 

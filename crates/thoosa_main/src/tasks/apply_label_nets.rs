@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
-use log::{debug, trace};
+use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 use tch::Kind::Float;
@@ -68,28 +68,35 @@ where
     {
         let tho_device_idx = stage_ctx.device_idx();
 
-        let label_nets = thoosa_shared::with_perf_log(
+        let all_label_nets = thoosa_shared::with_perf_log(
             || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
             "ApplyLabelNets/new/read_ws",
         ).load_label_nets(Some(train_label_nets_run_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
 
         let mut apply_nets = vec![];
 
-        for (label, nets) in label_nets {
+        debug!("ApplyLabelNets::new: all_label_nets={all_label_nets:?}");
+
+        for (label, nets) in all_label_nets {
 
 
             for (train_label_net_run_id, label_net_params, net) in nets {
                 let label_nets = store.list_trained_nets(vec![train_label_net_run_id], None, None).await?;
+
+                debug!("ApplyLabelNets::new: train_label_net_run_id={train_label_net_run_id} label_nets={label_nets:?}");
 
                 assert_eq!(label_nets.len(), 1); //for now there is always single net for run_id
                 let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
 
                 let motif_net_ids = store.list_input_nets(*label_net_id).await?;
                 if motif_net_ids.is_empty() {
+                    warn!("no motifs for train_label_net_run_id={train_label_net_run_id}");
                     continue//TODO, change to assert, just for tests
                 }
 
                 let motif_nets = store.list_trained_nets(motif_net_ids, None, None).await?;
+
+                debug!("ApplyLabelNets::new: train_label_net_run_id={train_label_net_run_id} motif_nets={motif_nets:?}");
 
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(ApplyMotifNets::from_trained_nets(
@@ -286,7 +293,7 @@ where
                 debug!("ApplyLabelNet::run: input={input:?}");
 
                 // let batch_input = input.data().t_ref().f_unsqueeze(0)?;//TODO
-                let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), 12, 0.0)?;
+                let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), 12*600, 0.0)?;
                 debug!("ApplyLabelNet::run: batch_input_={batch_input_:?}");
                 let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 1)?.f_transpose(0,1)?;
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?} batch_input_.1={:?}", batch_input_.1);

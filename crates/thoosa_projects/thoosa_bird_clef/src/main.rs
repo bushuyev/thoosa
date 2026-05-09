@@ -12,8 +12,9 @@ use log::{debug, error, info, warn};
 use std::time::Instant;
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
-use tch::IndexOp;
+use tch::{IndexOp, Tensor};
 use tch::Kind::Float;
+use tch::kind::FLOAT_CPU;
 use tokio::task::JoinHandle;
 use thoosa_common::dims::LabelProbability;
 use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
@@ -23,7 +24,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::InferArgs;
-use thoosa_common::utils::{kick_register_cuda_hooks, to_vec_f32};
+use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::{ChannelsData2, RawTensorLoader};
@@ -159,7 +160,8 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
     let mut ctx = RunCtxImpl::new(0, "root");
 
 
-    let mut oggs = Vec::with_capacity(600);
+    let mut oggs_t = Tensor::empty([600, 1920000], FLOAT_CPU);
+    // let mut oggs = Vec::with_capacity(600);
     for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(600).enumerate() {
         let entry = entry?;
         let path = entry.path();
@@ -172,90 +174,78 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
 
             debug!("path: {path:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());
 
-            oggs.push((path, ogg_t));
+            oggs_t.get(entry_i as i64).f_copy_(&pad_to_2(&ogg_t.view(-1), &[1920000], true, false)?.0)?;
+            // oggs.push((path, ogg_t));
         } else {
             warn!("path {path:?} is not an ogg");
         }
     }
 
-    info!("loaded {} ", oggs.len());
+    info!("loaded {:?} ", oggs_t);
+    let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t)?));//
     let label_models = Arc::new(ws.read().label_models()?);
 
     let ctx_0 = ctx.branch("".into(), false);
     let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0])));
 
-    // let mut labels_apply_label_nets = HashMap::new();
 
 
     let mut label_results = Arc::new(RwLock::new(HashMap::new()));
-    for (label_i, label) in LABELS.iter().enumerate().skip(1)/*.take(20)*/ {
+    for (label_i, label) in LABELS.iter().enumerate()/*.skip(0).take(20)*/ {
 
         let apply_label_nets = next
             .take()
             .expect("prefetch task missing")
-            .await??;
-
-            // Start loading the next item immediately.
-            // This runs while `stuff` is being used below.
-            if label_i + 1 < 600 {
-                let ctx_0 = ctx.branch("".into(), false);
-                next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &label)));
-            }
-
-
-        let futures = futures::stream::iter(oggs.iter().enumerate().map(|(entry_i, (path, ogg_t)) | {
-            let label_results = Arc::clone(&label_results);
-            let apply_label_nets = Arc::clone(&apply_label_nets);
-            let mut ctx = ctx.branch(Some("async"), false);
-            async move {
-
-                debug!("label={label:?} path={path:?} apply_label_nets loaded");
-
-                let ogg_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(entry_i, path.to_string_lossy().to_string()).into(), ogg_t.shallow_clone())?));//
-
-
-                // let input = ThoTensor::new(label.into(), _ogg_t)?;
-                let results = Arc::clone(&apply_label_nets).run(Arc::clone(&ogg_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await?;
-                with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
-
-                    let probs = to_vec_f32(results.as_ref());
-                    info!("{label_i}/{entry_i} label={label:?} path={path:?} probs={probs:?}");// slice={slice}
-                    // label_results.write().enry(label.to_string(), results.as_ref().shallow_clone());
-
-                    label_results.write()
-                        .entry(label.to_string())
-                        .or_insert(HashMap::new())
-                        .insert(path.to_string_lossy().to_string(), probs);
-                        // .or_insert(vec![])
-                        // .push(results.as_ref().f_double_value(&[]).unwrap_or(0.0));
-
-                    Ok(())
-                })?;
-
-                debug!("label={label:?} path={path:?} inferred");
-                // assert!(labels_apply_label_nets.insert(label.to_string(), apply_label_nets).is_none(), "got {label} twice");
-
-                debug!("path={path:?} done");
-
-
-                Ok::<_, ThoError>(())
-            }
-        })) .buffer_unordered(32) // at most 3 spawned tasks are awaited/in-flight
-            .map(|join_result| {
-                // join_result: Result<anyhow::Result<String>, JoinError>
-                match join_result {
-                    Ok(inner_result) => Ok(inner_result),
-                    Err(join_err) => Err(ThoError::from(join_err)),
-                }
-            })
-            .try_collect::<Vec<_>>()
             .await?;
 
-        info!("label {label:?} ({label_i}) done");
+            if label_i + 1 < LABELS.len() {
+                let ctx_0 = ctx.branch("".into(), false);
+                next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[label_i+1])));
+            }
+
+            let apply_label_nets = match apply_label_nets {
+                Ok(v) => {
+                    if v.num_nets() == 0 {
+                        warn!("no nets for {label}");
+                        label_results.write().insert(label.to_string(), vec![0.0; 60*32000]);
+                        continue
+                    }
+                    debug!("got v={v:?} fro {label}");
+                    v
+                }
+                Err(e) => {
+                    warn!("failed to load net for {label}, got e={e}");
+                    label_results.write().insert(label.to_string(), vec![0.0; 60*32000]);
+                    continue
+                }
+            };
+
+            debug!("label={label:?}  apply_label_nets loaded");//path={path:?}
+
+            match Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await{
+                Ok(results) => {
+                    with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
+
+                        let probs = to_vec_f32(results.as_ref());
+                        info!("{label_i} label={label:?}  probs={probs:?}");// slice={slice} path={path:?}{entry_i}
+                        assert_eq!(probs.len(), 600 * 12, "label={label} probs.len={}", probs.len()); //600 files * minute
+
+                        label_results.write().insert(label.to_string(), probs);
+
+
+                        Ok(())
+                    })?;
+
+                }
+                Err(e) => {
+                    warn!("got e={e} for {label}");
+                    label_results.write().insert(label.to_string(), vec![0.0; 60*32000]);
+                }
+            };
+
+            debug!("label={label:?}  inferred");
+
     }
-
-
-
     info!("label_results={}", label_results.read().len());
     Ok(())
 }
