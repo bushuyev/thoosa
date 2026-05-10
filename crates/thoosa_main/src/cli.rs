@@ -795,6 +795,9 @@ where
         }
 
         Some(Infer(infer_params)) => {
+            if let Some(infer) = infer {
+                infer(infer_params, &ws, &store).await?;
+            }
             // block_on(run_infer(
             //     &ws,
             //     &store,

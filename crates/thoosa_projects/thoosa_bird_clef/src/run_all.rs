@@ -837,8 +837,8 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            // window: RangeOrValue::Range{ range: Range {start: 2000, end: 100000}, step: Some((30000, 0)) },
-            window: RangeOrValue::Value(10000),
+            window: RangeOrValue::Range{ range: Range {start: 10000, end: 50000}, step: Some((20000, 0)) },
+            // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
             //     AverageFilter(AverageFilterParamsRangeOrValue {

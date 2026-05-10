@@ -49,6 +49,7 @@ where
 {
     id: SynKey,
     apply_nets: Vec<ApplyNets<C>>,
+    batch_in_chunks: usize,
     pd: PhantomData<C>,
 }
 
@@ -62,6 +63,7 @@ where
         train_label_nets_run_ids: Vec<RunId>,
         mut stage_ctx: R,
         motif_slices_step: u32,
+        batch_in_chunks: usize,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
@@ -108,7 +110,7 @@ where
                         motif_nets,
                     )
                         .await?),
-                    apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_id, net)),
+                    apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_id, net, batch_in_chunks)),
                 });
             }
         }
@@ -117,6 +119,7 @@ where
         Ok(Self {
             id: mono_key!(0, "todo").into(),
             apply_nets,
+            batch_in_chunks,
             pd: PhantomData,
         })
     }
@@ -232,6 +235,7 @@ where
     train_label_net_run_id: RunId,
     net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>>>,
     pd: PhantomData<C>,
+    batch_in_chunks: usize
 }
 
 impl<C> ApplyLabelNet<C>
@@ -242,12 +246,14 @@ where
         label: String,
         train_label_net_run_id: RunId,
         net: ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+        batch_in_chunks: usize,
     ) -> Self {
         Self {
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
             train_label_net_run_id,
             net_wrapper: Arc::new(DevicesWrap::wrap(net)),
+            batch_in_chunks,
             pd: PhantomData,
         }
     }
@@ -281,8 +287,6 @@ where
 
         let net_wrapper = Arc::clone(&self.net_wrapper);
 
-
-
         async move {
             let out_id = self.out_id(input.id());
 
@@ -293,7 +297,7 @@ where
                 debug!("ApplyLabelNet::run: input={input:?}");
 
                 // let batch_input = input.data().t_ref().f_unsqueeze(0)?;//TODO
-                let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), 12*600, 0.0)?;
+                let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), self.batch_in_chunks as i64, 0.0)?;
                 debug!("ApplyLabelNet::run: batch_input_={batch_input_:?}");
                 let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 1)?.f_transpose(0,1)?;
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?} batch_input_.1={:?}", batch_input_.1);
@@ -678,6 +682,7 @@ mod tests {
             labels.iter().map(|label| label.train_run_id).collect(),
             mock_run_ctx::default(0),
             step,
+            0,
         ).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 

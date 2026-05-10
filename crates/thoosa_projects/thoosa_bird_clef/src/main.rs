@@ -4,7 +4,9 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
@@ -12,7 +14,7 @@ use log::{debug, error, info, warn};
 use std::time::Instant;
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
-use tch::{IndexOp, Tensor};
+use tch::{Cuda, IndexOp, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tokio::task::JoinHandle;
@@ -41,9 +43,15 @@ mod data;
 mod labels;
 mod run_all;
 
+const SLOTS_PER_FILE: usize = 12;
+const SLOT_SECONDS: usize = 5;
+const EXPECTED_LABELS: usize = 234;
+
 fn main() -> Result<(), ThoError>{
-    debug!("bird_clef main");
-    kick_register_cuda_hooks();
+    info!("bird_clef main");
+    if Cuda::is_available() {
+        kick_register_cuda_hooks();
+    }
 
     let t1 = Instant::now();
 
@@ -156,41 +164,45 @@ fn main() -> Result<(), ThoError>{
 
 
 async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
-    GlobalCtx::init_devices(1);
     let mut ctx = RunCtxImpl::new(0, "root");
 
 
-    let mut oggs_t = Tensor::empty([600, 1920000], FLOAT_CPU);
-    // let mut oggs = Vec::with_capacity(600);
-    for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(600).enumerate() {
+    let mut pathnames = Vec::with_capacity(600);
+    for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(601).enumerate() {
         let entry = entry?;
         let path = entry.path();
         let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
         debug!("path: {path:?} is_file={} is_ogg={}", path.is_file(), is_ogg);
 
         if path.is_file() && is_ogg {
-            let ogg_t = ogg_to_tensor(&path)?; //.unfold(1, 160000, 160000); //.view((12, 160000));
-            //let ogg_t = GlobalCtx::global().copy_ctx(1).await.copy(&ogg_to_tensor(&path)?, 1, Float).await?; //.unfold(1, 160000, 160000); //.view((12, 160000));
+            debug!("path: {path:?}");
 
-            debug!("path: {path:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());
-
-            oggs_t.get(entry_i as i64).f_copy_(&pad_to_2(&ogg_t.view(-1), &[1920000], true, false)?.0)?;
-            // oggs.push((path, ogg_t));
+            pathnames.push(path.to_string_lossy().to_string());
         } else {
             warn!("path {path:?} is not an ogg");
         }
     }
 
-    info!("loaded {:?} ", oggs_t);
+    let num_files = pathnames.len();
+
+    let mut oggs_t = Tensor::empty([num_files as i64, 1920000], FLOAT_CPU);//1920000 = 32000 × 60 one minute
+    for (entry_i, ogg_filename) in pathnames.iter().enumerate() {
+        let ogg_t = ogg_to_tensor(ogg_filename)?;
+        debug!("ogg_filename: {ogg_filename:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());
+
+        oggs_t.get(entry_i as i64).f_copy_(&pad_to_2(&ogg_t.view(-1), &[1920000], true, false)?.0)?;
+    }
+
+    debug!("loaded {:?} ", oggs_t);
     let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t)?));//
     let label_models = Arc::new(ws.read().label_models()?);
 
     let ctx_0 = ctx.branch("".into(), false);
-    let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0])));
+    let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0], num_files * SLOTS_PER_FILE, params.motif_slices_step as u32)));
 
 
 
-    let mut label_results = Arc::new(RwLock::new(HashMap::new()));
+    let mut label_results: HashMap<String, Vec<f32>> = HashMap::new();
     for (label_i, label) in LABELS.iter().enumerate()/*.skip(0).take(20)*/ {
 
         let apply_label_nets = next
@@ -198,59 +210,70 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
             .expect("prefetch task missing")
             .await?;
 
-            if label_i + 1 < LABELS.len() {
-                let ctx_0 = ctx.branch("".into(), false);
-                next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[label_i+1])));
-            }
+        if label_i + 1 < LABELS.len() {
+            let ctx_0 = ctx.branch("".into(), false);
+            next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[label_i+1], num_files * SLOTS_PER_FILE, params.motif_slices_step as u32)));
+        }
 
-            let apply_label_nets = match apply_label_nets {
-                Ok(v) => {
-                    if v.num_nets() == 0 {
-                        warn!("no nets for {label}");
-                        label_results.write().insert(label.to_string(), vec![0.0; 60*32000]);
-                        continue
-                    }
-                    debug!("got v={v:?} fro {label}");
-                    v
-                }
-                Err(e) => {
-                    warn!("failed to load net for {label}, got e={e}");
-                    label_results.write().insert(label.to_string(), vec![0.0; 60*32000]);
+        let apply_label_nets = match apply_label_nets {
+            Ok(v) => {
+                if v.num_nets() == 0 {
+                    warn!("no nets for {label}");
+                    label_results.insert(label.to_string(), vec![]);
                     continue
                 }
-            };
+                debug!("got v={v:?} fro {label}");
+                v
+            }
+            Err(e) => {
+                warn!("failed to load net for {label}, got e={e}");
+                label_results.insert(label.to_string(), vec![]);
+                continue
+            }
+        };
 
-            debug!("label={label:?}  apply_label_nets loaded");//path={path:?}
+        debug!("label={label:?}  apply_label_nets loaded");//path={path:?}
 
-            match Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await{
-                Ok(results) => {
-                    with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
+        match Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(Some(&format!("ctx for {label}")), false)).await{
+            Ok(results) => {
+                with_data!(ctx.branch(Some(&format!("ctx for {label}")), false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
 
-                        let probs = to_vec_f32(results.as_ref());
-                        info!("{label_i} label={label:?}  probs={probs:?}");// slice={slice} path={path:?}{entry_i}
-                        assert_eq!(probs.len(), 600 * 12, "label={label} probs.len={}", probs.len()); //600 files * minute
+                    let probs = to_vec_f32(results.as_ref());
+                    info!("{label_i} label={label:?}");// slice={slice} path={path:?}{entry_i}
+                    debug!("{label_i} label={label:?}  probs={probs:?}");// slice={slice} path={path:?}{entry_i}
+                    assert_eq!(probs.len(), num_files * 12, "label={label} probs.len={}", probs.len()); //600 files * minute
 
-                        label_results.write().insert(label.to_string(), probs);
+                    label_results.insert(label.to_string(), probs);
 
 
-                        Ok(())
-                    })?;
+                    Ok(())
+                })?;
 
-                }
-                Err(e) => {
-                    warn!("got e={e} for {label}");
-                    label_results.write().insert(label.to_string(), vec![0.0; 60*32000]);
-                }
-            };
+            }
+            Err(e) => {
+                warn!("got e={e} for {label}");
+                label_results.insert(label.to_string(), vec![]);
+            }
+        };
 
-            debug!("label={label:?}  inferred");
+        debug!("label={label:?}  inferred");
 
     }
-    info!("label_results={}", label_results.read().len());
+    debug!("label_results={}", label_results.len());
+
+    debug!("pathnames={pathnames:?}");
+    debug!("label_results={label_results:?}");
+
+    write_birdclef_submission_csv(
+        &pathnames,
+        &label_results,
+        &LABELS,
+        "submission.csv"
+    )?;
     Ok(())
 }
 
-async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
+async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_ids = store.list_label_nets_run_ids(label).await?;
     debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
@@ -260,9 +283,123 @@ async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store:
         &store,
         run_ids,
         ctx,
-        1000,
+        motif_slices_step,
+        batch_in_chunks,
     ).await?);
     Ok(apply_label_nets)
+}
+
+
+
+
+pub fn write_birdclef_submission_csv(
+    pathnames: &[String],
+    label_results: &HashMap<String, Vec<f32>>,
+    labels: &[&str],
+    output_csv: impl AsRef<Path>,
+) -> Result<(), ThoError> {
+    debug!("write_birdclef_submission_csv: labels.len={}", labels.len());
+
+    if labels.len() != EXPECTED_LABELS {
+        return Err(ThoError::new(format!("expected {EXPECTED_LABELS} labels, got {}", labels.len())));
+    }
+
+    let expected_rows = pathnames.len() * SLOTS_PER_FILE;
+
+    // Validate once and keep refs in fixed LABELS order.
+    let mut label_probs: Vec<(&str, &Vec<f32>)> = Vec::with_capacity(labels.len());
+    let zero_vec = vec![0.0; expected_rows];
+
+    for &label in labels {
+        let probs = label_results.get(label).expect(&format!("missing predictions for label {label:?}"));
+
+        if probs.is_empty() {
+
+            label_probs.push((label, &zero_vec));
+            continue;
+        }
+
+        if probs.len() != expected_rows {
+            let msg = format!("label {label:?} has {} predictions, expected {expected_rows} = {} files * {SLOTS_PER_FILE} slots", probs.len(), pathnames.len() );
+            error!("{}", msg);
+            return Err(ThoError::new(msg));
+        }
+
+        label_probs.push((label, probs));
+    }
+
+    debug!("write_birdclef_submission_csv: output_csv={:?}", output_csv.as_ref());
+    let file = File::create(output_csv)?;
+
+    let mut w = BufWriter::new(file);
+
+    // Header: row_id,<label1>,<label2>,...
+    write_csv_field(&mut w, "row_id")?;
+    for &(label, _) in &label_probs {
+        write!(w, ",")?;
+        write_csv_field(&mut w, label)?;
+    }
+    writeln!(w)?;
+
+    debug!("write_birdclef_submission_csv: pathnames.len={}", pathnames.len());
+    // Rows:
+    // file_i slot 0 => stem_5
+    // file_i slot 1 => stem_10
+    // ...
+    // file_i slot 11 => stem_60
+    for (file_i, pathname) in pathnames.iter().enumerate() {
+        let stem = Path::new(pathname)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect(&format!("could not extract UTF-8 file stem from path {pathname:?}"));
+
+        for slot_i in 0..SLOTS_PER_FILE {
+            let row_i = file_i * SLOTS_PER_FILE + slot_i;
+            let end_time = (slot_i + 1) * SLOT_SECONDS;
+
+            let row_id = format!("{stem}_{end_time}");
+            write_csv_field(&mut w, &row_id)?;
+
+            for &(_, probs) in &label_probs {
+                let p = probs[row_i];
+
+                if !p.is_finite() {
+                    return Err(ThoError::new(&format!("non-finite probability for row_id={row_id:?}, row_i={row_i}: {p}")));
+                }
+
+                write!(w, ",{p}")?;
+            }
+
+            writeln!(w)?;
+        }
+    }
+
+    w.flush()?;
+
+    debug!("write_birdclef_submission_csv done");//path={path:?}
+
+    Ok(())
+}
+
+fn write_csv_field<W: Write>(w: &mut W, s: &str) -> std::io::Result<()> {
+    let needs_quotes = s.bytes().any(|b| matches!(b, b',' | b'"' | b'\n' | b'\r'));
+
+    if !needs_quotes {
+        write!(w, "{s}")?;
+        return Ok(());
+    }
+
+    write!(w, "\"")?;
+    for ch in s.chars() {
+        if ch == '"' {
+            write!(w, "\"\"")?;
+        } else {
+            write!(w, "{ch}")?;
+        }
+    }
+    write!(w, "\"")?;
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -271,6 +408,7 @@ mod tests {
     use std::sync::Arc;
     use log::info;
     use parking_lot::RwLock;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
     use thoosa_common::ws::{FsWorkspace, WsMockBuilder};
@@ -281,7 +419,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_infer_labels() -> Result<(), ThoError> {
-
+        GlobalCtx::init_devices(1);
         //TODO
         // let ws = Arc::new(RwLock::new(
         //     WsMockBuilder::new(None, 1, 100, u32::MAX)
@@ -303,8 +441,8 @@ mod tests {
         )?));
         let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
-        // let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 0);
-        let params = InferArgs::new(0, "/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes".to_string(), "".to_string(), 0);
+        let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 1000);
+        // let params = InferArgs::new(0, "/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes".to_string(), "".to_string(), 1000);
 
         infer_labels(&params, &ws, &store).await?;
 
