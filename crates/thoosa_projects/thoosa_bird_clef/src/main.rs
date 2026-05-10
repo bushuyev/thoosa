@@ -49,9 +49,7 @@ const EXPECTED_LABELS: usize = 234;
 
 fn main() -> Result<(), ThoError>{
     info!("bird_clef main");
-    if Cuda::is_available() {
-        kick_register_cuda_hooks();
-    }
+
 
     let t1 = Instant::now();
 
@@ -61,9 +59,11 @@ fn main() -> Result<(), ThoError>{
     // CUDA init failures from BirdCLEF usually happen here or later in GlobalCtx::init_devices inside run_cli.
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
-            //runs cuCtxSetCurrent
-            if let Err(err) = ThoCudaContext::new(0) {
-                panic!("Failed to create context: {err:?}"); //TODO device
+            if tch::Cuda::is_available() {
+                //runs cuCtxSetCurrent
+                if let Err(err) = ThoCudaContext::new(0) {
+                    panic!("Failed to create context: {err:?}"); //TODO device
+                }
             }
         })
         .worker_threads(cpu_num/2)
@@ -163,12 +163,13 @@ fn main() -> Result<(), ThoError>{
 }
 
 
-async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
+async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
     let mut ctx = RunCtxImpl::new(0, "root");
 
 
     let mut pathnames = Vec::with_capacity(600);
-    for (entry_i, entry) in fs::read_dir(&params.input_dir)?.take(601).enumerate() {
+
+    for (entry_i, entry) in fs::read_dir(&args.input_dir)?.take(args.limit.unwrap_or(usize::MAX)).enumerate() {
         let entry = entry?;
         let path = entry.path();
         let is_ogg = path.extension().map(|e| e.eq("ogg")).unwrap_or(false);
@@ -198,7 +199,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
     let label_models = Arc::new(ws.read().label_models()?);
 
     let ctx_0 = ctx.branch("".into(), false);
-    let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0], num_files * SLOTS_PER_FILE, params.motif_slices_step as u32)));
+    let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32)));
 
 
 
@@ -212,7 +213,7 @@ async fn infer_labels(params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, st
 
         if label_i + 1 < LABELS.len() {
             let ctx_0 = ctx.branch("".into(), false);
-            next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[label_i+1], num_files * SLOTS_PER_FILE, params.motif_slices_step as u32)));
+            next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[label_i+1], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32)));
         }
 
         let apply_label_nets = match apply_label_nets {

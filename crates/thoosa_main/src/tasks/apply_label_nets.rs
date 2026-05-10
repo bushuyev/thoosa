@@ -159,20 +159,44 @@ where
         let futures = self.apply_nets
             .iter()
             .map(|apply_net| {
-                let input = Arc::clone(&input);
+                let input: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::clone(&input);
                 let mut ctx = ctx.branch(Some("apply_label_nets_motif_probs_0"), false);
                 async move {
 
+                    #[cfg(test)]{
+                        with_data!(ctx.branch(Some("debug"), false), input; |ctx, input:&ThoTensor<ChannelsData2, SynKey>|{
+                            debug!("ApplyLabelNets::run: input=\n{}", input.as_ref());
+                            Ok(())
+                        });
+                    }
+
                     //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
-                    let motif_probs = Arc::clone(&apply_net.apply_motif_nets)
+                    let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = Arc::clone(&apply_net.apply_motif_nets)
                         .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false))
                         .await?;
+
+
+                    #[cfg(test)]{
+                        with_data!(ctx.branch(Some("debug"), false), motif_probs; |ctx, probs:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
+                            debug!("ApplyLabelNets::run: probs=\n{}", probs.data().as_ref());
+                            Ok(())
+                        });
+                    }
+
 
                     let motif_probs = Arc::clone(&motif_probs);
                     let apply_label_net_ctx = ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_net.label, apply_net.apply_label_net.train_label_net_run_id)), false);
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below.
-                    let result = Arc::clone(&apply_net.apply_label_net).run(motif_probs, apply_label_net_ctx).await?;
+                    let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = Arc::clone(&apply_net.apply_label_net).run(motif_probs, apply_label_net_ctx).await?;
+
+                    #[cfg(test)]{
+                        with_data!(ctx.branch(Some("debug"), false), result; |ctx, result:&ThoTensor<LabelProbability, SynKey>|{
+                            debug!("ApplyLabelNets::run: result=\n{}", result.as_ref());
+                            Ok(())
+                        });
+                    }
+
                     Ok::<_, ThoError>(result)
                 }
             });
@@ -682,7 +706,7 @@ mod tests {
             labels.iter().map(|label| label.train_run_id).collect(),
             mock_run_ctx::default(0),
             step,
-            0,
+            1,
         ).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 
@@ -694,9 +718,11 @@ mod tests {
         let mut run_ctx = mock_run_ctx::default(0);
         let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input)), run_ctx.branch(Some("apply_label_nets_run".into()), false)).await?;
 
+
         with_data!(run_ctx.branch(Some("apply_label_nets_assert".into()), false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
             debug!("t=\n{}", out.t_ref());
-            Ok::<_, ThoError>((out.t_ref().size(), to_vec_f32(&out.t_ref().totype(Float))))
+            let out = out.as_ref().f_squeeze_dim(-1)?;
+            Ok::<_, ThoError>((out.size(), to_vec_f32(&out.totype(Float))))
         })
     }
 
@@ -710,7 +736,7 @@ mod tests {
         ];
         let labels = vec![
             TestLabelNetSpec::new("A", 100, 2000, vec![10], vec![0.1, 0.1], 0.1),
-            TestLabelNetSpec::new("A", 101, 2001, vec![10], vec![0.2, 0.2], 0.1),
+            TestLabelNetSpec::new("B", 101, 2001, vec![10], vec![0.2, 0.2], 0.1),
         ];
 
         let (size, values) = run_apply_label_case(&labels, &motifs, motif_width, step, 3).await?;

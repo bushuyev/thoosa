@@ -1165,7 +1165,7 @@ impl Store for SqlStore {
 
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
             let r = conn.prepare(
-                "select tn.run_id from trained_nets tn left join run_configs rc on tn.run_id=rc.id where rc.type='TrainLabelNetsRunConfig' and net_path like ? order by run_on desc limit 1"//TODO takes last one
+                "SELECT tn.run_id FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type='TrainLabelNetsRunConfig' AND net_path LIKE ? ORDER BY run_on DESC LIMIT 1"//TODO takes last one
             )?.query_map([Value::Text(format!("{label}%"))], |row| {
                 Ok(row.get::<usize, u32>(0)?)
             })?.map(|v| v.unwrap()).collect();
@@ -2336,6 +2336,14 @@ fn init_sqlite_reader(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+fn init_sqlite_reader_no_tmp_files(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
+
+    // conn.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+    // conn.pragma_update(None, "journal_mode", "DELETE")?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    Ok(())
+}
+
 fn debug_trace_event(ev: TraceEvent) {
     match ev {
         TraceEvent::Stmt(a, b) => {
@@ -2806,8 +2814,6 @@ impl SqlStore {
             readers.push(reader);
         }
 
-
-
         let readers = if readers.is_empty() {
             vec![writer.clone()]
         } else {
@@ -2824,6 +2830,31 @@ impl SqlStore {
             rr: AtomicUsize::new(0),
         }))
     }
+
+    pub async fn from_path_readonly<P: AsRef<Path>>(path: P) -> Result<Box<dyn Store>, ThoError> {
+        let path_buf = path.as_ref().to_path_buf();
+        let conn_target = path_buf.to_string_lossy().to_string();
+        let conn_flags = OpenFlags::SQLITE_OPEN_READ_ONLY;
+
+        let mut readers = Vec::with_capacity(SQL_STORE_READERS_CNT.max(1));
+        for _ in 0..SQL_STORE_READERS_CNT.max(1) {
+            let reader = tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_ONLY).await?;
+            reader.call(init_sqlite_reader_no_tmp_files).await?;
+            readers.push(reader);
+        }
+
+        Ok(Box::new(Self {
+            #[cfg(test)]
+            conn: Mutex::new(Connection::open(&path_buf)?),
+            writer: tokio_rusqlite::Connection::open_with_flags(&path_buf, OpenFlags::SQLITE_OPEN_READ_ONLY).await?,
+            readers: Arc::new(readers),
+            conn_target,
+            conn_flags,
+            rr: AtomicUsize::new(0),
+        }))
+    }
+
+
     // #[cfg(test)]
     pub async fn in_mem() -> Result<Box<dyn Store>, ThoError> {
         let db_idx = IN_MEM_DB_COUNTER.fetch_add(1, Ordering::Relaxed);

@@ -2184,6 +2184,12 @@ pub struct InferArgs {
 
     #[arg(long, default_value = "submission.csv")]
     pub output_dir: String,
+
+    #[arg(long)]
+    pub limit:Option<usize>,
+
+    #[arg(long)]
+    pub models_dir: Option<String>,
 }
 
 impl InferArgs {
@@ -2205,6 +2211,8 @@ impl InferArgs {
             motif_slices_step: input_slice_step,
             input_dir: input_data,
             output_dir: output,
+            limit: None,
+            models_dir: None,
         }
     }
 }

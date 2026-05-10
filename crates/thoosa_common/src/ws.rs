@@ -94,6 +94,59 @@ impl FsWorkspace {
         }))
     }
 
+    pub fn new_with_models_dir(
+        base_path: impl Into<PathBuf>,
+        channels: u32,
+        max_input: u32,
+        sample_rate: u32,
+        models_dir:&String
+    ) -> Result<Box<dyn Workspace>, ThoError> {
+        let base_path = base_path.into();
+        fs::create_dir_all(&base_path)?;
+
+        let store_path: PathBuf = base_path.join("main_db.db3");
+
+        let models_path: PathBuf = models_dir.into();
+
+        let plots_path: PathBuf = base_path.join("plots");
+        fs::create_dir_all(&plots_path)?;
+
+        let tensors_path: PathBuf = base_path.join("tensors");
+        fs::create_dir_all(&tensors_path)?;
+
+        let tmp_path: PathBuf = base_path.join("tmp");
+        fs::create_dir_all(&tmp_path)?;
+
+        let log_path: PathBuf = base_path.join("log");
+        fs::create_dir_all(&log_path)?;
+
+        let motifs_models_path: PathBuf = models_path.join("motifs");
+
+
+        let labels_models_path: PathBuf = models_path.join("labels");
+
+
+        let final_models_path: PathBuf = models_path.join("final");
+
+
+        Ok(Box::new(Self {
+            base_path,
+            store_path,
+            tensors_path,
+            nets_path: models_path,
+            plots_path,
+            motifs_nets_path: motifs_models_path,
+            labels_nets_path: labels_models_path,
+            final_nets_path: final_models_path,
+            log_path,
+            tmp_path,
+            channels,
+            sample_rate,
+            max_input,
+        }))
+    }
+
+
     /*
        select_motifs_run_id/channel/motif_id
     */
