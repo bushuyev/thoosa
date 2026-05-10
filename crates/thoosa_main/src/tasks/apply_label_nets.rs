@@ -81,6 +81,7 @@ where
 
         for (label, nets) in all_label_nets {
 
+            debug!("ApplyLabelNets::new: label={label:?} nets.len={}", nets.len());
 
             for (train_label_net_run_id, label_net_params, net) in nets {
                 let label_nets = store.list_trained_nets(vec![train_label_net_run_id], None, None).await?;
@@ -154,7 +155,7 @@ where
         #[cfg(debug_assertions)]
         let input_debug = input.clone();
 
-        debug!("ApplyLabelNets::run: label_nets={:?}", self.apply_nets);
+        debug!("ApplyLabelNets::run: self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
 
         let futures = self.apply_nets
             .iter()
@@ -307,7 +308,7 @@ where
         input: Arc<DevicesWrap<Self::In<'static>>>,
         mut ctx: Self::Ctx,
     ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
-        debug!("ApplyLabelNet::run: input={input:?}");
+        debug!("ApplyLabelNet::run: id={:?} input={input:?}", self.id);
 
         let net_wrapper = Arc::clone(&self.net_wrapper);
 
@@ -635,13 +636,15 @@ mod tests {
         for label in labels {
             let motif_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids);
             let (params, net) = weighted_label_net(motif_nets.len() as u32, slices_len, label.weights.clone(), device);
+                debug!("run_apply_label_case: label.label={:?} label.train_run_id={}", label.label, label.train_run_id);
             label_ws_entries.entry(label.label.clone()).or_default().push((label.train_run_id, params, net));
         }
+
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, channels, 100, motif_width)
                 .with_load_motif_net(motif_ws_entries)
-                .with_label_nets(label_ws_entries)
+                .with_load_label_nets(label_ws_entries)
                 .build(),
         ));
 

@@ -972,7 +972,7 @@ impl WsMockBuilder {
         self
     }
 
-    pub fn with_label_nets(
+    pub fn with_load_label_nets(
         mut self,
         label_nets: HashMap<
             String,
