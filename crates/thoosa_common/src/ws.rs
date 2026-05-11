@@ -20,8 +20,8 @@ use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key, panic_to_err};
 
-pub(crate) const NET_PARAMS_FILE: &str = "parameters.json";
-pub(crate) const NET_WEIGHTS_FILE: &str = "weights.safetensors";
+pub const NET_PARAMS_FILE: &str = "parameters.json";
+pub const NET_WEIGHTS_FILE: &str = "weights.safetensors";
 
 
 #[derive(Debug)]
