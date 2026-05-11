@@ -1,6 +1,7 @@
 pub mod cross_batch_clc;
 pub mod cross_dims;
 pub mod cross_loader;
+pub mod convert_precision;
 mod dists_tracker;
 pub mod find_motifs;
 pub mod find_and_select_motifs;
