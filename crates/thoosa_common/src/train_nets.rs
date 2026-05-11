@@ -99,7 +99,7 @@ impl TrainLabelNetsArgs {
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
-pub struct TrainLabelNetsRunConfig {
+pub struct TrainLabelNetsRunConfig {//TODO rename to TrainLabelNetRunConfig
     #[in_map]
     pub id: Option<RunId>,
 
@@ -683,7 +683,7 @@ impl Default for MotifNetTypeArgs {
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
-pub struct TrainMotifsNetsRunConfig {
+pub struct TrainMotifsNetsRunConfig {//TODO rename to TrainMotifsNetRunConfig
     #[in_map]
     pub id: Option<RunId>,
 
