@@ -406,17 +406,28 @@ fn write_csv_field<W: Write>(w: &mut W, s: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::Arc;
-    use log::info;
+    use log::{debug, info, set_max_level};
+    use log::LevelFilter::Trace;
     use parking_lot::RwLock;
+    use polars::prelude::{AnyValue, CsvReadOptions, PolarsError, PolarsResult, SerReader};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
     use thoosa_common::ws::{FsWorkspace, WsMockBuilder};
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::ThoError;
+    use thoosa_shared::val::Val;
     use thoosa_store::{MockStoreBuilder, SqlStore};
-    use crate::infer_labels;
+    use thoosa_store::rusqlite::fallible_iterator::FallibleIterator;
+    use crate::{infer_labels, write_birdclef_submission_csv};
+    use crate::labels::LABELS;
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_infer_labels() -> Result<(), ThoError> {
@@ -452,4 +463,123 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_write_birdclef_submission_csv() -> Result<(), ThoError>{
+        set_max_level(Trace);
+        let inputs = ["input_a".into(), "input_b".into()];
+        write_birdclef_submission_csv(
+            &inputs,
+            &HashMap::from_iter(
+                LABELS
+                    .iter()
+                    .enumerate()
+                    .map(|(label_i, label)|(
+                            label.to_string(),
+                            inputs.iter().enumerate().flat_map(|(input_i, _)| (0..12).map(move |chunk| {
+                                let v= (
+                                    1_000_000 +
+                                        label_i * 1_000 +
+                                        input_i * 1_00 +
+                                        chunk
+                                    );
+                                debug!("test_write_birdclef_submission_csv: label_i={label_i} input_i={input_i} chunk={chunk}, v={v}");
+                                v as f32
+                            })).collect()
+                        )
+                    )
+            ),
+            &LABELS,
+            "/tmp/sub.csv"
+        )?;
+
+
+        let results = read_csv_with_polars("/tmp/sub.csv")?;
+
+        for (raw_i, raw) in results.iter().skip(1).enumerate() {
+            for (column_i, val) in raw.iter().skip(1).enumerate() {
+                debug!("test_write_birdclef_submission_csv: raw_i={raw_i} column_i={column_i} val={val:?}");
+
+                let v = match val {
+                    Val::Real(v) => *v as u64,
+                    Val::Int(v) => *v as u64,
+                    Val::UInt(v) => *v as u64,
+                    Val::Str(v) => v.parse::<u64>()?,
+                    Val::Bool(_) => {
+                        panic!("no bools expected")
+                    }
+                };
+                let label_i = column_i as u64;
+                let input_i =  raw_i as u64 / 12;
+                let chunk = raw_i as u64 % 12;
+                debug!("test_write_birdclef_submission_csv: raw_i={raw_i} column_i={column_i} v={v:?} label_i={label_i} input_i={input_i} chunk={chunk}");
+
+                assert_eq!(
+                  1_000_000u64 +
+                    label_i * 1_000 +
+                    input_i * 1_00 +
+                    chunk,
+                    v
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn read_csv_with_polars<P: AsRef<Path>>(path: P) -> PolarsResult<Vec<Vec<Val>>> {
+        let df = CsvReadOptions::default()
+            .with_has_header(false)
+            .try_into_reader_with_file_path(Some(path.as_ref().to_path_buf()))?
+            .finish()?;
+
+        (0..df.height())
+            .map(|row_i| {
+                df.get(row_i)
+                    .expect("row index is in bounds")
+                    .into_iter()
+                    .map(any_value_to_val)
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn any_value_to_val(v: AnyValue<'_>) -> PolarsResult<Val> {
+        Ok(match v {
+            AnyValue::Boolean(v) => Val::Bool(v),
+
+            AnyValue::Int8(v) => Val::Int(v as i64),
+            AnyValue::Int16(v) => Val::Int(v as i64),
+            AnyValue::Int32(v) => Val::Int(v as i64),
+            AnyValue::Int64(v) => Val::Int(v),
+
+            AnyValue::UInt8(v) => Val::UInt(v as u32),
+            AnyValue::UInt16(v) => Val::UInt(v as u32),
+            AnyValue::UInt32(v) => Val::UInt(v),
+            AnyValue::UInt64(v) => {
+                if let Ok(v) = u32::try_from(v) {
+                    Val::UInt(v)
+                } else {
+                    return Err(PolarsError::ComputeError(
+                        "u64 value does not fit into Val::UInt(u32)".into(),
+                    ));
+                }
+            }
+
+            AnyValue::Float32(v) => Val::Real(v as f64),
+            AnyValue::Float64(v) => Val::Real(v),
+
+            AnyValue::String(v) => {
+                // Val::Int(v.parse::<i64>().expect(&format!("can't parse '{v}'")))
+                Val::Str(v.to_owned())
+            },
+
+            other => {
+                return Err(PolarsError::ComputeError(
+                    format!("unsupported CSV value for Val: {other:?}").into(),
+                ));
+            }
+        })
+    }
+
 }
