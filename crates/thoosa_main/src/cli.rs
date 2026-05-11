@@ -1,11 +1,12 @@
 use crate::cli::Commands::{
-     FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, RunAll,
+     ConvertPrecision, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
 use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors};
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::tasks::cross_loader::ResourcesConfigInput;
+use crate::tasks::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
@@ -304,6 +305,7 @@ pub enum Commands {
     TrainMotifsNets(TrainMotifsNetsArgs),
     TrainLabelNets(TrainLabelNetsArgs),
     TrainFinalNet(TrainFinalNetArgs),
+    ConvertPrecision(ConvertPrecisionArgs),
     RunAll(RunAllArgs),
     Infer(InferArgs),
     SayHello(SayHelloArgs),
@@ -809,6 +811,18 @@ where
 
 
             info!("TrainFinalNet done");
+        }
+
+        Some(ConvertPrecision(convert_precision_args)) => {
+            debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
+            let output = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
+                .run(
+                    Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
+                    root_ctx.branch(Some("convert_precision"), true),
+                )
+                .await?;
+            let output = Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0).await?;
+            info!("ConvertPrecision done, converted={}", output.converted().len());
         }
 
         Some(RunAll(run_all_args)) => {
@@ -2148,6 +2162,19 @@ mod cli_tests {
 
         match cli.command {
             Some(crate::cli::Commands::PlotData(args)) => assert_eq!(args.data_by(), DataBy::MotifId(vec![1, 2])),
+            other => panic!("unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_convert_precision_command_parses() {
+        let cli = Cli::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_id:1,2", "--target-precision", "bf16"]);
+
+        match cli.command {
+            Some(crate::cli::Commands::ConvertPrecision(args)) => {
+                assert_eq!(args.nets_by(), crate::tasks::convert_precision::ConvertPrecisionBy::RunId(vec![1, 2]));
+                assert_eq!(args.target_precision(), crate::tasks::convert_precision::ConvertPrecisionTarget::Bf16);
+            }
             other => panic!("unexpected command: {other:?}"),
         }
     }
