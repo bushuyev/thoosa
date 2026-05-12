@@ -454,7 +454,7 @@ mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::train_nets::{TrainLabelNetsRunConfig, TrainMotifsNetsRunConfig};
+    use thoosa_common::train_nets::{TrainLabelNetRunConfig, TrainMotifNetRunConfig};
     use thoosa_common::ws::{FsWorkspace, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
     use thoosa_shared::run_configs::RunConfig;
     use thoosa_shared::{cdt_for_dir, ThoError};
@@ -486,7 +486,7 @@ mod tests {
             create_dummy_model(ws_guard.final_nets_path(), &lost_final_path)?;
         }
 
-        let run_id = store.save_run_config(None, &TrainLabelNetsRunConfig::type_name(), "kept", HashMap::new()).await?;
+        let run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "kept", HashMap::new()).await?;
         store.save_trained_net(run_id, kept_path.clone(), 0.01, None).await?;
 
         let output = run_stage(&ws, &store, PurgeMode::PurgeLost).await?;
@@ -512,8 +512,8 @@ mod tests {
             create_dummy_model(ws_guard.labels_nets_path(), &new_path)?;
         }
 
-        let old_run_id = store.save_run_config(None, &TrainLabelNetsRunConfig::type_name(), "old", HashMap::new()).await?;
-        let new_run_id = store.save_run_config(None, &TrainLabelNetsRunConfig::type_name(), "new", HashMap::new()).await?;
+        let old_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "old", HashMap::new()).await?;
+        let new_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "new", HashMap::new()).await?;
         set_run_on(&store, old_run_id, "2026-05-17 12:00:00").await?;
         set_run_on(&store, new_run_id, "2026-05-18 12:00:00").await?;
         store.save_trained_net(old_run_id, old_path.clone(), 0.01, None).await?;
@@ -541,8 +541,8 @@ mod tests {
             create_dummy_model(ws_guard.labels_nets_path(), &low_loss_path)?;
         }
 
-        let high_loss_run_id = store.save_run_config(None, &TrainLabelNetsRunConfig::type_name(), "high_loss", HashMap::new()).await?;
-        let low_loss_run_id = store.save_run_config(None, &TrainLabelNetsRunConfig::type_name(), "low_loss", HashMap::new()).await?;
+        let high_loss_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "high_loss", HashMap::new()).await?;
+        let low_loss_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "low_loss", HashMap::new()).await?;
         store.save_trained_net(high_loss_run_id, high_loss_path.clone(), 0.2, None).await?;
         store.save_trained_net(low_loss_run_id, low_loss_path.clone(), 0.05, None).await?;
 
@@ -570,13 +570,13 @@ mod tests {
             create_dummy_model(ws_guard.labels_nets_path(), &label_path)?;
         }
 
-        let used_motif_run_id = store.save_run_config(None, &TrainMotifsNetsRunConfig::type_name(), "used", HashMap::new()).await?;
-        let unused_motif_run_id = store.save_run_config(None, &TrainMotifsNetsRunConfig::type_name(), "unused", HashMap::new()).await?;
+        let used_motif_run_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "used", HashMap::new()).await?;
+        let unused_motif_run_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "unused", HashMap::new()).await?;
         store.save_trained_net(used_motif_run_id, used_motif_path.clone(), 0.01, None).await?;
         store.save_trained_net(unused_motif_run_id, unused_motif_path.clone(), 0.01, None).await?;
         let used_motif_id = store.list_trained_nets(vec![used_motif_run_id], None, None).await?[0].0;
 
-        let label_run_id = store.save_run_config(None, &TrainLabelNetsRunConfig::type_name(), "label", HashMap::new()).await?;
+        let label_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "label", HashMap::new()).await?;
         store.save_trained_net(label_run_id, label_path, 0.01, Some(vec![used_motif_id])).await?;
 
         let output = run_stage(&ws, &store, PurgeMode::PurgeUnusedMotifModels).await?;

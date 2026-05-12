@@ -22,7 +22,7 @@ use futures_util::FutureExt;
 use mockall_double::double;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
-use thoosa_common::dims::{AnyDims, AnyMetrics, AnySub, ChannelsData, ChannelsSlicesData, Dims};
+use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, ChannelsSlicesData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::{simple_id, CopyToDevice, ThoError};

@@ -3,14 +3,14 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use log::{debug, info};
 use tch::Device::Cpu;
-use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-use thoosa_common::runner::common::cachable::DevicesWrap;
+use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, Metrics, NormThicknessRunConfig};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, TrainMotifsNetsRunConfig, TrainMotifsNetsRunConfigRangeOrValue};
+use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::ws::Workspace;
@@ -21,6 +21,7 @@ use thoosa_main::tasks::bucketing::PlainBandAggregationRangeOrValue::Mean;
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use thoosa_main::tasks::motif_loader::MotifLoader;
+use thoosa_main::tasks::motif_stats::{MotifStats, MotifStatsInput};
 use thoosa_main::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -34,8 +35,8 @@ pub(crate) struct AllConfigs {
     pub find_and_select: FindAndSelect,
 
 
-    pub train_motif_nets_run_config_range_or_value:TrainMotifsNetsRunConfigRangeOrValue,
-    pub train_label_nets_run_config_range_or_value:TrainLabelNetsRunConfigRangeOrValue,
+    pub train_motif_nets_run_config_range_or_value:TrainMotifNetRunConfigRangeOrValue,
+    pub train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
     #[allow(dead_code)]
     pub train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
     pub train_motifs_opt_config:Arc<OptConfig>,
@@ -200,7 +201,7 @@ pub(crate) async fn run_all_2(
     let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config))));
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
-    let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+    let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
         None,
         all_config.train_motif_nets_run_config_range_or_value,
         input_wrapper,
@@ -227,7 +228,7 @@ pub(crate) async fn run_all_2(
     let labels_filter = run_all_args.labels_filter();
 
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
-    let train_label_nets_run_ids = run_opt::< _, _, TrainLabelNetsRunConfig, _, _>(
+    let train_label_nets_run_ids = run_opt::< _, _, TrainLabelNetRunConfig, _, _>(
         None,
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
@@ -420,7 +421,7 @@ pub(crate) async fn run_all(
                         let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, train_motifs_opt_config)));
 
                         // Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
-                        let train_motif_net_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+                        let train_motif_net_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
                             None,
                             train_motif_nets_run_config_range_or_value,
                             input_wrapper,
@@ -451,7 +452,7 @@ pub(crate) async fn run_all(
                         )/*.check(&store).await?*/));
 
                         // Run a grid over label-net training configs; consumes motif nets from previous stage.
-                        let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
+                        let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                             None,
                             train_label_nets_run_config_range_or_value,
                             train_labels_input,
@@ -574,7 +575,7 @@ pub(crate) async fn run_all(
 
                     let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: select_motifs_run_ids.clone() }, train_motifs_opt_config)));
 
-                    let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifsNetsRunConfig, _, _>(
+                    let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
                         None,
                         train_motif_nets_run_config_range_or_value,
                         input_wrapper,
@@ -605,7 +606,7 @@ pub(crate) async fn run_all(
                     )/*.check(&store).await?*/));
 
                     // Run a grid over label-net training configs; consumes motif nets from previous stage.
-                    let train_label_nets_run_ids = run_opt::<_, _, TrainLabelNetsRunConfig, _, _>(
+                    let train_label_nets_run_ids = run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                         None,
                         train_label_nets_run_config_range_or_value,
                         train_labels_input,
@@ -713,7 +714,7 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
 
     /////////////////////train_motifs
-    let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
+    let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(10),
@@ -758,7 +759,7 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     };
 
     //////////////////////train labels
-    let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
+    let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),
@@ -908,7 +909,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     };
 
     /////////////////////train_motifs
-    let train_motif_nets_run_config_range_or_value: TrainMotifsNetsRunConfigRangeOrValue = TrainMotifsNetsRunConfigRangeOrValue {
+    let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(20),
@@ -956,7 +957,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     };
 
     //////////////////////train labels
-    let train_label_nets_run_config_range_or_value: TrainLabelNetsRunConfigRangeOrValue = TrainLabelNetsRunConfigRangeOrValue {
+    let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(100),

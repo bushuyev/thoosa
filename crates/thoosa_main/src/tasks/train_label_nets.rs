@@ -34,7 +34,7 @@ use thoosa_common::batches::{prefetch_next_batch_stream, preload_one, AsyncDataB
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, LabelProbability, MotifProbability, ThoBatch};
 use thoosa_common::runs::{Labeled, NetResources, SavableResult};
-use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigFields, TrainLabelNetRunConfigResult, TrainLabelNetRunConfigResultParams};
+use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self_attention_label_node, CommonTrainingRunConfig, ConvNetArgs, ConvNetParams, LabelNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinLenNetParams, LinNetArgs, OptConfig, SelfAttentionNetArgs, SelfAttentionNetParams, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigResult, TrainLabelNetRunConfigResultParams};
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -68,10 +68,10 @@ where
     train_motif_nets_run_ids: Vec<RunId>,
     motif_nets_ids: Vec<RunId>,
     run_configs: Arc<OptRunConfigs<
-        Vec<NamedVal<TrainLabelNetsRunConfigFields>>,
-        Vec<NamedRange<TrainLabelNetsRunConfigFields>>,
-        Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>,
-        TrainLabelNetsRunConfigFields,
+        Vec<NamedVal<TrainLabelNetRunConfigFields>>,
+        Vec<NamedRange<TrainLabelNetRunConfigFields>>,
+        Vec<Hyperparameter<TrainLabelNetRunConfigFields>>,
+        TrainLabelNetRunConfigFields,
     >>,
     pd: PhantomData<L>,
     applied_motif_loader: Arc<LM>,
@@ -86,7 +86,7 @@ where
 pub async fn new_train_label_nets<L, C, R>(
     train_motif_net_run_ids: Vec<RunId>,
     loader: Arc<L>,
-    run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
+    run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     stage_ctx:R,
@@ -155,7 +155,7 @@ where
         motif_nets_ids: Vec<u32>,
         applied_motif_loader: Arc<LM>,
         num_nets:u32,
-        run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetsRunConfigFields>>, Vec<NamedRange<TrainLabelNetsRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetsRunConfigFields>>, TrainLabelNetsRunConfigFields>,
+        run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         opt_config:Arc<OptConfig>,
@@ -393,7 +393,7 @@ where
 
 
                     let train_net = Arc::new(TrainNet::new(
-                        move |_ctx_for_batch:C,rc:&TrainLabelNetsRunConfig| {
+                        move |_ctx_for_batch:C,rc:&TrainLabelNetRunConfig| {
 
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
                             let label = label_for_batch.clone();
@@ -444,7 +444,7 @@ where
 
 
                        },
-                        move |rc:&TrainLabelNetsRunConfig, vs: &VarStore| {
+                        move |rc:&TrainLabelNetRunConfig, vs: &VarStore| {
                             match rc.net {
                                 LabelNetTypeArgs::ConvNet(ConvNetArgs {
                                      num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel, ref joint
@@ -479,14 +479,14 @@ where
                             // Ok(pred_y.binary_cross_entropy::<Tensor>(&target, None, Reduction::Mean).set_requires_grad(true)) - with sigmoid in any_len_label_node
                             Ok(pred_y.binary_cross_entropy_with_logits::<Tensor>(&target, None, None, Reduction::Mean).set_requires_grad(true))
                         },
-                        move |rc:&TrainLabelNetsRunConfig, vs: &VarStore|{
+                        move |rc:&TrainLabelNetRunConfig, vs: &VarStore|{
                             rc.common_training_args.build_optimizer(vs)
                         },
                         |t:ThoBatch<MotifProbability>| {
                             debug!("TrainLabelNets::run, x_f: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
                             t
                         },
-                        |rc:&TrainLabelNetsRunConfig|{
+                        |rc:&TrainLabelNetRunConfig|{
                             rc.common_training_args.epochs
                         },
                         1,//TODO params
@@ -762,7 +762,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, NetResources};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetsRunConfigFields};
+    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, LabelNetTypeArgsFields, LinNetArgsFields, OptConfig, TrainLabelNetRunConfigFields};
     use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, reset_print_options};
     use thoosa_common::ws::{mock_ws_simp, WsMockBuilder};
     use thoosa_common::tch_test_utils::resource_tensor;
@@ -960,18 +960,18 @@ mod tests {
         let run_configs = thoosa_shared::run_configs::OptRunConfigs::new(
             thoosa_shared::run_configs::GridRunConfigs::new(
                 thoosa_shared::run_configs::ConstConfigs::new(vec![
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(100)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
-                    // NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
-                    NamedVal::new(TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::Features)), Val::Int(1000)),//TODO used as num features in any_len_label_node
+                    NamedVal::new(TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Epochs), Val::Int(100)),
+                    NamedVal::new(TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::BatchSize), Val::Int(8)),
+                    // NamedVal::new(TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::FixedNumSlices(FixedNumSlicesNetArgsFields::NumLayers)), Val::Int(3)),
+                    NamedVal::new(TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::Features)), Val::Int(1000)),//TODO used as num features in any_len_label_node
                 ]),
                 vec![
-                    // NamedRange::new(TrainLabelNetsRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
+                    // NamedRange::new(TrainLabelNetRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))
                 ],
             ),
             vec![
-                Hyperparameter::UniformFloat{name: TrainLabelNetsRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001},
-                Hyperparameter::UniformInt{name: TrainLabelNetsRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::NumLayers)), lower: 1, upper: 10}
+                Hyperparameter::UniformFloat{name: TrainLabelNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.0001, upper: 0.001},
+                Hyperparameter::UniformInt{name: TrainLabelNetRunConfigFields::Net(LabelNetTypeArgsFields::LinNet(LinNetArgsFields::NumLayers)), lower: 1, upper: 10}
             ],
         );
 

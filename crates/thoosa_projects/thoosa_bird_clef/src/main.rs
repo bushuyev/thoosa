@@ -206,7 +206,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     let mut label_results: HashMap<String, Vec<f32>> = HashMap::new();
     for (label_i, label) in LABELS.iter().enumerate()/*.skip(0).take(20)*/ {
 
-        let apply_label_nets = load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx.branch("load_apply_label_nets_model".into(), false), Arc::clone(&label_models), &LABELS[label_i+1], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32).await;
+        let apply_label_nets = load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx.branch("load_apply_label_nets_model".into(), false), Arc::clone(&label_models), &LABELS[label_i], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32).await;
         // let apply_label_nets = next
         //     .take()
         //     .expect("prefetch task missing")

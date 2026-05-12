@@ -97,7 +97,7 @@ mod tests {
     use tch::Tensor;
     use tch::kind::FLOAT_CPU;
     use crate::runner::adjusters::splits::OutputBuilder;
-    use crate::dims::{AnyMetrics, AnySub, Dims};
+    use crate::dims::{AnyMetrics, Dims};
     use thoosa_shared::simple_id;
     use thoosa_shared::ThoError;
     use thoosa_shared::traits::SimpleId;
