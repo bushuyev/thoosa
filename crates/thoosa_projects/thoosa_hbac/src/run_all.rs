@@ -13,7 +13,7 @@ use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeO
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot, FindAndSelect, RunAllArgs};
+use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot, RunAllArgs};
 use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
@@ -28,6 +28,20 @@ use thoosa_shared::{RangeOrValue, ThoError};
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::val::NamedVal;
 use thoosa_store::Store;
+
+pub enum FindAndSelect {
+    GridOnly{
+        find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
+        fixed_find_motifs_config:FixedFindMotifsConfig,
+        select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
+    },
+    WithOpt{
+        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
+        fixed_find_motifs_config:FixedFindMotifsConfig,
+        find_and_select_motifs_opt_config:OptConfig,
+    }
+}
+
 
 pub(crate) struct AllConfigs {
     pub find_and_select: FindAndSelect,
@@ -567,7 +581,7 @@ mod tests {
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
     use thoosa_common::ws::FsWorkspace;
-    use thoosa_main::cli::{import_resources, FindAndSelect, RunAllArgs};
+    use thoosa_main::cli::{import_resources, RunAllArgs};
     use thoosa_main::RawTensorLoader;
     use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -580,7 +594,7 @@ mod tests {
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::SqlStore;
-    use crate::run_all::{run_all, AllConfigs};
+    use crate::run_all::{run_all, AllConfigs, FindAndSelect};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn heavy_test_run_all() -> Result<(), ThoError> {
