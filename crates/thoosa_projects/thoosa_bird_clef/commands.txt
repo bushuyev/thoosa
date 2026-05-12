@@ -32,3 +32,5 @@ cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write
 cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/ --input-dir=
 
 
+cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/  convert-precision --nets-by type:all --target-precision fp16
+
