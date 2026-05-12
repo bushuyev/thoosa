@@ -94,7 +94,7 @@ use crate::tasks::stage_ids::SELECT_MOTIFS;
 //
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectMotifsOutputMode {
+pub(crate) enum SelectMotifsOutputMode {
     Standalone,
     WithConstraintMetrics,
 }
@@ -124,11 +124,11 @@ impl SelectMotifsInput {
         }
     }
 
-    fn resources_input(&self) -> &ResourcesConfigInput<Simple> {
+    pub(crate) fn resources_input(&self) -> &ResourcesConfigInput<Simple> {
         &self.resources_input
     }
 
-    fn output_mode(&self) -> SelectMotifsOutputMode {
+    pub(crate) fn output_mode(&self) -> SelectMotifsOutputMode {
         self.output_mode
     }
 }

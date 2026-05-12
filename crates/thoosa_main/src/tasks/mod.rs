@@ -16,6 +16,7 @@ pub mod merge_selected_motifs;
 pub mod transforms;
 pub mod stages_seq;
 pub mod select_motifs;
+pub mod select_buckets;
 pub mod stacked_moitfs_loader;
 pub mod resources_motifs_clc_dist;
 pub mod seq_scan;
