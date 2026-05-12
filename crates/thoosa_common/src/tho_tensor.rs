@@ -78,12 +78,12 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             pd: PhantomData,
         })
     }
-    pub fn to_device(&self, d: Device) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.f_to_device(d)?)
-    }
-    pub fn contiguous(&self) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.f_contiguous()?)
-    }
+    // pub fn to_device(&self, d: Device) -> Result<ThoTensor<D, Id>, ThoError> {
+    //     ThoTensor::new(self.id.clone(), self.t.f_to_device(d)?)
+    // }
+    // pub fn contiguous(&self) -> Result<ThoTensor<D, Id>, ThoError> {
+    //     ThoTensor::new(self.id.clone(), self.t.f_contiguous()?)
+    // }
 
 
 }

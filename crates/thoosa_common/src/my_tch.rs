@@ -6,7 +6,7 @@ use std::sync::Arc;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
 use tch::{nn, Kind, TchError, Tensor};
-
+use tch::Kind::Float;
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
@@ -748,6 +748,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyDropout {
 pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
     fn debug(&self) {}
 
+    //TODO should consume t: &ThoTensor<DI, SimpleId>?
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 }
 
@@ -821,26 +822,21 @@ unsafe impl<DI: Dims, DO: Dims> Sync for MyLinear<DI, DO> {}
 
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLinear<DI, DO> {
     fn debug(&self) {
-        debug!(
-            "ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",
-            self.ws.device(),
-            self.bs.as_ref().map(|bs| bs.device())
-        );
+        debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()));
     }
 
-    fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        #[cfg(debug_assertions)]
+    fn tho_forward(&self, in_t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+        #[cfg(any(debug_assertions, tho_debug))]
         {
-            debug!("Module for MyLinear::forward: descr={}", self.descr);
-            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),t.device_idx());
-            debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),t.size());
+            debug!("Module for MyLinear::forward: descr={} in_t={in_t:?} self.ws={:?} self.bs={:?}", self.descr, self.ws, self.bs);
+            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),in_t.device_idx());
+            debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),in_t.size());
         }
-        match t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {
-            //TODO error
+        match in_t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {
             Ok(t) => Ok(t.into()),
             Err(e) => {
                 error!("{:?}", e);
-                #[cfg(debug_assertions)]
+                #[cfg(any(debug_assertions, tho_debug))]
                 error!("failed layer descr: {} ", self.descr);
 
                 Err(e.into())
@@ -1042,29 +1038,8 @@ fn self_attention_forward_t(
     trace!("SelfAttention::tho_forward: key_valid=\n{key_valid}");
 
     debug!(
-        "SelfAttention::tho_forward: \
-         x.size={:?}, \
-         key_valid.size={:?}, \
-         w_q.ws.size={:?}, w_q.bs.size={:?}, \
-         w_k.ws.size={:?}, w_k.bs.size={:?}, \
-         w_v.ws.size={:?}, w_v.bs.size={:?}, \
-         w_o.ws.size={:?}, w_o.bs.size={:?}, \
-         n_heads={:?}, \
-         head_dim={:?}, \
-         dropout={:?}",
-        x.size(),
-        key_valid.size(),
-        w_q.ws.size(),
-        w_q.bs.as_ref().map(|v| v.size()),
-        w_k.ws.size(),
-        w_k.bs.as_ref().map(|v| v.size()),
-        w_v.ws.size(),
-        w_v.bs.as_ref().map(|v| v.size()),
-        w_o.ws.size(),
-        w_o.bs.as_ref().map(|v| v.size()),
-        n_heads,
-        head_dim,
-        dropout
+        "SelfAttention::tho_forward: x={:?}, key_valid={:?}, w_q.ws={:?}, w_q.bs={:?}, w_k.ws={:?}, w_k.bs={:?}, w_v.ws={:?}, w_v.bs={:?}, w_o.ws={:?}, w_o.bs={:?}, n_heads={:?}, head_dim={:?}, dropout={:?}",
+        x,key_valid,w_q.ws,w_q.bs.as_ref().map(|v| v),w_k.ws,w_k.bs.as_ref().map(|v| v),w_v.ws,w_v.bs.as_ref().map(|v| v),w_o.ws,w_o.bs.as_ref().map(|v| v),n_heads,head_dim,dropout
     );
 
     let q = x
@@ -1098,7 +1073,7 @@ fn self_attention_forward_t(
 
                 drop(key_valid);
 
-                panic_to_err!(raw_scores.f_masked_fill(&invalid_mask, -1e9))?
+                panic_to_err!(raw_scores.f_masked_fill(&invalid_mask, -1e4))?
             };
 
             drop(raw_scores);
@@ -1147,33 +1122,44 @@ fn attn_block_forward_t(
     dropout: f64,
     train: bool,
 ) -> Result<Tensor, ThoError> {
+
+    debug!("attn_block_forward_t: x.kind={:?} ln1.ws.kind={:?}", x.kind(), ln1.ws.as_ref().map(|ws|ws.kind()));
+
     let h = x.f_layer_norm(
         ln1.normalized_shape.as_slice(),
-        ln1.ws.as_ref(),
-        ln1.bs.as_ref(),
+        ln1.ws.as_ref().map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
+        ln1.bs.as_ref().map(|v|v.to_kind(Float)),
         1e-5,
         true,
-    )?;
+    )?.to_kind(x.kind());
 
     let x = x.f_add(
         &self_attention_forward_t(h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?
     )?;
 
+    debug!("attn_block_forward_t: x.kind={:?} ln2.ws.kind={:?}", x.kind(), ln2.ws.as_ref().map(|ws|ws.kind()));
 
-    let f = x.f_layer_norm(
+    let f = x.to_kind(Float).f_layer_norm(
         ln2.normalized_shape.as_slice(),
-        ln2.ws.as_ref(),
-        ln2.bs.as_ref(),
+        ln2.ws.as_ref().map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
+        ln2.bs.as_ref().map(|v|v.to_kind(Float)),
         1e-5,
         true,
-    )?
-    .f_linear(&ff1.ws, ff1.bs.as_ref())?
+    )?.to_kind(x.kind());
+
+    debug!("attn_block_forward_t: f={f:?}");
+
+    let f = f.f_linear(&ff1.ws, ff1.bs.as_ref())?
     .f_gelu("none")?
     .f_dropout(dropout, train)?
     .f_linear(&ff2.ws, ff2.bs.as_ref())?
     .f_dropout(dropout, train)?;
 
-    x.f_add(&f).map_err(|e| e.into())
+    let out = x.f_add(&f)?;
+
+    debug!("attn_block_forward_t: out={out:?}");
+
+    Ok(out)
 }
 
 #[derive(Debug)]
@@ -1246,7 +1232,7 @@ fn sinusoidal_positional_encoding(length: i64, d_model: i64, device: tch::Device
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        debug!("SelfAttention::tho_forward:  t.id={:?} t.size={:?} lengths={lengths:?}", t.id(), t.size());
+        debug!("SelfAttention::tho_forward:  t.id={:?} t.size={:?} t.kind={:?} lengths={lengths:?}", t.id(), t.size(), t.as_ref().kind());
 
         let s = t.size();
         if s.len() != 3 {
@@ -1257,10 +1243,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
         let l = s[1];
         let d = s[2];
         if d != self.n_heads * self.head_size {
-            return Err(ThoError::new(format!(
-                "SelfAttention::tho_forward d_model mismatch, expected {}, got {d}",
-                self.n_heads * self.head_size
-            )));
+            return Err(ThoError::new(format!("SelfAttention::tho_forward d_model mismatch, expected {}, got {d}", self.n_heads * self.head_size)));
         }
 
         let x = t.as_ref();
@@ -1273,7 +1256,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
             Tensor::f_ones([b, l], (Kind::Bool, x.device()))?
         };
 
-        let mask_f = key_valid.f_to_kind(Kind::Float)?.f_unsqueeze(-1)?;
+        let mask_f = key_valid.f_to_kind(t.as_ref().kind())?.f_unsqueeze(-1)?;
         h = h.f_mul(&mask_f)?;
         h = attn_block_forward_t(
             &h,
