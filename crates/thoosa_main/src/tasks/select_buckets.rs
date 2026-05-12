@@ -37,7 +37,7 @@ const SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT: usize = 16;
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
 #[run_config_grid]
-pub struct SelectBucketsStageRunConfig {
+pub struct SelectBucketsRunConfig {
     #[in_map]
     pub id: Option<RunId>,
 
@@ -46,7 +46,7 @@ pub struct SelectBucketsStageRunConfig {
     pub energy_k: f64,
 }
 
-impl SelectBucketsStageRunConfig {
+impl SelectBucketsRunConfig {
     pub fn new(id: Option<RunId>, energy_k: f64) -> Self {
         Self { id, energy_k }
     }
@@ -185,7 +185,7 @@ where
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     loader: Arc<L>,
     motif_loader: Arc<ML>,
-    run_configs: Vec<SelectBucketsStageRunConfig>,
+    run_configs: Vec<SelectBucketsRunConfig>,
     find_motifs_run_ids: Vec<RunId>,
     find_motif_run_ids_motif_ids: HashMap<RunId, Vec<u32>>,
     pd: PhantomData<C>,
@@ -230,7 +230,7 @@ where
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
         motif_loader: Arc<ML>,
-        run_configs: Vec<SelectBucketsStageRunConfig>,
+        run_configs: Vec<SelectBucketsRunConfig>,
         find_motifs_run_ids: Vec<RunId>,
     ) -> Result<Self, ThoError> {
         let mut find_motif_run_ids_motif_ids = HashMap::new();
@@ -290,7 +290,7 @@ where
         })
     }
 
-    async fn evaluate_motif(&self, motif_id: u32, select_config: &SelectBucketsStageRunConfig, reference: ReferenceStats, mut ctx: C) -> Result<BucketEvaluation, ThoError> {
+    async fn evaluate_motif(&self, motif_id: u32, select_config: &SelectBucketsRunConfig, reference: ReferenceStats, mut ctx: C) -> Result<BucketEvaluation, ThoError> {
         let motif = Arc::clone(&self.motif_loader)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()))),
@@ -317,7 +317,7 @@ where
 
     async fn select_for_run_config(
         &self,
-        select_config: &SelectBucketsStageRunConfig,
+        select_config: &SelectBucketsRunConfig,
         resources: Arc<Vec<Resource>>,
         output_mode: SelectMotifsOutputMode,
         mut ctx: C,
@@ -444,7 +444,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SelectBucketsStage, SelectBucketsStageRunConfig};
+    use super::{SelectBucketsStage, SelectBucketsRunConfig};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
@@ -526,7 +526,7 @@ mod tests {
                 &store,
                 loader,
                 motif_loader,
-                vec![SelectBucketsStageRunConfig::new(Some(select_buckets_run_id), 2.0)],
+                vec![SelectBucketsRunConfig::new(Some(select_buckets_run_id), 2.0)],
                 vec![find_motifs_run_id],
             )
             .await?,
