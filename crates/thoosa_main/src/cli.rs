@@ -1,5 +1,5 @@
 use crate::cli::Commands::{
-     ConvertPrecision, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, RunAll,
+     ConvertPrecision, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, PurgeModels, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
@@ -7,6 +7,7 @@ use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors}
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
+use crate::tasks::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::version::VERSION;
@@ -306,6 +307,7 @@ pub enum Commands {
     TrainLabelNets(TrainLabelNetsArgs),
     TrainFinalNet(TrainFinalNetArgs),
     ConvertPrecision(ConvertPrecisionArgs),
+    PurgeModels(PurgeModelsArgs),
     RunAll(RunAllArgs),
     Infer(InferArgs),
     SayHello(SayHelloArgs),
@@ -823,6 +825,18 @@ where
                 .await?;
             let output = Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0).await?;
             info!("ConvertPrecision done, converted={}", output.converted().len());
+        }
+
+        Some(PurgeModels(purge_models_args)) => {
+            debug!("PurgeModels: purge_models_args={purge_models_args:?}");
+            let output = Arc::new(PurgeModelsStage::<RunCtxImpl>::new(&ws, &store, purge_models_args.clone()))
+                .run(
+                    Arc::new(DevicesWrap::wrap(PurgeModelsInput::new())),
+                    root_ctx.branch(Some("purge_models"), true),
+                )
+                .await?;
+            let output = Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0).await?;
+            info!("PurgeModels done, purged={}", output.purged().len());
         }
 
         Some(RunAll(run_all_args)) => {
