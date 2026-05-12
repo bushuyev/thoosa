@@ -105,6 +105,7 @@ use crate::tasks::bucketing_opt::BucketingOptStage;
 use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
+use crate::tasks::select_buckets::{SelectBucketsRunConfigRangeOrValue};
 use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::tasks::seq_scan::SeqScanStage;
 use crate::tasks::train_final_net::new_train_final_net;
@@ -922,20 +923,6 @@ where
 
 
     Ok(())
-}
-
-
-pub enum FindAndSelect {
-    GridOnly{
-        find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
-        fixed_find_motifs_config:FixedFindMotifsConfig,
-        select_motifs_run_config:SelectMotifsRunConfigRangeOrValue,
-    },
-    WithOpt{
-        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
-        fixed_find_motifs_config:FixedFindMotifsConfig,
-        find_and_select_motifs_opt_config:OptConfig,
-    }
 }
 
 
@@ -2040,7 +2027,7 @@ where
 
 #[cfg(test)]
 mod cli_tests {
-    use crate::cli::{import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot, Cli, FindAndSelect, RunAllArgs};
+    use crate::cli::{import_resources, median_window_from_find_and_select, run_all_find_motifs_config_grid_0, run_grid, run_plot, Cli, RunAllArgs};
     use clap::Parser;
     use futures::executor::block_on;
     use log::LevelFilter::{Debug, Error, Info, Trace, Warn};

@@ -37,7 +37,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
 use thoosa_with_data::with_data;
-use crate::run_all::{run_all, run_all_2, run_all_grid_config_0};
+use crate::run_all::{run_all, run_all_grid_config_0};
 
 mod data;
 mod labels;
