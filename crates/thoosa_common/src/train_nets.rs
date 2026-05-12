@@ -99,7 +99,7 @@ impl TrainLabelNetsArgs {
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
-pub struct TrainLabelNetsRunConfig {//TODO rename to TrainLabelNetRunConfig
+pub struct TrainLabelNetRunConfig {//TODO rename to TrainLabelNetRunConfig
     #[in_map]
     pub id: Option<RunId>,
 
@@ -112,13 +112,13 @@ pub struct TrainLabelNetsRunConfig {//TODO rename to TrainLabelNetRunConfig
     pub net: LabelNetTypeArgs,
 }
 
-impl AsRef<CommonTrainingRunConfig> for TrainLabelNetsRunConfig {
+impl AsRef<CommonTrainingRunConfig> for TrainLabelNetRunConfig {
     fn as_ref(&self) -> &CommonTrainingRunConfig {
         &self.common_training_args
     }
 }
 
-impl TrainLabelNetsRunConfig {
+impl TrainLabelNetRunConfig {
     pub fn new(
         id: Option<RunId>,
         common_training_args: CommonTrainingRunConfig,
@@ -138,7 +138,7 @@ pub struct TrainLabelNetRunConfigResult {
     pub label: String,
     pub loss: f32,
     label_node_params: LabelNetParams,
-    train_label_nets_run_config: TrainLabelNetsRunConfig,
+    train_label_nets_run_config: TrainLabelNetRunConfig,
     var_store: VarStore,
     motif_nets_ids:Vec<u32>
 }
@@ -157,7 +157,7 @@ impl TrainLabelNetRunConfigResult {
         label: String,
         loss: f32,
         label_node_params: LabelNetParams,
-        train_label_nets_run_config: TrainLabelNetsRunConfig,
+        train_label_nets_run_config: TrainLabelNetRunConfig,
         var_store: VarStore,
     ) -> Self {
         Self {
@@ -199,8 +199,8 @@ impl SavableResult for TrainLabelNetRunConfigResult {
     ) -> Result<u32, ThoError> {
 
         let run_config_id = store.save_run_config(
-            Some(p.train_motif_nets_run_ids),//it's used as input for TrainLabelNetsOutput
-            &TrainLabelNetsRunConfig::type_name(),
+            Some(p.train_motif_nets_run_ids), //it's used as input for TrainLabelNetsOutput
+            &TrainLabelNetRunConfig::type_name(),
             "Label",
             run_config_values_with_loss(self.train_label_nets_run_config.to_properties_iter(None), self.loss),
         ).await?;
@@ -737,7 +737,7 @@ impl Default for MotifNetTypeArgs {
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_opt]
-pub struct TrainMotifsNetsRunConfig {//TODO rename to TrainMotifsNetRunConfig
+pub struct TrainMotifNetRunConfig {
     #[in_map]
     pub id: Option<RunId>,
 
@@ -753,7 +753,7 @@ pub struct TrainMotifsNetsRunConfig {//TODO rename to TrainMotifsNetRunConfig
 
 }
 
-impl AsRef<CommonTrainingRunConfig> for TrainMotifsNetsRunConfig {
+impl AsRef<CommonTrainingRunConfig> for TrainMotifNetRunConfig {
     fn as_ref(&self) -> &CommonTrainingRunConfig {
         &self.common_training_args
     }
@@ -1719,7 +1719,7 @@ pub struct TrainMotifNetResult {
     motif_id: u32,
     pub vs: VarStore,
     pub params: MotifNetParams,
-    run_config_values: TrainMotifsNetsRunConfig,
+    run_config_values: TrainMotifNetRunConfig,
     #[allow(dead_code)]
     select_motifs_run_id: RunId,
 }
@@ -1732,7 +1732,7 @@ impl TrainMotifNetResult {
         vs: VarStore,
         select_motifs_run_id: RunId,
         params: MotifNetParams,
-        run_config_values: TrainMotifsNetsRunConfig,
+        run_config_values: TrainMotifNetRunConfig,
     ) -> Self {
         Self {
             loss,
@@ -1817,7 +1817,7 @@ impl SavableResult for TrainMotifNetResult {
 
         let train_motif_net_run_id = store.save_run_config(
             Some(p),
-            &TrainMotifsNetsRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
+            &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
             run_config_values_with_loss(self.run_config_values.to_properties_iter(None), self.loss),
         ).await?;
@@ -2352,7 +2352,7 @@ mod train_tests {
     use crate::loader::{LoadRunner, OfMemSize, SyncWrapper};
     use crate::my_tch::ThoModule;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetsRunConfig, TrainLabelNetsRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifsNetsRunConfig};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
@@ -3945,14 +3945,14 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let train_motif_nets_run_id = store.save_run_config(None, TrainMotifsNetsRunConfig::type_name(), "source", HashMap::new()).await?;
+        let train_motif_nets_run_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
 
         let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
             // vec![source_run_id],
             "alpha".to_string(),
             0.125,
             LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
-            TrainLabelNetsRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16))),
+            TrainLabelNetRunConfig::new(None, CommonTrainingRunConfig::default(), LabelNetTypeArgs::LinNet(LinNetArgs::new(2, 16))),
             VarStore::new(Cpu),
         );
 
@@ -3977,8 +3977,8 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let label_run_id_0 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_0", HashMap::new()).await?;
-        let label_run_id_1 = store.save_run_config(None, TrainLabelNetsRunConfig::type_name(), "label_1", HashMap::new()).await?;
+        let label_run_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
+        let label_run_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
             Some(&vec![label_run_id_0, label_run_id_1]),
             0.25,

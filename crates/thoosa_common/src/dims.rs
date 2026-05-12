@@ -115,14 +115,7 @@ impl Dims for AnyDims {
 
 
 
-pub struct AnySub {}
 
-#[async_trait]
-impl CopyToDevice for AnySub {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        todo!()
-    }
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct AnyMetrics;

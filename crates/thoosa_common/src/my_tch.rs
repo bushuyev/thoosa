@@ -2,6 +2,7 @@ use core::fmt;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
+use std::ptr;
 use std::sync::Arc;
 use log::{debug, error, trace};
 use serde::{Deserialize, Serialize};
@@ -11,7 +12,7 @@ use tch::nn::{ConvConfig, Module};
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
 };
-
+use torch_sys::C_tensor;
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
@@ -820,6 +821,8 @@ pub struct MyLinear<DI: Dims, DO: Dims> {
 unsafe impl<DI: Dims, DO: Dims> Send for MyLinear<DI, DO> {}
 unsafe impl<DI: Dims, DO: Dims> Sync for MyLinear<DI, DO> {}
 
+
+
 impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLinear<DI, DO> {
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()));
@@ -1281,6 +1284,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
 
 #[cfg(test)]
 mod tch_tests {
+    use std::ptr;
     use std::sync::Arc;
     use log::debug;
 
@@ -1288,15 +1292,15 @@ mod tch_tests {
     use tch::Device::Cpu;
     use tch::Kind::{Bool, Float};
     use tch::{Device, IndexOp, Kind, Tensor, nn};
-
+    use tch::kind::FLOAT_CPU;
     use tch::nn::{BatchNormConfig, ConvConfig, VarStore};
-
+    use torch_sys::C_tensor;
     use thoosa_shared::ThoError;
 
     use crate::builder::SeqBuilder;
     use crate::builder::{Node, clc_conv1d_out};
-    use crate::dims::{AnyDims, Batch};
-    use crate::my_tch::{valid_time_mask, ThoModule};
+    use crate::dims::{AnyDims, Batch, Dims};
+    use crate::my_tch::{valid_time_mask, MyLinear, ThoModule};
     use crate::train_nets::ThoModuleWithStore;
 
     #[test]
@@ -1631,6 +1635,74 @@ mod tch_tests {
                 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0
             ]).view((4, 11)).totype(Bool)
         );
+
+        Ok(())
+    }
+
+    fn call_generated_1<F>(f: F) -> Result<Tensor, ThoError>
+    where
+        F: FnOnce(*mut *mut C_tensor),
+    {
+        let mut out: *mut C_tensor = ptr::null_mut();
+
+        f(&mut out as *mut *mut C_tensor);
+
+        // check_torch_err()?;
+
+        if out.is_null() {
+            Err(ThoError::new("generated libtorch op returned a null Tensor pointer"))
+        } else {
+            // Takes ownership of the returned libtorch Tensor pointer.
+            Ok(unsafe { Tensor::from_ptr(out) })
+        }
+    }
+
+    fn as_mut_c_tensor(t: &Tensor) -> *mut C_tensor {
+        // The generated libtorch API takes *mut C_tensor even for logical inputs.
+        // We do not mutate these tensors from Rust.
+        t.as_ptr() as *mut C_tensor
+    }
+
+    fn scalar_f32(v: f64) -> Tensor {
+        Tensor::from_slice(&[v as f32])
+            .to_device(Device::Cpu)
+            .to_kind(Kind::Float)
+    }
+
+    fn symmetric_i8_scale(t: &Tensor) -> f64 {
+        let max_abs = t.abs().max().double_value(&[]);
+        if max_abs == 0.0 || !max_abs.is_finite() {
+            1.0
+        } else {
+            max_abs / 127.0
+        }
+    }
+
+    fn scalar_i64(v: i64) -> Tensor {
+        Tensor::from_slice(&[v])
+            .to_device(Device::Cpu)
+            .to_kind(Kind::Int64)
+    }
+
+    //TODO https://chatgpt.com/g/g-p-6802177ab924819193b7de5c74c7014c-rust/c/6a0308a4-c734-83eb-9983-9d324d9cda56
+    #[test]
+    fn test_quantized_linear() -> Result<(), ThoError>{
+        let weight = Tensor::rand(&[3, 100], FLOAT_CPU);
+        let bias = Tensor::rand(&[3], FLOAT_CPU);
+
+        let weight_scale = scalar_f32(symmetric_i8_scale(&weight));
+        let weight_zero_point = scalar_i64(0);
+
+        let packed_weight = call_generated_1(|out| unsafe {
+            torch_sys::c_generated::atg__wrapped_linear_prepack(
+                out,
+                as_mut_c_tensor(&weight),
+                as_mut_c_tensor(&weight_scale),
+                as_mut_c_tensor(&weight_zero_point),
+                as_mut_c_tensor(&bias),
+            );
+        })?;
+
 
         Ok(())
     }
