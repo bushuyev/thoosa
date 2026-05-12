@@ -14,7 +14,7 @@ use log::{debug, error, info, warn};
 use std::time::Instant;
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
-use tch::{Cuda, IndexOp, Tensor};
+use tch::{Cuda, Device, IndexOp, Kind, Tensor};
 use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tokio::task::JoinHandle;
@@ -186,7 +186,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 
     let num_files = pathnames.len();
 
-    let mut oggs_t = Tensor::empty([num_files as i64, 1920000], FLOAT_CPU);//1920000 = 32000 × 60 one minute
+    let mut oggs_t = Tensor::empty([num_files as i64, 1920000], (Kind::Half, Device::Cpu));//1920000 = 32000 × 60 one minute
     for (entry_i, ogg_filename) in pathnames.iter().enumerate() {
         let ogg_t = ogg_to_tensor(ogg_filename)?;
         debug!("ogg_filename: {ogg_filename:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());

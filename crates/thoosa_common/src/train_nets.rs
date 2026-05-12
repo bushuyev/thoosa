@@ -319,10 +319,26 @@ where
 unsafe impl<DI: Dims + Send, DO: Dims + Send> Send for ThoModuleWithStore<DI, DO> {}
 unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO> {}
 
-impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO>
-    for ThoModuleWithStore<DI, DO>
+impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
+
+        let store_float_precision = var_store_float_precision(&self.var_store);
+
+        debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.as_ref().kind());
+
+        let VarStoreFloatPrecision::Uniform(float_precision) = store_float_precision else {
+            return Err(ThoError::new(format!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id)))
+        };
+        let t = if !float_precision.eq(&t.as_ref().kind()) {
+            debug!("ThoModuleWithStore::tho_forward: t.id={:?}, converting to {:?}", t.id(), float_precision);
+
+            &t.to_kind(float_precision)?
+        } else {
+            t
+        };
+        debug!("ThoModuleWithStore::tho_forward: t.id={:?}, t.as_ref().kind={:?}", t.id(), t.as_ref().kind());
+
         self.module.tho_forward(t, lengths, train)
     }
 }
@@ -384,6 +400,44 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
 
 
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VarStoreFloatPrecision {
+    NoFloatVars,
+    Uniform(Kind),
+    Mixed(Vec<(Kind, usize)>),
+}
+
+fn is_float_kind(kind: Kind) -> bool {
+    matches!(
+            kind,
+            Kind::Half | Kind::BFloat16 | Kind::Float | Kind::Double
+        )
+}
+
+pub fn var_store_float_precision(vs: &nn::VarStore) -> VarStoreFloatPrecision {
+    let mut counts: Vec<(Kind, usize)> = Vec::new();
+
+    for (_name, tensor) in vs.variables() {
+        let kind = tensor.kind();
+
+        if !is_float_kind(kind) {
+            continue;
+        }
+
+        if let Some((_k, count)) = counts.iter_mut().find(|(k, _)| *k == kind) {
+            *count += 1;
+        } else {
+            counts.push((kind, 1));
+        }
+    }
+
+    match counts.len() {
+        0 => VarStoreFloatPrecision::NoFloatVars,
+        1 => VarStoreFloatPrecision::Uniform(counts[0].0),
+        _ => VarStoreFloatPrecision::Mixed(counts),
+    }
 }
 
 #[async_trait]
@@ -1288,10 +1342,11 @@ fn self_attention_masked_mean(h: &Tensor, lengths: Option<&BatchLengths>) -> Res
         return Err(ThoError::new(format!("self_attention_masked_mean expected [B,L,D], got {:?}", h_size)));
     }
     if let Some(lengths) = lengths {
+        let kind = h.kind();
         let mask = mask_from_lengths(lengths.as_slice(), h_size[1], h.device())?.f_squeeze_dim(1)?;
-        let mask_f = mask.f_to_kind(Kind::Float)?.f_unsqueeze(-1)?;
-        let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?;
-        let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, Kind::Float)?.f_clamp_min(1.0)?;
+        let mask_f = mask.f_to_kind(kind)?.f_unsqueeze(-1)?;
+        let sum = h.f_mul(&mask_f)?.f_sum_dim_intlist([1].as_slice(), false, kind)?;
+        let denom = mask_f.f_sum_dim_intlist([1].as_slice(), false, kind)?.f_clamp_min(1.0)?;
         sum.f_div(&denom).map_err(|e| e.into())
     } else {
         h.f_mean_dim(1, false, None).map_err(|e| e.into())
@@ -1451,10 +1506,11 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
     debug!("self_attention_label_node: params={params:?}");
 
 
-    SeqBuilder::new(0, None)?
+    let mut seq_builder = SeqBuilder::new(0, None)?;
+    let builder = seq_builder
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("self_attention_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
+                debug!("self_attention_label_node: transpose input={t:?} _lengths={_lengths:?}");
                 Ok(t.transpose(1, 2))
             })),
             Some(params.motif_nets),
@@ -1473,7 +1529,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, lengths: Option<&BatchLengths>| {
-                debug!("self_attention_label_node: pooling input={:?} lengths={lengths:?}", t.size());
+                debug!("self_attention_label_node: pooling input={t:?} lengths={lengths:?}");
                 self_attention_masked_mean(t, lengths)
             })),
             None,
@@ -1481,15 +1537,19 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         .linear_s(
             1,
             "self_attention_label_head_last",
-        )?
-        .closure(
+        )?;
+
+        #[cfg(any(debug_assertions, tho_debug))] {
+        let builder = builder.closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("self_attention_label_node: self_attention_label_head_last={t:?}");
                 Ok(t.shallow_clone())
             })),
             None,
-        )?
-        .end_seq()
+        )?;}
+
+
+    builder .end_seq()
 
 }
 
@@ -1518,18 +1578,17 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
         for layer in 0..lin_params.motif_layers {
             builder = builder.linear_feats(
-                "self_attention_in_proj",
+                "lin_label_node",
                 lin_params.features,
                 lin_params.features,
             )?
-            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-            ;
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
         }
 
 
     builder.linear_s(
             1,
-            "self_attention_label_head_last",
+            "lin_label_node last",
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1541,102 +1600,6 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
         )?
         .end_seq()
 
-    // SeqBuilder::new(num_features/*30000*/, None)?
-    //     // .closure(
-    //     //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-    //     //         debug!("lin_label_node: input={t:?}");
-    //     //         Ok(t.shallow_clone())
-    //     //     })),
-    //     //     None,
-    //     // )?
-    //     .split1(
-    //
-    //     {
-    //         let mut seq_builder = SeqBuilder::new(num_features, None)?;
-    //         let mut builder = &mut seq_builder
-    //         /*.closure(
-    //             Arc::new(Box::new(move |t: &Tensor| {
-    //                 debug!("lin_label_node: motif input={t:?}");
-    //                 Ok(t.shallow_clone())
-    //             })),
-    //             None,
-    //         )*/;
-    //         for layer in 0..lin_params.motif_layers {
-    //             builder = builder.linear_s(
-    //                 num_features,
-    //                 format!("split_layer_{layer}"),
-    //             )?
-    //             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
-    //
-    //         }
-    //         builder
-    //             .end_seq()?
-    //         },
-    //
-    //         Box::new(move |t: &Tensor| {
-    //             debug!("lin_label_node: t.size={:?}", t.size());
-    //             let batch_size = t.size()[0];
-    //             let motif_nets = t.size()[1];
-    //             let dim_size = t.size()[2] as u32;
-    //             let ranges = (0..dim_size).step_by(num_features as usize).map(|v|v as i64).collect::<Vec<_>>();
-    //             debug!("lin_label_node: ranges={ranges:?}");
-    //
-    //
-    //             Ok(ranges.into_iter().map(|start| {
-    //
-    //                 let t = if start as u32 + num_features > dim_size  {
-    //                     debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?} padding to {:?}", start as u32 + num_features, t.size(), [batch_size, motif_nets, num_features as i64]);
-    //                     pad_to(&t.f_narrow(2, start, dim_size as i64 - start)?, &[batch_size, motif_nets, num_features as i64], 0.0)?
-    //                 } else {
-    //                     debug!("lin_label_node: start as u32 + features={:?} dim_size={dim_size} t.size={:?}", start as u32 + num_features, t.size());
-    //                     t.f_narrow(2, start, num_features as i64)?
-    //                 };
-    //
-    //                 Ok(t)
-    //             }).collect::<Result<Vec<Tensor>, ThoError>>()?)
-    //         }),
-    //         Box::new(move |res: Vec<Tensor>| {
-    //             debug!("lin_label_node: res={res:?}");
-    //
-    //             let all = Tensor::f_concat(res.as_slice(), 1)?;
-    //             debug!("lin_label_node: all.size={:?}", all.size());
-    //
-    //             let r = all.f_mean_dim(1, false, None)?;//.i((0, ..num_features as i64)); //
-    //             debug!("lin_label_node: r.size={:?}", r.size());
-    //
-    //             Ok(r)
-    //
-    //         })
-    //     )?
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor| {
-        //         debug!("lin_label_node: final input={t:?}");
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     None,
-        // )
-        // .conv_1d("lin_label_node conv", 1000)
-        // .linear_s(
-        //     num_features,
-        //     "head_linear_s_0",
-        // )?
-        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        // .linear_s(
-        //     256,
-        //     "head_linear_s_256"
-        // )?
-        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        // .linear_s(
-        //     128,
-        //     "head_linear_s_128"
-        // )?
-        // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-        // .linear_s(
-        //     1,
-        //     "head_linear_s_1"
-        // )?
-        // // .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))
-        // .end_seq()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -2592,7 +2555,18 @@ mod train_tests {
             &[128, 256, 384],
             11i64,
             SelfAttentionNetParams::new(64, 4, 4, 0.1),
-        ).await
+            false,
+        ).await?;
+
+        _test_save_load_self_attention_label_node(
+            19,
+            &[128, 256, 384],
+            11i64,
+            SelfAttentionNetParams::new(64, 4, 4, 0.1),
+            true,
+        ).await?;
+
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2872,7 +2846,7 @@ mod train_tests {
         Ok(())
     }
 
-    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams) -> Result<(), ThoError> {
+    async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams, half: bool) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_dir={test_dir:?}");
 
@@ -2889,11 +2863,16 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> = self_attention_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        if half {
+            vs_0.half();
+        }
         vs_0.freeze();
+
+        let module_with_store = ThoModuleWithStore::with_factory(mono_key!(0, "test"), net, vs_0, None);
 
         for slices in all_slices {
             let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
-            let _ = net.tho_forward(
+            let _ = module_with_store.tho_forward(
                 &Tensor::rand(
                     [
                         batch,
@@ -2909,9 +2888,9 @@ mod train_tests {
 
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", module_with_store.var_store(), &params)?;
 
-        debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
+        debug!("net_id={net_id:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
 
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
@@ -2921,8 +2900,8 @@ mod train_tests {
              Cpu,
         )?;
 
-        assert!(vs_0.variables().len() > 0);
-        assert_eq!(vs_0.variables(), loaded_module.var_store().variables());
+        assert!(module_with_store.var_store().variables().len() > 0);
+        assert_eq!(module_with_store.var_store().variables(), loaded_module.var_store().variables());
 
         if matches!(Device::cuda_if_available(), Cuda(_)) {
             let cuda_net = loaded_module.copy_to_device(1).await?;
