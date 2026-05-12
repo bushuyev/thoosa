@@ -111,6 +111,12 @@ pub struct RunConfigRow {
     pub run_on: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TrainedNetEntry {
+    pub id: u32,
+    pub net_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunConfigFilter {
     pub id: Option<RunId>,
@@ -297,6 +303,12 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn save_trained_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
 
     async fn list_trained_nets(&self, run_ids: Vec<RunId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+    async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
+    async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
+    async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
+    async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
+    async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
+    async fn update_run_config_run_on(&self, run_id: RunId, run_on: String) -> Result<(), ThoError>;
     async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError>;
 
     async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
@@ -503,6 +515,12 @@ mock! {
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+        async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
+        async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
+        async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
+        async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
+        async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
+        async fn update_run_config_run_on(&self, run_id: RunId, run_on: String) -> Result<(), ThoError>;
         async fn list_input_nets(&self, net_id: RunId) -> Result<Vec<u32>, ThoError>;
         async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
         #[cfg(test)]
@@ -584,6 +602,8 @@ pub struct SqlStore {
 
 const SQL_STORE_READERS_CNT: usize = 8;
 static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
+const TRAIN_LABEL_NETS_RUN_CONFIG_TYPE: &str = "TrainLabelNetsRunConfig";
+const TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE: &str = "TrainMotifsNetsRunConfig";
 
 #[derive(Debug)]
 struct RandomSliceResourceCtx {
@@ -2260,6 +2280,65 @@ impl Store for SqlStore {
         .await
     }
 
+    async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError> {
+        self.with_reader_conn("list_trained_net_entries", move |conn| {
+            let mut stmt = conn.prepare("SELECT id, net_path FROM trained_nets")?;
+            stmt.query_map([], Self::trained_net_entry)?
+                .map(|v| v.map_err(ThoError::from))
+                .collect::<Result<Vec<_>, ThoError>>()
+        }).await
+    }
+
+    async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError> {
+        self.with_reader_conn("list_label_trained_nets_before", move |conn| {
+            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type=? AND rc.run_on < ?")?;
+            stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
+                .map(|v| v.map_err(ThoError::from))
+                .collect::<Result<Vec<_>, ThoError>>()
+        }).await
+    }
+
+    async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError> {
+        self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
+            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
+            stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, loss], Self::trained_net_entry)?
+                .map(|v| v.map_err(ThoError::from))
+                .collect::<Result<Vec<_>, ThoError>>()
+        }).await
+    }
+
+    async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError> {
+        self.with_reader_conn("list_unused_motif_trained_nets", move |conn| {
+            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type=? AND NOT EXISTS (SELECT 1 FROM trained_nets_input nti WHERE nti.input_id=tn.id)")?;
+            stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
+                .map(|v| v.map_err(ThoError::from))
+                .collect::<Result<Vec<_>, ThoError>>()
+        }).await
+    }
+
+    async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError> {
+        self.with_writer_conn("delete_trained_nets", move |conn| {
+            if net_ids.is_empty() {
+                return Ok(0);
+            }
+
+            let placeholders = net_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+            let query = format!("DELETE FROM trained_nets WHERE id IN ({placeholders})");
+            let params = net_ids.into_iter().map(|net_id| rusqlite::types::Value::Integer(net_id as i64)).collect::<Vec<_>>();
+            let t = conn.transaction()?;
+            let deleted = t.execute(&query, rusqlite::params_from_iter(params))?;
+            t.commit()?;
+            Ok(deleted)
+        }).await
+    }
+
+    async fn update_run_config_run_on(&self, run_id: RunId, run_on: String) -> Result<(), ThoError> {
+        self.with_writer_conn("update_run_config_run_on", move |conn| {
+            conn.execute("UPDATE run_configs SET run_on=? WHERE id=?", params![run_on, run_id])?;
+            Ok(())
+        }).await
+    }
+
     //TODO test
     async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError> {
         self.with_reader_conn("list_input_nets", move |conn| {
@@ -2366,6 +2445,13 @@ fn debug_trace_event(ev: TraceEvent) {
 
 //TODO move all prepare to init
 impl SqlStore {
+    fn trained_net_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<TrainedNetEntry> {
+        Ok(TrainedNetEntry {
+            id: row.get::<usize, u32>(0)?,
+            net_path: PathBuf::from(row.get::<usize, String>(1)?),
+        })
+    }
+
     fn count_motif_slices(motif_id: u32, conn: &Connection) -> Result<usize, ThoError> {
         let count = conn.query_row("SELECT count(*) FROM slices WHERE motif_id = ?", [motif_id], |row| {
             row.get::<usize, i64>(0)
