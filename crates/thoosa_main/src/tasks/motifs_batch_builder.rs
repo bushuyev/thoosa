@@ -25,17 +25,14 @@ pub fn make_batch(in_tensor: &Tensor, batch_size: i64) -> TchResult<Tensor> {
     make_batch_with(in_tensor, batch_size, MixupJitterCfg::default())
 }
 
-/// Main entry. Expects `x` of shape [num_records X seq_len], float dtype.
+///  Expects `x` of shape [num_records X seq_len], float dtype.
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MixupJitterCfg::make_batch_with"))]
 pub fn make_batch_with(
     in_tensor: &Tensor,
     batch_size: i64,
     cfg: MixupJitterCfg,
 ) -> TchResult<Tensor> {
-    debug!(
-        "make_batch_with: batch_size={batch_size} in_tensor.size={:?}",
-        in_tensor.size()
-    );
+    debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}",in_tensor.size());
 
     let (num_records, _seq_len) = in_tensor.size2()?; // ensures 2-D and returns (N, M)
     let device = in_tensor.device();

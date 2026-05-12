@@ -58,13 +58,7 @@ impl<D: Dims> ThoTensor<D, SimpleId> {
         drop(self.t);
     }
 
-    // pub fn new(id: CachableId, tensor: Tensor) -> Self {
-    //     Self {
-    //         id,
-    //         t: tensor, _pd: PhantomData,
-    //         tracking: Default::default(),
-    //     }
-    // }
+
 }
 
 impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {

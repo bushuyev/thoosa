@@ -244,7 +244,7 @@ where
     store: Arc<Box<dyn Store>>,
     loader: Arc<L>,
     run_config: BucketRunConfig,
-    sync_stage: Arc<SyncBucketingStage<D, Id, C>>,
+    sync_bucketing_stage: Arc<SyncBucketingStage<D, Id, C>>,
     pd: PhantomData<(RC, D, Id, C)>,
     channels:u32,
     sample_rate:u32,
@@ -307,7 +307,7 @@ where
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             loader,
-            sync_stage: Arc::new(SyncBucketingStage::new(run_config.clone(), window, step, sample_rate, Arc::clone(&temp_stores_by_bucket))),
+            sync_bucketing_stage: Arc::new(SyncBucketingStage::new(run_config.clone(), window, step, sample_rate, Arc::clone(&temp_stores_by_bucket))),
             run_config,
             pd: PhantomData,
             channels,
@@ -821,7 +821,7 @@ where
         let futures = resources.iter().map(|resource|{
             let mut sync_bucketing_ctx = ctx.branch(Some(&format!("BucketingStage_{}", resource.id())), false);
             let loader = Arc::clone(&self.loader);
-            let sync_stage = Arc::clone(&self.sync_stage);
+            let sync_stage = Arc::clone(&self.sync_bucketing_stage);
             let sample_rate = self.sample_rate;
             async move {
 

@@ -683,7 +683,6 @@ fn accumulating_mean_mask(
     let mut total_samples_guard = total_samples.lock();
     debug!("new_total_means: 1. total_samples_guard=\n{total_samples_guard} ");
 
-    // let means_device = total_samples_guard.device();
 
     let count_t_added =  counts_t.f_add(&total_samples_guard)?;
 

@@ -36,6 +36,7 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
 use thoosa_common::cuda_utils::with_pooled_cuda_stream;
+use thoosa_common::runs::Simple;
 use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
