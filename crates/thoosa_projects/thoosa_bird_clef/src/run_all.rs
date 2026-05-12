@@ -153,7 +153,8 @@ pub(crate) async fn run_all(
 
 
 
-                        let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
+                        // let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
+                        let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
 
                         let mut select_motifs_run_ids = vec![];
                         //
@@ -497,7 +498,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 10000, end: 50000}, step: Some((20000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((10000, 0)) },
             // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
@@ -537,11 +538,11 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // }),
             finder_kind: FinderKindRangeOrValue::Bucket(BucketRunConfigRangeOrValue {
                 id: None,
-                bucket_count: RangeOrValue::Value(100),
+                bucket_count: RangeOrValue::Value(1000),
                 min_slices: RangeOrValue::Value(3),
                 max_slices: RangeOrValue::Value(100000),
                 bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
-                    band_hz: RangeOrValue::Value(160.0),
+                    band_hz: RangeOrValue::Value(16.0),
                     aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),
                     apply_hann_window: RangeOrValue::Value(true),
                     remove_dc_offset: RangeOrValue::Value(true),
@@ -555,7 +556,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         select_motifs_run_config: SelectBucketsRunConfigRangeOrValue {
             id: None,
 
-            energy_k: RangeOrValue::Value(2.0),
+            energy_k: RangeOrValue::Value(1.5),
         },
     };
 

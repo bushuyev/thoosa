@@ -361,12 +361,16 @@ where
                 return Err(ThoError::new(format!("SelectBucketsStage::select_for_run_config: evaluated {} of {motif_ids_len} motifs", evaluations.len())));
             }
 
+            let mut bad_motifs = vec![];
             for evaluation in evaluations {
                 debug!("SelectBucketsStage::select_for_run_config: motif_id={} energy={} score={} selected={}", evaluation.motif_id, evaluation.energy, evaluation.score, evaluation.selected);
                 if evaluation.selected {
                     selected.push((evaluation.motif_id, evaluation.score));
+                } else {
+                    bad_motifs.push((evaluation.motif_id, evaluation.score));
                 }
             }
+            info!("SelectBucketsStage::select_for_run_config: bad_motifs={bad_motifs:?}");
 
             if output_mode == SelectMotifsOutputMode::WithConstraintMetrics {
                 metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_mean"), reference.mean as f32);
