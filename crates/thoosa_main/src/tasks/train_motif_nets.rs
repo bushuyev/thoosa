@@ -32,7 +32,7 @@ use thoosa_common::dims::{Batch, Dims, MotifProbability, MotifSlices, Slice, Tho
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
+use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -171,6 +171,16 @@ where
         }
     }
 
+}
+
+fn train_motif_run_configs_may_use_cosine_net(run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields>) -> bool {
+    fn is_cosine_net_field(field: &TrainMotifNetRunConfigFields) -> bool {
+        matches!(field, TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(_)))
+    }
+
+    run_configs.grid_run_config_source().const_params().iter().any(|v| is_cosine_net_field(v.path()))
+        || run_configs.opt_params().iter().any(|p| is_cosine_net_field(p.name()))
+        || run_configs.grid_to_vals_and_opt_params().into_iter().any(|(vals, opt_params)| vals.iter().any(|v| is_cosine_net_field(v.path())) || opt_params.iter().any(|p| is_cosine_net_field(p.name())))
 }
 
 async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs_run_ids: &[RunId]) -> Result<Vec<CompletedTrial>, ThoError> {
@@ -322,14 +332,20 @@ where
                 ).await?;
 
 
-                //TODO it's needed only for CosineNet
-                let (t, motif_width) = with_data!(ctx.branch(Some("train_motif_nets_motif_width"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                let motif_meta = motif.extra().await?;
+                let motif_width = motif_meta.window;
+                let needs_cosine_motif = train_motif_run_configs_may_use_cosine_net(&train_motifs_nodes_run_configs);
+                let cosine_motif = if needs_cosine_motif {
+                    Some(with_data!(ctx.branch(Some("train_motif_nets_cosine_motif"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
 
-                    let src = motif.data().as_ref();
-                    let mut dst = src.f_zeros_like()?;
-                    dst.f_copy_(&src)?;
-                    Ok::<_, ThoError>((Arc::new(ThoTensor::<MotifSlices, SynKey>::new(motif.id().clone(), dst)?), motif.extra().window))
-                })?;
+                        let src = motif.data().as_ref();
+                        let mut dst = src.f_zeros_like()?;
+                        dst.f_copy_(&src)?;
+                        Ok::<_, ThoError>(Arc::new(ThoTensor::<MotifSlices, SynKey>::new(motif.id().clone(), dst)?))
+                    })?)
+                } else {
+                    None
+                };
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
 
@@ -351,7 +367,8 @@ where
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
                             MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b),
                         };
-                        Ok((params.motif_net(Some(Arc::clone(&t)))?.build_tch_module(&vs.root())?, params))
+                        let motif = if matches!(&rc.net, MotifNetTypeArgs::CosineNet(_)) { cosine_motif.as_ref().map(Arc::clone) } else { None };
+                        Ok((params.motif_net(motif)?.build_tch_module(&vs.root())?, params))
                     },
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone
