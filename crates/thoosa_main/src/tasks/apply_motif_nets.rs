@@ -350,6 +350,7 @@ where
 
             let motif_id = extra.motif_id();
             let motif_width = extra.motif_net_params.num_features();
+            motif_widths.insert(motif_width);
 
             let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?; //TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;

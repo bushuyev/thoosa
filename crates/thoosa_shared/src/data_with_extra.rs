@@ -20,7 +20,7 @@ where
 impl<D, E> DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId,
-    E: Clone + Debug + Send + Sync,
+    E: Debug + Send + Sync,
 {
     pub fn new(data: D, extra: E) -> Self {
         Self { data, extra:Arc::new(extra) }

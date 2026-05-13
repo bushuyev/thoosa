@@ -997,11 +997,8 @@ where
                         )
                         .await?;
 
-                    let meta = with_data!(ctx.branch(Some("motif_stats_merged_motif_meta"), false), motif; |_ctx, motif: &LoadedMotif| {
-                        let meta = motif.extra();
-                        debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, motif.data().size());
-                        Ok::<_, ThoError>(meta.clone())
-                    })?;
+                    let meta = motif.extra().await?;
+                    debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, motif.size());
 
                     match expected_channel {
                         Some(channel) if channel != meta.channel => {
