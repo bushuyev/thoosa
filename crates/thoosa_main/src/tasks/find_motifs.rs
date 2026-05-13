@@ -501,6 +501,7 @@ where
         debug!("FindMotifsStage::run: run_config_stages.len={run_config_stages_len}");
 
         //gpt Run each per-config CrossLoader; failures are logged but do not abort the stage.
+        // TODO(perf): order or group run configs by shared resource/filter pipeline so repeated RawTensorLoader/config_to_stage work can be reused across FindMotifsStage children.
         let futures = self
             .run_config_stages
             .iter()

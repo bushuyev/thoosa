@@ -146,6 +146,7 @@ impl RunCtx for RunCtxImpl {
 
     fn add_purge_gpu_closure(&mut self, cl:Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>>+ Send + Sync>) {
         if let Some(purge_gpu_closures) = self.purge_gpu_closures.as_ref() {
+            // TODO(perf): this lock is hit for every cached data access; store purge callbacks in a per-branch small vector and merge once when the branch finishes.
             with_perf_log(
                 || purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_purge_gpu_closure: timed out waiting for purge_gpu_closures lock"),
                 "RunCtxWithPermits/add_purge_gpu_closure/purge_gpu_closures",

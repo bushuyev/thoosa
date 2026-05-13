@@ -298,6 +298,7 @@ where
                 .await;
         }
 
+        // TODO(perf): OOMHandler::run is on the hot path for millions of successful TrainStep calls; add a fast path that bypasses selector/runner setup until an OOM has occurred for the same task shape.
         run_with_runner(
             &self.adjusters,
             Arc::clone(task),

@@ -1482,6 +1482,7 @@ where
             async move {
                 if let Some(extend_config) = select_motifs_run_config.extend_config.as_ref() {
 
+                    // TODO(perf): extension recomputes resource/motif distance masks per select config; cache intermediate masks by find_motifs_run_id and resources set before filtering.
                     let channels_motifs_added_slices = self_for_futs.extend_motifs_for_run_config(
                         select_motifs_run_config,
                         extend_config,
@@ -1504,6 +1505,7 @@ where
                 }
 
                 let selected_motifs = self_for_futs
+                    // TODO(perf): criteria filtering reloads metrics for each select config; keep a per-run motif metric cache when only thresholds differ.
                     .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch("filter_motifs_by_criteria".into(), false))
                     .await?;
 

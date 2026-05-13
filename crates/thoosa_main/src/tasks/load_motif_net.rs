@@ -125,6 +125,7 @@ where
             || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
             "LoadMotifNet/run/read_ws",
         );
+        // TODO(perf): resolve the path under the workspace lock, then load the model outside it; also consider caching loaded net params by net_id/precision.
         let (params, module) = ws_guard.load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;

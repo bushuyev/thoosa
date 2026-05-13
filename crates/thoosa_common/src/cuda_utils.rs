@@ -208,6 +208,7 @@ pub async fn copy_d2h_from_ptr(
 
     debug!("copy_d2h_from_ptr: src_t.size={:?} chunks={chunks} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes} dst_t={dst_t:?}",src_size);
 
+    // TODO(perf): frequent small D2H copies spend most elapsed time in scheduling/synchronization; coalesce adjacent tensor copies or keep pinned buffers warm per device stream.
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
 
@@ -338,6 +339,7 @@ pub async fn copy_h2d_from_ptr(
     let tensor_mem_size = tensor_mem_size(init_type, &size);
     debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
+    // TODO(perf): H2D copies mirror the D2H overhead; batch small uploads and reuse stream/buffer assignments instead of launching per tensor chunk.
     // chunk layout
     let chunks = tensor_mem_size / buf_size;
     let last = tensor_mem_size % buf_size;
