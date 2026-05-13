@@ -76,6 +76,7 @@ where
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         with_data!(ctx.branch(Some("raw_tensor_loader_input"), false), input; |ctx:C, resource: &Resource| {
+            // TODO(perf): add a shared raw-resource tensor cache/prefetch layer here; traced runs repeatedly reload tens of thousands of raw tensors through this stage.
             let tensor = (self.loader_fn)(resource, &self.device)?;
 
             Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(

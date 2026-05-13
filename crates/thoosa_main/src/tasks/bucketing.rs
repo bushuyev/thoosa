@@ -486,6 +486,7 @@ where
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_patches: ranges channels={} bucket channels={}", patch_ranges.len(), channels_bucket_ids.len())));
         }
 
+        // TODO(perf): temp_stores_by_bucket is locked while slices are appended; shard by bucket or buffer per resource and flush outside this global mutex.
         let mut temp_stores = self.temp_stores_by_bucket.lock();
         if temp_stores.len() != self.run_config.bucket_count as usize {
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_patches: temp stores={} bucket_count={}", temp_stores.len(), self.run_config.bucket_count)));
@@ -532,6 +533,7 @@ where
         let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, self.sample_rate as f64, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
         debug!("save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
 
+        // TODO(perf): random projection planes are rebuilt per resource; cache them for each (input_size, bucket_count, device, normalize) within the bucketing run.
         let planes = panic_to_err!(make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], self.run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device()))?;
         debug!("save_resource_plain_buckets: planes={planes:?}");
 
@@ -540,6 +542,7 @@ where
 
         let channels_bucket_ids = panic_to_err!(bucket_ids_from_one_hot_3d(&buckets_one_hot))?;
 
+        // TODO(perf): this uses the same global bucket-store lock as mel patches; accumulate per-resource groups first and keep the critical section to the final save calls.
         let mut temp_stores = self.temp_stores_by_bucket.lock();
         if temp_stores.len() != self.run_config.bucket_count as usize {
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: temp stores={} bucket_count={}", temp_stores.len(), self.run_config.bucket_count)));
@@ -865,6 +868,7 @@ where
                 Ok(())
             }
         });
+        // TODO(perf): fixed in-flight limit of 4 may underutilize the CPU/GPU pipeline for small resources and overfill memory for huge ones; make it adaptive from recent batch sizes/OOM state.
         let loaded_motifs = collect_futures_with_progress(
             futures,
             resources.len(),
@@ -937,6 +941,7 @@ fn bucket_ids_from_one_hot_3d(buckets: &Tensor) -> Result<Vec<Vec<usize>>, ThoEr
 
     let channels = size[0];
     let slices = size[1];
+    // TODO(perf): this forces a device-to-CPU roundtrip for every bucketed tensor; keep bucket assignment/grouping on device or batch the CPU conversion per resource.
     let bucket_ids = buckets.f_argmax(Some(2), false)?.f_to_device(Device::Cpu)?.f_to_kind(Kind::Int64)?.f_contiguous()?;
     let flat = Vec::<i64>::try_from(&bucket_ids.f_reshape([-1])?)?;
     let mut result = vec![Vec::with_capacity(slices as usize); channels as usize];

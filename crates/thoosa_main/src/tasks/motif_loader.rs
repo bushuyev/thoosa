@@ -539,6 +539,7 @@ where
 
         let motif_id_value = motif_id.vals[0].to_data_id();
         let select_motifs_run_id_for_key = select_motifs_run_id.clone();
+        // TODO(perf): cache motif slice lists/resource grouping by motif_id; repeated DB reads dominate MotifLoader elapsed time in traced runs.
         let (channel, find_motifs_run_id, slices, resources_map) = self
             .store
             .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
@@ -713,6 +714,7 @@ where
 
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
+        // TODO(perf): precompute or cache random-slice pools for (motif_id, limit, input_len_adjuster) so each batch does not wait on fresh SQL selection.
         let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize)).await?;
 
 
@@ -801,6 +803,7 @@ where
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} slices={slices:?} descr={descr}");
 
+        // TODO(perf): load raw resource tensors with bounded concurrency; this loop is sequential and sits under the MotifLoader critical path.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource));
         let raw_tensor = Arc::clone(&configurable_loader)
@@ -825,6 +828,7 @@ where
 
             let mut dst = Tensor::f_zeros([valid_slices.len() as i64, window as i64], (raw_tt.t_ref().kind(), raw_tt.t_ref().device()))?;
             for (slice_i, slice) in valid_slices.into_iter().enumerate() {
+                // TODO(perf): replace per-slice f_get/f_copy with an index tensor/gather or batched narrow copy when slices are contiguous enough.
                 let src = raw_tt.t.f_i((channel, slice as i64..(slice + window) as i64))?;
                 dst.f_get(slice_i as i64)?.f_copy_(&src)?;
             }
@@ -928,6 +932,7 @@ where
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");
 
+        // TODO(perf): load_random_slices repeats the same sequential raw-resource loading pattern; use a bounded concurrent loader once memory pressure is modeled.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource));
         let raw_tensor = Arc::clone(&configurable_loader)
@@ -951,6 +956,7 @@ where
                     warn!("load_random_slices:  slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
                 } else {
                     debug!("load_random_slices:  slice_i={slice_i} slice={slice:?} size={size:?}");
+                    // TODO(perf): this copies one random slice at a time; build a batched index/gather path to reduce tensor indexing overhead during training.
                     let src = raw_tt.t.f_i((0..channels, slice as i64..(slice + window) as i64))?;
                     let mut dst = motif_t.t.f_i((0..channels, slice_i, ..))?;
                     dst.f_copy_(&src)?;

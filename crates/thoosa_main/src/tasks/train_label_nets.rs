@@ -424,6 +424,7 @@ where
                                                let x_1_refs = x_1.iter().map(|x| x.data()).collect::<Vec<_>>();
                                                let x_0_refs = x_0.iter().map(|x| x.data()).collect::<Vec<_>>();
 
+                                               // TODO(perf): pad_stack reallocates/copies variable-length motif outputs for every label batch; group by output length or reuse padded buffers across batches.
                                                let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), num_nets as i64, max_input)?;
                                                let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), num_nets as i64, max_input)?;
                                                let lengths_1 = BatchLengths::new(lengths_1);
@@ -674,6 +675,7 @@ where
     fn build_batch_stream(build_batch_fn: BuildBatchFn<LD, X, Y, C>, resource_indexes_for_batches: Vec<Box<[usize]>>, loader: Arc<L>, mut ctx: C, x_1: Arc<Vec<Resource>>, x_0: Arc<Vec<Resource>>) -> BoxStream<'static, Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError>> {
         debug!("ResourcesBatch::build_batch_stream: resource_indexes_for_batches={resource_indexes_for_batches:?}");
 
+        // TODO(perf): each produced batch waits for collect_futures_with_progress to load/apply both sides; add a bounded prefetch queue so ApplyMotifNets overlaps TrainNet forward/backward.
         let futures = futures::stream::iter(resource_indexes_for_batches.into_iter().enumerate()).then(move |(i, batch_keys)|   {
             let build_batch_fn = Arc::clone(&build_batch_fn);
             let loader = Arc::clone(&loader);

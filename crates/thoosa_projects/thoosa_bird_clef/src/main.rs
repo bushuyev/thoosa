@@ -164,6 +164,8 @@ fn main() -> Result<(), ThoError>{
 
 
 async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
+    tch::set_num_interop_threads(1);
+
     let mut ctx = RunCtxImpl::new(0, "root");
 
 

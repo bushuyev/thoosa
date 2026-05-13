@@ -269,6 +269,7 @@ impl GlobalCtx {
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("dump_all_to_cpu_{descr}"), maps.len(), 1);
 
         for (type_name, entry) in maps.iter() {
+            // TODO(perf): track GPU-resident caches per device so OOM recovery can skip CPU-only caches instead of asking every registered cache to dump.
             let _cache_guard = Self::lock_cache_shared(entry, "GlobalCtx::dump_all_to_cpu: timed out waiting for cache gate read lock").await;
             debug!("GlobalCtx::dump_all_to_cpu: type_name={type_name}");
             entry.purger.purge_gpu(required_ids.get(type_name).map(|v| *v), tho_device_idx, type_name).await?;
