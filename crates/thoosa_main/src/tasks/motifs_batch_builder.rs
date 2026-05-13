@@ -52,6 +52,7 @@ pub fn make_batch_with(
 
     // Case 2: data paucity — build a batch via sampling with replacement,
     // then mixup (optional) and jitter (optional).
+    // TODO(perf): random index tensors are rebuilt for every small batch; reuse per-device scratch buffers or pre-generate epoch indices where exact sampling independence is not required.
     let base_idx = Tensor::f_randint(num_records, [batch_size], (Kind::Int64, device))?;
     let mut out = in_tensor
         .f_index_select(0, &base_idx)?
@@ -63,6 +64,7 @@ pub fn make_batch_with(
             .f_index_select(0, &perm_idx)?
             .f_to_kind(Kind::Float)?;
 
+        // TODO(perf): beta_tensor samples on CPU and copies to the target device on every invocation; cache lambda batches or move beta sampling to a device-side approximation.
         let lam = beta_tensor(cfg.alpha, batch_size, device)?.f_to_kind(out.kind())?; // [B]
         let w = lam.f_unsqueeze(1)?; // [B,1] to broadcast over M
         let one_minus_w = w.f_ones_like()?.f_sub(&w)?;

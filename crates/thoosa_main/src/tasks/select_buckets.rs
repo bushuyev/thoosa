@@ -266,6 +266,7 @@ where
         let mut energy = RunningEnergy::default();
 
         for resource in resources {
+            // TODO(perf): load reference tensors with bounded concurrency and merge per-worker RunningStats/RunningEnergy; the current sequential pass repeats for every select config.
             let t = Arc::clone(&configured_loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(resource.clone())),
@@ -291,6 +292,7 @@ where
     }
 
     async fn evaluate_motif(&self, motif_id: u32, select_config: &SelectBucketsRunConfig, reference: ReferenceStats, mut ctx: C) -> Result<BucketEvaluation, ThoError> {
+        // TODO(perf): persist motif/bucket energy as metadata when motifs are created so selection configs do not reload every motif tensor just to recompute energy.
         let motif = Arc::clone(&self.motif_loader)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()))),
@@ -327,6 +329,7 @@ where
 
         for find_motifs_run_id in &self.find_motifs_run_ids {
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, *find_motifs_run_id).await?;
+            // TODO(perf): cache ReferenceStats by (find_motifs_run_id, resources set); energy_k changes do not require recomputing the reference distribution.
             let reference = self
                 .reference_stats_for_find_run(resources.as_ref(), &find_motifs_run_config, ctx.branch(Some("select_buckets_reference_stats_for_find_run"), false))
                 .await?;

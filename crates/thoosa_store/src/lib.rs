@@ -1634,6 +1634,7 @@ impl Store for SqlStore {
         debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_ids:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
         self.with_reader_conn("list_motif_slices", move |conn| {
 
+            // TODO(perf): this query is called for every MotifLoader run; add a prepared/cacheable path for the common motif_id + select_run filter and avoid ORDER BY RANDOM for large tables.
             let (slice_filter_clause, slice_filter_params) = if all_but_in_run_id.is_none() {
                 match select_motifs_run_ids.as_ref() {
                     None => (String::new(), Vec::new()),
@@ -1752,6 +1753,7 @@ impl Store for SqlStore {
 
         assert!(motif_width > 0, "motif_width must be greater than zero");
         let input_len_adjuster_in_motif = Arc::clone(&input_len_adjuster);
+        // TODO(perf): candidate construction scans motif/resource context on every training batch; persist reusable candidate pools per motif/run/window/min_distance and sample from them cheaply.
         let (channel, run_id, mut all_candidates, mut resources_map, desired_count) = self.with_reader_conn("list_random_motif_slices", move |conn| {
             let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
             let (target_positions_by_res, num_motif_slices) = Self::load_motif_target_positions(motif_id, conn)?;
@@ -1819,6 +1821,7 @@ impl Store for SqlStore {
 
         self.with_reader_conn("list_random_slices_out_of_resources", move |conn| {
             let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
+            // TODO(perf): fallback random-slice selection can be prefiltered by run/channel with indexed temp tables instead of rebuilding all non-motif contexts.
             let desired_count = match desired_count {
                 Some(desired_count) => desired_count,
                 None => Self::count_motif_slices(motif_id, conn)?,

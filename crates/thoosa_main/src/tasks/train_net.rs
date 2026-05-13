@@ -270,6 +270,7 @@ where
 
                 debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?} epoch={idx}",maybe_cuda_mem(&device));
 
+                // TODO(perf): rebuilding the batch stream every epoch duplicates batch-index/resource setup; reuse per-epoch planning state when stochastic inputs allow it.
                 let mut batches = batch.train_batch_stream(ctx.branch(Some("train_batch"), false));
                 debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
 
@@ -282,6 +283,7 @@ where
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
 
+                    // TODO(perf): the stable path pays full OOMHandler overhead for every batch; cache the last successful chunk/permit state per TrainNet run so common batches skip the expensive wrapper path.
                     oom_handler.run(
                         &train_step,
                         Arc::clone(&input),
@@ -333,6 +335,7 @@ where
                             best_valid_loss = valid_loss;
                             bad_epochs = 0;
                             {
+                                // TODO(perf): best-checkpoint saves block the training loop; save on a background CPU task or only after a minimum score delta when configs produce many small improvements.
                                 let mut vs_guard = thoosa_shared::with_perf_log(|| vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "TrainNet/run_inner/lock_vs");
                                 panic_to_err!(vs_guard.save(&best_checkpoint_path))?;//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
                             }
@@ -615,6 +618,7 @@ where
     }
 
     fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
+        // TODO(perf): lock_net is taken for every forward call; if TrainStep is not shared concurrently, split ownership so the hot path can call the module without a mutex.
         let net = thoosa_shared::with_perf_log(
             || self.net.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
             "TrainStep/forward/lock_net",
@@ -680,6 +684,7 @@ where
         let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
 
         {
+            // TODO(perf): lock_opt is per batch; keep optimizer ownership local to the training task or queue optimizer steps to avoid mutex traffic in TrainStep::do_run.
             let mut opt = thoosa_shared::with_perf_log(
                 || self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
                 "TrainStep/do_run/lock_opt",

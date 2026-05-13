@@ -437,9 +437,11 @@ where
         assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
 
         if to_tho_device_idx != 0 {
+            // TODO(perf): avoid writing on_cpu_since when the target residency state is unchanged; this write happens millions of times on hot cache loads.
             *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::load_from_any_device_ on_cpu_since.write") = None;
         }
 
+        // TODO(perf): consider an atomic/device-residency bitmap so cache hits do not require a Tokio RwLock read in this very hot path.
         let read_guard = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
 
         if read_guard.is_some() {
@@ -621,6 +623,7 @@ where
     {
 
         async move {
+            // TODO(perf): dump_to_cpu scans device residency before and after dumping; return/update a residency bitmap so OOM recovery avoids duplicate lock scans.
             if wrap.is_all_on_cpu().await {
                 // #[cfg(any(test, feature = "mock_global_ctx"))]
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
@@ -713,6 +716,7 @@ where
     async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
         trace!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
 
+        // TODO(perf): keep an atomic residency bitset/count per DevicesWrap so frequent CPU-residency checks do not scan every per-device RwLock.
         for (device_idx, data) in wrap.cached_data.iter().enumerate().skip(1) {
             if timed_tokio_read(data, "CpuOrGpu::is_all_on_cpu read").await.is_some() {
                 debug!("DataCacheWrapper::is_all_on_cpu: {:?} is on device_idx={device_idx}", wrap.id);

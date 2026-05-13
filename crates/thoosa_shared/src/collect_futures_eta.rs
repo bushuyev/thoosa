@@ -203,6 +203,7 @@ impl CollectEtaTracker {
             let mut state = self.state_guard();
             if let Some(invocation) = state.invocations.get_mut(&id) {
                 invocation.record_completion(now);
+                // TODO(perf): this rebuilds/sends the full ETA snapshot on every completion; throttle snapshot construction for very hot loops such as TrainStep.
                 Some(self.build_snapshot(&state, now).progress_state)
             } else {
                 None
