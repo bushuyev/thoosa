@@ -22,6 +22,7 @@ use thoosa_shared::{with_async_perf_log, with_perf_log, CopyToDevice, LOCK_TIMEO
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
+use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
@@ -1202,6 +1203,26 @@ where
 
 }
 
+impl <D, E> DevicesWrap<DataWithExtra<D, E>>
+where
+    D: Data + CopyToDevice + WithId + Sync + Send,
+    E: Clone + Debug + Send + Sync
+{
+
+    pub async fn extra(&self) -> Result<E, ThoError> {
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
+
+            if let (data_with_extra_guard) = source_read_guard {
+                if let Some(data_with_extra) = data_with_extra_guard.as_ref() {
+                    return Ok(data_with_extra.extra().clone());
+                }
+            }
+        }
+
+        Err(ThoError::new(format!("Can't get extra from {:?}", self.id)))
+    }
+}
 
 #[cfg(test)]
 mod tests {

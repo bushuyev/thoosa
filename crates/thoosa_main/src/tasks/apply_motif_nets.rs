@@ -301,7 +301,7 @@ where
     where
         R: RunCtx + Adjustable + 'static
     {
-        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));
+        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));//TODO move to new
         let trained_net_ids = trained_nets.iter().map(|v|v.0).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
@@ -326,7 +326,7 @@ where
                 }
             });
 
-        let loaded_motif_nets = collect_futures_with_progress(
+        let loaded_motif_nets: Vec<(u32, Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>)> = collect_futures_with_progress(
             futures,
             trained_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
@@ -346,11 +346,10 @@ where
         let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
         for (net_id, motif_net) in loaded_motif_nets {
-            let (motif_id, motif_width) = with_data!(stage_ctx.branch(Some("apply_motif_nets_meta"), false), motif_net; |_ctx, v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
-                let motif_width = v.extra().motif_net_params.num_features();
-                motif_widths.insert(motif_width);
-                Ok::<_, ThoError>((v.extra().motif_id(), motif_width))
-            })?;
+            let extra = motif_net.extra().await?;
+
+            let motif_id = extra.motif_id();
+            let motif_width = extra.motif_net_params.num_features();
 
             let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?; //TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
@@ -482,7 +481,7 @@ where
                 };
                 let out_id = apply_motif_net.out_id(&input.id());
                 let apply_motif_net_ctx = ctx.branch(Some(&format!("apply_motif_nets_{out_id:?}")), true);
-                let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));
+                let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));//The reason to copy apply_motif_net.net_wrapper into apply_motif_net input is to get it out of Wrapper in sync do_run method
 
                 let slice_step = self.slice_step;
 
