@@ -1210,11 +1210,12 @@ where
 {
 
     pub async fn extra(&self) -> Result<E, ThoError> {
-        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-            let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
+        // A concurrent dump_to_cpu can move data from a device slot to CPU while this method is scanning slots; the second pass avoids a false NotFound after waiting on the old device slot.
+        for _attempt in 0..2 {
+            for op in self.cached_data.iter() {
+                let source_read_guard = timed_tokio_read(op, "CpuOrGpu::extra source read").await;
 
-            if let (data_with_extra_guard) = source_read_guard {
-                if let Some(data_with_extra) = data_with_extra_guard.as_ref() {
+                if let Some(data_with_extra) = source_read_guard.as_ref() {
                     return Ok(data_with_extra.extra().clone());
                 }
             }
