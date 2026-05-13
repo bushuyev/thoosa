@@ -13,14 +13,14 @@ where
     D:Data+CopyToDevice+WithId,
     E:Debug + Send + Sync,
 {
-    data: D,
-    extra: Arc<E>,
+    data: D,//needs to be copied to GPU
+    extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
 }
 
 impl<D, E> DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId,
-    E:Debug + Send + Sync,
+    E: Clone + Debug + Send + Sync,
 {
     pub fn new(data: D, extra: E) -> Self {
         Self { data, extra:Arc::new(extra) }
