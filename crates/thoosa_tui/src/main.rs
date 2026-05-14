@@ -3818,7 +3818,7 @@ mod tests {
             },
             RunConfigEntry {
                 id: 3,
-                run_config_type: "TrainMotifsNetsRunConfig".to_string(),
+                run_config_type: "TrainMotifNetRunConfig".to_string(),
                 descr: "child".to_string(),
                 run_on: "2026-03-15 10:00:00".to_string(),
             },
@@ -4153,7 +4153,7 @@ mod tests {
             },
             RunConfigEntry {
                 id: 86440,
-                run_config_type: "TrainMotifsNetsRunConfig".to_string(),
+                run_config_type: "TrainMotifNetRunConfig".to_string(),
                 descr: "train motif nets".to_string(),
                 run_on: "2026-03-18 18:49:40".to_string(),
             },

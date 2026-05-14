@@ -29,6 +29,7 @@ use thoosa_shared::ThoError;
 
 use async_trait::async_trait;
 use std::sync::Arc;
+use tch::Kind::Float;
 use torch_sys::at_grad_set_enabled;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
@@ -64,7 +65,7 @@ pub struct TrainLabelNetsArgs {
     pub opt_config: OptConfig,
 
     #[arg(long)]
-    pub run_config_cnt: String, //TrainLabelNetsRunConfig
+    pub run_config_cnt: String, //TrainLabelNetRunConfig
 
     #[arg(long)]
     pub max_motif_net_loss: Option<f32>,
@@ -327,9 +328,20 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for
 
         debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.as_ref().kind());
 
-        let VarStoreFloatPrecision::Uniform(float_precision) = store_float_precision else {
-            return Err(ThoError::new(format!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id)))
+        let float_precision = match store_float_precision {
+            VarStoreFloatPrecision::NoFloatVars => {
+                warn!("ThoModuleWithStore::tho_forward: store_float_precision={store_float_precision:?}"); //dummy nets may have no tensors
+
+                Float
+            }
+            VarStoreFloatPrecision::Uniform(kind) => {
+                kind
+            }
+            VarStoreFloatPrecision::Mixed(_) => {
+                return Err(ThoError::new(format!("ThoModule {:?} contains tensors of unexpected precision: store_float_precision={store_float_precision:?}", self.id)))
+            }
         };
+
         let t = if !float_precision.eq(&t.as_ref().kind()) {
             debug!("ThoModuleWithStore::tho_forward: t.id={:?}, converting to {:?}", t.id(), float_precision);
 
@@ -537,7 +549,7 @@ pub struct TrainMotifsNetsArgs {
     pub opt_config: OptConfig,
 
     #[arg(long)]
-    pub run_config_cnt: String, //TrainMotifsNetsRunConfig
+    pub run_config_cnt: String, //TrainMotifNetRunConfig
 
     #[arg(long, default_value_t = 10)]
     pub epoch_size: u32,
@@ -2069,7 +2081,7 @@ pub struct TrainFinalNetArgs {
     pub opt_config: OptConfig,
 
     #[arg(long)]
-    pub run_config_cnt: String, //TrainLabelNetsRunConfig
+    pub run_config_cnt: String, //TrainLabelNetRunConfig
 
     #[arg(long)]
     pub selected_motif_nets_limit: Option<usize>,

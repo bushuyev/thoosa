@@ -74,6 +74,8 @@ where
     apply_motif_nets: Vec<(u32/*net_id*/, Arc<ApplyMotifNet<C>>)>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
+    batch_applied_motif_nets:Arc<BatchAppliedMotifNets<C>>
+
 }
 
 #[derive(Debug)]
@@ -382,7 +384,7 @@ where
         // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
-
+        let batch_applied_motif_nets = Arc::new(BatchAppliedMotifNets::<C>::new(id.clone()));
         Ok(Self {
             id,
             ws: Arc::clone(&ws),
@@ -401,7 +403,8 @@ where
                     fail_if_size_bigger_than
                 )))).collect(),
             slice_step,
-            motif_width
+            motif_width,
+            batch_applied_motif_nets
         })
     }
 
@@ -551,7 +554,7 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        let batch_applied_motif_nets = Arc::new(BatchAppliedMotifNets::<C>::new(self.id.clone()));
+
 
         let batch_input = TmpCacheWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
@@ -565,7 +568,7 @@ where
         );
         let motif_nets_applied = oom_handler
         .consume(
-            &batch_applied_motif_nets,
+            &self.batch_applied_motif_nets,
             batch_input,
             ctx.branch(Some("apply_motif_nets_batch"), true),
             Contexts::new(
@@ -776,6 +779,8 @@ where
         let input_id = input.id().clone();
         let mut motif_nets_applied = std::mem::take(&mut input.motif_nets_applied);
 
+        // assert!(motif_nets_applied.is_empty(), "motif_nets_applied are empty in input={input:?}"); TODO it should not be called if there is no nets
+
         debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?}", motif_nets_applied.len(), input_id);
 
         motif_nets_applied.sort_by(|a,b|a.id().partial_cmp(&b.id()).unwrap_or(Ordering::Equal));
@@ -793,7 +798,7 @@ where
             debug!("BatchAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
         }
 
-        trace!("BatchAppliedMotifNets::consume: matches_={motif_nets_applied:?}");
+        trace!("BatchAppliedMotifNets::consume: motif_nets_applied={motif_nets_applied:?}");
 
         // TODO(perf): this pads and copies each motif-net output row by row; batch padding/stretching into a stack/cat operation would reduce tensor indexing overhead for large net counts.
         let res_t = match Tensor::f_zeros([motif_nets_applied.len() as i64, max_match_len], output_options) {
