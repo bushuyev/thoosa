@@ -434,7 +434,7 @@ pub struct MyCosineConv1d {
 impl MyCosineConv1d {
 
     pub fn new(vs: &Path, l: i64, init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>, a: f64, b: f64) -> Result<Self, TchError> {
-        debug!("MyCosineConv1d: l={l}");
+        debug!("MyCosineConv1d::new: l={l}");
         let kernel = match init {
             None => {
                 vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?
@@ -443,6 +443,7 @@ impl MyCosineConv1d {
                 let l = motif_slices.size()[1];
                 let proto = motif_slices.as_ref().as_ref().f_mean_dim(0, false, Kind::Float)?; // [L]
 
+                debug!("MyCosineConv1d::new: proto={proto:?}");
 
                 // zero-mean prototype
                 let proto_mean = proto.f_mean(Kind::Float)?;
@@ -458,7 +459,7 @@ impl MyCosineConv1d {
 
                 // Learnable kernel [1,1,L], initialized with prototype
                 let mut kernel = vs.var("kernel", &[1, 1, l], nn::Init::Const(0.0))
-                    .set_requires_grad(false);//TODO use tch::no_grad
+                    .set_requires_grad(false);
 
 
                 kernel.f_copy_(&proto_unit.f_view([1, 1, l])?)?;
@@ -492,7 +493,8 @@ impl MyCosineConv1d {
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        debug!("MyCosineConv1d::tho_forward: x_in.size={:?} lengths={lengths:?}", x_in.size());
+        debug!("MyCosineConv1d::tho_forward: x_in={:?} lengths={lengths:?}", x_in);
+        let in_kind = x_in.as_ref().kind();
 
         if let Some(lengths) = lengths.as_deref_mut() {//this can't be used in with other layers so length update is no needed
             for len in lengths.as_mut_slice().iter_mut() {
@@ -507,7 +509,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
         // Normalize kernel each forward so it stays unit-ish during training
         let k_sq = self.kernel.f_mul(&self.kernel)?;
         let k_norm = k_sq
-            .f_sum_dim_intlist(&[1, 2][..], true, Kind::Float)? // [1,1,1]
+            .f_sum_dim_intlist(&[1, 2][..], true, in_kind)? // [1,1,1]
             .f_sqrt()?
             .f_clamp_min(1e-12)?;
         let k_unit = self.kernel.f_div(&k_norm)?; // [1,1,L]
@@ -525,7 +527,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
         // Denominator = ||x||
         let x_sq = x.f_mul(&x)?;
         let x_norm = x_sq
-            .f_sum_dim_intlist(&[1, 2][..], true, Kind::Float)? // [B,1,1]
+            .f_sum_dim_intlist(&[1, 2][..], true, in_kind)? // [B,1,1]
             .f_sqrt()?
             .f_clamp_min(1e-12)?;
 
@@ -537,6 +539,8 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
             .f_mul(&self.alpha)?
             .f_add(&self.beta)?
             .f_squeeze_dim(2)?; // [B,1]
+
+        debug!("MyCosineConv1d::tho_forward: logits={logits:?}");
 
         Ok(logits.into())
     }
@@ -1066,7 +1070,7 @@ fn self_attention_forward_t(
 
     let attn = {
         let scores = {
-            let raw_scores = panic_to_err!(q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale))?;
+            let mut raw_scores = panic_to_err!(q.f_matmul(&k.f_transpose(-2, -1)?)?.f_div_scalar(scale))?;
 
             let masked_scores = {
                 let invalid_mask = key_valid
@@ -1076,7 +1080,7 @@ fn self_attention_forward_t(
 
                 drop(key_valid);
 
-                panic_to_err!(raw_scores.f_masked_fill(&invalid_mask, -1e4))?
+                panic_to_err!(raw_scores.f_masked_fill_(&invalid_mask, -1e4))?
             };
 
             drop(raw_scores);
@@ -1130,11 +1134,11 @@ fn attn_block_forward_t(
 
     let h = x.f_layer_norm(
         ln1.normalized_shape.as_slice(),
-        ln1.ws.as_ref().map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
-        ln1.bs.as_ref().map(|v|v.to_kind(Float)),
+        ln1.ws.as_ref(), //.map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
+        ln1.bs.as_ref(), //.map(|v|v.to_kind(Float)),
         1e-5,
         true,
-    )?.to_kind(x.kind());
+    )?;//.to_kind(x.kind())
 
     let x = x.f_add(
         &self_attention_forward_t(h, key_valid, w_q, w_k, w_v, w_o, n_heads, head_dim, dropout, train)?
@@ -1142,13 +1146,13 @@ fn attn_block_forward_t(
 
     debug!("attn_block_forward_t: x.kind={:?} ln2.ws.kind={:?}", x.kind(), ln2.ws.as_ref().map(|ws|ws.kind()));
 
-    let f = x.to_kind(Float).f_layer_norm(
+    let f = x.f_layer_norm(//x.to_kind(Float).
         ln2.normalized_shape.as_slice(),
-        ln2.ws.as_ref().map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
-        ln2.bs.as_ref().map(|v|v.to_kind(Float)),
+        ln2.ws.as_ref(), //.map(|v|v.to_kind(Float)),//TODO it needs Float only on CPU
+        ln2.bs.as_ref(), //.map(|v|v.to_kind(Float)),
         1e-5,
         true,
-    )?.to_kind(x.kind());
+    )?;//.to_kind(x.kind())
 
     debug!("attn_block_forward_t: f={f:?}");
 
