@@ -172,7 +172,7 @@ where
 
                     //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
                     let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = Arc::clone(&apply_net.apply_motif_nets)
-                        .run_cached(input, ctx.branch(Some("apply_label_nets_motif_probs"), false))
+                        .run(input, ctx.branch(Some("apply_label_nets_motif_probs"), false))
                         .await?;
 
 
@@ -316,7 +316,7 @@ where
 
             with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
 
-                debug!("ApplyLabelNet::run: input={input:?}");
+                debug!("ApplyLabelNet::run: input={input:?}");//[motif_netx x probabilities = input/
 
                 // let batch_input = input.data().t_ref().f_unsqueeze(0)?;//TODO
                 let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), self.batch_in_chunks as i64, 0.0)?;

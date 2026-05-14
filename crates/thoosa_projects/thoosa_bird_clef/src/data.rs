@@ -7,12 +7,12 @@ use std::fs::{File, read_dir};
 use std::io::BufReader;
 use std::path::Path;
 use polars::prelude::{col, lit, CsvParseOptions, CsvReadOptions, IntoLazy, SerReader};
-use tch::Kind::Half;
-use tch::Tensor;
+use tch::Kind::{BFloat16, Half};
+use tch::{Kind, Tensor};
 use thoosa_shared::ThoError;
 
 pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
-    file: P,
+    file: P, kind: Kind,
 ) -> Result<Tensor, ThoError> {
     debug!("ogg_to_tensor: file={file:?}");
 
@@ -39,7 +39,7 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
             .into_iter()
             .map(|channel| Ok(
                 Tensor::f_from_slice(channel.as_slice())?
-                       .f_totype(Half)?
+                       .f_totype(kind)?
             ))
             .collect::<Result<Vec<Tensor>, ThoError>>()?,
         0,
@@ -193,7 +193,7 @@ pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Te
         source_path
             .as_ref()
             .join("train_audio")
-            .join(key.replace("_", "/")),
+            .join(key.replace("_", "/")), BFloat16,
     )?)
 }
 
@@ -214,7 +214,7 @@ mod tests {
     use std::sync::Arc;
     use std::time::UNIX_EPOCH;
     use tch::Device::Cpu;
-    use tch::Kind::Float;
+    use tch::Kind::{BFloat16, Float};
     use tch::{Device, IndexOp, TchError, Tensor};
     use tempfile::NamedTempFile;
     use thoosa_common::loader::{LoadRunner, SyncWrapper};
@@ -336,7 +336,7 @@ mod tests {
         debug!("ogg_file={ogg_file:?}");
         debug!("sample={sample:?}");
 
-        let t = ogg_to_tensor(&ogg_file)?;
+        let t = ogg_to_tensor(&ogg_file, BFloat16)?;
 
         debug!("t={t}");
 
