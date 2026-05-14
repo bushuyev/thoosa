@@ -48,6 +48,7 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunId};
 use thoosa_shared::traits::{Data, SimpleId, WithId};
+use thoosa_shims::inference_mode::InferenceModeGuard;
 use crate::runner::global_ctx::GlobalCtx;
 
 #[derive(Args, Debug, Clone)]
@@ -323,7 +324,7 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-
+        let _guard = InferenceModeGuard::enabled();
         let store_float_precision = var_store_float_precision(&self.var_store);
 
         debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.as_ref().kind());
@@ -379,6 +380,8 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
     where
         F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> + Send + Sync + 'static,
     {
+        let _guard = InferenceModeGuard::enabled();
+
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);
         let module = builder(&vs.root())?;
@@ -2416,6 +2419,7 @@ mod train_tests {
 
     use rand::rngs::StdRng;
     use rand_distr::{Distribution, Normal};
+    use thoosa_shims::inference_mode::InferenceModeGuard;
 
     #[ctor::ctor]
     fn test_init() {
@@ -4003,6 +4007,19 @@ mod train_tests {
         let run_config_values = store.list_run_config_values(run_id).await?;
 
         assert_eq!(Some(&Val::Real(0.25)), run_config_values.get("loss"));
+
+        Ok(())
+    }
+
+
+    #[test]
+    fn test_inference_mode() -> Result<(), ThoError>{
+
+        assert!(!Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
+
+        let _guard = InferenceModeGuard::enabled();
+
+        assert!(Tensor::zeros(&[10, 100], FLOAT_CPU).is_inference());
 
         Ok(())
     }
