@@ -602,8 +602,8 @@ pub struct SqlStore {
 
 const SQL_STORE_READERS_CNT: usize = 8;
 static IN_MEM_DB_COUNTER: AtomicUsize = AtomicUsize::new(0);
-const TRAIN_LABEL_NETS_RUN_CONFIG_TYPE: &str = "TrainLabelNetsRunConfig";
-const TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE: &str = "TrainMotifsNetsRunConfig";
+const TRAIN_LABEL_NETS_RUN_CONFIG_TYPE: &str = "TrainLabelNetRunConfig";
+const TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE: &str = "TrainMotifNetRunConfig";
 
 #[derive(Debug)]
 struct RandomSliceResourceCtx {
@@ -1185,7 +1185,7 @@ impl Store for SqlStore {
 
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
             let r = conn.prepare(
-                "SELECT tn.run_id FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type='TrainLabelNetsRunConfig' AND net_path LIKE ? ORDER BY run_on DESC LIMIT 1"//TODO takes last one
+                "SELECT tn.run_id FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type='TrainLabelNetRunConfig' AND net_path LIKE ? ORDER BY run_on DESC LIMIT 1"//TODO takes last one
             )?.query_map([Value::Text(format!("{label}%"))], |row| {
                 Ok(row.get::<usize, u32>(0)?)
             })?.map(|v| v.unwrap()).collect();
@@ -5189,7 +5189,7 @@ mod store_tests {
 
         let root_run_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
         let select_run_id = store.save_run_config(Some(&[root_run_id]), &"SelectMotifsRunConfig", "alpha motif selection", HashMap::new()).await?;
-        let child_run_id = store.save_run_config(Some(&[select_run_id]), &"TrainMotifsNetsRunConfig", "child", HashMap::new()).await?;
+        let child_run_id = store.save_run_config(Some(&[select_run_id]), &"TrainMotifNetRunConfig", "child", HashMap::new()).await?;
         let _other_run_id = store.save_run_config(None, &"OtherRunConfig", "beta", HashMap::new()).await?;
 
         let by_id = store.list_run_configs_filtered(RunConfigFilter {
@@ -5199,7 +5199,7 @@ mod store_tests {
         assert_eq!(vec![select_run_id, root_run_id], by_id.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         let by_type = store.list_run_configs_filtered(RunConfigFilter {
-            run_config_type: Some("TrainMotifsNetsRunConfig".to_string()),
+            run_config_type: Some("TrainMotifNetRunConfig".to_string()),
             ..RunConfigFilter::default()
         }).await?;
         assert_eq!(vec![child_run_id, select_run_id, root_run_id], by_type.into_iter().map(|entry| entry.id).collect::<Vec<_>>());

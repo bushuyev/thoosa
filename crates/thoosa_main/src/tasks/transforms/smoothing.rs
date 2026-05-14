@@ -374,6 +374,7 @@ pub fn moving_average(x: &Tensor, window: u32, step: i64) -> Result<Tensor, ThoE
 }
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use thoosa_common::utils::make_periodic_signal;
     use thoosa_shared::ThoError;
     use tch::Tensor;
@@ -381,17 +382,21 @@ mod tests {
 
     #[test]
     fn test_0() -> Result<(), ThoError> {
-        for periods in 1..10 {
-            let x = make_periodic_signal(1000, periods);
-
-            let lambda = 0.5; //spline_lambda_from_window_and_extrema(x.size()[0], 1.0);
-            // let smooth_x = smoothing_spline_1d_channels(&x, lambda)?;
-            let smooth_x = median(&x, 200)?;
-
-
-            thoosa_common::utils::debug_plot_impl(&x, &format!("x_{periods}"), 0)?;
-            thoosa_common::utils::debug_plot_impl(&smooth_x, &format!("smooth_x{periods}"), 0)?;
+        #[derive(Debug)]
+        struct A {
+            val:&'static str
         }
+        impl Drop for A {
+            fn drop(&mut self) {
+                debug!("{:?} dropped", self.val)
+            }
+        }
+
+        'scope: {
+            let _ = A { val: "_" };
+            let _x = A { val: "_x" };
+            debug!("scope ended");
+        };
 
         Ok(())
     }
