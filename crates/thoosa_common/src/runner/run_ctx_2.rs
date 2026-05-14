@@ -11,7 +11,7 @@ use thoosa_shared::comp_id::SynKey;
 use crate::runner::common::{MaxParallelCtx, RunCtx};
 
 use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::{with_perf_log, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{perf_log, sync_mutex_lock, ThoError};
 use tracing::error;
 
 use crate as thoosa_common;
@@ -147,11 +147,9 @@ impl RunCtx for RunCtxImpl {
     fn add_purge_gpu_closure(&mut self, cl:Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>>+ Send + Sync>) {
         if let Some(purge_gpu_closures) = self.purge_gpu_closures.as_ref() {
             // TODO(perf): this lock is hit for every cached data access; store purge callbacks in a per-branch small vector and merge once when the branch finishes.
-            with_perf_log(
-                || purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::add_purge_gpu_closure: timed out waiting for purge_gpu_closures lock"),
-                "RunCtxWithPermits/add_purge_gpu_closure/purge_gpu_closures",
+            perf_log!(
+                sync_mutex_lock!(purge_gpu_closures).push(cl)
             )
-            .push(cl);
         }
     }
 
@@ -166,11 +164,7 @@ impl Drop for RunCtxImpl {
             debug!(
                 "Drop for RunCtxWithPermits::drop: id={:?} count={count} purge_gpu_closures.len={}",
                 self.id,
-                with_perf_log(
-                    || purge_gpu_closures.try_lock_for(LOCK_TIMEOUT).expect("RunCtxWithPermits::drop: timed out waiting for purge_gpu_closures lock"),
-                    "RunCtxWithPermits/drop/purge_gpu_closures",
-                )
-                .len()
+                perf_log!(sync_mutex_lock!(purge_gpu_closures).len())
             );
 
             if count == 1 {// it's topmost ctx

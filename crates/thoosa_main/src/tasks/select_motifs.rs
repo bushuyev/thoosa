@@ -43,7 +43,7 @@ use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, with_async_perf_log, with_perf_log, StreamBuffering, ThoError};
+use thoosa_shared::{async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{hump, Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -784,10 +784,7 @@ where
             find_motif_run_ids_motif_ids.insert(*find_motifs_run_id, store.list_motifs(*find_motifs_run_id).await?);
         }
 
-        let channels = with_perf_log(
-            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "SelectMotifsStage/new/read_ws",
-        )
+        let channels = perf_log!(sync_read_lock!(ws))
         .channels() as usize;
 
         Ok(Self {
@@ -1137,10 +1134,7 @@ where
             debug!("SelectMotifsStage::run: clc_resources_input={clc_resources_input:?}");
             debug!("SelectMotifsStage::run: 1. find_motifs_run_config={find_motifs_run_config:?}");
             let required_ids = HashMap::new();
-            let channels = with_perf_log(
-                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "SelectMotifsStage/run/read_ws",
-            )
+            let channels = perf_log!(sync_read_lock!(ws))
             .channels();
 
             let ClcResourcesMotifsDistOutput {
@@ -1232,17 +1226,7 @@ where
                                 }).await??;
 
 
-                                let mut motif_added_slices_guard = with_async_perf_log(
-                                    async ||{
-                                        tokio::time::timeout(
-                                            thoosa_shared::LOCK_TIMEOUT,
-                                            channels_motifs_added_slices[channel].write(),
-                                        )
-                                            .await
-                                            .map_err(|_| ThoError::new("SelectMotifsStage::run: timed out waiting for channels_motifs_added_slices write lock"))
-                                    },
-                                    "SelectMotifs/extend_with_one_find_run"
-                                ).await?;
+                                let mut motif_added_slices_guard = async_perf_log!(async_write_lock!(channels_motifs_added_slices[channel]));
 
                                 for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
 
@@ -1461,10 +1445,7 @@ where
             )))
         }
 
-        let num_channels = with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "SelectMotifsStage/run/read_ws",
-        )
+        let num_channels = perf_log!(sync_read_lock!(self.ws))
         .channels() as usize;
         let total_size = resources.iter().map(|resource| resource.length() as usize).sum::<usize>();
 

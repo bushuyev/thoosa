@@ -1290,18 +1290,12 @@ mod tests {
         let output = Arc::clone(&stage)
             .run(
                 input,
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "RandomStats/test/write_ctx",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                     .branch(Some("random_stats"), false),
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::with_perf_log(
-            || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "RandomStats/test/write_ctx",
-        )
+        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
             .branch(Some("random_stats_data"), false);
         let size = output
             .with_data_ref(0, ctx_for_data, None, |stats: &MotifStatsOutput, _ctx| {
@@ -1359,10 +1353,7 @@ mod tests {
         let output = Arc::clone(&stage)
             .run(
                 input,
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "MotifStats::test_merged_motifs_stats_source/write_ctx",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("motif_stats_merged"), false),
             )
             .await?;
@@ -1370,10 +1361,7 @@ mod tests {
         let value = output
             .with_data_ref(
                 0,
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "MotifStats::test_merged_motifs_stats_source/read_ctx",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("motif_stats_merged_data"), false),
                 None,
                 |stats: &MotifStatsOutput, _ctx| stats.channel_value(&metric, 0),

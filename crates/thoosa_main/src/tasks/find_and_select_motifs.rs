@@ -342,8 +342,8 @@ impl FindAndSelectMotifsStage {
         let loss = if eval_metrics.score_sum == 0.0 { f32::MAX } else { 1.0 / eval_metrics.score_sum as f32 };
         debug!("FindAndSelectMotifsStage::run: run_config={run_config:?} score_sum={} loss={loss}", eval_metrics.score_sum);
 
-        if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss").0 {
-            *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/write_min_loss") = (loss, Some(run_config));
+        if loss < thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss_ref)).0 {
+            *thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(min_loss_ref)) = (loss, Some(run_config));
         }
 
         (eval_metrics, loss)
@@ -430,7 +430,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
 
                     opt.optimize().await;
 
-                    let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "FindAndSelectMotifs/run/read_min_loss");
+                    let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
 
                     let (best_loss, best_config) = (guard.0, guard.1.as_ref().map(|v|v.clone()));
 

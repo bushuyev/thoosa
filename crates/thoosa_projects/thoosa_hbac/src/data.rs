@@ -1234,9 +1234,7 @@ mod tests {
 
         let loader = Arc::new(RawTensorLoader::<MockRunCtx>::new(
             move |input_resource: &Resource, _device| {
-                let t = loader_tensors
-                    .try_lock_for(thoosa_shared::LOCK_TIMEOUT)
-                    .expect("lock timeout")
+                let t = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(loader_tensors))
                     .get(input_resource)
                     .map(|v| v.as_ref().shallow_clone())
                     .ok_or_else(|| ThoError::new(format!("missing resource tensor for resource_id={}", input_resource.id())))?;

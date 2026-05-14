@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
 use crate::device_stats::ThoDeviceStats;
-use crate::{with_perf_log, LOCK_TIMEOUT};
+use crate::{perf_log, sync_mutex_lock};
 
 pub(crate) const COLLECT_ETA_LOG_INTERVAL: Duration = Duration::from_secs(10);
 pub const COLLECT_ETA_PROGRESS_SOCKET_ID: &str = "thoosa-progress";
@@ -173,10 +173,7 @@ impl CollectEtaTracker {
     }
 
     fn state_guard(&self) -> parking_lot::MutexGuard<'_, CollectEtaState> {
-        with_perf_log(
-            || self.state.try_lock_for(LOCK_TIMEOUT).expect("CollectEtaTracker::state_guard: timed out waiting for tracker lock"),
-            "CollectEtaTracker/state_guard",
-        )
+        perf_log!(sync_mutex_lock!(self.state))
     }
 
     fn register(&self, descr: &str, total: usize, concurrency: usize) -> u64 {

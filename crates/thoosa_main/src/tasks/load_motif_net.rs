@@ -121,10 +121,7 @@ where
         let device_idx = ctx.device_idx();
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
-        let ws_guard = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "LoadMotifNet/run/read_ws",
-        );
+        let ws_guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws));
         // TODO(perf): resolve the path under the workspace lock, then load the model outside it; also consider caching loaded net params by net_id/precision.
         let (params, module) = ws_guard.load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
 

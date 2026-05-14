@@ -189,10 +189,7 @@ where
     }
 
     async fn load_candidates_by_channel(&self, run_ids: &[RunId]) -> Result<Vec<Vec<SelectedMotifCandidate>>, ThoError> {
-        let channels = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "MergeSelectedMotifs/load_candidates/read_ws",
-        )
+        let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();
         let mut candidates_by_channel = vec![Vec::new(); channels as usize];
         let mut run_config_cache = HashMap::<RunId, FindMotifsRunConfig>::new();
@@ -495,10 +492,7 @@ mod tests {
         let output = stage
             .run(
                 Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(vec![select_run_id_0, select_run_id_1]))),
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "MergeSelectedMotifs::test/write_ctx",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("merge_selected_motifs"), false),
             )
             .await?;
@@ -506,10 +500,7 @@ mod tests {
         let (run_id, merged_groups_by_channel) = output
             .with_data_ref(
                 0,
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "MergeSelectedMotifs::test/read_ctx",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("merge_selected_motifs_output"), false),
                 None,
                 |output: &MergeSelectedMotifsOutput, _ctx| Ok::<_, ThoError>((*output.id(), output.merged_groups_by_channel().clone())),

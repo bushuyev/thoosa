@@ -204,20 +204,14 @@ where
     ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
         debug!("TrainNet::run_inner: descr={descr}");
         let (node, params) = {
-            let vs_guard = thoosa_shared::with_perf_log(
-                || vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "TrainNet/run_inner/lock_vs",
-            );
+            let vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs));
             match (self.net)(&run_config, &vs_guard) {
                 Ok(v) => v,
                 Err(e) => return Box::pin(async { Err(e) }),
             }
         };
         let optimizer = {
-            let vs_guard = thoosa_shared::with_perf_log(
-                || vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "TrainNet/run_inner/lock_vs",
-            );
+            let vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs));
             match (self.optimizer)(&run_config, &vs_guard) {
                 Ok(v) => v,
                 Err(e) => return Box::pin(async { Err(e) }),
@@ -336,7 +330,7 @@ where
                             bad_epochs = 0;
                             {
                                 // TODO(perf): best-checkpoint saves block the training loop; save on a background CPU task or only after a minimum score delta when configs produce many small improvements.
-                                let mut vs_guard = thoosa_shared::with_perf_log(|| vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"), "TrainNet/run_inner/lock_vs");
+                                let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs));
                                 panic_to_err!(vs_guard.save(&best_checkpoint_path))?;//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
                             }
                             saved_best = true;
@@ -358,10 +352,7 @@ where
                 collect_eta_record_completion(epochs_eta_guard.id());
             }
             if saved_best {
-                let mut vs_guard = thoosa_shared::with_perf_log(
-                    || vs.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "TrainNet/run_inner/lock_vs",
-                );
+                let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs));
                 vs_guard.load(&best_checkpoint_path)?;
                 debug!("TrainNet::run_inner: descr={descr}  final best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta} best_checkpoint_path={best_checkpoint_path:?}");
             } else {
@@ -619,10 +610,7 @@ where
 
     fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
         // TODO(perf): lock_net is taken for every forward call; if TrainStep is not shared concurrently, split ownership so the hot path can call the module without a mutex.
-        let net = thoosa_shared::with_perf_log(
-            || self.net.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "TrainStep/forward/lock_net",
-        );
+        let net = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.net));
         net.tho_forward(x_t, lengths, train)
     }
 
@@ -635,10 +623,7 @@ where
     }
 
     fn set_lr(&self, lr: f64) {
-        let mut opt = thoosa_shared::with_perf_log(
-            || self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "TrainStep/set_lr/lock_opt",
-        );
+        let mut opt = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.opt));
         opt.set_lr(lr);
     }
 }
@@ -685,10 +670,7 @@ where
 
         {
             // TODO(perf): lock_opt is per batch; keep optimizer ownership local to the training task or queue optimizer steps to avoid mutex traffic in TrainStep::do_run.
-            let mut opt = thoosa_shared::with_perf_log(
-                || self.opt.try_lock_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "TrainStep/do_run/lock_opt",
-            );
+            let mut opt = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.opt));
             debug!("TrainStep::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
             debug!("TrainStep::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));

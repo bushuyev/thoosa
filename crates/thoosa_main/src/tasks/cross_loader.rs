@@ -1677,10 +1677,7 @@ mod tests {
         let test_dir = Path::new("/tmp/").join(cdt_for_dir());
         fs::create_dir_all(&test_dir)?;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
-        let store_path = thoosa_shared::with_perf_log(
-            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").store_path().to_path_buf(),
-            "CrossLoader::test_cross_clc/ws_read_store_path",
-        );
+        let store_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).store_path().to_path_buf());
         let store = Arc::new(SqlStore::from_path(&store_path).await?);
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
@@ -1829,10 +1826,7 @@ mod tests {
         let expected_len = expected.len();
         assert!(expected_len > 0);
 
-        let slices_path = thoosa_shared::with_perf_log(
-            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").tmp_path().join(format!("{run_id}_0_slices.zstd")),
-            "CrossLoader::test_cross_clc/ws_read_tmp_path",
-        );
+        let slices_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).tmp_path().join(format!("{run_id}_0_slices.zstd")));
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
             .map_err(|e| ThoError::from_error(format!("read slices file {slices_path:?}"), e))?;
 
