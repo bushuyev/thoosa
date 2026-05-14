@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{with_async_perf_log, with_perf_log, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock, ThoError};
 use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
@@ -59,15 +59,9 @@ impl RegisteredCacheHandle {
     }
 
     pub async fn lock_exclusive(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
-        with_async_perf_log(
-            async || {
-                tokio::time::timeout(LOCK_TIMEOUT, self.gate.clone().write_owned())
-                    .await
-                    .expect("RegisteredCacheHandle::lock_exclusive: timed out waiting for cache gate write lock")
-            },
-            "RegisteredCacheHandle/lock_exclusive/write_cache_gate",
+        async_perf_log!(
+            async_write_owned_lock!(Arc::clone(&self.gate))
         )
-        .await
     }
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -153,10 +147,7 @@ impl GlobalCtx {
         });
 
         assert!(
-            with_perf_log(
-                || self.caches.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::register_cache: timed out waiting for caches write lock"),
-                "GlobalCtx/register_cache/write_caches",
-            )
+            perf_log!(sync_write_lock!(self.caches))
             .insert(cache.0, entry)
             .is_none()
         );
@@ -166,40 +157,25 @@ impl GlobalCtx {
         RegisteredCacheHandle { name: cache.0, gate }
     }
 
-    fn caches_snapshot(&self, ctx: &'static str) -> CacheSnapshot {
-        with_perf_log(
-            || {
-                self.caches
-                    .try_read_for(LOCK_TIMEOUT)
-                    .unwrap_or_else(|| panic!("{ctx}: timed out waiting for caches read lock"))
-                    .iter()
-                    .map(|(type_name, entry)| (*type_name, Arc::clone(entry)))
-                    .collect()
-            },
-            ctx,
+    fn caches_snapshot(&self, descr: &'static str) -> CacheSnapshot {
+        perf_log!(
+            sync_read_lock!(self.caches, "{descr}")
+                .iter()
+                .map(|(type_name, entry)| (*type_name, Arc::clone(entry)))
+                .collect(),
+            "{descr}"
         )
     }
 
     async fn lock_cache_shared(entry: &Arc<CacheRegistryEntry>, ctx: &'static str) -> tokio::sync::OwnedRwLockReadGuard<()> {
-        with_async_perf_log(
-            async || {
-                tokio::time::timeout(LOCK_TIMEOUT, entry.gate.clone().read_owned())
-                    .await
-                    .unwrap_or_else(|_| panic!("{ctx}: timed out waiting for cache gate read lock"))
-            },
-            ctx,
-        )
-        .await
+        async_perf_log!(async_read_owned_lock!(Arc::clone(&entry.gate), "{ctx}"), "{ctx}")
     }
 
     pub fn remove_cache(&self, key:&'static str) {
         debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
-            with_perf_log(
-                || self.caches.try_write_for(LOCK_TIMEOUT).expect(&format!("GlobalCtx::remove_cache, key={key}: timed out waiting for caches write lock")),
-                "GlobalCtx/remove_cache/write_caches",
-            )
+            perf_log!(sync_write_lock!(self.caches, "key={key}"), "key={key}")
             .remove(key)
             .is_some()
         );
@@ -335,22 +311,6 @@ impl GlobalCtx {
         }
 
         debug!("GlobalCtx::purge_cpu: purge_until={purge_until} done");
-    }
-
-    pub fn next_cache_area(&self) -> Result<CacheAreaId, ThoError> {//TODO remove
-        with_perf_log(
-            || self.caches_areas.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::next_cache_area: timed out waiting for cache_areas write lock"),
-            "GlobalCtx/next_cache_area/write_cache_areas",
-        )
-        .next_available_cache_area()
-    }
-
-    pub fn dispose_cache_area(&self, cache_area:CacheAreaId) {
-        with_perf_log(
-            || self.caches_areas.try_write_for(LOCK_TIMEOUT).expect("GlobalCtx::dispose_cache_area: timed out waiting for cache_areas write lock"),
-            "GlobalCtx/dispose_cache_area/write_cache_areas",
-        )
-        .dispose_cache_area(cache_area)
     }
 
     pub fn do_age(&self) {
@@ -536,36 +496,6 @@ pub mod mock_global_ctx {
             self
         }
 
-
-        pub fn with_dispose_cache_area(mut self) -> Self {
-            if let Some(real) = self.real {
-                self.mock.expect_dispose_cache_area().times(0..).returning({
-                    move | cache_area| {
-                        real.dispose_cache_area(cache_area)
-                    }
-                });
-            } else {
-                self.mock.expect_dispose_cache_area().times(0..);
-            }
-            self
-        }
-
-        pub fn with_next_cache_area(mut self, mut cache_areas:Vec<u64>) -> Self {
-            if let Some(real) = self.real {
-                let _ = self.mock.expect_next_cache_area().returning({
-                    move || {
-                        real.next_cache_area()
-                    }
-                });
-            } else {
-                let _ = self.mock.expect_next_cache_area().returning(move ||{
-                    Ok(cache_areas.pop().unwrap())
-                });
-            }
-
-            self
-        }
-
         pub fn finish(self) -> MockGlobalCtx {
             self.mock
         }
@@ -612,9 +542,7 @@ pub mod mock_global_ctx {
             .with_device_count(params.device_count)
             .with_register_cache()
             .with_remove_cache()
-            .with_next_cache_area(params.next_cache_areas)
             .with_run_purge_gpu()
-            .with_dispose_cache_area()
             .finish()
     }
 

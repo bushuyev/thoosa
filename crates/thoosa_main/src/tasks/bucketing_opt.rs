@@ -23,7 +23,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfig, RunId};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{collect_futures_with_progress, panic_to_err_async, StreamBuffering, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{collect_futures_with_progress, panic_to_err_async, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
@@ -270,8 +270,8 @@ impl BucketingOptStage {
         let loss = if eval_metrics.motif_count == 0 { f32::MAX } else { 1.0 / eval_metrics.motif_count as f32 };
         debug!("BucketingOptStage::run: run_config={run_config:?} motif_count={} loss={loss}", eval_metrics.motif_count);
 
-        if loss < thoosa_shared::with_perf_log(|| min_loss_ref.try_read_for(LOCK_TIMEOUT).expect("lock timeout"), "BucketingOptStage/run/read_min_loss").0 {
-            *thoosa_shared::with_perf_log(|| min_loss_ref.try_write_for(LOCK_TIMEOUT).expect("lock timeout"), "BucketingOptStage/run/write_min_loss") = (loss, Some(run_config));
+        if loss < thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss_ref)).0 {
+            *thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(min_loss_ref)) = (loss, Some(run_config));
         }
 
         (eval_metrics, loss)
@@ -340,7 +340,7 @@ impl AsyncStage for BucketingOptStage {
 
                 opt.optimize().await;
 
-                let guard = thoosa_shared::with_perf_log(|| min_loss.try_read_for(LOCK_TIMEOUT).expect("lock timeout"), "BucketingOptStage/run/read_min_loss");
+                let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
                 let (best_loss, best_config) = (guard.0, guard.1.as_ref().cloned());
 
                 if let Some(best_config) = best_config {

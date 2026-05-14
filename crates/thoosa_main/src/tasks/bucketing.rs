@@ -30,7 +30,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunId;
-use thoosa_shared::{collect_futures_with_progress, panic_to_err, StreamBuffering, TensorIdSliceIdx, ThoError, LOCK_TIMEOUT};
+use thoosa_shared::{collect_futures_with_progress, panic_to_err, StreamBuffering, TensorIdSliceIdx, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
@@ -288,7 +288,7 @@ where
         let step = i64::from(step);
 
         let (channels, sample_rate, tmp_path) = {
-            let ws = ws.try_read_for(LOCK_TIMEOUT).expect("BucketingStage::run: timed out waiting for workspace read lock");
+            let ws = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
             (ws.channels(), ws.sample_rate(), ws.tmp_path().clone())
         };
 

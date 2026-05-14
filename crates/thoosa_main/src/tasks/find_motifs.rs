@@ -270,10 +270,7 @@ where
                         }
                         FinderKind::CrossLoader(cross_loader_run_config) => {
                             let cross_loader_run_config = cross_loader_run_config.clone();
-                            let channels = thoosa_shared::with_perf_log(
-                                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").channels(),
-                                "FindMotifsStage::new/ws_read_channels",
-                            );
+                            let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).channels());
 
                             let filter = cross_loader_run_config.slices_filter.clone();
 

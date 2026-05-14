@@ -917,10 +917,7 @@ where
     assert!(!resource_ids_slices.is_empty());
 
     let window = find_motifs_run_config.window;
-    let channels = thoosa_shared::with_perf_log(
-        || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-        "load_random_slices/read_ws",
-    )
+    let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws))
     .channels() as i64;
     assert!(channels > 0, "load_random_slices: channels must be > 0");
 
@@ -1188,18 +1185,12 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
         let motif = motif_loader
             .run_cached(
                 Arc::clone(&input_id),
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "MotifLoader::test_load_motif/ctx_write_for_run_cached",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("motif_loader_test"), false),
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::with_perf_log(
-            || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "MotifLoader::test_load_motif/ctx_write_for_data",
-        )
+        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
         .branch(Some("motif_loader_test_data"), false);
         let r = motif.with_data_ref(0, ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, _ctx|{
             let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
@@ -1275,18 +1266,12 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
         let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = random_slices_loader
             .run(
                 Arc::clone(&input),
-                thoosa_shared::with_perf_log(
-                    || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "RandomSlicesLoader::test_load_random_slices/ctx_write_for_run",
-                )
+                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("random_slices_loader"), false),
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::with_perf_log(
-            || ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "RandomSlicesLoader::test_load_random_slices/ctx_write_for_data",
-        )
+        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
         .branch(Some("random_slices_loader_data"), false);
         let r = slices.with_data_ref(
             0,

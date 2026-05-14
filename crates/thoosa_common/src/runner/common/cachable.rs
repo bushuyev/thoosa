@@ -18,7 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use thoosa_shared::{with_async_perf_log, with_perf_log, CopyToDevice, LOCK_TIMEOUT};
+use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
 use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
@@ -31,40 +31,23 @@ use thoosa_shared::traits::WithId;
 use crate::cuda_utils::with_pooled_cuda_stream;
 
 async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
-    with_async_perf_log(
-        async || tokio::time::timeout(LOCK_TIMEOUT, lock.read()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock read lock")),
-        ctx,
-    )
-    .await
+    async_perf_log!(async_read_lock!(lock, "{ctx}"), "{ctx}")
 }
 
 async fn timed_tokio_write<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockWriteGuard<'a, T> {
-    with_async_perf_log(
-        async || tokio::time::timeout(LOCK_TIMEOUT, lock.write()).await.unwrap_or_else(|_| panic!("{ctx}: timed out waiting for tokio::sync::RwLock write lock")),
-        ctx,
-    )
-    .await
+    async_perf_log!(async_write_lock!(lock, "{ctx}"), "{ctx}")
 }
 
 fn timed_parking_mutex_lock<'a, T>(lock: &'a Mutex<T>, ctx: &'static str) -> parking_lot::MutexGuard<'a, T> {
-    with_perf_log(
-        || lock.try_lock_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::Mutex lock")),
-        ctx,
-    )
+    perf_log!(sync_mutex_lock!(lock, "{ctx}"), "{ctx}")
 }
 
 fn timed_parking_rw_read<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockReadGuard<'a, T> {
-    with_perf_log(
-        || lock.try_read_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock read lock")),
-        ctx,
-    )
+    perf_log!(sync_read_lock!(lock, "{ctx}"), "{ctx}")
 }
 
 fn timed_parking_rw_write<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockWriteGuard<'a, T> {
-    with_perf_log(
-        || lock.try_write_for(LOCK_TIMEOUT).unwrap_or_else(|| panic!("{ctx}: timed out waiting for parking_lot::RwLock write lock")),
-        ctx,
-    )
+    perf_log!(sync_write_lock!(lock, "{ctx}"), "{ctx}")
 }
 
 #[async_trait]

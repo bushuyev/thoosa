@@ -195,10 +195,7 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.device_idx();
 
-        let num_channels = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "StackedMotifsLoader/run/read_ws",
-        )
+        let num_channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();
         let find_motifs_run_config = with_data!(ctx.branch(Some("stacked_motifs_input"), false), input; |_ctx, input: &StackedMotifsInput|{
             Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))

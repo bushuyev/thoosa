@@ -104,10 +104,7 @@ where
 {
     pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunId) -> Result<Self, ThoError> {
         let (num_channels, sample_rate)  = {
-            let guard = thoosa_shared::with_perf_log(
-                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "FreqFilter::new/ws_read",
-            );
+            let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
             (guard.channels() as i64, guard.sample_rate() as f64)
         };
 
