@@ -49,7 +49,13 @@ const EXPECTED_LABELS: usize = 234;
 
 fn main() -> Result<(), ThoError>{
     info!("bird_clef main");
+    if let Ok(thoosa_num_interop_threads)= std::env::var("THOOSA_NUM_INTEROP_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<u32>().map_err(|e|ThoError::from(e))){
+        info!("thoosa_num_interop_threads={thoosa_num_interop_threads}");
+        tch::set_num_interop_threads(thoosa_num_interop_threads as i32);
+    };
 
+    let worker_threads = std::env::var("THOOSA_WORKER_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<usize>().map_err(|e|ThoError::from(e))).ok();
+    let blocking_threads = std::env::var("THOOSA_BLOCKING_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<usize>().map_err(|e|ThoError::from(e))).ok();
 
     let t1 = Instant::now();
 
@@ -66,8 +72,8 @@ fn main() -> Result<(), ThoError>{
                 }
             }
         })
-        .worker_threads(cpu_num/2)
-        .max_blocking_threads(cpu_num/2)
+        .worker_threads(worker_threads.unwrap_or(cpu_num/2))
+        .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
         .enable_all()
         .build()
         .map_err(|err| {
@@ -164,8 +170,6 @@ fn main() -> Result<(), ThoError>{
 
 
 async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>) -> Result<(), ThoError>{
-    tch::set_num_interop_threads(1);
-
     let mut ctx = RunCtxImpl::new(0, "root");
 
 
