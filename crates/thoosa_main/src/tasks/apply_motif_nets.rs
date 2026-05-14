@@ -1105,20 +1105,20 @@ pub fn apply_motif_net_forward(
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
 
     debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.t.size());
-        trace!("ApplyMotifNet::do_run: batch.t=\n{}", input.t);
-        let t = input.t.f_i((c, ..))?;
-        let t = if t.size()[0] >= motif_width {
-            t
-        } else {
+    trace!("ApplyMotifNet::do_run: batch.t=\n{}", input.t);
+    let t = input.t.f_i((c, ..))?;
+    let t = if t.size()[0] >= motif_width {
+        t
+    } else {
         warn!("ApplyMotifNet::do_run: 1. motif_id={motif_id} padding t.size={:?} to motif_width={motif_width} out_id={out_id:?}", t.size());
-            pad_to(&t, &[motif_width], 0.0)?
-        };
+        pad_to(&t, &[motif_width], 0.0)?
+    };
 
-        // TODO(perf): cache unfolded channel windows by (resource, channel, motif_width, slice_step) across motif nets; tracing shows this stage is invoked tens of thousands of times.
-        let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
-        debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
+    // TODO(perf): cache unfolded channel windows by (resource, channel, motif_width, slice_step) across motif nets; tracing shows this stage is invoked tens of thousands of times.
+    let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
+    debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
-    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices.f_totype(Float)?);
+    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices); //.f_totype(Float)?
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 

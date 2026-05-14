@@ -110,3 +110,15 @@ opt-level = 3
 strip = "none"
 lto = false
 panic = "unwind"
+
+[profile.final-release]
+inherits = "release"
+debug = false
+opt-level = 3
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+incremental = false
+debug-assertions = false
+overflow-checks = false
