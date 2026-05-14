@@ -497,8 +497,8 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
     let find_and_select =  FindAndSelect::GridOnly {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
-            step: RangeOrValue::Value(2000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 32000}, step: Some((10000, 0)) },
+            step: RangeOrValue::Value(1000),
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((10000, 0)) },
             // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
@@ -538,18 +538,18 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // }),
             finder_kind: FinderKindRangeOrValue::Bucket(BucketRunConfigRangeOrValue {
                 id: None,
-                bucket_count: RangeOrValue::Value(100),
+                bucket_count: RangeOrValue::Value(500),
                 min_slices: RangeOrValue::Value(3),
                 max_slices: RangeOrValue::Value(100000),
                 bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
-                    band_hz: RangeOrValue::Value(160.0),
+                    band_hz: RangeOrValue::Value(32.0),
                     aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),
                     apply_hann_window: RangeOrValue::Value(true),
                     remove_dc_offset: RangeOrValue::Value(true),
                     normalize_lsh: RangeOrValue::Value(true),
                 })
             }),
-            max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
+            max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100000) })),
         },
 
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
@@ -565,7 +565,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
             epochs: RangeOrValue::Value(20),
-            batch_size: RangeOrValue::Value(50),
+            batch_size: RangeOrValue::Value(100),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(3),
@@ -585,26 +585,26 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     kernel: RangeOrValue::Value(1000),
         // }),
 
-        net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-            conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            // conv_layers: RangeOrValue::Value(1),
-            // head_layers: RangeOrValue::Value(1),
-            head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            step: RangeOrValue::Value(20),
-            channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-            // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-            // kernel: RangeOrValue::Value(10),
-            kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
-            head_pool: None,
-        })
-
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-        //     // step: RangeOrValue::Value(1),
-        //     // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-        //     a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
-        //     b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     // conv_layers: RangeOrValue::Value(1),
+        //     // head_layers: RangeOrValue::Value(1),
+        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     step: RangeOrValue::Value(20),
+        //     channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+        //     // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+        //     // kernel: RangeOrValue::Value(10),
+        //     kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
+        //     head_pool: None,
         // })
+
+        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+            // step: RangeOrValue::Value(1),
+            // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
+            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+        })
 
     };
 

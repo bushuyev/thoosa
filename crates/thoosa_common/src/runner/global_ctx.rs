@@ -19,6 +19,7 @@ use crate::copy_ctx::CopyCtx;
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 use crate::tho_device::ThoDevice;
 use futures::FutureExt;
+use thoosa_shims::context::ThoCudaContext;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -112,8 +113,8 @@ impl GlobalCtx {
 
             GlobalCtx::global().drop_device(tho_device_idx, "drop").await?;
 
-            // let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
-            // cu_ctx.reset()?;
+            let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
+            cu_ctx.reset()?;//it only calls clearCublasWorkspaces and CUDACachingAllocator::emptyCache, see  tho_cu_reset crates/thoosa_shims/src-cpp/context.cpp:16
 
             *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
 
@@ -657,7 +658,8 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
     use log::debug;
-    use tch::kind::FLOAT_CUDA;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::Kind::Float;
     use tch::Tensor;
     use thoosa_shared::ThoError;
     use thoosa_shims::context::ThoCudaContext;
@@ -699,9 +701,16 @@ mod tests {
         debug!("sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-        // GlobalCtx::reset_cuda_context(1).await?;
+        // GlobalCtx::global().drop_device(1, "drop").await?;
         // let cu_ctx = ThoCudaContext::new(0 as i32)?;
         // cu_ctx.reset()?;
+
+        GlobalCtx::reset_cuda_context(1).await?;
+        debug!("reset done");
+
+        // let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
+        // let t_cuda = GlobalCtx::global().copy_ctx(1).await.copy(&t_cpu, 1, Float).await?;
+        // debug!("t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = with_data!(root_ctx.branch("bbb".into(), false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{

@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_infer_labels() -> Result<(), ThoError> {
+    async fn heavy_test_infer_labels() -> Result<(), ThoError> {
         GlobalCtx::init_devices(1);
         //TODO
         // let ws = Arc::new(RwLock::new(
