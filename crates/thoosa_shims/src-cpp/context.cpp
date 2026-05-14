@@ -14,10 +14,14 @@ CUresult tho_cu_init(unsigned int flags) {
 }
 
 CUresult tho_cu_reset(CUdevice device) {
-  at::cuda::clearCublasWorkspaces();
-  c10::cuda::CUDACachingAllocator::emptyCache();
-  // return tho_record_cuda_result("cuDevicePrimaryCtxReset", cuDevicePrimaryCtxReset(device));
-  return static_cast<CUresult>(0);
+  try {
+    at::cuda::clearCublasWorkspaces();
+    c10::cuda::CUDACachingAllocator::emptyCache();
+    // return tho_record_cuda_result("cuDevicePrimaryCtxReset", cuDevicePrimaryCtxReset(device));
+    return CUresult::CUDA_SUCCESS;//TODO add ThoShimResult and use its errors
+  } catch (...) {
+    return CUresult::CUDA_ERROR_UNKNOWN;
+  }
 }
 
 CUresult tho_cu_device_get(CUdevice *device, int ordinal) {
