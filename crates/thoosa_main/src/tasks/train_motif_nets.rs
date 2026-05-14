@@ -264,10 +264,7 @@ where
             Ok::<(MotifsBy, Arc<OptConfig>), ThoError>((input.motifs_by.clone(), input.opt_config.clone()))
         })?;
 
-        let channels = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "TrainMotifNets/run/read_ws",
-        )
+        let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();
 
         debug!("TrainMotifNets::run: motifs_by={motifs_by:?} opt_config={opt_config:?}");

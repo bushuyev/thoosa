@@ -315,10 +315,7 @@ where
 
         validate_welch_params(nperseg, noverlap)?;
 
-        let sample_rate = thoosa_shared::with_perf_log(
-            || self.ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "WelchPSD/run/read_ws",
-        )
+        let sample_rate = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .sample_rate() as f64;
 
         let resources = self.load_resources_for_input(resources_config).await?;

@@ -1453,18 +1453,11 @@ where
     ) -> Self {
         debug!(
             "DistsTracker:new: fixed_config={fixed_config:?} channels={}",
-            thoosa_shared::with_perf_log(
-                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "DistsTracker/new/read_ws",
-            )
-            .channels()
+            thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).channels()
         );
 
         let channel_trackers = (0
-            ..thoosa_shared::with_perf_log(
-                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                "DistsTracker/new/read_ws",
-            )
+            ..thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws))
             .channels())
             .map(|channel| {
                 debug!("DistsTracker:new: channel={channel}");
@@ -1472,10 +1465,7 @@ where
                 Arc::new(RwLock::new(SimpleMotifTracker::new(
                     if fixed_config.keep_slice_matches {
                         SqlMotifTrackerStore::new(
-                            thoosa_shared::with_perf_log(
-                                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                                "DistsTracker/new/read_ws",
-                            )
+                            thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws))
                             .tmp_run_store_path(run_config.id.expect("id") as u32, channel),
                             run_config.id.expect("id"),
                             channel,
@@ -1483,10 +1473,7 @@ where
                         .expect("can't create tmp store")
                     } else {
                         FileMotifTrackerStore::new(
-                            thoosa_shared::with_perf_log(
-                                || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                                "DistsTracker/new/read_ws",
-                            )
+                            thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws))
                             .tmp_path(),
                             run_config.id.expect("id"),
                             channel,
@@ -1513,10 +1500,7 @@ where
         let mut channels_groups = Vec::with_capacity(self.channel_trackers.len());
         for (channel, mt) in self.channel_trackers.iter().enumerate() {
             let (mut dumper, max_slices_counts) = {
-                let mut tracker = thoosa_shared::with_perf_log(
-                    || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                    "DistsTracker/new/write_tracker",
-                );
+                let mut tracker = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(mt));
                 (tracker.take_dumper()?, tracker.max_slices_counts())
             };
             let groups_inserted = dumper.load_slices_into_groups(&self.store, max_slices_counts).await?;
@@ -1596,10 +1580,7 @@ where
                 if slice_0.0 != slice_1.0 || slice_0.1 != slice_1.1 {
                     trace!("DistsTracker::consume, track: input.id={input_id:?} slice_0={slice_0:?} slice_1={slice_1:?}", );
 
-                    thoosa_shared::with_perf_log(
-                        || channel_trackers[channel].try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "DistsTracker/consume/write_tracker",
-                    )
+                    thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(channel_trackers[channel]))
                     .track(slice_0, slice_1, dist as f32);
                 }
             });
@@ -1608,10 +1589,7 @@ where
                 .into_par_iter()
                 .zip(matches_by_channel.into_par_iter())
                 .try_for_each(|(mt, matches)| {
-                    let mut guard = thoosa_shared::with_perf_log(
-                        || mt.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-                        "DistsTracker/consume/write_tracker_final",
-                    );
+                    let mut guard = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(mt));
                     guard.dump();
                     Ok::<(), ThoError>(())
                 })?;

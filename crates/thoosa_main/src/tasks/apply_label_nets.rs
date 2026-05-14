@@ -70,10 +70,7 @@ where
     {
         let tho_device_idx = stage_ctx.device_idx();
 
-        let all_label_nets = thoosa_shared::with_perf_log(
-            || ws.try_read_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout"),
-            "ApplyLabelNets/new/read_ws",
-        ).load_label_nets(Some(train_label_nets_run_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
+        let all_label_nets = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
 
         let mut apply_nets = vec![];
 

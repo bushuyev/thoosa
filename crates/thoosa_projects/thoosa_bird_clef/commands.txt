@@ -29,7 +29,7 @@ cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-
 
 cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/ plot-data --data-by=run_id:59791 --labels=crbthr1
 
-cargo run --release --bin thoosa_bird_clef   -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/ --input-dir=
+CUDA_VISIBLE_DEVICES='' cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/ infer --limit=10 --input-dir=/home/bu/dvl/rust/thoosa/crates/thoosa_projects/thoosa_bird_clef/test_data/train_soundscapes
 
 cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/  purge-models --purge-mode=lost
 cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path=/home/bu/tmp/ws_clef/  purge-models --purge-mode=unused_motifs

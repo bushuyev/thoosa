@@ -1676,7 +1676,7 @@ pub(crate) mod tests {
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
-        let run_ctx_branch = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_run"), false);
+        let run_ctx_branch = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(Some("apply_motif_nets_run"), false);
 
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?)),
@@ -1694,7 +1694,7 @@ pub(crate) mod tests {
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
 
-        let ctx_for_data = run_ctx.try_write_for(thoosa_shared::LOCK_TIMEOUT).expect("lock timeout").branch(Some("apply_motif_nets_assert"), false);
+        let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(Some("apply_motif_nets_assert"), false);
 
         with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);

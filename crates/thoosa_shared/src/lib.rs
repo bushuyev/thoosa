@@ -65,6 +65,7 @@ pub mod device_stats;
 pub mod math;
 pub mod audio_utils;
 pub mod tmp_file;
+pub mod macros;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,
@@ -361,6 +362,7 @@ pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
 pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(240);//TODO should depend on future
 
 
+
 struct AggPerf<'a>(&'a str, &'a str);
 impl std::fmt::Display for AggPerf<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -370,13 +372,14 @@ impl std::fmt::Display for AggPerf<'_> {
 
 
 #[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("sync_lock", descr)))]
+#[inline]
 pub fn with_perf_log<F, R>(f:F, descr:&str) -> R
 where
     F:FnOnce()->R {
 
-
     f()
 }
+
 
 #[tracing::instrument(level="debug", skip_all, fields(agg_perf = %AggPerf("async_lock", descr)))]
 #[inline]
