@@ -1,1 +1,0 @@
-pub const VERSION:&'static str = "2026-05-14 14:36:22.912637295 UTC";
