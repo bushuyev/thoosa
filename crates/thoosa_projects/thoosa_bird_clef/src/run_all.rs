@@ -447,14 +447,18 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         // }),
-        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-            // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            ff_mult: RangeOrValue::Value(2),
-            // dropout: RangeOrValue::Value(0.1),
-            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+        //     // d_model: RangeOrValue::Value(64),
+        //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+        //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+        //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     ff_mult: RangeOrValue::Value(2),
+        //     // dropout: RangeOrValue::Value(0.1),
+        //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        // })
+        net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
+            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 2 }, step: None },
+            features: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
         })
 
     };

@@ -35,7 +35,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -270,7 +270,7 @@ where
                         }
                         FinderKind::CrossLoader(cross_loader_run_config) => {
                             let cross_loader_run_config = cross_loader_run_config.clone();
-                            let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).channels());
+                            let channels = perf_log!(sync_read_lock!(ws).channels());
 
                             let filter = cross_loader_run_config.slices_filter.clone();
 
