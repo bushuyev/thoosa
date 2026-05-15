@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::tasks::bucketing::{BucketingStage, MelPatchResourcesInput};
+use crate::tasks::bucketing::{BucketingStage, BucketingInput};
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
@@ -35,7 +35,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -136,7 +136,7 @@ where
             Self::CrossLoader { cross_loader, .. } => Arc::clone(cross_loader).run(input, ctx).await,
             Self::Bucketing { bucketing_stage, .. } => {
                 let input = with_data!(ctx.branch(Some("find_motifs_bucketing_input"), false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
-                    Ok::<_, ThoError>(MelPatchResourcesInput::new(input.resources_config().clone()))
+                    Ok::<_, ThoError>(BucketingInput::new(input.resources_config().clone()))
                 })?;
                 Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx).await?;
                 Ok(Arc::new(DevicesWrap::wrap(())))
@@ -270,7 +270,7 @@ where
                         }
                         FinderKind::CrossLoader(cross_loader_run_config) => {
                             let cross_loader_run_config = cross_loader_run_config.clone();
-                            let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).channels());
+                            let channels = perf_log!(sync_read_lock!(ws).channels());
 
                             let filter = cross_loader_run_config.slices_filter.clone();
 

@@ -172,13 +172,6 @@ impl TrainLabelNetRunConfigResult {
             motif_nets_ids: vec![],
         }
     }
-
-}
-
-fn run_config_values_with_loss(values: impl Iterator<Item = (String, Val)>, loss: f32) -> HashMap<String, Val> {
-    let mut values = values.collect::<HashMap<_, _>>();
-    values.insert("loss".to_string(), loss.into());
-    values
 }
 
 #[derive(Debug)]
@@ -204,7 +197,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
             Some(p.train_motif_nets_run_ids), //it's used as input for TrainLabelNetsOutput
             &TrainLabelNetRunConfig::type_name(),
             "Label",
-            run_config_values_with_loss(self.train_label_nets_run_config.to_properties_iter(None), self.loss),
+            self.train_label_nets_run_config.to_properties_iter(None).collect(),
         ).await?;
 
         let path = ws.read()
@@ -266,11 +259,13 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
             Some(&self.train_label_nodes_run_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
-            run_config_values_with_loss(self.train_final_net_run_config.to_properties_iter(None), self.loss),
+            self.train_final_net_run_config.to_properties_iter(None).collect(),
         ).await?;
 
-        ws.read()
+        let path = ws.read()
             .save_final_net(run_config_id, &self.var_store, &self.final_node_params)?;
+
+        store.save_trained_net(run_config_id, path, self.loss, None).await?;
 
         Ok(run_config_id)
     }
@@ -1793,15 +1788,6 @@ impl SavableResult for TrainMotifsNetsResult {
     }
 }
 
-// //TODO remove
-// impl WithId for Box<TrainMotifsNetsResult> {
-//     type ID = RunId;
-//
-//     fn id(&self) -> &Self::ID {
-//         &self.id
-//     }
-// }
-
 
 impl WithId for TrainMotifsNetsResult {
     type ID = ();
@@ -1834,7 +1820,7 @@ impl SavableResult for TrainMotifNetResult {
             Some(p),
             &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             "TrainMotifNetResult",
-            run_config_values_with_loss(self.run_config_values.to_properties_iter(None), self.loss),
+            self.run_config_values.to_properties_iter(None).collect(),
         ).await?;
 
         let path = ws.read().save_motif_net(
@@ -3690,7 +3676,6 @@ mod train_tests {
         let run_config_values = store.list_run_config_values(train_label_nets_run_id).await?;
         let trained_nets = store.list_trained_nets(vec![train_label_nets_run_id], None, None).await?;
 
-        assert_eq!(Some(&Val::Real(0.125)), run_config_values.get("loss"));
         assert_eq!(vec![train_label_nets_run_id], store.list_output_run_ids(train_motif_nets_run_id).await?);
         assert_eq!(vec![(1, PathBuf::from(format!("alpha/{train_label_nets_run_id}")), 0.125)], trained_nets);
 
@@ -3706,7 +3691,7 @@ mod train_tests {
         let label_run_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
             Some(&vec![label_run_id_0, label_run_id_1]),
-            0.25,
+            0.125,
             VarStore::new(Cpu),
             FinalNetParams::new(4, 2, 3),
             TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
@@ -3714,9 +3699,9 @@ mod train_tests {
 
         let run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
         let run_config_values = store.list_run_config_values(run_id).await?;
+        let trained_nets = store.list_trained_nets(vec![run_id], None, None).await?;
 
-        assert_eq!(Some(&Val::Real(0.25)), run_config_values.get("loss"));
-
+        assert_eq!(vec![(1, PathBuf::from(format!("3")), 0.125)], trained_nets);
         Ok(())
     }
 
