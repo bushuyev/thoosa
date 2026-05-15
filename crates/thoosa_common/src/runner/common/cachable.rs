@@ -30,25 +30,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 use crate::cuda_utils::with_pooled_cuda_stream;
 
-async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
-    async_perf_log!(async_read_lock!(lock, "{ctx}"), "{ctx}")
-}
 
-async fn timed_tokio_write<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockWriteGuard<'a, T> {
-    async_perf_log!(async_write_lock!(lock, "{ctx}"), "{ctx}")
-}
-
-fn timed_parking_mutex_lock<'a, T>(lock: &'a Mutex<T>, ctx: &'static str) -> parking_lot::MutexGuard<'a, T> {
-    perf_log!(sync_mutex_lock!(lock, "{ctx}"), "{ctx}")
-}
-
-fn timed_parking_rw_read<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockReadGuard<'a, T> {
-    perf_log!(sync_read_lock!(lock, "{ctx}"), "{ctx}")
-}
-
-fn timed_parking_rw_write<'a, T>(lock: &'a parking_lot::RwLock<T>, ctx: &'static str) -> parking_lot::RwLockWriteGuard<'a, T> {
-    perf_log!(sync_write_lock!(lock, "{ctx}"), "{ctx}")
-}
 
 #[async_trait]
 pub trait Cached: AsyncStage + Named
@@ -421,7 +403,7 @@ where
 
         if to_tho_device_idx != 0 {
             // TODO(perf): avoid writing on_cpu_since when the target residency state is unchanged; this write happens millions of times on hot cache loads.
-            *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::load_from_any_device_ on_cpu_since.write") = None;
+            *perf_log!(sync_write_lock!(&wrap.on_cpu_since), "CpuOrGpu::load_from_any_device_ on_cpu_since.write") = None;
         }
 
         // TODO(perf): consider an atomic/device-residency bitmap so cache hits do not require a Tokio RwLock read in this very hot path.
@@ -611,7 +593,7 @@ where
                 // #[cfg(any(test, feature = "mock_global_ctx"))]
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-                *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
+                *perf_log!(sync_write_lock!(&wrap.on_cpu_since), "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
                 return Ok(());
             }
 
@@ -646,7 +628,7 @@ where
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
-                *timed_parking_rw_write(&wrap.on_cpu_since, "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(age);
+                *perf_log!(sync_write_lock!(&wrap.on_cpu_since), "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(age);
             }
 
             debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}",wrap.id);
@@ -675,7 +657,7 @@ where
     }
 
     fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
-        let on_cpu_since = timed_parking_rw_read(&wrap.on_cpu_since, "CpuOrGpu::is_on_cpu_before on_cpu_since.read");
+        let on_cpu_since = perf_log!(sync_read_lock!(&wrap.on_cpu_since), "CpuOrGpu::is_on_cpu_before on_cpu_since.read");
         let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age ).unwrap_or(false);
 
         debug!("DataCacheWrapper::is_on_cpu_before: self.id={:?} self.on_cpu_since={:?} r={r} threshold_age={threshold_age}",wrap.id, wrap.on_cpu_since);
@@ -1210,6 +1192,19 @@ where
 
         Err(ThoError::new(format!("Can't get extra from {:?}", self.id)))
     }
+}
+
+//TODO inline
+async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
+    async_perf_log!(async_read_lock!(lock, "{ctx}"), "{ctx}")
+}
+
+async fn timed_tokio_write<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockWriteGuard<'a, T> {
+    async_perf_log!(async_write_lock!(lock, "{ctx}"), "{ctx}")
+}
+
+fn timed_parking_mutex_lock<'a, T>(lock: &'a Mutex<T>, ctx: &'static str) -> parking_lot::MutexGuard<'a, T> {
+    perf_log!(sync_mutex_lock!(lock, "{ctx}"), "{ctx}")
 }
 
 #[cfg(test)]

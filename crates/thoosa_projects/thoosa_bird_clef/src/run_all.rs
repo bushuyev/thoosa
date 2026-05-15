@@ -33,13 +33,13 @@ use thoosa_shared::ResourceType::NotInGroup;
 use thoosa_shared::run_configs::RunId;
 use thoosa_store::Store;
 
-pub enum FindAndSelect {
-    GridOnly{
+pub enum RunMode {
+    StandaloneLabels {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
         fixed_find_motifs_config:FixedFindMotifsConfig,
         select_motifs_run_config:SelectBucketsRunConfigRangeOrValue,
     },
-    WithOpt{
+    LabelsOnAllMotifs {
         find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
         fixed_find_motifs_config:FixedFindMotifsConfig,
         find_and_select_motifs_opt_config:OptConfig,
@@ -48,8 +48,7 @@ pub enum FindAndSelect {
 
 
 pub(crate) struct AllConfigs {
-    pub find_and_select: FindAndSelect,
-
+    pub run_mode: RunMode,
 
     pub train_motif_nets_run_config_range_or_value:TrainMotifNetRunConfigRangeOrValue,
     pub train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
@@ -81,8 +80,8 @@ pub(crate) async fn run_all(
     let labels_filter_ref = labels_filter.as_ref();
 
 
-    match &all_config.find_and_select {
-        FindAndSelect::GridOnly { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config } => {
+    match &all_config.run_mode {
+        RunMode::StandaloneLabels { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config } => {
             // Default BirdCLEF path: find motifs for each label/resource set, bypass SelectBucketsStage with select_all_motifs, then train motif and label nets.
             let find_motifs_run_config = Arc::new(find_motifs_run_config_range_or_value.clone());
             let select_motifs_run_config = Arc::new(select_motifs_run_config.clone());
@@ -151,14 +150,12 @@ pub(crate) async fn run_all(
 
                         info!("run_all: label={label} find_motifs_run_ids={find_motifs_run_ids:?}");
 
-
-
-                        // let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
                         let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
 
                         let mut select_motifs_run_ids = vec![];
                         //
                         for find_motifs_run_id in &find_motifs_run_ids {
+
                             select_motifs_run_ids.extend(run_grid::</*Labeled,*/ _, _, _, _, _>(
                                 Some(vec![*find_motifs_run_id]),
                                 Arc::clone(&select_motifs_run_config),
@@ -182,33 +179,6 @@ pub(crate) async fn run_all(
                                 || label_ctx.branch(Some("select_motifs"), true),
                             ).await?);
                         }
-                      /*      let find_motifs_input = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
-                            let find_motifs_run_id = store.save_run_config(
-                                    None,
-                                    &FindMotifsRunConfig::type_name(),
-                                    "FindMotifsRunConfig",
-                                    FindMotifsRunConfig::new(None, 1000, 8000, None, SimilarityMetric::EucDist(EucDistConfig{ z_normalize: true }), SlicesFilter::Accumulate(AccumulateStats{ aggr: Aggr::Max(MaxAggr{ k: 0.0 }) }), None).to_properties_iter(None).collect(),
-                                ).await?;
-
-                            let run_ids = run_grid(
-                                Some(vec![find_motifs_run_id]),
-                                bucket_config_range_or_value,
-                                find_motifs_input,
-                                &ws,
-                                &store,
-                                |run_configs| async {
-                                    Arc::new(BucketingStage::<Simple, RawTensorLoader<RunCtxImpl>, ChannelsData2, SynKey, RunCtxImpl>::new(
-                                        &ws,
-                                        &store,
-                                        Arc::clone(&loader),
-                                        run_configs
-                                    ).expect("BucketingStage::new failed"))
-                                },
-                                || label_ctx.branch(Some("mel patch"), true),
-                            ).await?;
-                            // let select_motifs_run_ids = store.select_all_motifs(&run_ids).await?;
-                            */
-
 
                         // select_all_motifs is a deliberate bypass: it creates selection runs that include every found motif without invoking SelectBucketsStage criteria.
                         // let select_motifs_run_ids = store.select_all_motifs(&find_motifs_run_ids).await?;
@@ -303,7 +273,7 @@ pub(crate) async fn run_all(
 
             Ok::<_, ThoError>(())
         }
-        FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
+        RunMode::LabelsOnAllMotifs { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
             Ok(())
         }
     }
@@ -313,7 +283,7 @@ pub(crate) async fn run_all(
 #[allow(dead_code)]
 pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    let find_and_select =  FindAndSelect::WithOpt {
+    let find_and_select =  RunMode::LabelsOnAllMotifs {
         find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
             id: None,
             find_motifs_run_config: FindMotifsRunConfigRangeOrValue {
@@ -447,14 +417,18 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         // }),
-        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-            // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            ff_mult: RangeOrValue::Value(2),
-            // dropout: RangeOrValue::Value(0.1),
-            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+        //     // d_model: RangeOrValue::Value(64),
+        //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+        //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+        //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     ff_mult: RangeOrValue::Value(2),
+        //     // dropout: RangeOrValue::Value(0.1),
+        //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+        // })
+        net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
+            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 2 }, step: None },
+            features: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
         })
 
     };
@@ -479,7 +453,7 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         },
     };
     AllConfigs{
-        find_and_select,
+        run_mode: find_and_select,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,
@@ -494,7 +468,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
     //gpt Navigation note: main.rs currently chooses this config. CLI values still enter through RunAllArgs;
     //gpt this function owns the default search spaces for motif discovery and training.
-    let find_and_select =  FindAndSelect::GridOnly {
+    let find_and_select =  RunMode::StandaloneLabels {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
@@ -674,7 +648,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         },
     };
     AllConfigs{
-        find_and_select,
+        run_mode: find_and_select,
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_final_net_run_config_range_or_value,

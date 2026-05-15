@@ -164,22 +164,3 @@ pub trait RunConfig: Debug {
 
     fn type_name() -> &'static str;
 }
-
-//TODO move from_properties_map__ into here + all run config meta data id, description, date, running time
-#[allow(dead_code)]
-pub struct RunConfigHolder<R: RunConfig> {
-    id: RunId,
-    run_config: R,
-    descr: String,
-}
-
-impl<R: RunConfig> RunConfigHolder<R> {
-    pub fn new(id: RunId, run_config: R, _descr: &str) -> Self {
-        Self {
-            id,
-            run_config,
-            descr: "".to_string(),
-            // ran_on,
-        }
-    }
-}

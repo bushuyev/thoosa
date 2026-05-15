@@ -175,7 +175,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::remove_cache: key={}", key);
 
         assert!(
-            perf_log!(sync_write_lock!(self.caches, "key={key}"), "key={key}")
+            perf_log!(sync_write_lock!(self.caches, "key={key}"))
             .remove(key)
             .is_some()
         );
