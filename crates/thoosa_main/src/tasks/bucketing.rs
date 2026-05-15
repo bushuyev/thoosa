@@ -37,19 +37,19 @@ use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
+use crate::buffer_limits::{BUCKETING_LIMIT, STACKED_MOTIFS_LOADER_RUN};
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
 
 #[derive(Debug, Clone)]
-pub struct MelPatchResourcesInput<RC>
+pub struct BucketingInput<RC>
 where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
 {
     resources_config: RC,
 }
 
-impl<RC> MelPatchResourcesInput<RC>
+impl<RC> BucketingInput<RC>
 where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
 {
@@ -67,7 +67,7 @@ where
     }
 }
 
-impl<RC> WithId for MelPatchResourcesInput<RC>
+impl<RC> WithId for BucketingInput<RC>
 where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
 {
@@ -78,7 +78,7 @@ where
     }
 }
 
-impl<RC> Data for MelPatchResourcesInput<RC>
+impl<RC> Data for BucketingInput<RC>
 where
     RC: ResourcesConfig + Debug + Send + Sync + Clone,
 {
@@ -98,14 +98,14 @@ where
     }
 }
 
-impl<RC> Input for MelPatchResourcesInput<RC> where RC: ResourcesConfig + Debug + Send + Sync + Clone {}
+impl<RC> Input for BucketingInput<RC> where RC: ResourcesConfig + Debug + Send + Sync + Clone {}
 
 #[derive(Debug, Clone)]
-pub struct MelPatchOutput {
+pub struct BucketingOutput {
     pub(crate) motif_ids: (RunId, Vec<u32>),
 }
 
-impl MelPatchOutput {
+impl BucketingOutput {
     fn new(run_ids_motif_ids: (RunId, Vec<u32>)) -> Self {
         Self { motif_ids: run_ids_motif_ids }
     }
@@ -115,7 +115,7 @@ impl MelPatchOutput {
     }
 }
 
-impl WithId for MelPatchOutput {
+impl WithId for BucketingOutput {
     type ID = ();
 
     fn id(&self) -> &Self::ID {
@@ -123,7 +123,7 @@ impl WithId for MelPatchOutput {
     }
 }
 
-impl Data for MelPatchOutput {
+impl Data for BucketingOutput {
     type Metrics = ();
     type M = CpuOnly<Self>;
 
@@ -140,24 +140,11 @@ impl Data for MelPatchOutput {
     }
 }
 
-impl Output for MelPatchOutput {}
+impl Output for BucketingOutput {}
 
-#[async_trait]
-impl SavableResult for MelPatchOutput {
-    type R = Vec<u32>;
-
-    async fn save(
-        &mut self,
-        store: &Arc<Box<dyn Store>>,
-        ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        p: Self::P<'_>
-    ) -> Result<Vec<u32>, ThoError> {
-        Ok(vec![0])
-    }
-}
 
 #[derive(Debug)]
-pub struct MelPatchTempStore {
+pub struct MelPatchTempStore {//TODO it's similar to FileMotifTrackerStore  but saves single slices instead of pairs. Rename and put together with FileMotifTrackerStore in same mod
     path: PathBuf,
     writer: BufWriter<File>,
 }
@@ -299,7 +286,7 @@ where
                 let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
                 MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
             })
-                .collect::<Result<Vec<_>, ThoError>>()?;
+            .collect::<Result<Vec<_>, ThoError>>()?;
 
         let temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>> = Arc::new(Mutex::new(temp_stores_by_bucket));
 
@@ -796,10 +783,10 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = MelPatchResourcesInput<RC>
+    type In<'a> = BucketingInput<RC>
     where
         Self: 'a;
-    type Out = MelPatchOutput;
+    type Out = BucketingOutput;
 }
 
 impl<RC, L, D, Id, C> AsyncStage for BucketingStage<RC, L, D, Id, C>
@@ -812,7 +799,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let resources_config = with_data!(ctx.branch(Some("mel_patch_resources"), false), input; |_ctx, input: &MelPatchResourcesInput<RC>| {
+        let resources_config = with_data!(ctx.branch(Some("mel_patch_resources"), false), input; |_ctx, input: &BucketingInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
         let resources = resources_config.to_resources(&self.store).await?;
@@ -868,20 +855,19 @@ where
                 Ok(())
             }
         });
-        // TODO(perf): fixed in-flight limit of 4 may underutilize the CPU/GPU pipeline for small resources and overfill memory for huge ones; make it adaptive from recent batch sizes/OOM state.
+
         let loaded_motifs = collect_futures_with_progress(
             futures,
             resources.len(),
-            4,
+            BUCKETING_LIMIT,
             StreamBuffering::Unordered,
             "BucketingStage/resources",
         )
-            .await
-            .into_iter()
-            .collect::<Vec<_>>();
+        .await
+        .into_iter()
+        .collect::<Vec<_>>();
 
 
-        // self.store.up
         let run_id = self.run_config.run_id()?;
         let mut motif_ids = Vec::new();
         let mut groups_by_channel = (0..self.channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
@@ -914,7 +900,7 @@ where
 
         info!("BucketingStage::run: run_id={run_id:?} done");
 
-        Ok(Arc::new(DevicesWrap::wrap(MelPatchOutput::new((run_id, motif_ids)))))
+        Ok(Arc::new(DevicesWrap::wrap(BucketingOutput::new((run_id, motif_ids)))))
     }
 }
 
@@ -1178,7 +1164,7 @@ mod tests {
     use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
-    use super::{filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, MelPatchResourcesInput, MelPatchTempStore};
+    use super::{filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, BucketingInput, MelPatchTempStore};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
@@ -1192,7 +1178,6 @@ mod tests {
     use crate::cli::{import_resources, plot_motif};
     use crate::RawTensorLoader;
     use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
-    use crate::tasks::bucketing_opt::BucketingOptStage;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
     use crate::tasks::slices_stats::euclidean_distance;
@@ -1388,7 +1373,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
@@ -1442,24 +1427,11 @@ mod tests {
             }),
         };
 
-        let find_and_select_input = Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(
+        let find_and_select_input = Arc::new(DevicesWrap::wrap(BucketingInput::new(
             Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
         )));
 
-         let run_id = run_opt::</*Simple,*/ _, _, BucketRunConfig, _, _>(
-            None,
-            run_config,
-            find_and_select_input,
-            &ws,
-            &store,
-            async |run_configs| {
-                Ok(Arc::new(BucketingOptStage::new(loader, &ws, &store, run_configs, Arc::new(OptConfig::new(1000, 30)))))
-            },
-            || ctx.branch(Some("opt mel patch"), false),
-        ).await?;
-
-
-        /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
+       /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
 
         let all_motifs = [MotifKind::ChirpUp, MotifKind::ChirpDown, MotifKind::Trill, MotifKind::HarmonicStack].as_slice().into_iter().map(move |motif|(motif.clone(), Tensor::from_slice(gen_motif(motif_len, &motif).as_slice()).view((1, 1, -1)).to_device(Cuda(0)))).collect::<Vec<(MotifKind, Tensor)>>();
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
@@ -1655,7 +1627,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(MelPatchResourcesInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
