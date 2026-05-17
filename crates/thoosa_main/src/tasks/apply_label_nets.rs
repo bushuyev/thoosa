@@ -23,7 +23,7 @@ use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::traits::{Adjustable, WithId};
+use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
@@ -183,9 +183,7 @@ where
                         })?;
                     }
 
-
-
-                    //gpt Each label net runs independently; ordering is preserved by buffer mode below.
+                    //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = Arc::clone(&apply_net.apply_label_net).run(motif_probs, ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_net.label, apply_net.apply_label_net.train_label_net_run_id)), false)).await?;
 
                     #[cfg(test)]{
@@ -217,17 +215,23 @@ where
             Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.device_idx()).into())) )?)))
         } else {
             let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
-                let stacked = Tensor::f_stack(
-                    outs.iter()
-                        .map(|o| {
-                            debug!("o.size={:?}", o.t_ref().size());
-                            o.t_ref().sigmoid()
-                        })
-                        .collect::<Vec<_>>()
-                        .as_slice(),
-                    0,
-                )?;
-                ThoTensor::new(out_id, stacked)
+
+                #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run/stack"))]
+                fn _stack(outs:&[&ThoTensor<LabelProbability, SynKey>]) -> Result<Tensor, ThoError> {
+                        Ok(Tensor::f_stack(
+                            outs.iter()
+                                .map(|o| {
+                                    debug!("o.size={:?}", o.t_ref().size());
+                                    o.t_ref().sigmoid()
+                                })
+                                .collect::<Vec<_>>()
+                                .as_slice(),
+                            0,
+                        )?)
+                }
+
+                ThoTensor::new(out_id, _stack(outs)?)
+
             })?;
 
             #[cfg(debug_assertions)]
@@ -293,7 +297,7 @@ where
 {
     type Ctx = C;
     type In<'a> = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
-    type Out = ThoTensor<LabelProbability, SynKey>;
+    type Out = ThoTensor<LabelProbability, SynKey>;//TODO it's Batch<LabelProbability>
 }
 
 impl<C> AsyncStage for ApplyLabelNet<C>
@@ -318,9 +322,9 @@ where
 
             with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
 
-                debug!("ApplyLabelNet::run: input={input:?}");//[motif_netx x probabilities = input/
+                debug!("ApplyLabelNet::run: input={input:?}");//[motif_nets x probabilities = input/
 
-                // let batch_input = input.data().t_ref().f_unsqueeze(0)?;//TODO
+
                 let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), self.batch_in_chunks as i64, 0.0)?;
                 debug!("ApplyLabelNet::run: batch_input_={batch_input_:?}");
                 let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 1)?.f_transpose(0,1)?;
@@ -332,7 +336,13 @@ where
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?}");
                 trace!("ApplyLabelNet::run: batch_input=\n{batch_input}");
 
-                let out = net.tho_forward(&batch_input, Some(&mut lengths), false);
+                #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::run/tho_forward"))]
+                fn _tho_forward(net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, i: &ThoTensor<MotifsNetsSelectionDims, SimpleId>, l: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<Batch<LabelProbability>, SimpleId>, ThoError> {
+                    net.tho_forward(&i, l, false)
+                }
+
+                // let out = net.tho_forward(&batch_input, Some(&mut lengths), false);
+                let out = _tho_forward(net, &batch_input, Some(&mut lengths), false);
                 debug!("ApplyLabelNet::run: out={out:?}");
 
                 let out = out?;
