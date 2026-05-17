@@ -81,6 +81,7 @@ where
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     epoch_size: u32,
+    descr: Option<String>,
     pd:PhantomData<C>
 
 }
@@ -145,7 +146,8 @@ where
             Vec<Hyperparameter<TrainMotifNetRunConfigFields>>,
             TrainMotifNetRunConfigFields,
         >,
-        epoch_size: u32
+        epoch_size: u32,
+        descr: Option<String>
     ) -> Self {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::clone(&store),
@@ -167,6 +169,7 @@ where
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
             epoch_size,
+            descr,
             pd: PhantomData
         }
     }
@@ -320,7 +323,7 @@ where
             let store = Arc::clone(&self.store);
             let epoch_size = self.epoch_size;
             let reusable_completed_trials = reusable_completed_trials.clone();
-
+            let descr = self.descr.clone();
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = motif_loader.run(
@@ -408,6 +411,7 @@ where
                     select_motifs_run_id,
                     train_net_output.node_params,
                     train_net_output.run_config,
+                    descr
                 ))
             }
 
@@ -751,7 +755,8 @@ mod tests {
             &ws,
             &store,
             run_configs,
-            10
+            10,
+            None
         ));
 
         let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(3, 2)))));

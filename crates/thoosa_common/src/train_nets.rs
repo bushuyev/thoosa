@@ -1732,6 +1732,7 @@ pub struct TrainMotifNetResult {
     run_config_values: TrainMotifNetRunConfig,
     #[allow(dead_code)]
     select_motifs_run_id: RunId,
+    descr: Option<String>
 }
 
 impl TrainMotifNetResult {
@@ -1743,6 +1744,7 @@ impl TrainMotifNetResult {
         select_motifs_run_id: RunId,
         params: MotifNetParams,
         run_config_values: TrainMotifNetRunConfig,
+        descr: Option<String>,
     ) -> Self {
         Self {
             loss,
@@ -1752,6 +1754,7 @@ impl TrainMotifNetResult {
             params,
             run_config_values,
             select_motifs_run_id,
+            descr
         }
     }
 
@@ -1819,7 +1822,7 @@ impl SavableResult for TrainMotifNetResult {
         let train_motif_net_run_id = store.save_run_config(
             Some(p),
             &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
-            "TrainMotifNetResult",
+            self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
             self.run_config_values.to_properties_iter(None).collect(),
         ).await?;
 
