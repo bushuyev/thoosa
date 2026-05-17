@@ -96,7 +96,7 @@ pub(crate) async fn run_all(
                 let init_ctx_find_motifs = label_ctx.branch(Some("init_ctx_find_motifs"), false);
 
                 let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
-                let _select_motifs_run_config = Arc::clone(&select_motifs_run_config);
+
                 let train_motif_nets_run_config_range_or_value = Arc::clone(&train_motif_nets_run_config_range_or_value);
                 let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
                 let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
