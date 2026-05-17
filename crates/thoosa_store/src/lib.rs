@@ -284,6 +284,8 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+
+    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunId>, ThoError>;
     async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
     async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
 
@@ -484,6 +486,7 @@ mock! {
         >;
         async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
         async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunId>, ThoError>;
         async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
@@ -1889,6 +1892,23 @@ impl Store for SqlStore {
         })
         .await
     }
+
+    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunId>, ThoError> {
+        self.with_reader_conn("list_run_configs", move |conn| {
+            let run_configs = {
+                let mut stmt = conn.prepare("SELECT id FROM run_configs WHERE descr=? AND type=?")?;
+                stmt.query_map([descr.as_str(), type_], |row| {
+                    row.get::<usize, RunId>(0)
+                })?
+                    .map(|v| v.map_err(ThoError::from))
+                    .collect::<Result<Vec<RunId>, ThoError>>()?
+            };
+
+            Ok(run_configs)
+        })
+            .await
+    }
+
 
     async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError> {
         self.with_reader_conn("list_run_configs_page", move |conn| {

@@ -122,8 +122,7 @@ pub enum Node {
         path:String,
         in_feats: u32,
         out_feats: u32,
-        config: Option<LinearConfig>,
-        quantize:bool
+        config: Option<LinearConfig>
     },
     Func {
         func: Fp,
@@ -315,7 +314,6 @@ impl Node {
                 in_feats,
                 out_feats,
                 config,
-                quantize,
 
             } => {
 
@@ -324,7 +322,7 @@ impl Node {
                 assert!(in_feats > 0, "in_feats > 0: in_feats={in_feats} path={path}");
                 assert!(out_feats > 0, "out_feats > 0: in_feats={in_feats} path={path}");
 
-                #[cfg(debug_assertions)]
+                #[cfg(any(debug_assertions, tho_debug))]
                 let decr = path.clone();
 
                 Box::new(my_linear(
@@ -332,8 +330,7 @@ impl Node {
                     in_feats as i64,
                     out_feats as i64,
                     config.unwrap_or(LinearConfig::default()),
-                    quantize,
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(debug_assertions, tho_debug))]
                     decr,
                 )?)
             }
@@ -628,7 +625,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats: self.num_features,
             config: None,
-            quantize: false,
         });
         Ok(self)
     }
@@ -637,7 +633,7 @@ impl SeqBuilder {
         &mut self,
         path: P,
         num_features: u32,
-        out_feats: u32, quantize: bool,
+        out_feats: u32,
     ) -> Result<&mut Self, ThoError> {
         if num_features == 0 {
             return Err(ThoError::new(format!("linear_feats, num_features > 0: path={}", path.to_string())));
@@ -648,13 +644,12 @@ impl SeqBuilder {
             in_feats: num_features,
             out_feats,
             config: None,
-            quantize,
         });
         self.num_features = out_feats;
         Ok(self)
     }
 
-    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32, quantize: bool) -> Result<&mut Self, ThoError> {
+    pub fn linear_f<P:ToString>(&mut self, path: P, f: f32) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear_f, self.num_features > 0: path={}", path.to_string())));
         }
@@ -665,7 +660,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: None,
-            quantize,
         });
         self.num_features = out_feats;
 
@@ -676,7 +670,6 @@ impl SeqBuilder {
         &mut self,
         out_feats: u32,
         path: P,
-        quantize: bool,
     ) -> Result<&mut Self, ThoError> {
         if self.num_features == 0 {
             return Err(ThoError::new(format!("linear_f, self.num_features > 0: path={}", path.to_string())));
@@ -690,7 +683,6 @@ impl SeqBuilder {
             in_feats: self.num_features,
             out_feats,
             config: None,
-            quantize,
         });
         self.num_features = out_feats;
 
@@ -716,7 +708,6 @@ impl SeqBuilder {
             out_feats,
             config: Some(config),
 
-            quantize: false,
         });
         self.num_features = out_feats;
 
@@ -740,7 +731,6 @@ impl SeqBuilder {
             out_feats,
             config: None,
 
-            quantize: false,
         });
         self.num_features = out_feats;
 

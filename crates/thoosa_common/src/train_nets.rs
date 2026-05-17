@@ -395,7 +395,8 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
             }
         }
 
-        module.quantize();
+        //TODO config/arg to enable
+        // module.quantize();
 
         Ok(Self::with_factory(id, module, vs, Some(builder)))
     }
@@ -1146,7 +1147,7 @@ net.closure(
                     2.
                 } else {
                     0.5
-                }, false,
+                },
             )?
             .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
     }
@@ -1155,7 +1156,7 @@ net.closure(
         // .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
         .linear_s(
             1,
-            "motif_last_head", false,
+            "motif_last_head",
         )?
         .end_seq()
 
@@ -1201,7 +1202,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
         // .batch_norm()
         .linear_s(
             params.num_features * 2,
-            "todo", false,
+            "todo",
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
 
@@ -1209,7 +1210,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
         net = net
             .linear_s(
                 params.num_features * 2,
-                "todo", false,
+                "todo",
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
     }
@@ -1219,7 +1220,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
         // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
-            "todo", false,
+            "todo",
         )?
         .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
         .end_seq()
@@ -1443,7 +1444,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 None,
             )?.linear_feats(
                 "cnn_label_head",
-                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features, false,
+                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
             )?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1480,7 +1481,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
             )?
             .linear_feats(
                 "cnn_label_head",
-                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features, false,
+                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
             )?
                 .closure(
                     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1495,7 +1496,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     for layer in 0..cnn_params.num_head_layers {
         builder = builder.linear_s(
             2*cnn_params.num_head_features,
-            format!("cnn_label_head_{layer}"), false,
+            format!("cnn_label_head_{layer}"),
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1509,7 +1510,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
     builder.linear_s(
         1,
-        "cnn_label_head_last", false,
+        "cnn_label_head_last",
     )?
     .closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1542,7 +1543,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         .linear_feats(
             "self_attention_in_proj",
             params.motif_nets,
-            sa_params.head_size * sa_params.n_heads, false,
+            sa_params.head_size * sa_params.n_heads,
         )?
         .self_attention(
             "self_attention_block",
@@ -1560,7 +1561,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         )?
         .linear_s(
             1,
-            "self_attention_label_head_last", false,
+            "self_attention_label_head_last",
         )?;
 
         #[cfg(any(debug_assertions, tho_debug))] {
@@ -1606,7 +1607,6 @@ pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, T
                 "lin_label_node",
                 lin_params.features,
                 lin_params.features,
-                quantize,
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
         }
@@ -1614,8 +1614,8 @@ pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, T
 
     builder.linear_s(
         1,
-        "lin_label_node last", quantize,
-        )?
+        "lin_label_node last",
+    )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("lin_label_node: out={:?}", t.size());
@@ -1659,7 +1659,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     let mut net = builder
         .linear_s(
             2 * params.in_features,
-            "final_net_first_layer".to_string(), false,
+            "final_net_first_layer".to_string(),
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
 
@@ -1667,7 +1667,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
         net = net
             .linear_s(
                 params.in_features,
-                format!("final_net_{i}th_layer"), false,
+                format!("final_net_{i}th_layer"),
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
     }
@@ -1676,7 +1676,7 @@ net
     // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     .linear_s(
         params.out_features,
-        "final_net_last_layer", false,
+        "final_net_last_layer",
     )?
     .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
     .end_seq()

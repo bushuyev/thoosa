@@ -285,9 +285,14 @@ pub(crate) async fn run_all(
                 let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
                     run_all_args.train_resource_config()
                 )));
-                let train_motif_net_run_ids = vec![];
+
 
                 async move {
+                    let train_motif_net_run_ids = store.list_run_config_ids_by_descr(label.clone(), "TrainMotifNetRunConfig").await?;
+                    if train_motif_net_run_ids.is_empty(){
+                        return Ok(());
+                    }
+
                     panic_to_err_async!(async move {
                         let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                             None,
@@ -348,61 +353,7 @@ pub(crate) async fn run_all(
 
 
 pub(crate) fn run_labels_config_0(run_all_params: &RunAllArgs) -> RunMode {
-
-    //gpt Navigation note: main.rs currently chooses this config. CLI values still enter through RunAllArgs;
-    //gpt this function owns the default search spaces for motif discovery and training.
-
-
-    /////////////////////train_motifs
-    let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
-        id: None,
-        common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(20),
-            batch_size: RangeOrValue::Value(100),
-            // lr: RangeOrValue::Value(0.0001),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(3),
-            min_delta: RangeOrValue::Value(1e-4_f32),
-
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Value(0.9),
-                beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(true),
-            })),
-        },
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::LinNet(MotifLinNetArgsRangeOrValue {
-        //     num_layers: RangeOrValue::Value(2),
-        //     step: RangeOrValue::Value(1000),
-        //     channels: RangeOrValue::Value(2),
-        //     kernel: RangeOrValue::Value(1000),
-        // }),
-
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-        //     // conv_layers: RangeOrValue::Value(1),
-        //     // head_layers: RangeOrValue::Value(1),
-        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-        //     step: RangeOrValue::Value(20),
-        //     channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-        //     // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
-        //     // kernel: RangeOrValue::Value(10),
-        //     kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
-        //     head_pool: None,
-        // })
-
-        net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
-            // step: RangeOrValue::Value(1),
-            // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-            // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-            a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
-            b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
-        })
-
-    };
-
     //////////////////////train labels
-    //////////////////////train final
     RunMode::RunLabels {
         train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue {
             id: None,
@@ -432,24 +383,25 @@ pub(crate) fn run_labels_config_0(run_all_params: &RunAllArgs) -> RunMode {
             //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
             //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
             // }),
-            net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-                // d_model: RangeOrValue::Value(64),
-                head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-                n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-                // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-                ff_mult: RangeOrValue::Value(2),
-                // dropout: RangeOrValue::Value(0.1),
-                dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
-            })
-            // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
-            //     // num_layers: RangeOrValue::Value(4),
-            //     num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
-            //     features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+            // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+            //     // d_model: RangeOrValue::Value(64),
+            //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+            //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+            //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+            //     ff_mult: RangeOrValue::Value(2),
+            //     // dropout: RangeOrValue::Value(0.1),
+            //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
             // })
+            net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
+                // num_layers: RangeOrValue::Value(4),
+                num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
+                features: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: None },
+            })
 
         },
-        train_labels_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
+        train_labels_opt_config: Arc::new(OptConfig::new_with_early_stopping(100, 10, 5, 10e-5)),
     }}
+
 
 
 pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
