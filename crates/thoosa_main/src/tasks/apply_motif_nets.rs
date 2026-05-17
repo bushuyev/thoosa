@@ -1129,7 +1129,7 @@ pub fn apply_motif_net_forward(
     debug_plot!(&t.f_view((1, -1))?, "apply_motif_net_run_input_{input_id}")?;
     debug_plot!(&out_t.f_view((1, -1))?, "apply_motif_net_run_input_motif_applied_{input_id}_{motif_id}")?;
 
-    ThoTensor::new(out_id, out_t)
+    ThoTensor::new(out_id, out_t.totype(Float))
 }
 
 

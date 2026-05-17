@@ -832,7 +832,7 @@ pub struct MyLinear<DI: Dims, DO: Dims> {
 
     quantized:Option<FastQuantizedLinear>,
 
-    #[cfg(debug_assertions)]
+    #[cfg(any(debug_assertions, tho_debug))]
     descr: String,
 }
 
@@ -846,35 +846,16 @@ where
     DO: Dims + Send + Sync
 {
     pub fn new(
-        ws: Tensor, bs: Option<Tensor>, _pd_di: PhantomData<DI>, _pd_do: PhantomData<DO>,quantize:bool,
-        #[cfg(debug_assertions)]
+        ws: Tensor, bs: Option<Tensor>, _pd_di: PhantomData<DI>, _pd_do: PhantomData<DO>,
+        #[cfg(any(debug_assertions, tho_debug))]
         descr: String
     ) -> Self {
 
-
         Self {
-
-            quantized: if quantize {
-                // let ws_fl = ws.as_ref().to_kind(Float);
-                // let bs_fl = bs.as_ref().map(|t| t.to_kind(Float));
-                //
-                // debug!("MyLinear::new: ws={ws:?} ws_fl={ws_fl:?} bs_fl={bs_fl:?} bs={bs:?}");
-                //
-                // Some(
-                //     FastQuantizedLinear::from_float_weights(
-                //         // &Tensor::rand(ws.as_ref().size(), FLOAT_CPU),
-                //         &ws_fl,
-                //         // bs.as_ref().map(|t| Tensor::rand(t.size(), FLOAT_CPU)).as_ref()
-                //         bs_fl.as_ref()
-                //     ).expect("can't quantize")
-                // )//TODO error
-                None
-            } else {
-                None
-            },
+            quantized: None,
             ws, bs, _pd_di, _pd_do,
 
-            #[cfg(debug_assertions)]
+            #[cfg(any(debug_assertions, tho_debug))]
             descr
         }
     }
@@ -949,8 +930,8 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
-    quantize:bool,
-    #[cfg(debug_assertions)] descr: String,
+    #[cfg(any(debug_assertions, tho_debug))]
+    descr: String,
 ) -> Result<MyLinear<DI, DO>, ThoError> {
     assert!(in_dim > 0);
     assert!(out_dim > 0);
@@ -974,8 +955,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
         bs,
         Default::default(),
         Default::default(),
-        quantize,
-        #[cfg(debug_assertions)]
+        #[cfg(any(debug_assertions, tho_debug))]
         descr,
     ))
 }
@@ -1027,7 +1007,7 @@ pub fn configure_dense(
         .dropout(0.5)?
         .linear_s(
             6,
-            "todo", false,
+            "todo",
         )?
         .end_seq()
 }
@@ -1452,7 +1432,7 @@ mod tch_tests {
         let res_seq = SeqBuilder::new(10, None)?
             .linear_s(
                 1,
-                "todo", false,
+                "todo",
             )?
             .end_seq()?;
 
@@ -1460,7 +1440,7 @@ mod tch_tests {
             .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
-                "todo", false,
+                "todo",
             )?
             .end_seq()?;
 
@@ -1559,7 +1539,7 @@ mod tch_tests {
             .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
-                "todo", false,
+                "todo",
             )?
             .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
             .end_seq()?
@@ -1682,7 +1662,7 @@ mod tch_tests {
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
-                                "todo", false,
+                                "todo",
                             )? //2 weight bias
                             .end_seq()?,
                         SeqBuilder::new(321, None)?
@@ -1691,7 +1671,7 @@ mod tch_tests {
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
-                                "todo", false,
+                                "todo",
                             )? //2 weight bias
                             .end_seq()?,
                     ],
@@ -1700,13 +1680,13 @@ mod tch_tests {
                 )?
                 .linear_s(
                     10,
-                    "todo", false,
+                    "todo",
                 )? //2 weight bias
                 .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .linear_s(
                     20,
-                    "todo", false,
+                    "todo",
                 )? //2 weight bias
                 .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
                 .end_seq()
@@ -1817,7 +1797,7 @@ mod tch_tests {
             Default::default(),
         );
 
-        let qlinear = thoosa_shims::quantized_linear::FastQuantizedLinear::from_float_linear(&linear)?;
+        let qlinear = FastQuantizedLinear::from_float_linear(&linear)?;
 
         let xs = Tensor::randn([256, 1024], FLOAT_CPU);
 

@@ -9,7 +9,7 @@ use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
 use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::{cdt_for_dir, mono_key, now_ms};
+use thoosa_shared::{cdt_for_dir, mono_key, now_ms, perf_log, sync_mutex_lock};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace, warn};
 use parking_lot::Mutex;
@@ -23,6 +23,7 @@ use std::time::{Instant, SystemTime};
 use rand::random;
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
+use tch::Kind::Float;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
@@ -609,7 +610,7 @@ where
 
     fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
         // TODO(perf): lock_net is taken for every forward call; if TrainStep is not shared concurrently, split ownership so the hot path can call the module without a mutex.
-        let net = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.net));
+        let net = perf_log!(sync_mutex_lock!(self.net));
         net.tho_forward(x_t, lengths, train)
     }
 
@@ -622,7 +623,7 @@ where
     }
 
     fn set_lr(&self, lr: f64) {
-        let mut opt = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.opt));
+        let mut opt = perf_log!(sync_mutex_lock!(self.opt));
         opt.set_lr(lr);
     }
 }
@@ -833,8 +834,7 @@ mod tests {
                     1,
                     1,
                     LinearConfig::default(),
-                    false,
-                    #[cfg(debug_assertions)]
+                    #[cfg(any(debug_assertions, tho_debug))]
                     "test_train_net".to_string(),
                 )?);
             Ok((net, ())) // Net params, dummy
