@@ -632,7 +632,8 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
 ///
 /// Each row m in every output chunk is compacted to the left and padded
 /// with `pad_value`.
-pub fn split_padded_motif_scores(
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores"))]
+pub fn split_padded_motif_scores( //TOOD move to utils.rs
     scores: &Tensor,
     real_lengths: &[i64],
     n_chunks: i64,
@@ -641,32 +642,23 @@ pub fn split_padded_motif_scores(
     let size = scores.size();
 
     if size.len() != 2 {
-        return Err(ThoError::new(format!(
-            "expected scores shape [M, Slices], got {size:?}"
-        )));
+        return Err(ThoError::new(format!("expected scores shape [M, Slices], got {size:?}")));
     }
 
     if n_chunks <= 0 {
-        return Err(ThoError::new(format!(
-            "n_chunks must be > 0, got {n_chunks}"
-        )));
+        return Err(ThoError::new(format!("n_chunks must be > 0, got {n_chunks}")));
     }
 
     let m_count = size[0];
     let padded_slices = size[1];
 
     if real_lengths.len() != m_count as usize {
-        return Err(ThoError::new(format!(
-            "real_lengths.len() must be M={m_count}, got {}",
-            real_lengths.len()
-        )));
+        return Err(ThoError::new(format!("real_lengths.len() must be M={m_count}, got {}", real_lengths.len())));
     }
 
     for (m, &len) in real_lengths.iter().enumerate() {
         if len < 0 || len > padded_slices {
-            return Err(ThoError::new(format!(
-                "bad real length for motif {m}: {len}, padded_slices={padded_slices}"
-            )));
+            return Err(ThoError::new(format!("bad real length for motif {m}: {len}, padded_slices={padded_slices}")));
         }
     }
 
@@ -699,21 +691,30 @@ pub fn split_padded_motif_scores(
                 continue;
             }
 
-            // src shape: [1, len]
-            let src = scores
-                .f_narrow(0, m, 1)?
-                .f_narrow(1, start, len)?;
 
-            // dst shape: [1, len], points into the output chunk.
-            let mut dst = chunks[chunk_idx as usize]
-                .f_narrow(0, m, 1)?
-                .f_narrow(1, 0, len)?;
-
-            dst.f_copy_(&src)?;
+            copy_chunk(scores, &mut chunks, m, chunk_idx, start, len)?;
         }
     }
 
     Ok((chunks, chunk_lengths))
+}
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores/copy"))]
+fn copy_chunk(scores: &Tensor, chunks: &mut Vec<Tensor>, m: i64, chunk_idx: i64, start: i64, len: i64) -> Result<(), ThoError> {
+    {
+        // src shape: [1, len]
+        let src = scores
+            .f_narrow(0, m, 1)?
+            .f_narrow(1, start, len)?;
+
+        // dst shape: [1, len], points into the output chunk.
+        let mut dst = chunks[chunk_idx as usize]
+            .f_narrow(0, m, 1)?
+            .f_narrow(1, 0, len)?;
+
+        dst.f_copy_(&src)?;
+    };
+    Ok(())
 }
 
 fn ceil_div(a: i64, b: i64) -> i64 {

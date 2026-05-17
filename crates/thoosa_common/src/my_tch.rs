@@ -832,6 +832,7 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()));
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MyLinear::tho_forward"))]
     fn tho_forward(&self, in_t: &ThoTensor<DI, SimpleId>, _lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         #[cfg(any(debug_assertions, tho_debug))]
         {
