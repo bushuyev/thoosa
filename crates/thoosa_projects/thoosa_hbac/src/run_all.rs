@@ -225,6 +225,7 @@ pub(crate) async fn run_all(
                 &store,
                 run_configs,
                 run_all_args.train_motifs_epoch_size,
+                None,
             )))
         },
         || root_ctx.branch(Some("train motif nets"), true),

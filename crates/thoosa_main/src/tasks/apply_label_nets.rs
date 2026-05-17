@@ -300,6 +300,8 @@ impl<C> AsyncStage for ApplyLabelNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::run"))]
     fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,

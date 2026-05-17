@@ -34,31 +34,21 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_store::Store;
 
 pub enum RunMode {
-    StandaloneLabels {
+    RunAll {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
         fixed_find_motifs_config:FixedFindMotifsConfig,
         select_motifs_run_config:SelectBucketsRunConfigRangeOrValue,
+        train_motif_nets_run_config_range_or_value:TrainMotifNetRunConfigRangeOrValue,
+        train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
+        train_motifs_opt_config:Arc<OptConfig>,
+        train_labels_opt_config:Arc<OptConfig>,
     },
-    LabelsOnAllMotifs {
-        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue,
-        fixed_find_motifs_config:FixedFindMotifsConfig,
-        find_and_select_motifs_opt_config:OptConfig,
+    RunLabels {
+        train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
+        train_labels_opt_config:Arc<OptConfig>,
     }
 }
 
-
-pub(crate) struct AllConfigs {
-    pub run_mode: RunMode,
-
-    pub train_motif_nets_run_config_range_or_value:TrainMotifNetRunConfigRangeOrValue,
-    pub train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
-    #[allow(dead_code)]
-    pub train_final_net_run_config_range_or_value:TrainFinalNetRunConfigRangeOrValue,
-    pub train_motifs_opt_config:Arc<OptConfig>,
-    pub train_labels_opt_config:Arc<OptConfig>,
-    #[allow(dead_code)]
-    pub train_final_opt_config:Arc<OptConfig>,
-}
 
 
 pub(crate) async fn run_all(
@@ -67,7 +57,7 @@ pub(crate) async fn run_all(
     loader: &Arc<RawTensorLoader<RunCtxImpl>>,
     mut root_ctx: RunCtxImpl,
     run_all_args: &RunAllArgs,
-    all_config:AllConfigs
+    run_mode:RunMode
 ) -> Result<(), ThoError> {
     debug!("run_all");
 
@@ -80,13 +70,13 @@ pub(crate) async fn run_all(
     let labels_filter_ref = labels_filter.as_ref();
 
 
-    match &all_config.run_mode {
-        RunMode::StandaloneLabels { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config } => {
+    match run_mode {
+        RunMode::RunAll { find_motifs_run_config_range_or_value, fixed_find_motifs_config, select_motifs_run_config, train_motif_nets_run_config_range_or_value, train_label_nets_run_config_range_or_value, train_motifs_opt_config, train_labels_opt_config } => {
             // Default BirdCLEF path: find motifs for each label/resource set, bypass SelectBucketsStage with select_all_motifs, then train motif and label nets.
             let find_motifs_run_config = Arc::new(find_motifs_run_config_range_or_value.clone());
             let select_motifs_run_config = Arc::new(select_motifs_run_config.clone());
-            let train_motif_nets_run_config_range_or_value = Arc::new(all_config.train_motif_nets_run_config_range_or_value);
-            let train_label_nets_run_config_range_or_value = Arc::new(all_config.train_label_nets_run_config_range_or_value);
+            let train_motif_nets_run_config_range_or_value = Arc::new(train_motif_nets_run_config_range_or_value);
+            let train_label_nets_run_config_range_or_value = Arc::new(train_label_nets_run_config_range_or_value);
 
             let find_resources = run_all_args.find_resources.clone();
             let _select_resources = run_all_args.select_resources.clone();
@@ -109,8 +99,8 @@ pub(crate) async fn run_all(
                 let _select_motifs_run_config = Arc::clone(&select_motifs_run_config);
                 let train_motif_nets_run_config_range_or_value = Arc::clone(&train_motif_nets_run_config_range_or_value);
                 let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
-                let train_labels_opt_config = Arc::clone(&all_config.train_labels_opt_config);
-                let train_motifs_opt_config = Arc::clone(&all_config.train_motifs_opt_config);
+                let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
+                let train_motifs_opt_config = Arc::clone(&train_motifs_opt_config);
 
 
                 let find_resources = find_resources.clone();
@@ -195,7 +185,7 @@ pub(crate) async fn run_all(
 
                         // Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
                         let train_motif_net_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
-                            None,
+                            Some(select_motifs_run_ids),
                             train_motif_nets_run_config_range_or_value,
                             input_wrapper,
                             &ws,
@@ -207,6 +197,7 @@ pub(crate) async fn run_all(
                                     &store,
                                     run_configs,
                                     run_all_args.train_motifs_epoch_size,
+                                    Some(label.clone())
                                 )))
                             },
                             || label_ctx.branch(Some("train motif nets"), false),
@@ -226,7 +217,7 @@ pub(crate) async fn run_all(
 
                         // Run a grid over label-net training configs; consumes motif nets from previous stage.
                         let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
-                            None,
+                            Some(train_motif_net_run_ids.clone()),
                             train_label_nets_run_config_range_or_value,
                             train_labels_input,
                             &ws,
@@ -273,85 +264,104 @@ pub(crate) async fn run_all(
 
             Ok::<_, ThoError>(())
         }
-        RunMode::LabelsOnAllMotifs { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
-            Ok(())
+        RunMode::RunLabels { train_label_nets_run_config_range_or_value, train_labels_opt_config } => {
+            let train_label_nets_run_config_range_or_value = Arc::new(train_label_nets_run_config_range_or_value);
+
+            let futures = labels.iter().filter(|label|
+                {
+                    labels_filter_ref
+                        .map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label)))
+                        .unwrap_or(true)
+                }
+            ).map(|label| {
+                info!("run_all: label={label}");
+                let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
+                let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
+
+                let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
+                let ws_in_train_labels = Arc::clone(&ws);
+                let store_in_train_labels = Arc::clone(&store);
+                let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
+                let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
+                    run_all_args.train_resource_config()
+                )));
+                let train_motif_net_run_ids = vec![];
+
+                async move {
+                    panic_to_err_async!(async move {
+                        let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
+                            None,
+                            train_label_nets_run_config_range_or_value,
+                            train_labels_input,
+                            &ws,
+                            &store,
+                            async move |run_configs| {
+                                new_train_label_nets(
+                                    train_motif_net_run_ids,
+                                    Arc::clone(&loader),
+                                    run_configs,
+                                    &ws_in_train_labels,
+                                    &store_in_train_labels,
+                                    init_ctx_train_labels,
+                                    train_labels_opt_config,
+                                    Some(vec![label.clone()]),
+                                    Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                                    run_all_args.selected_motif_nets_limit,
+                                    run_all_args.motif_slices_step
+                                ).await.map(|v| Arc::new(v))
+                            },
+                            || label_ctx.branch(Some("train label nets"), false),
+                        ).await {
+                            Ok(train_label_nets_run_ids) => {
+                                info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
+                            }
+                            Err(e) => {
+                                info!("train label nets failed: label={label} e={e:?}");
+                            }
+                        };
+
+                        info!("train label nets done: label={label} train_label_net_run_ids={train_label_net_run_ids:?}");
+                        Ok::<_, ThoError>(())
+                    })
+                }
+            });
+
+            //
+            let _ = collect_futures_with_progress(
+                futures,
+                labels.len(),
+                4,
+                StreamBuffering::Unordered,
+                "bird_clef_labels",
+            ).await;
+
+            Ok::<_, ThoError>(())
         }
-    }
+
+    }?;
+
+
+
+    Ok::<_, ThoError>(())
 
 }
 
-#[allow(dead_code)]
-pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 
-    let find_and_select =  RunMode::LabelsOnAllMotifs {
-        find_and_select_run_config_range_or_value: FindAndSelectMotifsRunConfigRangeOrValue {
-            id: None,
-            find_motifs_run_config: FindMotifsRunConfigRangeOrValue {
-                id: None,
-                step: RangeOrValue::Value(1000),
-                window: RangeOrValue::Range{ range: Range {start: 2000, end: 16000}, step: Some((2000, 0)) },
-                // window: RangeOrValue::Value(1000),
-                // freq_filter: None,
-                // freq_filter: Some(vec![
-                //     AverageFilter(AverageFilterParamsRangeOrValue {
-                //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
-                //         step: RangeOrValue::Value(1),
-                //     }),
-                // ]),
+pub(crate) fn run_labels_config_0(run_all_params: &RunAllArgs) -> RunMode {
 
-                freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
-                    low_hz: RangeOrValue::Range { range: Range { start: 0., end: 16000. }, step: None },
-                    band_hz: RangeOrValue::Range { range: Range { start: 2., end: 100. }, step: None },
-                    // band_hz: RangeOrValue::Value(2.),
-                    // kernel_size: RangeOrValue::Value(1000),
-                    kernel_size: RangeOrValue::Range { range: Range { start: 1000, end: 8000 }, step: None },
-                    stride: RangeOrValue::Value(1),
-                    padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-                })]),
-                finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
-                    // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-                    // similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ with_rfft: RangeOrValue::Value(true) }),
-                    similarity_metric: SimilarityMetricRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue{ _path_pd: Default::default() }),
-                    // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-                    //     // aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(10.0) }),
-                    //     aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(1.0) }),
-                    //     slices: RangeOrValue::Value(100),
-                    // }),
-                    slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-                        // aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(1.0) }),
-                        aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
-                    }),
-                }),
-                max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(1000) })),
-            },
-            select_motifs_run_config: SelectMotifsRunConfigRangeOrValue {
-                id: None,
-                extend_config: None,
-                motif_criteria: vec![
-                    MotifCriterionConstraintRangeOrValue {
-                        metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue {
-                            eps: RangeOrValue::Value(1e-8),
-                        }),
-                        min: RangeOrValue::Value(0.5),
-                    }
-                ],
-                extend_max_slices: None,
-            },
-        },
-        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        find_and_select_motifs_opt_config: OptConfig { opt_max_evals: 100, opt_num_init: 10, patience: 20, min_delta: 1e-4_f32 },
-    };
+    //gpt Navigation note: main.rs currently chooses this config. CLI values still enter through RunAllArgs;
+    //gpt this function owns the default search spaces for motif discovery and training.
 
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
         id: None,
         common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(10),
-            batch_size: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(20),
+            batch_size: RangeOrValue::Value(100),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
+            patience: RangeOrValue::Value(3),
             min_delta: RangeOrValue::Value(1e-4_f32),
 
             optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
@@ -361,12 +371,25 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
                 amsgrad: RangeOrValue::Value(true),
             })),
         },
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     num_layers: RangeOrValue::Range { range: Range { start: 3, end: 5 }, step: None },
-        //     step: RangeOrValue::Value(10),
-        //     channels: RangeOrValue::Value(32),
-        //     kernel: RangeOrValue::Value(10),
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::LinNet(MotifLinNetArgsRangeOrValue {
+        //     num_layers: RangeOrValue::Value(2),
+        //     step: RangeOrValue::Value(1000),
+        //     channels: RangeOrValue::Value(2),
+        //     kernel: RangeOrValue::Value(1000),
         // }),
+
+        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
+        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     // conv_layers: RangeOrValue::Value(1),
+        //     // head_layers: RangeOrValue::Value(1),
+        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     step: RangeOrValue::Value(20),
+        //     channels: RangeOrValue::Value(2), //RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+        //     // channels: RangeOrValue::Range{ range: Range {start: 2, end: 4}, step: None },
+        //     // kernel: RangeOrValue::Value(10),
+        //     kernel: RangeOrValue::Range{ range: Range {start: 100, end: 200}, step: None },
+        //     head_pool: None,
+        // })
 
         net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
             // step: RangeOrValue::Value(1),
@@ -376,163 +399,64 @@ pub(crate) fn run_all_opt_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
         })
 
-        // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
-        //     conv_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-        //     head_layers: RangeOrValue::Range { range: Range { start: 2, end: 24 }, step: None },
-        //     step: RangeOrValue::Value(10),
-        //     channels: RangeOrValue::Range{ range: Range {start: 8, end: 256}, step: None },
-        //     // kernel: RangeOrValue::Value(10),
-        //     kernel: RangeOrValue::Range{ range: Range {start: 10, end: 100}, step: None },
-        //     head_pool: None,
-        // })
-
     };
 
     //////////////////////train labels
-    let train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = TrainLabelNetRunConfigRangeOrValue {
-        id: None,
-        common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(2),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
-            min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Value(0.9),
-                beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(true),
-            })),
-        },
-
-        // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
-        //     num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-        //     hidden_conv_channels: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
-        //     // hidden_conv_channels: RangeOrValue::Value(64),
-        //     // num_head_layers: RangeOrValue::Value(10),
-        //     num_head_layers: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
-        //     num_head_features: RangeOrValue::Range { range: Range { start: 8, end: 256 }, step: None },
-        //     // num_head_features: RangeOrValue::Value(256),
-        //     kernel: RangeOrValue::Value(100),
-        //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
-        //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
-        // }),
-        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-        //     // d_model: RangeOrValue::Value(64),
-        //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-        //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-        //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-        //     ff_mult: RangeOrValue::Value(2),
-        //     // dropout: RangeOrValue::Value(0.1),
-        //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
-        // })
-        net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue{
-            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 2 }, step: None },
-            features: RangeOrValue::Range { range: Range { start: 100, end: 200 }, step: None },
-        })
-
-    };
     //////////////////////train final
-    let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = TrainFinalNetRunConfigRangeOrValue {
-        id: None,
-        common_training_args: CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
-            batch_size: RangeOrValue::Value(2),
-            lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-            patience: RangeOrValue::Value(10),
-            min_delta: RangeOrValue::Value(1e-4_f32),
-            optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
-                beta1: RangeOrValue::Value(0.9),
-                beta2: RangeOrValue::Value(0.999),
-                wd: RangeOrValue::Value(0.01),
-                amsgrad: RangeOrValue::Value(true),
-            })),
+    RunMode::RunLabels {
+        train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue {
+            id: None,
+            common_training_args: CommonTrainingRunConfigRangeOrValue {
+                epochs: RangeOrValue::Value(100),
+                batch_size: RangeOrValue::Value(2),
+                lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
+                patience: RangeOrValue::Value(10),
+                min_delta: RangeOrValue::Value(1e-4_f32),
+                optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
+                    beta1: RangeOrValue::Value(0.9),
+                    beta2: RangeOrValue::Value(0.999),
+                    wd: RangeOrValue::Value(0.01),
+                    amsgrad: RangeOrValue::Value(true),
+                })),
+            },
+
+            // net: LabelNetTypeArgsRangeOrValue::ConvNet(ConvNetArgsRangeOrValue {
+            //     num_conv_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
+            //     hidden_conv_channels: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
+            //     // hidden_conv_channels: RangeOrValue::Value(64),
+            //     // num_head_layers: RangeOrValue::Value(10),
+            //     num_head_layers: RangeOrValue::Range { range: Range { start: 8, end: 32 }, step: None },
+            //     num_head_features: RangeOrValue::Range { range: Range { start: 8, end: 256 }, step: None },
+            //     // num_head_features: RangeOrValue::Value(256),
+            //     kernel: RangeOrValue::Value(100),
+            //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
+            //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
+            // }),
+            net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+                // d_model: RangeOrValue::Value(64),
+                head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+                n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+                // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+                ff_mult: RangeOrValue::Value(2),
+                // dropout: RangeOrValue::Value(0.1),
+                dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
+            })
+            // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
+            //     // num_layers: RangeOrValue::Value(4),
+            //     num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
+            //     features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+            // })
+
         },
-        net: FinalNetArgsRangeOrValue {
-            num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
-        },
-    };
-    AllConfigs{
-        run_mode: find_and_select,
-        train_motif_nets_run_config_range_or_value,
-        train_label_nets_run_config_range_or_value,
-        train_final_net_run_config_range_or_value,
-        train_motifs_opt_config: Arc::new(OptConfig::new(30, 10)),
-        train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
-        train_final_opt_config: Arc::new(OptConfig::new(30, 10))
-    }
-}
+        train_labels_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
+    }}
 
 
-pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
+pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
 
     //gpt Navigation note: main.rs currently chooses this config. CLI values still enter through RunAllArgs;
     //gpt this function owns the default search spaces for motif discovery and training.
-    let find_and_select =  RunMode::StandaloneLabels {
-        find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
-            id: None,
-            step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((10000, 0)) },
-            // window: RangeOrValue::Value(10000),
-            freq_filter: None,
-            // freq_filter: Some(vec![
-            //     AverageFilter(AverageFilterParamsRangeOrValue {
-            //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
-            //         step: RangeOrValue::Value(1),
-            //     }),
-            // ]),
 
-            // freq_filter: Some(vec![
-                // BandPassFilter(BandPassFilterParamsRangeOrValue {
-                //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 16001. }, step: Some((4000., 1)) },
-                //     band_hz: RangeOrValue::Value(1.),
-                //     kernel_size: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
-                //     stride: RangeOrValue::Value(1),
-                //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
-                // }),
-                // Abs(AbsFilterParamsRangeOrValue{ _path_pd: Default::default() }),
-                // MedianFilter(MedianFilterParamsRangeOrValue{
-                //     // window: RangeOrValue::Value(1000)
-                //     window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
-                // })
-            // ]),
-            // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
-            //     // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-            //     similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ with_rfft: RangeOrValue::Value(true) }),
-            //     // similarity_metric: SimilarityMetricRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue{ _path_pd: Default::default() }),
-            //     // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-            //     //     aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(5.0) }),
-            //     //     // aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(1.0) }),
-            //     //     slices: RangeOrValue::Value(100),
-            //     // }),
-            //     slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
-            //         // aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(1.0) }),
-            //         aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.5) }),
-            //     }),
-            // }),
-            finder_kind: FinderKindRangeOrValue::Bucket(BucketRunConfigRangeOrValue {
-                id: None,
-                bucket_count: RangeOrValue::Value(500),
-                min_slices: RangeOrValue::Value(3),
-                max_slices: RangeOrValue::Value(100000),
-                bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
-                    band_hz: RangeOrValue::Value(32.0),
-                    aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),
-                    apply_hann_window: RangeOrValue::Value(true),
-                    remove_dc_offset: RangeOrValue::Value(true),
-                    normalize_lsh: RangeOrValue::Value(true),
-                })
-            }),
-            max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100000) })),
-        },
-
-        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
-        select_motifs_run_config: SelectBucketsRunConfigRangeOrValue {
-            id: None,
-
-            energy_k: RangeOrValue::Value(1.5),
-        },
-    };
 
     /////////////////////train_motifs
     let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
@@ -611,20 +535,20 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
         //     // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
         //     joint: ConvNetJointArgsRangeOrValue::AttnPool1d(AttnPool1dArgsRangeOrValue{ _dummy: 0 }),
         // }),
-        net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
-            // d_model: RangeOrValue::Value(64),
-            head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
-            n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
-            // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
-            ff_mult: RangeOrValue::Value(2),
-            // dropout: RangeOrValue::Value(0.1),
-            dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
-        })
-        // net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
-        //     // num_layers: RangeOrValue::Value(4),
-        //     num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
-        //     features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+        // net: LabelNetTypeArgsRangeOrValue::SelfAttentionNet(SelfAttentionNetArgsRangeOrValue {
+        //     // d_model: RangeOrValue::Value(64),
+        //     head_size: RangeOrValue::Range { range: Range { start: 64, end: 256 }, step: None },
+        //     n_heads: RangeOrValue::Range { range: Range { start: 4, end: 12 }, step: None },
+        //     // ff_mult: RangeOrValue::Range { range: Range { start: 2, end: 4 }, step: None },
+        //     ff_mult: RangeOrValue::Value(2),
+        //     // dropout: RangeOrValue::Value(0.1),
+        //     dropout: RangeOrValue::Range { range: Range { start: 0.01, end: 0.2 }, step: None },
         // })
+        net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
+            // num_layers: RangeOrValue::Value(4),
+            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
+            features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+        })
 
     };
     //////////////////////train final
@@ -647,14 +571,75 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             num_layers: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
         },
     };
-    AllConfigs{
-        run_mode: find_and_select,
+
+    RunMode::RunAll {
+        find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
+            id: None,
+            step: RangeOrValue::Value(1000),
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((10000, 0)) },
+            // window: RangeOrValue::Value(10000),
+            freq_filter: None,
+            // freq_filter: Some(vec![
+            //     AverageFilter(AverageFilterParamsRangeOrValue {
+            //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
+            //         step: RangeOrValue::Value(1),
+            //     }),
+            // ]),
+
+            // freq_filter: Some(vec![
+            // BandPassFilter(BandPassFilterParamsRangeOrValue {
+            //     low_hz: RangeOrValue::Range { range: Range { start: 0., end: 16001. }, step: Some((4000., 1)) },
+            //     band_hz: RangeOrValue::Value(1.),
+            //     kernel_size: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
+            //     stride: RangeOrValue::Value(1),
+            //     padding: PaddingRangeOrValue::Zero(ZeroPaddingRangeOrValue::default()),
+            // }),
+            // Abs(AbsFilterParamsRangeOrValue{ _path_pd: Default::default() }),
+            // MedianFilter(MedianFilterParamsRangeOrValue{
+            //     // window: RangeOrValue::Value(1000)
+            //     window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
+            // })
+            // ]),
+            // finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
+            //     // similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
+            //     similarity_metric: SimilarityMetricRangeOrValue::DotProduct(DotProductConfigRangeOrValue{ with_rfft: RangeOrValue::Value(true) }),
+            //     // similarity_metric: SimilarityMetricRangeOrValue::PearsonCorr(PearsonCorrConfigRangeOrValue{ _path_pd: Default::default() }),
+            //     // slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
+            //     //     aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(5.0) }),
+            //     //     // aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(1.0) }),
+            //     //     slices: RangeOrValue::Value(100),
+            //     // }),
+            //     slices_filter: SlicesFilterRangeOrValue::Accumulate(AccumulateStatsRangeOrValue {
+            //         // aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue{ k: RangeOrValue::Value(1.0) }),
+            //         aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.5) }),
+            //     }),
+            // }),
+            finder_kind: FinderKindRangeOrValue::Bucket(BucketRunConfigRangeOrValue {
+                id: None,
+                bucket_count: RangeOrValue::Value(500),
+                min_slices: RangeOrValue::Value(3),
+                max_slices: RangeOrValue::Value(100000),
+                bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
+                    band_hz: RangeOrValue::Value(32.0),
+                    aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),
+                    apply_hann_window: RangeOrValue::Value(true),
+                    remove_dc_offset: RangeOrValue::Value(true),
+                    normalize_lsh: RangeOrValue::Value(true),
+                })
+            }),
+            max_slices: Some(MaxSlicesRangeOrValue::Abs(MaxSlicesAbsRangeOrValue { count: RangeOrValue::Value(100000) })),
+        },
+
+        fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
+        select_motifs_run_config: SelectBucketsRunConfigRangeOrValue {
+            id: None,
+
+            energy_k: RangeOrValue::Value(1.5),
+        },
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
-        train_final_net_run_config_range_or_value,
         train_motifs_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
         train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
-        train_final_opt_config: Arc::new(OptConfig::new(30, 10))
     }
 }
 
@@ -662,7 +647,7 @@ pub(crate) fn run_all_grid_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-    use crate::run_all::{run_all, run_all_grid_config_0};
+    use crate::run_all::{run_all, run_all_config_0};
     use log::debug;
     use parking_lot::RwLock;
     use std::fs;
@@ -783,7 +768,7 @@ mod tests {
             resolution: Resolution::Normal,
             labels: None,
         };
-        let all_configs = run_all_grid_config_0(&run_all_args);
+        let all_configs = run_all_config_0(&run_all_args);
 
         run_all(
             &ws,
