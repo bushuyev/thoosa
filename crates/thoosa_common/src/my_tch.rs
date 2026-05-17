@@ -4,10 +4,11 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ptr;
 use std::sync::Arc;
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use serde::{Deserialize, Serialize};
 use tch::{nn, Kind, TchError, Tensor};
 use tch::Kind::Float;
+use tch::kind::FLOAT_CPU;
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
     BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
@@ -16,6 +17,7 @@ use torch_sys::C_tensor;
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
+use thoosa_shims::quantized_linear::FastQuantizedLinear;
 use crate::batches::BatchLengths;
 use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Node};
 // use crate::{data, utils};
@@ -123,6 +125,12 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySeq
                     Ok(mean_r.into())
                 }
             }
+        }
+    }
+
+    fn quantize(&mut self) {
+        for layer in self.layers.iter_mut() {
+            layer.quantize();
         }
     }
 }
@@ -755,6 +763,10 @@ pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
 
     //TODO should consume t: &ThoTensor<DI, SimpleId>?
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
+
+    fn quantize(&mut self) {
+
+    }
 }
 
 pub type Fp = fn(&Tensor) -> Result<Tensor, ThoError>;
@@ -818,6 +830,8 @@ pub struct MyLinear<DI: Dims, DO: Dims> {
     _pd_di: PhantomData<DI>,
     _pd_do: PhantomData<DO>,
 
+    quantized:Option<FastQuantizedLinear>,
+
     #[cfg(debug_assertions)]
     descr: String,
 }
@@ -826,8 +840,52 @@ unsafe impl<DI: Dims, DO: Dims> Send for MyLinear<DI, DO> {}
 unsafe impl<DI: Dims, DO: Dims> Sync for MyLinear<DI, DO> {}
 
 
+impl<DI, DO> MyLinear<DI, DO>
+where
+    DI: Dims + Send + Sync,
+    DO: Dims + Send + Sync
+{
+    pub fn new(
+        ws: Tensor, bs: Option<Tensor>, _pd_di: PhantomData<DI>, _pd_do: PhantomData<DO>,quantize:bool,
+        #[cfg(debug_assertions)]
+        descr: String
+    ) -> Self {
 
-impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLinear<DI, DO> {
+
+        Self {
+
+            quantized: if quantize {
+                // let ws_fl = ws.as_ref().to_kind(Float);
+                // let bs_fl = bs.as_ref().map(|t| t.to_kind(Float));
+                //
+                // debug!("MyLinear::new: ws={ws:?} ws_fl={ws_fl:?} bs_fl={bs_fl:?} bs={bs:?}");
+                //
+                // Some(
+                //     FastQuantizedLinear::from_float_weights(
+                //         // &Tensor::rand(ws.as_ref().size(), FLOAT_CPU),
+                //         &ws_fl,
+                //         // bs.as_ref().map(|t| Tensor::rand(t.size(), FLOAT_CPU)).as_ref()
+                //         bs_fl.as_ref()
+                //     ).expect("can't quantize")
+                // )//TODO error
+                None
+            } else {
+                None
+            },
+            ws, bs, _pd_di, _pd_do,
+
+            #[cfg(debug_assertions)]
+            descr
+        }
+    }
+}
+
+
+impl<DI, DO> ThoModule<DI, DO> for MyLinear<DI, DO>
+where
+    DI: Dims + Send + Sync,
+    DO: Dims + Send + Sync
+{
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()));
     }
@@ -840,16 +898,49 @@ impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MyLin
             debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),in_t.device_idx());
             debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),in_t.size());
         }
-        match in_t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {
-            Ok(t) => Ok(t.into()),
-            Err(e) => {
-                error!("{:?}", e);
-                #[cfg(any(debug_assertions, tho_debug))]
-                error!("failed layer descr: {} ", self.descr);
+        match &self.quantized {
+            None => {
+                match in_t.as_ref().f_linear(&self.ws, self.bs.as_ref()) {
+                    Ok(t) => Ok(t.into()),
+                    Err(e) => {
+                        error!("{:?}", e);
+                        #[cfg(any(debug_assertions, tho_debug))]
+                        error!("failed layer descr: {} ", self.descr);
 
-                Err(e.into())
+                        Err(e.into())
+                    }
+                }
+            }
+            Some(quantized) => {
+
+                match quantized.try_forward(&in_t.as_ref().to_kind(Float)) {
+                    Ok(t) => Ok(t.into()),
+                    Err(e) => {
+                        error!("{:?}", e);
+                        #[cfg(any(debug_assertions, tho_debug))]
+                        error!("failed layer descr: {} ", self.descr);
+
+                        Err(e.into())
+                    }
+                }
             }
         }
+    }
+
+    fn quantize(&mut self) {
+        let ws_fl = self.ws.as_ref().to_kind(Float);
+        let bs_fl = self.bs.as_ref().map(|t| t.to_kind(Float));
+
+        debug!("MyLinear::new: ws={:?} ws_fl={ws_fl:?} bs={:?} bs_fl={bs_fl:?} ", self.ws, self.bs);
+
+        self.quantized =  Some(
+            FastQuantizedLinear::from_float_weights(
+                // &Tensor::rand(ws.as_ref().size(), FLOAT_CPU),
+                &ws_fl,
+                // bs.as_ref().map(|t| Tensor::rand(t.size(), FLOAT_CPU)).as_ref()
+                bs_fl.as_ref()
+            ).expect("can't quantize")
+        );
     }
 }
 
@@ -858,6 +949,7 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
     in_dim: i64,
     out_dim: i64,
     c: LinearConfig,
+    quantize:bool,
     #[cfg(debug_assertions)] descr: String,
 ) -> Result<MyLinear<DI, DO>, ThoError> {
     assert!(in_dim > 0);
@@ -877,14 +969,15 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
         None
     };
 
-    Ok(MyLinear {
-        ws: path.f_var("weight", &[out_dim, in_dim], c.ws_init)?,
+    Ok(MyLinear::new(
+        path.f_var("weight", &[out_dim, in_dim], c.ws_init)?,
         bs,
-        _pd_di: Default::default(),
-        _pd_do: Default::default(),
+        Default::default(),
+        Default::default(),
+        quantize,
         #[cfg(debug_assertions)]
         descr,
-    })
+    ))
 }
 
 pub fn configure_dense(
@@ -934,7 +1027,7 @@ pub fn configure_dense(
         .dropout(0.5)?
         .linear_s(
             6,
-            "todo",
+            "todo", false,
         )?
         .end_seq()
 }
@@ -1291,6 +1384,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for SelfAttention {
 mod tch_tests {
     use std::ptr;
     use std::sync::Arc;
+    use std::time::Instant;
     use log::debug;
 
     use crate::batches::BatchLengths;
@@ -1301,7 +1395,7 @@ mod tch_tests {
     use tch::nn::{BatchNormConfig, ConvConfig, VarStore};
     use torch_sys::C_tensor;
     use thoosa_shared::ThoError;
-
+    use thoosa_shims::quantized_linear::FastQuantizedLinear;
     use crate::builder::SeqBuilder;
     use crate::builder::{Node, clc_conv1d_out};
     use crate::dims::{AnyDims, Batch, Dims};
@@ -1358,7 +1452,7 @@ mod tch_tests {
         let res_seq = SeqBuilder::new(10, None)?
             .linear_s(
                 1,
-                "todo",
+                "todo", false,
             )?
             .end_seq()?;
 
@@ -1366,7 +1460,7 @@ mod tch_tests {
             .conv_1d("conv", 5, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
-                "todo",
+                "todo", false,
             )?
             .end_seq()?;
 
@@ -1465,7 +1559,7 @@ mod tch_tests {
             .conv_1d("conv", num_features / 10, 1, 1, ConvConfig::default(), None)?
             .linear_s(
                 1,
-                "todo",
+                "todo", false,
             )?
             .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
             .end_seq()?
@@ -1588,7 +1682,7 @@ mod tch_tests {
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
-                                "todo",
+                                "todo", false,
                             )? //2 weight bias
                             .end_seq()?,
                         SeqBuilder::new(321, None)?
@@ -1597,7 +1691,7 @@ mod tch_tests {
                             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
                             .linear_s(
                                 1,
-                                "todo",
+                                "todo", false,
                             )? //2 weight bias
                             .end_seq()?,
                     ],
@@ -1606,13 +1700,13 @@ mod tch_tests {
                 )?
                 .linear_s(
                     10,
-                    "todo",
+                    "todo", false,
                 )? //2 weight bias
                 .conv_1d("conv", 3, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .conv_1d("conv", 5, 1, 2, ConvConfig::default(), None)? //2 weight bias
                 .linear_s(
                     20,
-                    "todo",
+                    "todo", false,
                 )? //2 weight bias
                 .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
                 .end_seq()
@@ -1708,6 +1802,83 @@ mod tch_tests {
             );
         })?;
 
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_quantized() -> Result<(), ThoError>{
+        let vs = nn::VarStore::new(Device::Cpu);
+
+        let linear = nn::linear(
+            vs.root(),
+            1024,
+            512,
+            Default::default(),
+        );
+
+        let qlinear = thoosa_shims::quantized_linear::FastQuantizedLinear::from_float_linear(&linear)?;
+
+        let xs = Tensor::randn([256, 1024], FLOAT_CPU);
+
+        // Calls quantized::linear_dynamic through C++ shim.
+        let y_fast = qlinear.try_forward(&xs)?;
+
+        // Float reference.
+        let y_ref = xs.f_linear(&linear.ws, linear.bs.as_ref())?;
+
+        let max_abs_err = (&y_fast - &y_ref)
+            .abs()
+            .max()
+            .double_value(&[]);
+
+        println!("y_fast.size = {:?}", y_fast.size());
+        println!("max_abs_err = {max_abs_err}");
+
+        Ok(())
+    }
+
+    #[test]
+    fn bench_linear() -> Result<(), Box<dyn std::error::Error>> {
+        let vs = nn::VarStore::new(Device::Cpu);
+
+        let linear = nn::linear(
+            vs.root(),
+            4096,
+            4096,
+            Default::default(),
+        );
+
+        let qlinear = FastQuantizedLinear::from_float_linear(&linear)?;
+
+        let xs = Tensor::randn([128, 4096], FLOAT_CPU);
+
+        // Warmup.
+        for _ in 0..10 {
+            let _ = xs.f_linear(&linear.ws, linear.bs.as_ref())?;
+            let _ = qlinear.try_forward(&xs)?;
+        }
+
+        let n = 100;
+
+        let t0 = Instant::now();
+        for _ in 0..n {
+            let _ = xs.f_linear(&linear.ws, linear.bs.as_ref())?;
+        }
+        let float_elapsed = t0.elapsed();
+
+        let t1 = Instant::now();
+        for _ in 0..n {
+            let _ = qlinear.try_forward(&xs)?;
+        }
+        let q_elapsed = t1.elapsed();
+
+        println!("float elapsed: {:?}", float_elapsed);
+        println!("quant elapsed: {:?}", q_elapsed);
+        println!(
+            "speedup: {:.2}x",
+            float_elapsed.as_secs_f64() / q_elapsed.as_secs_f64()
+        );
 
         Ok(())
     }

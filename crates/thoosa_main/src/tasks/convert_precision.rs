@@ -509,12 +509,20 @@ mod tests {
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::train_nets::{final_net, FinalNetParams};
+    use thoosa_common::train_nets::{final_net, lin_label_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams};
     use thoosa_common::ws::{FsWorkspace, Workspace};
     use thoosa_shared::{cdt_for_dir, ThoError};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_converts_saved_final_net() -> Result<(), ThoError> {
+        run_convert_precision_stage_final_net(ConvertPrecisionTarget::Fp64, Kind::Double).await?;
+        run_convert_precision_stage_final_net(ConvertPrecisionTarget::Bf16, Kind::BFloat16).await?;
+        run_convert_precision_stage_label_net(ConvertPrecisionTarget::Bf16, Kind::BFloat16).await?;
+
+        Ok(())
+    }
+
+    async fn run_convert_precision_stage_final_net(precision_target: ConvertPrecisionTarget, kind: Kind) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
         let ws_box = FsWorkspace::new(test_dir, 2, 100, 100)?;
 
@@ -525,7 +533,7 @@ mod tests {
         let net_id = ws_box.save_final_net(3, &vs, &params)?;
 
         let ws = Arc::new(RwLock::new(ws_box));
-        let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from("final").join(&net_id)), ConvertPrecisionTarget::Fp64);
+        let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from("final").join(&net_id)), precision_target);
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
@@ -540,11 +548,42 @@ mod tests {
         let variables = loaded_module.var_store().variables();
         assert!(!variables.is_empty());
         for tensor in variables.values() {
-            assert_eq!(tensor.kind(), Kind::Double);
+            assert_eq!(tensor.kind(), kind);
         }
-
         Ok(())
     }
+
+    async fn run_convert_precision_stage_label_net(precision_target: ConvertPrecisionTarget, kind: Kind) -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
+        let ws_box = FsWorkspace::new(test_dir, 2, 100, 100)?;
+
+        let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ motif_layers: 2, features: 10 }));
+        let mut vs = VarStore::new(Device::Cpu);
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params, false)?.build_tch_module(&vs.root())?;
+        vs.freeze();
+        let net_id = ws_box.save_label_net(3, &"label_a", &vs, &params)?;
+
+        let ws = Arc::new(RwLock::new(ws_box));
+        let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from(&net_id)), precision_target);
+        let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
+        let output = stage
+            .run(
+                Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
+                RunCtxImpl::new(0, "convert_precision_test"),
+            )
+            .await?;
+        let output = Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await?;
+        assert_eq!(output.converted().len(), 1);
+
+        let (_, params, loaded_module) = ws.read().load_label_net(&net_id, &Device::Cpu)?;
+        let variables = loaded_module.var_store().variables();
+        assert!(!variables.is_empty());
+        for tensor in variables.values() {
+            assert_eq!(tensor.kind(), kind);
+        }
+        Ok(())
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_preserves_existing_tensor_names() -> Result<(), ThoError> {

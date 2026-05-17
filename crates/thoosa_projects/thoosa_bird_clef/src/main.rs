@@ -460,6 +460,7 @@ mod tests {
         let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
         let params = InferArgs::new(0, "test_data/train_soundscapes".to_string(), "".to_string(), 1000);
+
         // let params = InferArgs::new(0, "/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes".to_string(), "".to_string(), 1000);
 
         infer_labels(&params, &ws, &store).await?;
