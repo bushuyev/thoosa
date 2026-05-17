@@ -216,7 +216,7 @@ impl GlobalCtx {
             info!("GlobalCtx::debug_gpu: descr={descr} type_name={type_name}");
             match entry.purger.debug_gpu(device_idx).await {
                 Ok(v) => total_gpu_mem += v,
-                Err(e) => error!("GlobalCtx::debug_gpu: failed with {e:?}"),
+                Err(e) => log::error!("GlobalCtx::debug_gpu: failed with {e:?}"),
             }
         }
 
