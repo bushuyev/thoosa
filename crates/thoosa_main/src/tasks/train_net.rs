@@ -277,7 +277,6 @@ where
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
 
-                    // TODO(perf): the stable path pays full OOMHandler overhead for every batch; cache the last successful chunk/permit state per TrainNet run so common batches skip the expensive wrapper path.
                     oom_handler.run(
                         &train_step,
                         Arc::clone(&input),
