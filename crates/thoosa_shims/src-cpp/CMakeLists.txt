@@ -28,6 +28,7 @@ add_library(
         device_stats.cpp
         errors.cpp
         inference_mode.cpp
+        quantized_linear.cpp
 ) #add file to build.rs / cargo:rerun-if-changed
 target_include_directories(thoosa_shims PUBLIC ..)
 target_link_libraries(thoosa_shims PUBLIC ${TORCH_LIBRARIES} CUDA::cuda_driver CUDA::cudart)

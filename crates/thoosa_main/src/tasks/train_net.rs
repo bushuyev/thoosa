@@ -833,6 +833,7 @@ mod tests {
                     1,
                     1,
                     LinearConfig::default(),
+                    false,
                     #[cfg(debug_assertions)]
                     "test_train_net".to_string(),
                 )?);
