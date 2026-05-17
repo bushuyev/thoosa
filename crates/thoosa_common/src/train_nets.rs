@@ -379,9 +379,23 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
 
         let builder: Arc<ModuleFactory<DI, DO>> = Arc::new(builder);
         let mut vs = VarStore::new(device);
-        let module = builder(&vs.root())?;
+
+
+
+        let mut module = builder(&vs.root())?;
         vs.load(&model)?;
         vs.freeze();
+
+        {
+            let variables = vs.variables();
+            debug!("ThoModuleWithStore::load: id={:?}, variables={:?}", id, variables);
+
+            for tensor in variables.values() {
+                debug!("ThoModule::load: model={model:?} tensor={:?}", tensor);
+            }
+        }
+
+        module.quantize();
 
         Ok(Self::with_factory(id, module, vs, Some(builder)))
     }
@@ -1132,7 +1146,7 @@ net.closure(
                     2.
                 } else {
                     0.5
-                },
+                }, false,
             )?
             .func(|t| Tensor::f_gelu(t, "none").map_err(|e| e.into()))?;
     }
@@ -1141,7 +1155,7 @@ net.closure(
         // .func(|t| Tensor::f_relu(t).map_err(|e| e.into()))?
         .linear_s(
             1,
-            "motif_last_head",
+            "motif_last_head", false,
         )?
         .end_seq()
 
@@ -1187,7 +1201,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
         // .batch_norm()
         .linear_s(
             params.num_features * 2,
-            "todo",
+            "todo", false,
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
 
@@ -1195,7 +1209,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
         net = net
             .linear_s(
                 params.num_features * 2,
-                "todo",
+                "todo", false,
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
     }
@@ -1205,7 +1219,7 @@ pub fn lin_motif_node(params: &MotifLinNetParams) -> Result<Node, ThoError> {
         // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
         .linear_s(
             1,
-            "todo",
+            "todo", false,
         )?
         .func(|t|Tensor::f_sigmoid(t).map_err(|e|e.into()))?
         .end_seq()
@@ -1329,10 +1343,10 @@ impl LabelNetParams {
             })
     }
 
-    pub fn label_net(&self) -> Result<Node, ThoError> {
+    pub fn label_net(&self, quantize: bool) -> Result<Node, ThoError> {
         match &self.net_type {
             LabelNetTypeParams::LinNetParams(_) => {
-                lin_label_node(&self)
+                lin_label_node(&self, quantize)
             }
             LabelNetTypeParams::ConvNetParams(_) => {
                 conv_label_node(&self)
@@ -1429,7 +1443,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 None,
             )?.linear_feats(
                 "cnn_label_head",
-                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
+                cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features, false,
             )?
             .closure(
                 Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1466,7 +1480,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
             )?
             .linear_feats(
                 "cnn_label_head",
-                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features,
+                2* cnn_params.hidden_conv_channels, 2*cnn_params.num_head_features, false,
             )?
                 .closure(
                     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1481,7 +1495,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
     for layer in 0..cnn_params.num_head_layers {
         builder = builder.linear_s(
             2*cnn_params.num_head_features,
-            format!("cnn_label_head_{layer}"),
+            format!("cnn_label_head_{layer}"), false,
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1495,7 +1509,7 @@ pub fn conv_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
 
     builder.linear_s(
         1,
-        "cnn_label_head_last",
+        "cnn_label_head_last", false,
     )?
     .closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1528,7 +1542,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         .linear_feats(
             "self_attention_in_proj",
             params.motif_nets,
-            sa_params.head_size * sa_params.n_heads,
+            sa_params.head_size * sa_params.n_heads, false,
         )?
         .self_attention(
             "self_attention_block",
@@ -1546,7 +1560,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
         )?
         .linear_s(
             1,
-            "self_attention_label_head_last",
+            "self_attention_label_head_last", false,
         )?;
 
         #[cfg(any(debug_assertions, tho_debug))] {
@@ -1564,7 +1578,8 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
 }
 
 
-pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, ThoError> {
+    debug!("lin_label_node: params={params:?} quantize={quantize}");
 
     let LabelNetTypeParams::LinNetParams(lin_params) = &params.net_type else {
         // return Err(ThoError::new(format!("Unexpected params type: {cnn_params:?}")));
@@ -1591,14 +1606,15 @@ pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
                 "lin_label_node",
                 lin_params.features,
                 lin_params.features,
+                quantize,
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
         }
 
 
     builder.linear_s(
-            1,
-            "lin_label_node last",
+        1,
+        "lin_label_node last", quantize,
         )?
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
@@ -1643,7 +1659,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
     let mut net = builder
         .linear_s(
             2 * params.in_features,
-            "final_net_first_layer".to_string(),
+            "final_net_first_layer".to_string(), false,
         )?
         .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
 
@@ -1651,7 +1667,7 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
         net = net
             .linear_s(
                 params.in_features,
-                format!("final_net_{i}th_layer"),
+                format!("final_net_{i}th_layer"), false,
             )?
             .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
     }
@@ -1660,7 +1676,7 @@ net
     // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
     .linear_s(
         params.out_features,
-        "final_net_last_layer",
+        "final_net_last_layer", false,
     )?
     .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
     .end_seq()
@@ -2481,7 +2497,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
+            lin_label_node(&params, false)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
@@ -2502,7 +2518,6 @@ mod train_tests {
         }
 
 
-
         let net_id = ws
             .write()
             .save_label_net(1, &"test_label", &vs_0, &params)?;
@@ -2512,7 +2527,7 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
            model_base_path.join(NET_WEIGHTS_FILE),
            Cpu,
         )?;
@@ -2820,9 +2835,9 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-           model_base_path.join(NET_WEIGHTS_FILE),
-           Cpu,
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
+                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           Cpu,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -2900,9 +2915,9 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-             model_base_path.join(NET_WEIGHTS_FILE),
-             Cpu,
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
+                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           Cpu,
         )?;
 
         assert!(module_with_store.var_store().variables().len() > 0);
@@ -3324,7 +3339,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            LabelNetParams::label_net(&label_node_params)?.build_tch_module(&vs_0.root())?;
+            LabelNetParams::label_net(&label_node_params, true)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
         debug!(
             "save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}",

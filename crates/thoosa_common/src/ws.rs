@@ -260,7 +260,7 @@ impl FsWorkspace {
 
         let module = ThoModuleWithStore::load(
             mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
-            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+            move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
             model_path,
             *device,
         )?;
@@ -570,7 +570,7 @@ impl Workspace for FsWorkspace {
                         let module = ThoModuleWithStore::load(
                             mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
                             move |path: &nn::Path| {
-                                LabelNetParams::label_net(&params_for_builder)?
+                                LabelNetParams::label_net(&params_for_builder, true)?
                                     .build_tch_module(path)
                             },
                             model_path.clone(),
@@ -1225,7 +1225,7 @@ mod tests {
             LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
         );
         let mut vs = VarStore::new(Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params)?.build_tch_module(&vs.root())?;
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params, true)?.build_tch_module(&vs.root())?;
         vs.freeze();
 
         let net_id = ws.save_label_net(7, &"label_0", &vs, &params)?;
