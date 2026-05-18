@@ -1182,13 +1182,13 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
             None,
         )?
         .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b)?
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("cosine_motif_node: 2. t.size={:?}", t.size());
-                Ok(t.shallow_clone())
-            })),
-            None,
-        )?
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )?
         .end_seq()
 
 }
@@ -1592,14 +1592,14 @@ pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, T
 
     let mut seq_builder = SeqBuilder::new(0, None)?;
     let mut builder = seq_builder
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("lin_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
-                // Ok(t.transpose(1, 2))
-                Ok(t.shallow_clone())
-            })),
-            Some(params.motif_nets),
-        )?
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         debug!("lin_label_node: transpose input={:?} _lengths={_lengths:?}", t.size());
+        //         // Ok(t.transpose(1, 2))
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     Some(params.motif_nets),
+        // )?
         .adaptive_avg_pool(lin_params.features,lin_params.features )?;
 
         for layer in 0..lin_params.motif_layers {

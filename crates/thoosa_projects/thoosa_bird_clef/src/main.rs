@@ -205,23 +205,12 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t.view((1, -1)))?));//
     let label_models = Arc::new(ws.read().label_models()?);
 
-    // let ctx_0 = ctx.branch("".into(), false);
-    // let mut next: Option<JoinHandle<Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError>>> = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[0], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32)));
-
-
 
     let mut label_results: HashMap<String, Vec<f32>> = HashMap::new();
     for (label_i, label) in LABELS.iter().enumerate()/*.skip(0).take(20)*/ {
 
         let apply_label_nets = load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx.branch("load_apply_label_nets_model".into(), false), Arc::clone(&label_models), &LABELS[label_i], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32).await;
-        // let apply_label_nets = next
-        //     .take()
-        //     .expect("prefetch task missing")
-        //     .await?;
-        // if label_i + 1 < LABELS.len() {
-        //     let ctx_0 = ctx.branch("".into(), false);
-        //     next = Some(tokio::spawn(load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx_0, Arc::clone(&label_models), &LABELS[label_i+1], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32)));
-        // }
+
 
         let apply_label_nets = match apply_label_nets {
             Ok(v) => {
@@ -284,7 +273,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_ids = store.list_label_nets_run_ids(label).await?;
-    debug!("label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
+    debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
 
     let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
         &ws,
@@ -296,8 +285,6 @@ async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store:
     ).await?);
     Ok(apply_label_nets)
 }
-
-
 
 
 pub fn write_birdclef_submission_csv(
