@@ -1188,7 +1188,7 @@ impl Store for SqlStore {
 
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
             let r = conn.prepare(
-                "SELECT tn.run_id FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type='TrainLabelNetRunConfig' AND net_path LIKE ? ORDER BY run_on DESC LIMIT 1"//TODO takes last one
+                "SELECT tn.run_id FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type='TrainLabelNetRunConfig' AND net_path LIKE ? ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
             )?.query_map([Value::Text(format!("{label}%"))], |row| {
                 Ok(row.get::<usize, u32>(0)?)
             })?.map(|v| v.unwrap()).collect();

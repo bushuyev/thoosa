@@ -119,3 +119,97 @@ pub fn sg_smoothing_coeffs(window_len: usize, poly_order: usize) -> Result<Vec<f
 
     Ok(coeffs)
 }
+
+pub fn unordered_sets_of_size<E>(elements: &[E], m: usize) -> Vec<Vec<E>>
+where
+ E:Copy+Clone
+{
+    assert!(m > 0);
+
+    fn backtrack<E:Copy+Clone>(
+        elements: &[E],
+        m: usize,
+        start: usize,
+        current: &mut Vec<E>,
+        result: &mut Vec<Vec<E>>,
+    ) {
+        if current.len() == m {
+            result.push(current.clone());
+            return;
+        }
+
+        let remaining_needed = m - current.len();
+
+        // Not enough elements left.
+        if elements.len() - start < remaining_needed {
+            return;
+        }
+
+        for i in start..=elements.len() - remaining_needed {
+            current.push(elements[i]);
+            backtrack(elements, m, i + 1, current, result);
+            current.pop();
+        }
+    }
+
+    if m > elements.len() {
+        return vec![elements.to_vec()];
+    }
+
+    let mut result = Vec::new();
+    let mut current = Vec::with_capacity(m);
+
+    backtrack(elements, m, 0, &mut current, &mut result);
+
+    result
+}
+
+
+#[cfg(test)]
+mod tests {
+    use crate::math::unordered_sets_of_size;
+
+    #[test]
+    fn generates_unordered_sets_of_size_2() {
+        let elements = vec![0, 1, 2, 3];
+
+        let result = unordered_sets_of_size(&elements, 2);
+
+        assert_eq!(
+            result,
+            vec![
+                vec![0, 1],
+                vec![0, 2],
+                vec![0, 3],
+                vec![1, 2],
+                vec![1, 3],
+                vec![2, 3],
+            ]
+        );
+    }
+
+    #[test]
+    fn returns_empty_when_m_is_larger_than_input() {
+        let elements = vec![0, 1, 2];
+
+        let result = unordered_sets_of_size(&elements, 4);
+
+        assert_eq!(
+            result,
+            vec![
+                vec![0, 1, 2]
+            ]
+        )
+    }
+
+
+    #[test]
+    fn size_equal_to_input_returns_whole_input() {
+        let elements = vec![10, 20, 30];
+
+        let result = unordered_sets_of_size(&elements, 3);
+
+        assert_eq!(result, vec![vec![10, 20, 30]]);
+    }
+
+}
