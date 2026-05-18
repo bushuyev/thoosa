@@ -715,7 +715,6 @@ where
             let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()))));
 
             let run_ids = run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
-                None,
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -749,7 +748,6 @@ where
             let labels_filter = train_label_nets_args.labels_filter();
 
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
-                None,
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -788,7 +786,6 @@ where
             let opt_config = Arc::new(train_final_net_args.opt_config.clone());
             let init_ctx = root_ctx.branch(Some("init final nets"), true);
             let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
-                None,
                 train_final_net_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -1893,7 +1890,6 @@ where
 }
 
 pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
-    input_run_ids: Option<Vec<RunId>>,
     rcrv: RCRV,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,

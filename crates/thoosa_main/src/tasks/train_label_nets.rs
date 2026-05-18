@@ -171,6 +171,7 @@ where
                     .collect::<Vec<_>>()
             })
             .filter(|labels| !labels.is_empty());
+
         Ok(Self {
             train_motif_nets_run_ids,
             motif_nets_ids,
@@ -334,10 +335,12 @@ where
                 }
                 !is_empty
             }).collect::<Vec<_>>();
+
             if train_labels_resource_keys.is_empty() {
                 warn!("No resources in resources_config={resources_config:?}");
                 return Err(ThoError::new(format!("No resources in resources_config={resources_config:?}")));
             }
+
             //TODO util validate_resources function
             let valid_label_resource_keys =  valid_label_resource_keys.into_iter().filter(|(label, resources)|{
                 let is_empty = resources.is_empty();
@@ -346,6 +349,7 @@ where
                 }
                 !is_empty
             }).collect::<Vec<_>>();
+
             if valid_label_resource_keys.is_empty() {
                 warn!("No resources in resources_config={resources_config:?}");
                 return Err(ThoError::new(format!("No resources in resources_config={resources_config:?}")));
@@ -356,7 +360,7 @@ where
             debug!("TrainLabelNets::run: labels_others_train_valid_resources={labels_others_train_valid_resources:?}");
             debug!("TrainLabelNets::run: labels_train_and_valid_sets={labels_train_and_valid_sets:?}");
 
-            let labels_train_and_valid_sets_len = labels_train_and_valid_sets.len();
+            let labels_train_and_valid_sets_len = self.labels.as_ref().map(|filtered_labels|filtered_labels.len()).unwrap_or(labels_train_and_valid_sets.len());
             let labels_filter = self.labels.clone();
             let futures = labels_train_and_valid_sets.iter()
             .filter(|(label, _)|{

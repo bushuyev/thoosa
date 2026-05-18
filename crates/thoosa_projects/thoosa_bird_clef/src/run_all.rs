@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::Arc;
-use log::{debug, info};
+use log::{debug, error, info};
 use tch::Device::Cpu;
 use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, Metrics, NormThicknessRunConfig};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
@@ -29,8 +30,10 @@ use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRan
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_shared::{collect_futures_with_progress, panic_to_err_async, RangeOrValue, ResourceType, StreamBuffering, ThoError};
+use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
+use thoosa_shared::math::unordered_sets_of_size;
 use thoosa_shared::ResourceType::NotInGroup;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::{RunConfig, RunId};
 use thoosa_store::Store;
 
 pub enum RunMode {
@@ -49,7 +52,20 @@ pub enum RunMode {
     }
 }
 
+#[derive(Debug)]
+struct ClefRunConfig {
+    pub id:RunId
+}
 
+impl RunConfig for ClefRunConfig {
+    fn set_id(&mut self, id: RunId) {
+        self.id = id;
+    }
+
+    fn type_name() -> &'static str {
+        "ClefRunConfig"
+    }
+}
 
 pub(crate) async fn run_all(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -185,7 +201,6 @@ pub(crate) async fn run_all(
 
                         // Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
                         let train_motif_net_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
-                            Some(select_motifs_run_ids),
                             train_motif_nets_run_config_range_or_value,
                             input_wrapper,
                             &ws,
@@ -217,7 +232,6 @@ pub(crate) async fn run_all(
 
                         // Run a grid over label-net training configs; consumes motif nets from previous stage.
                         let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
-                            Some(train_motif_net_run_ids.clone()),
                             train_label_nets_run_config_range_or_value,
                             train_labels_input,
                             &ws,
@@ -263,9 +277,15 @@ pub(crate) async fn run_all(
             ).await;
 
             Ok::<_, ThoError>(())
-        }
+        }   
         RunMode::RunLabels { train_label_nets_run_config_range_or_value, train_labels_opt_config } => {
             let train_label_nets_run_config_range_or_value = Arc::new(train_label_nets_run_config_range_or_value);
+
+
+
+            let clef_run_id = Some(vec![store //to select models for inference
+                .save_run_config(None, ClefRunConfig::type_name(), "RunLabels", HashMap::new())
+                .await?]);
 
             let futures = labels.iter().filter(|label|
                 {
@@ -276,7 +296,7 @@ pub(crate) async fn run_all(
             ).map(|label| {
                 info!("run_all: label={label}");
                 let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
-                let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
+                let mut init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
 
                 let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
                 let ws_in_train_labels = Arc::clone(&ws);
@@ -285,49 +305,77 @@ pub(crate) async fn run_all(
                 let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
                     run_all_args.train_resource_config()
                 )));
-
-
+                let clef_run_id = clef_run_id.clone();
                 async move {
                     let train_motif_net_run_ids = store.list_run_config_ids_by_descr(label.clone(), "TrainMotifNetRunConfig").await?;
                     if train_motif_net_run_ids.is_empty(){
                         return Ok(());
                     }
 
-                    panic_to_err_async!(async move {
-                        let train_label_net_run_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
-                            None,
-                            train_label_nets_run_config_range_or_value,
-                            train_labels_input,
-                            &ws,
-                            &store,
-                            async move |run_configs| {
-                                new_train_label_nets(
-                                    train_motif_net_run_ids,
-                                    Arc::clone(&loader),
-                                    run_configs,
-                                    &ws_in_train_labels,
-                                    &store_in_train_labels,
-                                    init_ctx_train_labels,
-                                    train_labels_opt_config,
-                                    Some(vec![label.clone()]),
-                                    Some(run_all_args.max_motif_net_loss), //to RunAll args,
-                                    run_all_args.selected_motif_nets_limit,
-                                    run_all_args.motif_slices_step
-                                ).await.map(|v| Arc::new(v))
-                            },
-                            || label_ctx.branch(Some("train label nets"), false),
-                        ).await {
+
+                    let combo_sets = unordered_sets_of_size(train_motif_net_run_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(3));
+                    let limit = combo_sets.len().min(100);//TODO ..100
+
+                    let train_motif_net_run_ids_combos = combo_sets[..limit].to_vec();
+                    let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_ids_combos.len(), 1);
+
+                    for train_motif_net_run_ids_combo in train_motif_net_run_ids_combos {
+                        let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
+                        let train_labels_input = Arc::clone(&train_labels_input);
+                        let train_motif_net_run_ids = train_motif_net_run_ids.clone();
+                        let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
+                        let store_in_train_labels = Arc::clone(&store_in_train_labels);
+                        let init_ctx_train_labels = init_ctx_train_labels.branch(Some("init combo"), false);
+                        let mut label_ctx = label_ctx.branch(Some("label combo"), false);
+                        let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
+                        let clef_run_id = clef_run_id.clone();
+                        match panic_to_err_async!(
+                              run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
+                                train_label_nets_run_config_range_or_value,
+                                train_labels_input,
+                                &ws,
+                                &store,
+                                async move |run_configs| {
+                                    new_train_label_nets(
+                                        train_motif_net_run_ids,
+                                        Arc::clone(&loader),
+                                        run_configs,
+                                        &ws_in_train_labels,
+                                        &store_in_train_labels,
+                                        init_ctx_train_labels,
+                                        train_labels_opt_config,
+                                        Some(vec![label.clone()]),
+                                        Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                                        run_all_args.selected_motif_nets_limit,
+                                        run_all_args.motif_slices_step
+                                    ).await.map(|v| Arc::new(v))
+                                },
+                                || label_ctx.branch(Some("train label nets"), false),
+                            )
+                        ) {
                             Ok(train_label_nets_run_ids) => {
                                 info!("train label nets done: label={label} run_ids={train_label_nets_run_ids:?}");
+                                let min_loss = store.list_trained_nets(train_label_nets_run_ids, None, None).await?
+                                    .into_iter().map(|(.., loss)|loss).reduce(f32::min).unwrap_or(f32::MAX);
+
+                                if min_loss < 0.1 {
+                                    info!("stopping training label {label} got loss={min_loss}");
+
+                                    break
+                                }
                             }
                             Err(e) => {
-                                info!("train label nets failed: label={label} e={e:?}");
+                                error!("train label nets failed: label={label} e={e:?}");
                             }
                         };
 
-                        info!("train label nets done: label={label} train_label_net_run_ids={train_label_net_run_ids:?}");
-                        Ok::<_, ThoError>(())
-                    })
+
+                        collect_eta_record_completion(combos_eta.id());
+
+                    }
+                    info!("train label net done: label={label}");
+
+                    Ok(())
                 }
             });
 
@@ -339,6 +387,8 @@ pub(crate) async fn run_all(
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
+
+            info!("Clef train labels done, clef_run_id={clef_run_id:?}");
 
             Ok::<_, ThoError>(())
         }

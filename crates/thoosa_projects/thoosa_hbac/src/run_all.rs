@@ -164,7 +164,6 @@ pub(crate) async fn run_all(
         }
         FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
             let best_find_and_select_result_ids:Vec<RunId>= run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
-                None,
                 find_and_select_run_config_range_or_value,
                 find_and_select_input,
                 &ws,
@@ -213,7 +212,6 @@ pub(crate) async fn run_all(
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
     let train_motif_nets_run_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
-        None,
         all_config.train_motif_nets_run_config_range_or_value,
         input_wrapper,
         &ws,
@@ -241,7 +239,6 @@ pub(crate) async fn run_all(
 
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
     let train_label_nets_run_ids = run_opt::< _, _, TrainLabelNetRunConfig, _, _>(
-        None,
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
         &ws,
