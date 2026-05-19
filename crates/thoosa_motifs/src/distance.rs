@@ -13,7 +13,7 @@ use tch::kind::{FLOAT_CPU, INT64_CPU};
 use tch::{IndexOp, TchError, Tensor};
 use serde::Deserialize;
 use thoosa_common::debug_plot;
-use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm_2, z_norm_dims};
+use thoosa_common::utils::{skewness_kurtosis_1_dim, tensor_mem_size, z_norm, z_norm_dims};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{panic_to_err, ThoError};
@@ -21,8 +21,8 @@ use crate::pearson_corr::pearson_corr_distance_matrix_0_2;
 
 #[allow(dead_code)]
 pub fn z_normalized_euclidean(t_0: &Tensor, t_1: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
-    Ok(z_norm_2(t_0, 1)?
-        .f_sub(&z_norm_2(t_1, 1)?)?
+    Ok(z_norm(t_0, 1)?
+        .f_sub(&z_norm(t_1, 1)?)?
         .f_pow_tensor_scalar(2)?
         .f_sum_dim_intlist(dim, true, Kind::Float)?
         .f_pow_tensor_scalar(0.5)?)
@@ -187,7 +187,7 @@ pub fn clc_d2_similarity(t_0: &Tensor, t_1: &Tensor, similarity_metric: Similari
 
                 debug!("clc_d2_similarity: freqs_t_0={freqs_t_0:?} freqs_t_0={freqs_t_0:?}");
 
-                (&z_norm_2(&freqs_t_0, 2)?, &z_norm_2(&freqs_t_1, 2)?)
+                (&z_norm(&freqs_t_0, 2)?, &z_norm(&freqs_t_1, 2)?)//TODO when dim param in z_norm_2 was not used the dim value was hardcoded to 1
             } else {
                 (t_0, t_1)
             };

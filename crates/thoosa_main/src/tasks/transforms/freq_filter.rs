@@ -27,7 +27,7 @@ use thoosa_shared::{mono_key, CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::z_norm_2;
+use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::math::sg_smoothing_coeffs;
@@ -81,7 +81,7 @@ enum PreparedFilter {
         window: u32,
         step: u32,
     },
-    Abs {
+    ZNorm {
 
     }
 }
@@ -205,8 +205,8 @@ where
                         step: moving_average_config.step,
                     });
                 }
-                InputFilter::Abs(abs) => {
-                    filters.push(PreparedFilter::Abs{
+                InputFilter::ZNorm(abs) => {
+                    filters.push(PreparedFilter::ZNorm {
                     })
                 }
             }
@@ -278,8 +278,8 @@ where
                     debug!("FreqFilter::apply_tho_tensor, MovingAverage: id={} window={} filtered_t.size={:?} filtered_t_out.size={:?}", input_tensor.id(), window, filtered_t.size(), filtered_t_out.size());
                     filtered_t = filtered_t_out;
                 }
-                PreparedFilter::Abs{..} => {
-                    filtered_t = z_norm_2(&filtered_t, 1)?.f_abs()?;
+                PreparedFilter::ZNorm {..} => {
+                    filtered_t = z_norm(&filtered_t, 1)?.f_abs()?;
                 }
             }
         }
@@ -322,7 +322,7 @@ where
                 PreparedFilter::BandPass { stride, .. } | PreparedFilter::SavGol { stride, .. } => *stride as i64,
                 PreparedFilter::MovingAverage { step, .. } => *step as i64,
                 PreparedFilter::NotchBand { .. } | PreparedFilter::Median { .. } => 1,
-                PreparedFilter::Abs{..} => {1}
+                PreparedFilter::ZNorm {..} => {1}
             };
 
             effective_stride
@@ -344,7 +344,7 @@ where
                     Self::expand_required_len(required_len, *stride as i64, local_min)
                 }
                 PreparedFilter::SavGol { window_len, stride, .. } => Self::expand_required_len(required_len, *stride as i64, *window_len),
-                PreparedFilter::Abs { .. } => { Ok(1) }
+                PreparedFilter::ZNorm { .. } => { Ok(1) }
             }
         })
     }

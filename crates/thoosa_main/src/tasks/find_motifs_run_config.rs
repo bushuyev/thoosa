@@ -170,8 +170,8 @@ impl From<&AverageFilterParams> for StatsKey {
     }
 }
 
-impl From<&AbsFilterParams> for StatsKey {
-    fn from(value: &AbsFilterParams) -> Self {
+impl From<&ZNormFilterParams> for StatsKey {
+    fn from(value: &ZNormFilterParams) -> Self {
         StatsKey::Abs {}
     }
 }
@@ -186,7 +186,7 @@ impl From<&InputFilter> for StatsKey {
             InputFilter::SavGolFilter(filter) => filter.into(),
             InputFilter::MedianFilter(filter) => filter.into(),
             InputFilter::AverageFilter(filter) => filter.into(),
-            InputFilter::Abs(filter) => filter.into(),
+            InputFilter::ZNorm(filter) => filter.into(),
         }
     }
 }

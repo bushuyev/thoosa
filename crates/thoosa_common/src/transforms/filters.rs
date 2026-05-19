@@ -400,11 +400,11 @@ pub fn savgol_smooth_1d_channels(
 }
 
 #[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
-pub struct AbsFilterParams {
+pub struct ZNormFilterParams {
 
 }
 
-impl InputFilterLengthAdjuster for AbsFilterParams {
+impl InputFilterLengthAdjuster for ZNormFilterParams {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync> {
         Box::new(move |l: u32| l)
     }
@@ -532,7 +532,7 @@ pub enum InputFilter {
     SavGolFilter(SavGolFilterParams),
     MedianFilter(MedianFilterParams),
     AverageFilter(AverageFilterParams),
-    Abs(AbsFilterParams),
+    ZNorm(ZNormFilterParams),
 }
 
 impl FromStr for InputFilter {
@@ -551,7 +551,7 @@ impl InputFilterLengthAdjuster for InputFilter {
             InputFilter::SavGolFilter(filter) => filter.adjust_length(),
             InputFilter::MedianFilter(filter) => filter.adjust_length(),
             InputFilter::AverageFilter(filter) => filter.adjust_length(),
-            InputFilter::Abs(filter) => filter.adjust_length(),
+            InputFilter::ZNorm(filter) => filter.adjust_length(),
         }
     }
 }
