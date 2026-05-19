@@ -1172,17 +1172,17 @@ mod tests {
         let mut vs = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
             cosine_motif_node(match &params.net_type {
-                            MotifNetTypeParams::CosineNetParams(v) => v,
-                            _ => unreachable!(),
-                        },
-                              Some(Arc::new(ThoTensor::new(((0u32), "motif_id").into(), Tensor::rand(
-                                  [
-                                      123,
-                                      1234i64,
-                                  ],
-                                  FLOAT_CPU,
-                              ))?
-                              ))
+                MotifNetTypeParams::CosineNetParams(v) => v,
+                _ => unreachable!(),
+            },
+              Some(Arc::new(ThoTensor::new(((0u32), "motif_id").into(), Tensor::rand(
+                  [
+                      123,
+                      1234i64,
+                  ],
+                  FLOAT_CPU,
+              ))?
+              ))
             )?.build_tch_module(&vs.root())?;
 
         let out = net.tho_forward(
