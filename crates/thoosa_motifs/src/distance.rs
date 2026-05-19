@@ -931,7 +931,6 @@ mod distance_tests {
     use tch::{Device, IndexOp, Kind};
     use thoosa_common::builder::Node::Par;
     use super::{DotProductConfig, EucDistConfig, PearsonCorrConfig, SimilarityMetric};
-    use thoosa_common::loader::SyncWrapper;
     use thoosa_shared::panic_to_err;
     use thoosa_common::utils::{
         from, hist_1_dim, lin_iter,

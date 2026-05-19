@@ -21,7 +21,6 @@ pub mod dims;
 pub mod seq_scan_run_config;
 mod gaussian;
 pub mod input_probs;
-pub mod loader;
 pub mod my_tch;
 mod opt;
 pub mod parzen;

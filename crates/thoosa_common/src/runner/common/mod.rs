@@ -24,7 +24,7 @@ pub trait MaxParallelCtx: Named + Debug + Send + Sync {
     fn max_other_parallel(&self) -> MaxParallel;
 }
 
-pub trait RunCtx: MaxParallelCtx + WithId {//TODO remove PermitsCtx from RunCtx
+pub trait RunCtx: MaxParallelCtx + WithId {
     fn device_idx(&self) -> usize;
 
     fn branch(&mut self, new_name: Option<&str>, with_new_cache_area: bool) -> Self
