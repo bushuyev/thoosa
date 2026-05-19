@@ -23,7 +23,6 @@ use tch::Device::Cpu;
 use tch::IndexOp;
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::loader::{LoadRunner, Loader, SyncWrapper};
 use thoosa_common::transforms::filters::InputFilter;
 use thoosa_shared::panic_to_err;
 use thoosa_common::utils::*;
@@ -391,7 +390,6 @@ mod motifs_tests {
     use tch::Device::Cpu;
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::utils::*;

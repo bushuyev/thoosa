@@ -217,7 +217,6 @@ mod tests {
     use tch::Kind::{BFloat16, Float};
     use tch::{Device, IndexOp, TchError, Tensor};
     use tempfile::NamedTempFile;
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::Simple;
     use thoosa_common::utils::{
         from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32,

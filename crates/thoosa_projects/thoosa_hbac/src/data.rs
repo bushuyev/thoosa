@@ -806,7 +806,6 @@ mod tests {
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifCosineNetParams, MotifLinNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifNetTypeParams, OptConfig, TrainMotifNetRunConfigFields};

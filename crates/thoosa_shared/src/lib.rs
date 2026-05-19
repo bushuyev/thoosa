@@ -66,6 +66,7 @@ pub mod math;
 pub mod audio_utils;
 pub mod tmp_file;
 pub mod macros;
+pub mod rayon_pool;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,
