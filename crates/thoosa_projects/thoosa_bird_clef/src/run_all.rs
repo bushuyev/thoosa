@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use log::{debug, error, info};
 use tch::Device::Cpu;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue, TrimmedMeanRangeOrValue};
@@ -237,7 +238,7 @@ pub(crate) async fn run_all(
 
                         let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
                         let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 1);
-
+                        let best_min_loss = Arc::new(RwLock::new(f32::MAX));
                         for train_motif_net_run_config_ids_combo in train_motif_net_run_config_ids_combos {
                             let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
                             let train_labels_input = Arc::clone(&train_labels_input);
@@ -248,6 +249,7 @@ pub(crate) async fn run_all(
                             let mut label_ctx = label_ctx.branch(Some("label combo"), false);
                             let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
                             let init_ctx_train_labels =  init_ctx_train_labels.branch(Some("init label nets"), false);
+                            let best_min_loss= Arc::clone(&best_min_loss);
                             match panic_to_err_async!(
                                   run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                                     train_label_nets_run_config_range_or_value,
@@ -277,6 +279,9 @@ pub(crate) async fn run_all(
                                     let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).await?
                                         .into_iter().map(|(.., loss)|loss).reduce(f32::min).unwrap_or(f32::MAX);
 
+                                    if min_loss < *best_min_loss.read() {
+                                        *best_min_loss.write() = min_loss;
+                                    }
                                     if min_loss < 0.1 {
                                         info!("stopping training label {label} got loss={min_loss}");
 
@@ -293,7 +298,7 @@ pub(crate) async fn run_all(
 
                         }
 
-                        info!("train label nets done: label={label}");
+                        info!("train label nets done: label={label} best_min_loss={best_min_loss:?}");
 
                         Ok::<_, ThoError>(())
                     })
@@ -303,7 +308,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                4,
+                8,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
@@ -584,8 +589,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         // })
         net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
             // num_layers: RangeOrValue::Value(4),
-            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 2 }, step: None },
-            features: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: None },
+            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
+            features: RangeOrValue::Range { range: Range { start: 64, end: 512 }, step: None },
         })
 
     };

@@ -63,7 +63,7 @@ use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
+use thoosa_shared::run_configs::{run_id, OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
 use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, simple_id, CopyToDevice, RangeOrValue, StreamBuffering};
 use thoosa_shared::comp_id::SynKey;
@@ -464,10 +464,11 @@ where
 
     //TODO torch.backends.cuda.matmul.allow_tf32 = True
     info!(
-        "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={}",
+        "VERSION: {VERSION} devices={devices:?}, base_path={:?} cpus={cpu_num} tch::get_num_interop_threads={}, tch::get_num_threads={} run_id={}",
         cli.ws_path,
         tch::get_num_interop_threads(),
-        tch::get_num_threads()
+        tch::get_num_threads(),
+        run_id()
     );
     std::io::stdout().flush()?;
 
@@ -930,6 +931,8 @@ where
     let _ = stop_cpu_purge_tx.send(true);
     let _ = purge_cpu_worker.await;
 
+
+    info!("run_id {} done", run_id());
 
     Ok(())
 }
