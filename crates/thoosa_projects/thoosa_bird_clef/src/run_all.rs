@@ -12,8 +12,9 @@ use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZNormFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
+use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_grid, run_opt, run_plot, RunAllArgs};
 use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
@@ -579,7 +580,10 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             step: RangeOrValue::Value(1000),
             window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((2000, 0)) },
             // window: RangeOrValue::Value(10000),
-            freq_filter: None,
+            // freq_filter: None,
+            freq_filter: Some(vec![
+               ZNorm(ZNormFilterParamsRangeOrValue{ _path_pd: Default::default() })
+            ]),
             // freq_filter: Some(vec![
             //     AverageFilter(AverageFilterParamsRangeOrValue {
             //         window: RangeOrValue::dynamic(median_window_from_find_motifs_grid),
