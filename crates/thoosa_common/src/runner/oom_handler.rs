@@ -11,7 +11,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use log::{debug, warn};
-use mockall::automock;
+use mockall::{automock, Any};
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -644,19 +644,11 @@ where
     {
         Err(te) => {
             exclusive_job.update_from_error(&te);
-            debug!(
-                "OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",
-                task.as_ref().expect("run_with_runner_impl: missing task"),
-                os_thread_id(),
-            );
+            debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
             if te.is_retryable_oom() {
                 pref_oom_count();
-                debug!(
-                    "OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} before adjusters",
-                    task.as_ref().expect("run_with_runner_impl: missing task"),
-                    os_thread_id(),
-                );
+                debug!("OOMHandler::run, error: 1. ctx_id={ctx_id:?} task={:?} os_thread_id={} before adjusters",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
                 for adjuster in adjusters {
                     debug!("OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
@@ -751,7 +743,7 @@ where
                     }
                 }
             } else {
-                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} os_thread_id={} \nunexpected error: {te:?}",os_thread_id(),);
                 return Err(te);
             }
 
@@ -764,7 +756,7 @@ where
             Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
         }
         Ok(o) => {
-            debug!("OOMHandler::run: ctx_id={ctx_id:?} task={:?} os_thread_id={} done without oom ",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+            debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());
 
             Ok(o)
         }
