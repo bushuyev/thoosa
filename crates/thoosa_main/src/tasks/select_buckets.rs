@@ -374,6 +374,7 @@ where
                 }
             }
             info!("SelectBucketsStage::select_for_run_config: bad_motifs={bad_motifs:?}");
+            info!("SelectBucketsStage::select_for_run_config: selected={selected:?}");
 
             if output_mode == SelectMotifsOutputMode::WithConstraintMetrics {
                 metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_mean"), reference.mean as f32);

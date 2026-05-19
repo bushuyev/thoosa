@@ -359,7 +359,7 @@ where
     if log::log_enabled!(log::Level::Trace) {
         reset_print_options();
     }
-    // set_oom_score_adj(-1000);
+    //set_oom_score_adj(-1000);//TODO conf, needs sudo
 
     //gpt Navigation note: project binaries such as thoosa_bird_clef provide the closures above.
     //gpt This shared function handles CLI parsing, workspace/store setup, tensor cache loading, and command dispatch.
