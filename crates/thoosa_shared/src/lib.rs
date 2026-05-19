@@ -53,7 +53,9 @@ pub mod val;
 pub mod applicables_runner;
 pub mod colors_iter;
 pub mod hyperparameter;
-pub mod opt_rng;pub mod run_configs;
+pub mod opt_rng;
+
+pub mod run_configs;
 pub mod test_utils;
 pub mod traits;
 pub mod data_with_extra;

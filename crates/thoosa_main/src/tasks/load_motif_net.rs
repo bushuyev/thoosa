@@ -17,7 +17,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{mono_key, simple_id, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -25,12 +25,12 @@ use thoosa_shared::comp_id::SynKey;
 pub struct LoadMotifNetInput {
     id: SynKey,
     net_id: PathBuf,
-    // train_motif_nets_run_id:RunId
+    // train_motif_nets_run_config_id:RunId
 }
 
 
 impl LoadMotifNetInput {
-    pub fn new(net_id: PathBuf/*train_motif_nets_run_id: RunId*/) -> Self {
+    pub fn new(net_id: PathBuf/*train_motif_nets_run_config_id: RunId*/) -> Self {
         let net_id_str = net_id.to_string_lossy().to_string();
         Self {
             id: SynKey::new([

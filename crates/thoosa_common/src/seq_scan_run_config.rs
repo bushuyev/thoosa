@@ -10,14 +10,14 @@ use std::sync::Arc;
 use thoosa_properties_map::FromHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
-use thoosa_shared::run_configs::{RunConfig, RunId};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::val::Val;
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]
 #[run_config_grid]
 pub struct SeqScanRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[run_config]
     #[in_map]
@@ -42,7 +42,7 @@ pub struct SeqScanRunConfig {
 
 impl SeqScanRunConfig {
     pub fn from_properties_map_with_id(
-        id: RunId,
+        id: RunConfigId,
         properties: &HashMap<String, Val>,
     ) -> Result<Self, thoosa_shared::ThoError> {
         let mut seq_scan_run_config = Self::from_properties_map(None, properties)?;

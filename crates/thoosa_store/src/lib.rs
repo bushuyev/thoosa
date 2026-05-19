@@ -45,7 +45,7 @@ use rusqlite::types::Value;
 use rusqlite::{Connection, Error, OpenFlags, Transaction, params, ToSql};
 use rusqlite::trace::TraceEvent;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::{run_id, RunConfigId, RunId};
 use thoosa_shared::val::Val;
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
@@ -97,7 +97,7 @@ impl SetCond {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunConfigEntry {
-    pub id: RunId,
+    pub id: RunConfigId,
     pub run_config_type: String,
     pub descr: String,
     pub run_on: String,
@@ -105,7 +105,7 @@ pub struct RunConfigEntry {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunConfigRow {
-    pub id: RunId,
+    pub id: RunConfigId,
     pub r#type: String,
     pub descr: String,
     pub run_on: String,
@@ -119,7 +119,7 @@ pub struct TrainedNetEntry {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunConfigFilter {
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
     pub run_config_type: Option<String>,
     pub descr_substr: Option<String>,
     pub run_on_from: Option<String>,
@@ -131,7 +131,7 @@ pub struct RunMotifEntry {
     pub motif_id: u32,
     pub channel_id: usize,
     pub score: Option<f64>,
-    pub source_run_id: RunId,
+    pub source_run_config_id: RunConfigId,
     pub slices_cnt: usize,
     pub resources_cnt: usize,
 }
@@ -140,21 +140,22 @@ pub struct RunMotifEntry {
 pub trait Store: ResourceStore + Debug + Sync + Send {
     fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
     async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
+    async fn save_run(&self, descr: String) -> Result<RunId, ThoError>;
     async fn save_run_config<'a, 'b, 'c>(
         &self,
-        input_run_id: Option<&'a [RunId]>,
+        input_run_config_id: Option<&'a [RunConfigId]>,
         run_config_type: &'b str,
         descr: &'c str,
         properties_vals: HashMap<String, Val>,
-    ) -> Result<RunId, ThoError>;
+    ) -> Result<RunConfigId, ThoError>;
 
-    async fn get_input_run_ids<'a>(&self, run_id: RunId, input_type: Option<&'a str>) -> Result<Vec<RunId>, ThoError>;
+    async fn get_input_run_config_ids<'a>(&self, run_config_id: RunConfigId, input_type: Option<&'a str>) -> Result<Vec<RunConfigId>, ThoError>;
 
-    async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>; //corr_run_id, run_id, label
+    async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError>; //corr_run_config_id, run_config_id, label
 
-    async fn list_run_ids_with_outputs(&self, input_run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
+    async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
 
-    async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>; //corr_run_id, run_id, label
+    async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError>; //corr_run_config_id, run_config_id, label
 
     async fn save_resources_set(
         &self,
@@ -196,10 +197,10 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         &self,
         file_stem: &Vec<ResourceId>,
     ) -> Result<Vec<Resource>, ThoError>;
-    async fn list_label_nets_run_ids(
+    async fn list_label_nets_run_config_ids(
         &self,
         label: &str,
-    ) -> Result<Vec<RunId>, ThoError>;
+    ) -> Result<Vec<RunConfigId>, ThoError>;
     async fn resources_by_label(
         &self,
         min_p: f32,
@@ -214,34 +215,34 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn list_labels(&self, only_with_resources: bool) -> Result<Vec<String>, ThoError>;
 
-    async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_id: RunId, label: Option<&'a str>) -> Result<(), ThoError>;
-    async fn save_slices(&self, run_id: RunId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
+    async fn save_params_value<'a>(&self, params: HashMap<String, Val>, run_config_id: RunConfigId, label: Option<&'a str>) -> Result<(), ThoError>;
+    async fn save_slices(&self, run_config_id: RunConfigId, channel: i64, slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>) -> Result<(), ThoError>;
 
-    async fn save_groups_as_motifs_with_slices_matches(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
+    async fn save_groups_as_motifs_with_slices_matches(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>, path: PathBuf) -> Result<(), ThoError>;
 
-    async fn save_groups_as_motifs(&self, run_id: RunId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError>;
+    async fn save_groups_as_motifs(&self, run_config_id: RunConfigId, channel: i64, groups: HashMap<u16, HashSet<IdSlice>>) -> Result<Vec<u32>, ThoError>;
 
-    async fn add_slices_to_motif(&self, run_id: RunId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
+    async fn add_slices_to_motif(&self, run_config_id: RunConfigId, motif_id: u32, channel: i64, slices: HashSet<IdSlice>) -> Result<(), ThoError>;
 
-    async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
+    async fn list_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<u32>, ThoError>;
     // fn get_motif_meta<'a>(&self, motif_id: u32) -> BoxFuture<'a, Result<(usize, RunId), ThoError>>;
-    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
+    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunConfigId), ThoError>;
     async fn list_motifs_slices(
         &self,
-        run_id: RunId,
-        select_motifs_run_id: Option<Vec<RunId>>,
+        run_config_id: RunConfigId,
+        select_motifs_run_config_id: Option<Vec<RunConfigId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
 
     async fn list_motif_slices(
         &self,
         motif_id: u32,
-        select_motifs_run_id: Option<Vec<RunId>>,
+        select_motifs_run_config_id: Option<Vec<RunConfigId>>,
         limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32)>,
+        all_but_in_run_config_id: Option<(RunConfigId, u32)>,
     ) -> Result<
         (
             i64,
-            RunId,
+            RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
@@ -257,7 +258,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     ) -> Result<
         (
             i64,
-            RunId,
+            RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
@@ -274,46 +275,46 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
     ) -> Result<
         (
             i64,
-            RunId,
+            RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
         ThoError,
     >;
 
-    async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
+    async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError>;
 
     async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
 
-    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunId>, ThoError>;
+    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError>;
     async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
-    async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
+    async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError>;
 
     async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
     async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
 
-    async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
+    async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError>;
 
-    async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError>;
+    async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError>;
 
-    async fn save_selected_motifs(&self, run_id: RunId, selected_motifs: Vec<(u32, f64)>) -> Result<RunId, ThoError>;
+    async fn save_selected_motifs(&self, run_config_id: RunConfigId, selected_motifs: Vec<(u32, f64)>) -> Result<RunConfigId, ThoError>;
 
-    async fn select_all_motifs(&self, run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
+    async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
 
-    async fn list_selected_motifs(&self, motif_selection_id: RunId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
+    async fn list_selected_motifs(&self, motif_selection_id: RunConfigId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
-    async fn save_trained_net(&self, run_id: RunId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
+    async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
 
-    async fn list_trained_nets(&self, run_ids: Vec<RunId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
     async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
-    async fn update_run_config_run_on(&self, run_id: RunId, run_on: String) -> Result<(), ThoError>;
+    async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
     async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError>;
 
-    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
+    async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError>;
     #[cfg(test)]
     fn conn(&self) -> &parking_lot::Mutex<Connection>; //parking_lot:: for mockall
 }
@@ -325,17 +326,18 @@ mock! {
     impl Store for Store {
         fn open_external_writer_conn(&self) -> Result<Connection, ThoError>;
         async fn save_import(&self, descr: String) -> Result<u32, ThoError>;
+        async fn save_run(&self, descr: String) -> Result<RunId, ThoError>;
         async fn save_run_config<'a, 'b, 'c>(
             &self,
-            input_run_id: Option<&'a [RunId]>,
+            input_run_config_id: Option<&'a [RunConfigId]>,
             run_config_type: &'b str,
             descr: &'c str,
             properties_vals: HashMap<String, Val>,
-        ) -> Result<RunId, ThoError>;
-        async fn get_input_run_ids<'a>(&self,run_id: RunId,input_type: Option<&'a str>,) -> Result<Vec<RunId>, ThoError>;
-        async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError>;
-        async fn list_run_ids_with_outputs(&self, input_run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
-        async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError>;
+        ) -> Result<RunConfigId, ThoError>;
+        async fn get_input_run_config_ids<'a>(&self,run_config_id: RunConfigId,input_type: Option<&'a str>,) -> Result<Vec<RunConfigId>, ThoError>;
+        async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError>;
+        async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
+        async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError>;
 
         async fn save_resources_set(
             &self,
@@ -377,10 +379,10 @@ mock! {
             &self,
             file_stem: &Vec<ResourceId>,
         ) -> Result<Vec<Resource>, ThoError>;
-        async fn list_label_nets_run_ids(
+        async fn list_label_nets_run_config_ids(
             &self,
             label: &str,
-        ) -> Result<Vec<RunId>, ThoError>;
+        ) -> Result<Vec<RunConfigId>, ThoError>;
 
         async fn resources_by_label(
             &self,
@@ -396,57 +398,57 @@ mock! {
         async fn save_params_value<'a>(
             &self,
             params: HashMap<String, Val>,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             label: Option<&'a str>,
         ) -> Result<(), ThoError>;
         async fn save_slices(
             &self,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             channel: i64,
             slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>,
         ) -> Result<(), ThoError>;
         async fn save_groups_as_motifs_with_slices_matches(
             &self,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             channel: i64,
             groups: HashMap<u16, HashSet<IdSlice>>,
             path: PathBuf,
         ) -> Result<(), ThoError>;
         async fn save_groups_as_motifs(
             &self,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             channel: i64,
             groups: HashMap<u16, HashSet<IdSlice>>,
         ) -> Result<Vec<u32>, ThoError>;
 
         async fn add_slices_to_motif(
             &self,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             motif_id: u32,
             channel: i64,
             groups: HashSet<IdSlice>,
         ) -> Result<(), ThoError>;
 
-        async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError>;
+        async fn list_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<u32>, ThoError>;
         async fn list_motifs_slices(
             &self,
-            run_id: RunId,
-            select_motifs_run_id: Option<Vec<RunId>>,
+            run_config_id: RunConfigId,
+            select_motifs_run_config_id: Option<Vec<RunConfigId >>,
         ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError>;
 
         // fn get_motif_meta<'a>(&self, motif_id: u32) -> BoxFuture<'a, Result<(usize, RunId), ThoError>>;
-        async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError>;
+        async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunConfigId), ThoError>;
 
         async fn list_motif_slices(
             &self,
             motif_id: u32,
-            select_motifs_run_id: Option<Vec<RunId>>,
+            select_motifs_run_config_id: Option<Vec<RunConfigId >>,
             limit: Option<u32>,
-            all_but_in_run_id: Option<(RunId, u32)>,
+            all_but_in_run_config_id: Option<(RunConfigId, u32)>,
         ) -> Result<
             (
                 i64,
-                RunId,
+                RunConfigId,
                 Vec<TensorIdSliceIdx>,
                 HashMap<ResourceId, Resource>,
             ),
@@ -462,7 +464,7 @@ mock! {
         ) -> Result<
             (
                 i64,
-                RunId,
+                RunConfigId,
                 Vec<TensorIdSliceIdx>,
                 HashMap<ResourceId, Resource>,
             ),
@@ -478,43 +480,43 @@ mock! {
         ) -> Result<
             (
                 i64,
-                RunId,
+                RunConfigId,
                 Vec<TensorIdSliceIdx>,
                 HashMap<ResourceId, Resource>,
             ),
             ThoError,
         >;
-        async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError>;
+        async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError>;
         async fn list_run_configs(&self) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunId>, ThoError>;
+        async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError>;
         async fn list_run_configs_page(&self, limit: usize, offset: usize) -> Result<Vec<RunConfigEntry>, ThoError>;
-        async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError>;
+        async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_configs_filtered(&self, filter: RunConfigFilter) -> Result<Vec<RunConfigEntry>, ThoError>;
         async fn list_run_config_types(&self) -> Result<Vec<String>, ThoError>;
-        async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError>;
-        async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError>;
+        async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError>;
+        async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError>;
         async fn save_selected_motifs(
             &self,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             selected_motifs: Vec<(u32, f64)>,
-        ) -> Result<RunId, ThoError>;
-        async fn select_all_motifs(&self, run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError>;
+        ) -> Result<RunConfigId, ThoError>;
+        async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError>;
 
         async fn list_selected_motifs(
             &self,
-            motif_selection_id: RunId,
+            motif_selection_id: RunConfigId,
             channels: u32,
         ) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
         async fn save_trained_net(
             &self,
-            run_id: RunId,
+            run_config_id: RunConfigId,
             path: PathBuf,
             loss: f32,
             input_nets:Option<Vec<u32>>
         ) -> Result<(), ThoError>;
         async fn list_trained_nets(
             &self,
-            run_ids: Vec<RunId>,
+            run_config_ids: Vec<RunConfigId>,
             loss: Option<f32>,
             limit: Option<usize>,
         ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
@@ -523,9 +525,9 @@ mock! {
         async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn delete_trained_nets(&self, net_ids: Vec<u32>) -> Result<usize, ThoError>;
-        async fn update_run_config_run_on(&self, run_id: RunId, run_on: String) -> Result<(), ThoError>;
-        async fn list_input_nets(&self, net_id: RunId) -> Result<Vec<u32>, ThoError>;
-        async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError>;
+        async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError>;
+        async fn list_input_nets(&self, net_id: RunConfigId) -> Result<Vec<u32>, ThoError>;
+        async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError>;
         #[cfg(test)]
         fn conn(&self) -> &parking_lot::Mutex<Connection>;
     }
@@ -875,33 +877,15 @@ impl Store for SqlStore {
         .await
     }
 
-    //TODO resources - save serialized resources config - run_resources is getting too big
-    async fn save_run_config<'a, 'b, 'c>(
-        &self,
-        input_run_id: Option<&'a [RunId]>,
-        run_config_type: &'b str,
-        descr: &'c str,
-        properties_vals: HashMap<String, Val>,
-    ) -> Result<RunId, ThoError> {
-        let input_run_id = input_run_id.map(|v| v.to_vec());
-        let run_config_type = run_config_type.to_string();
-        let descr = descr.to_string();
-        debug!("SqlStore::save_run_config: input_run_id={input_run_id:?} run_config_type={run_config_type} descr={descr}");
-        self.with_writer_conn("save_run_config", move |conn| {
+    async fn save_run(&self, descr: String) -> Result<RunId, ThoError> {
+        debug!("SqlStore::save_run: descr={descr}");
+        self.with_writer_conn("save_run", move |conn| {
             let t = conn.transaction().map_err(|e| ThoError::from_error("start sqlite transaction", e))?;
-            t.execute("INSERT INTO run_configs (type, descr) VALUES (?, ?)", params![run_config_type, descr])?;
+            t.execute("INSERT INTO runs (descr) VALUES (?)", params![descr])?;
 
             let run_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
                 row.get::<usize, RunId>(0)
             })?;
-
-            Self::insert_input( input_run_id, &t, run_id, "INSERT INTO run_configs_input (run_id, input_run_id) VALUES")?;
-
-            if properties_vals.len() > 0 {
-                for property_val in properties_vals.into_iter() {
-                    Self::save_param_value(&t, run_id, &property_val.0, property_val.1, None)?;
-                }
-            }
 
             t.commit()?;
             Ok(run_id as RunId)
@@ -909,31 +893,66 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn get_input_run_ids<'a>(
+    //TODO resources - save serialized resources config - run_resources is getting too big
+    async fn save_run_config<'a, 'b, 'c>(
         &self,
-        run_id: RunId,
-        input_type: Option<&'a str>,
-    ) -> Result<Vec<RunId>, ThoError> {
-        let input_type = input_type.map(|v| v.to_string());
-        debug!("SqlStore::get_input_run_ids: run_id={run_id} input_type={input_type:?}");
-        self.with_reader_conn("get_input_run_ids", move |conn| {
-            let input_run_ids = Self::get_input_run_ids_(conn, run_id, input_type.as_deref())?;
-            debug!("get_input_run_ids: input_run_ids={input_run_ids:?}");
-            Ok(input_run_ids)
+        input_run_config_id: Option<&'a [RunConfigId]>,
+        run_config_type: &'b str,
+        descr: &'c str,
+        properties_vals: HashMap<String, Val>,
+    ) -> Result<RunConfigId, ThoError> {
+        let input_run_config_id = input_run_config_id.map(|v| v.to_vec());
+        let run_config_type = run_config_type.to_string();
+        let descr = descr.to_string();
+        debug!("SqlStore::save_run_config: input_run_config_id={input_run_config_id:?} run_config_type={run_config_type} descr={descr}");
+        self.with_writer_conn("save_run_config", move |conn| {
+            let t = conn.transaction().map_err(|e| ThoError::from_error("start sqlite transaction", e))?;
+
+            t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params![run_config_type, descr, run_configs::run_id()])?;
+
+            let run_config_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+                row.get::<usize, RunConfigId>(0)
+            })?;
+
+            Self::insert_input( input_run_config_id, &t, run_config_id, "INSERT INTO run_configs_input (run_config_id, input_run_config_id) VALUES")?;
+
+            if properties_vals.len() > 0 {
+                for property_val in properties_vals.into_iter() {
+                    Self::save_param_value(&t, run_config_id, &property_val.0, property_val.1, None)?;
+                }
+            }
+
+            t.commit()?;
+            Ok(run_config_id as RunConfigId)
         })
         .await
     }
 
-    /// returns - Vec<run_id, input_run_id>
-    async fn list_input_run_ids(&self, ids: &[RunId]) -> Result<Vec<(RunId, RunId)>, ThoError> {
+    async fn get_input_run_config_ids<'a>(
+        &self,
+        run_config_id: RunConfigId,
+        input_type: Option<&'a str>,
+    ) -> Result<Vec<RunConfigId>, ThoError> {
+        let input_type = input_type.map(|v| v.to_string());
+        debug!("SqlStore::get_input_run_config_ids: run_config_id={run_config_id} input_type={input_type:?}");
+        self.with_reader_conn("get_input_run_config_ids", move |conn| {
+            let input_run_config_ids = Self::get_input_run_config_ids_(conn, run_config_id, input_type.as_deref())?;
+            debug!("get_input_run_config_ids: input_run_config_ids={input_run_config_ids:?}");
+            Ok(input_run_config_ids)
+        })
+        .await
+    }
+
+    /// returns - Vec<run_config_id, input_run_config_id>
+    async fn list_input_run_config_ids(&self, ids: &[RunConfigId]) -> Result<Vec<(RunConfigId, RunConfigId)>, ThoError> {
         assert!(!ids.is_empty());
         let ids = ids.to_vec();
-        self.with_reader_conn("list_input_run_ids", move |conn| {
+        self.with_reader_conn("list_input_run_config_ids", move |conn| {
             let mut id_input_id = vec![];
             for ids_chunk in ids.chunks(500) {
                 let (mut q, params) = ids_chunk.iter().fold(
                     (
-                        vec!["SELECT run_id, input_run_id FROM run_configs_input WHERE run_id IN ("],
+                        vec!["SELECT run_config_id, input_run_config_id FROM run_configs_input WHERE run_config_id IN ("],
                         vec![],
                     ),
                     |mut a, v| {
@@ -950,7 +969,7 @@ impl Store for SqlStore {
                 let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
                 let chunk_rows = stmt
                     .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                        Ok((row.get::<usize, RunId>(0)?, row.get::<usize, RunId>(1)?))
+                        Ok((row.get::<usize, RunConfigId>(0)?, row.get::<usize, RunConfigId>(1)?))
                     })?
                     .collect::<Result<Vec<_>, _>>()?;
                 id_input_id.extend(chunk_rows);
@@ -960,19 +979,19 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_ids_with_outputs(&self, input_run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError> {
-        if input_run_ids.is_empty() {
+    async fn list_run_config_ids_with_outputs(&self, input_run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError> {
+        if input_run_config_ids.is_empty() {
             return Ok(vec![]);
         }
 
-        let input_run_ids = input_run_ids.to_vec();
-        self.with_reader_conn("list_run_ids_with_outputs", move |conn| {
-            let mut run_ids_with_outputs = vec![];
+        let input_run_config_ids = input_run_config_ids.to_vec();
+        self.with_reader_conn("list_run_config_ids_with_outputs", move |conn| {
+            let mut run_config_ids_with_outputs = vec![];
 
-            for ids_chunk in input_run_ids.chunks(500) {
+            for ids_chunk in input_run_config_ids.chunks(500) {
                 let (mut q, params) = ids_chunk.iter().fold(
                     (
-                        vec!["SELECT DISTINCT input_run_id FROM run_configs_input WHERE input_run_id IN ("],
+                        vec!["SELECT DISTINCT input_run_config_id FROM run_configs_input WHERE input_run_config_id IN ("],
                         vec![],
                     ),
                     |mut a, v| {
@@ -988,12 +1007,12 @@ impl Store for SqlStore {
 
                 let mut stmt = conn.prepare(q.into_iter().collect::<String>().as_str())?;
                 let chunk_rows = stmt
-                    .query_map(rusqlite::params_from_iter(params.into_iter()), |row| row.get::<usize, RunId>(0))?
+                    .query_map(rusqlite::params_from_iter(params.into_iter()), |row| row.get::<usize, RunConfigId>(0))?
                     .collect::<Result<Vec<_>, _>>()?;
-                run_ids_with_outputs.extend(chunk_rows);
+                run_config_ids_with_outputs.extend(chunk_rows);
             }
 
-            Ok(run_ids_with_outputs)
+            Ok(run_config_ids_with_outputs)
         })
         .await
     }
@@ -1003,7 +1022,7 @@ impl Store for SqlStore {
     async fn save_params_value<'a>(
         &self,
         params: HashMap<String, Val>,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         label: Option<&'a str>,
     ) -> Result<(), ThoError> {
         let label = label.map(|v| v.to_string());
@@ -1012,7 +1031,7 @@ impl Store for SqlStore {
             let label_id = t.query_row("SELECT id FROM labels WHERE label=?", [label.as_deref()], |row| row.get(0)).ok();
 
             for property_val in params.into_iter() {
-                Self::save_param_value(&t, run_id, &property_val.0, property_val.1, label_id)?;
+                Self::save_param_value(&t, run_config_id, &property_val.0, property_val.1, label_id)?;
             }
 
             t.commit()?;
@@ -1180,16 +1199,25 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_label_nets_run_ids(
+    async fn list_label_nets_run_config_ids(
         &self,
         label: &str,
-    ) -> Result<Vec<RunId>, ThoError> {
+    ) -> Result<Vec<RunConfigId>, ThoError> {
         let label = label.to_string();
 
         self.with_reader_conn("list_resource_random_not_labeled", move |conn| {
             let r = conn.prepare(
-                "SELECT tn.run_id FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type='TrainLabelNetRunConfig' AND net_path LIKE ? ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
-            )?.query_map([Value::Text(format!("{label}%"))], |row| {
+                "SELECT tn.run_config_id FROM trained_nets tn \
+                LEFT JOIN run_configs rc ON tn.run_config_id=rc.id \
+                WHERE \
+                    rc.run_id=? \
+                    rc.type='TrainLabelNetRunConfig' \
+                    AND net_path LIKE ?\
+                 ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
+            )?.query_map(params![
+                run_id(),
+                format!("{label}%")
+            ], |row| {
                 Ok(row.get::<usize, u32>(0)?)
             })?.map(|v| v.unwrap()).collect();
 
@@ -1327,7 +1355,7 @@ impl Store for SqlStore {
     //TODO remove
     async fn save_slices(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: i64,
         slices: Vec<(TensorIdSliceIdx, TensorIdSliceIdx, f32)>,
     ) -> Result<(), ThoError> {
@@ -1338,11 +1366,11 @@ impl Store for SqlStore {
 
         for slices_chunk in slices.chunks(500) {
             let (mut q, params) = slices_chunk.into_iter().fold(
-                (vec!["INSERT INTO slice_matches (run_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
+                (vec!["INSERT INTO slice_matches (run_config_id, channel_id, tensor_id_0, slice_idx_0, tensor_id_1, slice_idx_1, dist) VALUES"], vec![]), |mut a: (Vec<&str>, Vec<Value>), v| {
                     a.0.push("(?, ?, ?, ?, ?, ?, ?)");
                     a.0.push(", ");
 
-                    a.1.push(Value::Integer(run_id as i64));
+                    a.1.push(Value::Integer(run_config_id as i64));
                     a.1.push(Value::Integer(channel));
                     a.1.push(Value::Integer(v.0.0 as i64));
                     a.1.push(Value::Integer(v.0.1 as i64));
@@ -1368,7 +1396,7 @@ impl Store for SqlStore {
 
     async fn save_groups_as_motifs(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
     ) -> Result<Vec<u32>, ThoError> {
@@ -1376,7 +1404,7 @@ impl Store for SqlStore {
         let t = conn.transaction()?;
         let mut motif_ids = Vec::new();
 
-        debug!("save_groups_as_motifs: run_id={run_id:?}, channel={channel:?} groups={}", groups.len());
+        debug!("save_groups_as_motifs: run_config_id={run_config_id:?}, channel={channel:?} groups={}", groups.len());
 
         {
             for (group, slices) in groups {
@@ -1385,27 +1413,27 @@ impl Store for SqlStore {
                 }
                 let motifs_inserted = t
                     .execute(
-                        "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
-                        [group as usize, run_id as usize, channel as usize],
+                        "INSERT INTO motifs (group_ord, run_config_id, channel_id) VALUES (?, ?, ?)",
+                        [group as usize, run_config_id as usize, channel as usize],
                     )
-                    .map_err(|e| Self::log_error((group, run_id, channel), &t, e))?;
+                    .map_err(|e| Self::log_error((group, run_config_id, channel), &t, e))?;
 
                 let motif_id: i64 = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
                 let motif_id_u32 = u32::try_from(motif_id).map_err(|_| ThoError::new(format!("save_groups_as_motifs: motif_id={motif_id} does not fit into u32")))?;
                 motif_ids.push(motif_id_u32);
 
-                debug!("save_groups_as_motifs: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());
+                debug!("save_groups_as_motifs: group={group:?}, run_config_id={run_config_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices.len={}", slices.len());
                 trace!("save_groups_as_motifs: slices={slices:?} ");
 
                 let mut slices_chunks = slices.into_iter().array_chunks::<500>();
                 while let Some(chunk) = slices_chunks.next() {
-                    Self::insert_slices(&t, run_id, channel, motif_id, chunk.into_iter())?
+                    Self::insert_slices(&t, run_config_id, channel, motif_id, chunk.into_iter())?
                 }
                 let remainder = slices_chunks.into_remainder();
                 if remainder.len() != 0 {
                 // if !remainder.is_empty() {
-                    Self::insert_slices(&t, run_id, channel, motif_id, remainder)?
+                    Self::insert_slices(&t, run_config_id, channel, motif_id, remainder)?
                 }
             }
         }
@@ -1419,7 +1447,7 @@ impl Store for SqlStore {
 
     async fn add_slices_to_motif(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         motif_id: u32,
         channel: i64,
         slices: HashSet<IdSlice>,
@@ -1427,17 +1455,17 @@ impl Store for SqlStore {
         self.with_writer_conn("add_slices_to_motif", move |conn| {
         let t = conn.transaction()?;
 
-        debug!("save_slices_groups_as_motifs_from_file: run_id={run_id:?}, channel={channel:?} slices.len={}", slices.len());
+        debug!("save_slices_groups_as_motifs_from_file: run_config_id={run_config_id:?}, channel={channel:?} slices.len={}", slices.len());
 
         {
             let mut slices_chunks = slices.into_iter().array_chunks::<500>();
             while let Some(chunk) = slices_chunks.next() {
-                Self::insert_slices(&t, run_id, channel, motif_id as i64, chunk.into_iter())?
+                Self::insert_slices(&t, run_config_id, channel, motif_id as i64, chunk.into_iter())?
             }
             let remainder = slices_chunks.into_remainder();
             if remainder.len() != 0 {
             // if !remainder.is_empty() {
-                Self::insert_slices(&t, run_id, channel, motif_id as i64, remainder)?
+                Self::insert_slices(&t, run_config_id, channel, motif_id as i64, remainder)?
             }
         }
         t.commit()?;
@@ -1448,7 +1476,7 @@ impl Store for SqlStore {
 
     async fn save_groups_as_motifs_with_slices_matches(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: i64,
         groups: HashMap<u16, HashSet<IdSlice>>,
         path: PathBuf,
@@ -1456,12 +1484,12 @@ impl Store for SqlStore {
         self.with_writer_conn("save_groups_as_motifs_with_slices_matches", move |conn| {
         let t = conn.transaction()?;
 
-        debug!("save_slices_groups_as_motifs_from_tmp_db: run_id={run_id:?}, channel={channel:?} path={}", path.to_string_lossy());
+        debug!("save_slices_groups_as_motifs_from_tmp_db: run_config_id={run_config_id:?}, channel={channel:?} path={}", path.to_string_lossy());
 
         {
             t.execute(
                 format!(
-                    "ATTACH DATABASE '{}' AS slices_{run_id}_{channel}_tmp",
+                    "ATTACH DATABASE '{}' AS slices_{run_config_id}_{channel}_tmp",
                     path.to_string_lossy()
                 )
                 .as_str(),
@@ -1474,13 +1502,13 @@ impl Store for SqlStore {
                     continue
                 }
                 let motifs_inserted = t.execute(
-                    "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
-                    [group as usize, run_id as usize, channel as usize],
+                    "INSERT INTO motifs (group_ord, run_config_id, channel_id) VALUES (?, ?, ?)",
+                    [group as usize, run_config_id as usize, channel as usize],
                 )?; //TODO group not needed?
 
                 let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| row.get(0))?;
 
-                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_id={run_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
+                debug!("save_slices_groups_as_motifs_from_tmp_db: group={group:?}, run_config_id={run_config_id:?} motif_id={motif_id} motifs_inserted={motifs_inserted} slices={slices:?} ");
 
                 //each match appears twice in slices but will result in single raw returned from _tmp.slice_matches, should be faster than getting slices into set on slice_matches.id (IdSlice.0)
                 let mut slices_chunks = slices.into_iter().array_chunks::<500>();
@@ -1488,7 +1516,7 @@ impl Store for SqlStore {
                 while let Some(chunk) = slices_chunks.next() {
                     Self::insert_slices_matches_chunk_from_tmp(
                         &t,
-                        run_id,
+                        run_config_id,
                         channel,
                         motif_id,
                         chunk.into_iter(),
@@ -1499,7 +1527,7 @@ impl Store for SqlStore {
                 if remainder.len() != 0 {
                 // if !remainder.is_empty() {
                     Self::insert_slices_matches_chunk_from_tmp(
-                        &t, run_id, channel, motif_id, remainder,
+                        &t, run_config_id, channel, motif_id, remainder,
                     )?
                 }
             }
@@ -1509,7 +1537,7 @@ impl Store for SqlStore {
 
         let t = conn.transaction()?;
         t.execute(
-            format!("DETACH DATABASE slices_{run_id}_{channel}_tmp").as_str(),
+            format!("DETACH DATABASE slices_{run_config_id}_{channel}_tmp").as_str(),
             [],
         )?;
         t.commit()?;
@@ -1519,20 +1547,20 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunId), ThoError> {
+    async fn get_motif_meta(&self, motif_id: u32) -> Result<(usize, RunConfigId), ThoError> {
         self.with_reader_conn("get_motif_meta", move |conn| {
-                let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
-                debug!("get_motif_meta: motif_id={motif_id} channel={channel} run_id={run_id}");
-                Ok::<_, ThoError>((channel as usize, run_id))
+                let (channel, run_config_id) = Self::_motif_meta(motif_id, conn)?;
+                debug!("get_motif_meta: motif_id={motif_id} channel={channel} run_config_id={run_config_id}");
+                Ok::<_, ThoError>((channel as usize, run_config_id))
             })
             .await
     }
 
-    async fn list_motifs(&self, run_id: RunId) -> Result<Vec<u32>, ThoError> {
+    async fn list_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<u32>, ThoError> {
         self.with_reader_conn("list_motifs", move |conn| {
             let motif_ids = {
-                let mut stmt = conn.prepare("SELECT id FROM motifs WHERE run_id=?")?;
-                stmt.query_map([run_id], |row| Ok(row.get::<usize, u32>(0)?))?
+                let mut stmt = conn.prepare("SELECT id FROM motifs WHERE run_config_id=?")?;
+                stmt.query_map([run_config_id], |row| Ok(row.get::<usize, u32>(0)?))?
                     .collect::<Result<Vec<_>, Error>>()?
             };
             Ok(motif_ids)
@@ -1545,20 +1573,20 @@ impl Store for SqlStore {
      */
     async fn list_motifs_slices(
         &self,
-        run_id: RunId,
-        select_motifs_run_id: Option<Vec<RunId>>,
+        run_config_id: RunConfigId,
+        select_motifs_run_config_id: Option<Vec<RunConfigId>>,
     ) -> Result<HashMap<Resource, Vec<MotifSlice>>, ThoError> {
         self.with_reader_conn("list_motifs_slices", move |conn| {
-            let slice_run_ids = select_motifs_run_id.map(|mut ids| {
-                ids.push(run_id);
+            let slice_run_config_ids = select_motifs_run_config_id.map(|mut ids| {
+                ids.push(run_config_id);
                 ids.sort();
                 ids.dedup();
                 ids
             });
 
-            let slice_filter_clause = slice_run_ids
+            let slice_filter_clause = slice_run_config_ids
                 .as_ref()
-                .map(|ids| format!(" AND s.run_id IN ({})", ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ")))
+                .map(|ids| format!(" AND s.run_config_id IN ({})", ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ")))
                 .unwrap_or_default();
 
             let resources_motifs = {
@@ -1568,14 +1596,14 @@ impl Store for SqlStore {
                          FROM motifs m \
                          JOIN slices s ON s.motif_id=m.id \
                          JOIN resources r on r.id=s.resource_id \
-                         WHERE m.run_id=?{}",
+                         WHERE m.run_config_id=?{}",
                         slice_filter_clause
                     ),
                 )?;
 
-                let mut params: Vec<Value> = vec![Value::Integer(run_id as i64)];
-                if let Some(ids) = &slice_run_ids {
-                    params.extend(ids.iter().map(|slice_run_id| Value::Integer(*slice_run_id as i64)));
+                let mut params: Vec<Value> = vec![Value::Integer(run_config_id as i64)];
+                if let Some(ids) = &slice_run_config_ids {
+                    params.extend(ids.iter().map(|slice_run_config_id| Value::Integer(*slice_run_config_id as i64)));
                 }
 
                 let tensor_motifs: (HashMap<ResourceId, Vec<MotifSlice>>, HashMap<ResourceId, Resource>) = stmt
@@ -1617,39 +1645,39 @@ impl Store for SqlStore {
     }
 
 
-    ///returns channel, find_motifs_run_id, slices, resources map
+    ///returns channel, find_motifs_run_config_id, slices, resources map
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="list_motif_slices"))]
     async fn list_motif_slices(
         &self,
         motif_id: u32,
-        select_motifs_run_ids: Option<Vec<RunId>>, //None - all slices, empty - only slices from find_motifs, Some -  find_motifs + select_motif runs
+        select_motifs_run_config_ids: Option<Vec<RunConfigId>>, //None - all slices, empty - only slices from find_motifs, Some -  find_motifs + select_motif runs
         limit: Option<u32>,
-        all_but_in_run_id: Option<(RunId, u32/*channel*/)>, //TODO remove - load random slices from same channel/resources
+        all_but_in_run_config_id: Option<(RunConfigId, u32/*channel*/)>, //TODO remove - load random slices from same channel/resources
     ) -> Result<
         (
             i64,
-            RunId,
+            RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
         ThoError,
     > {
-        debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_id={select_motifs_run_ids:?} limit={limit:?} all_but_in_run_id={all_but_in_run_id:?}");
+        debug!("list_motif_slices: motif_id={motif_id} select_motifs_run_config_id={select_motifs_run_config_ids:?} limit={limit:?} all_but_in_run_config_id={all_but_in_run_config_id:?}");
         self.with_reader_conn("list_motif_slices", move |conn| {
 
             // TODO(perf): this query is called for every MotifLoader run; add a prepared/cacheable path for the common motif_id + select_run filter and avoid ORDER BY RANDOM for large tables.
-            let (slice_filter_clause, slice_filter_params) = if all_but_in_run_id.is_none() {
-                match select_motifs_run_ids.as_ref() {
+            let (slice_filter_clause, slice_filter_params) = if all_but_in_run_config_id.is_none() {
+                match select_motifs_run_config_ids.as_ref() {
                     None => (String::new(), Vec::new()),
                     Some(ids_raw) => {
                         let mut ids = ids_raw.clone();
                         ids.sort();
                         ids.dedup();
                         if ids.is_empty() {
-                            (" AND s.run_id IN (m.run_id)".to_string(), Vec::new())
+                            (" AND s.run_config_id IN (m.run_config_id)".to_string(), Vec::new())
                         } else {
                             let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
-                            (format!(" AND s.run_id IN (m.run_id, {placeholders})"), ids)
+                            (format!(" AND s.run_config_id IN (m.run_config_id, {placeholders})"), ids)
                         }
                     }
                 }
@@ -1659,15 +1687,15 @@ impl Store for SqlStore {
 
             let channel_slices = {
                 let mut query = String::from(
-                    "SELECT m.channel_id, m.run_id, s.run_id, r.id,  r.import_id, r.key, s.slice_idx \
+                    "SELECT m.channel_id, m.run_config_id, s.run_config_id, r.id,  r.import_id, r.key, s.slice_idx \
                         FROM motifs m \
                         LEFT JOIN slices s on s.motif_id=m.id \
                         LEFT JOIN resources r on s.resource_id=r.id \
                         WHERE ",
                 );
 
-                let params: Vec<u32> = match all_but_in_run_id {
-                    Some((_run_id, _channel_id)) => {
+                let params: Vec<u32> = match all_but_in_run_config_id {
+                    Some((_run_config_id, _channel_id)) => {
                         query.push_str("s.motif_id!=? AND m.channel_id=(SELECT channel_id FROM motifs WHERE id=?) ORDER BY RANDOM()");
                         vec![motif_id, motif_id]
                     }
@@ -1686,12 +1714,12 @@ impl Store for SqlStore {
                 let mut stmt = conn.prepare(&query)?;
                 debug!("list_motif_slices: params={params:?}");
 
-                let (slices, channel_set, run_id, resources_map) = stmt
+                let (slices, channel_set, run_config_id, resources_map) = stmt
                     .query_map(rusqlite::params_from_iter(params.iter()), |row| {
                         Ok((
                             row.get::<usize, i64>(0)?,
-                            row.get::<usize, RunId>(1)?,
-                            row.get::<usize, RunId>(2)?,
+                            row.get::<usize, RunConfigId>(1)?,
+                            row.get::<usize, RunConfigId>(2)?,
                             row.get(3)?,
                             row.get(4)?,
                             row.get(5)?,
@@ -1700,31 +1728,31 @@ impl Store for SqlStore {
                     })?
                     .fold(
                         Ok((HashSet::new(), HashSet::new(), None, HashMap::new())),
-                        |a: Result<(HashSet<TensorIdSliceIdx>, HashSet<i64>, Option<RunId>, HashMap<ResourceId, Resource>), ThoError>,
-                         v: Result<(i64, RunId, RunId, u32, u32, String, u32), Error>| {
-                            let (channel_id, motif_run_id, _slice_run_id, resource_id, import_id, key, slice_idx) = v?;
-                            let (mut a, mut channel_set, mut run_id, mut resources_map) = a?;
+                        |a: Result<(HashSet<TensorIdSliceIdx>, HashSet<i64>, Option<RunConfigId>, HashMap<ResourceId, Resource>), ThoError>,
+                         v: Result<(i64, RunConfigId, RunConfigId, u32, u32, String, u32), Error>| {
+                            let (channel_id, motif_run_config_id, _slice_run_config_id, resource_id, import_id, key, slice_idx) = v?;
+                            let (mut a, mut channel_set, mut run_config_id, mut resources_map) = a?;
 
-                            if run_id.is_none() {
-                                run_id.replace(motif_run_id);
+                            if run_config_id.is_none() {
+                                run_config_id.replace(motif_run_config_id);
                             } else {
-                                assert_eq!(run_id, Some(motif_run_id));
+                                assert_eq!(run_config_id, Some(motif_run_config_id));
                             }
 
                             a.insert(TensorIdSliceIdx(resource_id, slice_idx));
                             resources_map.insert(resource_id, Resource::new(resource_id, import_id, key, 0));
                             channel_set.insert(channel_id);
 
-                            Ok((a, channel_set, run_id, resources_map))
+                            Ok((a, channel_set, run_config_id, resources_map))
                         },
                     )?;
 
-                if all_but_in_run_id.is_none() {
+                if all_but_in_run_config_id.is_none() {
                     assert_eq!(channel_set.len(), 1, "channel_set={channel_set:?} motif_id={motif_id}");
-                    (channel_set.into_iter().next().expect("channel"), run_id.expect("no run id"), slices.into_iter().collect(), resources_map)
+                    (channel_set.into_iter().next().expect("channel"), run_config_id.expect("no run id"), slices.into_iter().collect(), resources_map)
                 } else {
-                    let (run_id, channel_id) = all_but_in_run_id.expect("all_but_in_run_id");
-                    (channel_id as i64, run_id, slices.into_iter().collect(), resources_map)
+                    let (run_config_id, channel_id) = all_but_in_run_config_id.expect("all_but_in_run_config_id");
+                    (channel_id as i64, run_config_id, slices.into_iter().collect(), resources_map)
                 }
             };
 
@@ -1746,7 +1774,7 @@ impl Store for SqlStore {
     ) -> Result<
         (
             i64,
-            RunId,
+            RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
@@ -1757,30 +1785,30 @@ impl Store for SqlStore {
         assert!(motif_width > 0, "motif_width must be greater than zero");
         let input_len_adjuster_in_motif = Arc::clone(&input_len_adjuster);
         // TODO(perf): candidate construction scans motif/resource context on every training batch; persist reusable candidate pools per motif/run/window/min_distance and sample from them cheaply.
-        let (channel, run_id, mut all_candidates, mut resources_map, desired_count) = self.with_reader_conn("list_random_motif_slices", move |conn| {
-            let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
+        let (channel, run_config_id, mut all_candidates, mut resources_map, desired_count) = self.with_reader_conn("list_random_motif_slices", move |conn| {
+            let (channel, run_config_id) = Self::_motif_meta(motif_id, conn)?;
             let (target_positions_by_res, num_motif_slices) = Self::load_motif_target_positions(motif_id, conn)?;
             let desired_count = desired_count.unwrap_or(num_motif_slices);
             if desired_count == 0 {
-                return Ok((channel, run_id, vec![], HashMap::new(), desired_count));
+                return Ok((channel, run_config_id, vec![], HashMap::new(), desired_count));
             }
 
             let contexts =
                 Self::load_motif_resource_contexts(motif_id, input_len_adjuster_in_motif.as_ref(), conn, target_positions_by_res)?;
 
             if contexts.is_empty() {
-                return Err(ThoError::new(format!("no resources found for channel {channel}, run_id={run_id}")));
+                return Err(ThoError::new(format!("no resources found for channel {channel}, run_config_id={run_config_id}")));
             }
 
             let (all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
-            Ok((channel, run_id, all_candidates, resources_map, desired_count))
+            Ok((channel, run_config_id, all_candidates, resources_map, desired_count))
         }).await?;
 
         if all_candidates.len() < desired_count {
             let missing_count = desired_count - all_candidates.len();
             debug!("list_random_slices_out_of_motif: motif_id={motif_id} fell back to other resources for {missing_count} slices");
 
-            let (fallback_channel, fallback_run_id, mut fallback_candidates, fallback_resources_map) = self
+            let (fallback_channel, fallback_run_config_id, mut fallback_candidates, fallback_resources_map) = self
                 .list_random_slices_out_of_resources(
                     motif_id,
                     motif_width,
@@ -1791,14 +1819,14 @@ impl Store for SqlStore {
                 .await?;
 
             assert_eq!(channel, fallback_channel, "fallback channel differs for motif_id={motif_id}");
-            assert_eq!(run_id, fallback_run_id, "fallback run_id differs for motif_id={motif_id}");
+            assert_eq!(run_config_id, fallback_run_config_id, "fallback run_config_id differs for motif_id={motif_id}");
 
             all_candidates.append(&mut fallback_candidates);
             resources_map.extend(fallback_resources_map);
         }
 
         Self::shuffle_and_limit_candidates(&mut all_candidates, desired_count);
-        Ok((channel, run_id, all_candidates, resources_map))
+        Ok((channel, run_config_id, all_candidates, resources_map))
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SqlStore::list_random_slices_out_of_resources"))]
@@ -1812,7 +1840,7 @@ impl Store for SqlStore {
     ) -> Result<
         (
             i64,
-            RunId,
+            RunConfigId,
             Vec<TensorIdSliceIdx>,
             HashMap<ResourceId, Resource>,
         ),
@@ -1823,7 +1851,7 @@ impl Store for SqlStore {
         assert!(motif_width > 0, "motif_width must be greater than zero");
 
         self.with_reader_conn("list_random_slices_out_of_resources", move |conn| {
-            let (channel, run_id) = Self::_motif_meta(motif_id, conn)?;
+            let (channel, run_config_id) = Self::_motif_meta(motif_id, conn)?;
             // TODO(perf): fallback random-slice selection can be prefiltered by run/channel with indexed temp tables instead of rebuilding all non-motif contexts.
             let desired_count = match desired_count {
                 Some(desired_count) => desired_count,
@@ -1831,29 +1859,29 @@ impl Store for SqlStore {
             };
 
             if desired_count == 0 {
-                return Ok((channel, run_id, vec![], HashMap::new()));
+                return Ok((channel, run_config_id, vec![], HashMap::new()));
             }
 
-            let contexts = Self::load_non_motif_resource_contexts(motif_id, run_id, channel, input_len_adjuster.as_ref(), conn)?;
+            let contexts = Self::load_non_motif_resource_contexts(motif_id, run_config_id, channel, input_len_adjuster.as_ref(), conn)?;
             if contexts.is_empty() {
-                return Ok((channel, run_id, vec![], HashMap::new()));
+                return Ok((channel, run_config_id, vec![], HashMap::new()));
             }
 
             let (mut all_candidates, resources_map) = Self::build_random_slice_candidates(&contexts, motif_width, min_distance);
             Self::shuffle_and_limit_candidates(&mut all_candidates, desired_count);
 
-            Ok((channel, run_id, all_candidates, resources_map))
+            Ok((channel, run_config_id, all_candidates, resources_map))
         }).await
     }
 
-    async fn list_run_resources(&self, run_id: RunId) -> Result<Vec<String>, ThoError> {
+    async fn list_run_resources(&self, run_config_id: RunConfigId) -> Result<Vec<String>, ThoError> {
         self.with_reader_conn("list_run_resources", move |conn| {
             let result = {
-                let count: i64 = conn.query_row("SELECT count(*) FROM run_resources WHERE run_id=?", [run_id], |row| row.get(0))?;
+                let count: i64 = conn.query_row("SELECT count(*) FROM run_resources WHERE run_config_id=?", [run_config_id], |row| row.get(0))?;
                 debug!("list_run_resources: count={}", count);
-                let mut stmt = conn.prepare("SELECT ord_id, key FROM run_resources WHERE run_id=? ORDER BY ord_id")?;
+                let mut stmt = conn.prepare("SELECT ord_id, key FROM run_resources WHERE run_config_id=? ORDER BY ord_id")?;
 
-                stmt.query_map([run_id], |row| Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?)))?
+                stmt.query_map([run_config_id], |row| Ok((row.get::<usize, i64>(0)?, row.get::<usize, String>(1)?)))?
                     .enumerate()
                     .map(|(i, ord_key)| {
                         ord_key
@@ -1878,7 +1906,7 @@ impl Store for SqlStore {
                 let mut stmt = conn.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC")?;
                 stmt.query_map([], |row| {
                     Ok(RunConfigEntry {
-                        id: row.get::<usize, RunId>(0)?,
+                        id: row.get::<usize, RunConfigId>(0)?,
                         run_config_type: row.get::<usize, String>(1)?,
                         descr: row.get::<usize, String>(2)?,
                         run_on: row.get::<usize, String>(3)?,
@@ -1893,15 +1921,19 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunId>, ThoError> {
+    async fn list_run_config_ids_by_descr(&self, descr:String, type_:&'static str) -> Result<Vec<RunConfigId>, ThoError> {
         self.with_reader_conn("list_run_configs", move |conn| {
             let run_configs = {
-                let mut stmt = conn.prepare("SELECT id FROM run_configs WHERE descr=? AND type=?")?;
-                stmt.query_map([descr.as_str(), type_], |row| {
-                    row.get::<usize, RunId>(0)
+                let mut stmt = conn.prepare("SELECT id FROM run_configs WHERE run_id=? AND descr=? AND type=?")?;
+                stmt.query_map(params![
+                   run_id(),
+                   descr.as_str(),
+                   type_
+               ], |row| {
+                    row.get::<usize, RunConfigId>(0)
                 })?
                     .map(|v| v.map_err(ThoError::from))
-                    .collect::<Result<Vec<RunId>, ThoError>>()?
+                    .collect::<Result<Vec<RunConfigId>, ThoError>>()?
             };
 
             Ok(run_configs)
@@ -1916,7 +1948,7 @@ impl Store for SqlStore {
                 let mut stmt = conn.prepare("SELECT id, type, descr, run_on FROM run_configs ORDER BY id DESC LIMIT ? OFFSET ?")?;
                 stmt.query_map([limit as i64, offset as i64], |row| {
                     Ok(RunConfigEntry {
-                        id: row.get::<usize, RunId>(0)?,
+                        id: row.get::<usize, RunConfigId>(0)?,
                         run_config_type: row.get::<usize, String>(1)?,
                         descr: row.get::<usize, String>(2)?,
                         run_on: row.get::<usize, String>(3)?,
@@ -1931,7 +1963,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_configs_by_ids(&self, ids: &[RunId]) -> Result<Vec<RunConfigEntry>, ThoError> {
+    async fn list_run_configs_by_ids(&self, ids: &[RunConfigId]) -> Result<Vec<RunConfigEntry>, ThoError> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -1957,7 +1989,7 @@ impl Store for SqlStore {
                 let chunk_rows = stmt
                     .query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                         Ok(RunConfigEntry {
-                            id: row.get::<usize, RunId>(0)?,
+                            id: row.get::<usize, RunConfigId>(0)?,
                             run_config_type: row.get::<usize, String>(1)?,
                             descr: row.get::<usize, String>(2)?,
                             run_on: row.get::<usize, String>(3)?,
@@ -2006,14 +2038,14 @@ impl Store for SqlStore {
                 where_clauses.join(" AND ")
             };
             let query = format!(
-                "WITH RECURSIVE matched(id) AS (SELECT rc.id FROM run_configs rc WHERE {}), visible(id) AS (SELECT id FROM matched UNION SELECT rci.input_run_id FROM run_configs_input rci JOIN visible v ON rci.run_id = v.id) SELECT rc.id, rc.type, rc.descr, rc.run_on FROM run_configs rc JOIN visible v ON v.id = rc.id ORDER BY rc.id DESC",
+                "WITH RECURSIVE matched(id) AS (SELECT rc.id FROM run_configs rc WHERE {}), visible(id) AS (SELECT id FROM matched UNION SELECT rci.input_run_config_id FROM run_configs_input rci JOIN visible v ON rci.run_config_id = v.id) SELECT rc.id, rc.type, rc.descr, rc.run_on FROM run_configs rc JOIN visible v ON v.id = rc.id ORDER BY rc.id DESC",
                 where_sql,
             );
 
             let mut stmt = conn.prepare(query.as_str())?;
             stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
                 Ok(RunConfigEntry {
-                    id: row.get::<usize, RunId>(0)?,
+                    id: row.get::<usize, RunConfigId>(0)?,
                     run_config_type: row.get::<usize, String>(1)?,
                     descr: row.get::<usize, String>(2)?,
                     run_on: row.get::<usize, String>(3)?,
@@ -2039,12 +2071,12 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_run_config_values(&self, run_id: RunId) -> Result<HashMap<String, Val>, ThoError> {
+    async fn list_run_config_values(&self, run_config_id: RunConfigId) -> Result<HashMap<String, Val>, ThoError> {
         self.with_reader_conn("list_run_config_values", move |conn| {
             let result = {
-                let mut stmt = conn.prepare("SELECT name, real_value, int_value, str_value, bool_value, unsigned FROM run_config_values WHERE run_id=?")?;
+                let mut stmt = conn.prepare("SELECT name, real_value, int_value, str_value, bool_value, unsigned FROM run_config_values WHERE run_config_id=?")?;
 
-                stmt.query_map([run_id], |row| {
+                stmt.query_map([run_config_id], |row| {
                     Ok((
                         row.get::<usize, String>(0)?,
                         row.get::<usize, f64>(1).ok(),
@@ -2054,7 +2086,7 @@ impl Store for SqlStore {
                         row.get::<usize, u8>(4).ok().map(|v| if v == 1 { true } else { false }).unwrap_or(false),
                     ))
                 })?
-                .map(|v| v.expect(format!("can't get run_config_values for {}", run_id).as_str()))
+                .map(|v| v.expect(format!("can't get run_config_values for {}", run_config_id).as_str()))
                 .fold(HashMap::new(), |mut a, (name, real_value, int_value, str_value, bool_value, unsigned)| {
                     a.insert(
                         name.clone(),
@@ -2069,25 +2101,25 @@ impl Store for SqlStore {
                 })
             };
 
-            debug!("list_run_config_values: run_id={run_id} result={result:?}");
+            debug!("list_run_config_values: run_config_id={run_config_id} result={result:?}");
             Ok(result)
         })
         .await
     }
 
-    async fn list_run_motifs(&self, run_id: RunId) -> Result<Vec<RunMotifEntry>, ThoError> {
+    async fn list_run_motifs(&self, run_config_id: RunConfigId) -> Result<Vec<RunMotifEntry>, ThoError> {
         self.with_reader_conn("list_run_motifs", move |conn| {
             let selected_motifs = {
                 let mut stmt = conn.prepare(
-                    "SELECT sm.motif_id, m.channel_id, sm.rate, m.run_id,                       (SELECT COUNT(*) FROM slices s WHERE s.motif_id = sm.motif_id) AS slices_cnt,                       (SELECT COUNT(DISTINCT s.resource_id) FROM slices s WHERE s.motif_id = sm.motif_id) AS resources_cnt                      FROM selected_motifs sm                      JOIN motifs m ON m.id = sm.motif_id                      WHERE sm.run_id = ?                      ORDER BY m.channel_id ASC, sm.rate DESC, sm.motif_id ASC",
+                    "SELECT sm.motif_id, m.channel_id, sm.rate, m.run_config_id,                       (SELECT COUNT(*) FROM slices s WHERE s.motif_id = sm.motif_id) AS slices_cnt,                       (SELECT COUNT(DISTINCT s.resource_id) FROM slices s WHERE s.motif_id = sm.motif_id) AS resources_cnt                      FROM selected_motifs sm                      JOIN motifs m ON m.id = sm.motif_id                      WHERE sm.run_config_id = ?                      ORDER BY m.channel_id ASC, sm.rate DESC, sm.motif_id ASC",
                 )?;
 
-                stmt.query_map([run_id], |row| {
+                stmt.query_map([run_config_id], |row| {
                     Ok(RunMotifEntry {
                         motif_id: row.get::<usize, u32>(0)?,
                         channel_id: row.get::<usize, usize>(1)?,
                         score: row.get::<usize, f64>(2).ok(),
-                        source_run_id: row.get::<usize, RunId>(3)?,
+                        source_run_config_id: row.get::<usize, RunConfigId>(3)?,
                         slices_cnt: row.get::<usize, usize>(4)?,
                         resources_cnt: row.get::<usize, usize>(5)?,
                     })
@@ -2096,21 +2128,21 @@ impl Store for SqlStore {
             };
 
             if !selected_motifs.is_empty() {
-                debug!("list_run_motifs: run_id={run_id} selected_motifs_count={}", selected_motifs.len());
+                debug!("list_run_motifs: run_config_id={run_config_id} selected_motifs_count={}", selected_motifs.len());
                 return Ok(selected_motifs);
             }
 
             let motifs = {
                 let mut stmt = conn.prepare(
-                    "SELECT m.id, m.channel_id, m.run_id                      FROM motifs m                      WHERE m.run_id = ?                      ORDER BY m.channel_id ASC, m.id ASC",
+                    "SELECT m.id, m.channel_id, m.run_config_id                      FROM motifs m                      WHERE m.run_config_id = ?                      ORDER BY m.channel_id ASC, m.id ASC",
                 )?;
 
-                stmt.query_map([run_id], |row| {
+                stmt.query_map([run_config_id], |row| {
                     Ok(RunMotifEntry {
                         motif_id: row.get::<usize, u32>(0)?,
                         channel_id: row.get::<usize, usize>(1)?,
                         score: None,
-                        source_run_id: row.get::<usize, RunId>(2)?,
+                        source_run_config_id: row.get::<usize, RunConfigId>(2)?,
                         slices_cnt: 0,
                         resources_cnt: 0,
                     })
@@ -2118,7 +2150,7 @@ impl Store for SqlStore {
                 .collect::<Result<Vec<_>, Error>>()?
             };
 
-            debug!("list_run_motifs: run_id={run_id} motifs_count={}", motifs.len());
+            debug!("list_run_motifs: run_config_id={run_config_id} motifs_count={}", motifs.len());
             Ok(motifs)
         })
         .await
@@ -2126,20 +2158,20 @@ impl Store for SqlStore {
 
     async fn save_selected_motifs(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         selected_motifs: Vec<(u32, f64)>,
-    ) -> Result<RunId, ThoError> {
+    ) -> Result<RunConfigId, ThoError> {
         debug!("save_selected_motifs: selected_motifs={:?}",selected_motifs);
         self.with_writer_conn("save_selected_motifs", move |conn| {
             let t = conn.transaction()?;
 
             for selected_motifs_chunk in selected_motifs.chunks(500) {
                 let (mut q, params) = selected_motifs_chunk.into_iter().fold(
-                    (vec!["INSERT INTO selected_motifs (run_id, motif_id, rate) VALUES "], vec![]),
+                    (vec!["INSERT INTO selected_motifs (run_config_id, motif_id, rate) VALUES "], vec![]),
                     |mut a: (Vec<&str>, Vec<Value>), (motif_id, rate)| {
                         a.0.push("(?, ?, ?)");
                         a.0.push(", ");
-                        a.1.push(Value::Integer(run_id as i64));
+                        a.1.push(Value::Integer(run_config_id as i64));
                         a.1.push(Value::Integer(*motif_id as i64));
                         a.1.push(Value::Real(*rate));
                         a
@@ -2152,46 +2184,47 @@ impl Store for SqlStore {
 
             t.commit()?;
 
-            Ok(run_id)
+            Ok(run_config_id)
         })
         .await
     }
 
-    async fn select_all_motifs(&self, run_ids: &[RunId]) -> Result<Vec<RunId>, ThoError> {
-        let run_ids = run_ids.to_vec();
-        debug!("select_all_motifs: run_ids={run_ids:?}");
+    async fn select_all_motifs(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<RunConfigId>, ThoError> {
+        let run_config_ids = run_config_ids.to_vec();
+        debug!("select_all_motifs: run_config_ids={run_config_ids:?}");
         self.with_writer_conn("select_all_motifs", move |conn| {
             let t = conn.transaction()?;
-            let mut selected_run_ids = Vec::with_capacity(run_ids.len());
+            let mut selected_run_config_ids = Vec::with_capacity(run_config_ids.len());
 
-            for input_run_id in run_ids {
-                t.execute("INSERT INTO run_configs (type, descr) VALUES (?, ?)", params!["SelectMotifsRunConfig", "bypass"])?;
 
-                let selected_run_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
-                    row.get::<usize, RunId>(0)
+            for input_run_config_id in run_config_ids {
+                t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params!["SelectMotifsRunConfig", "bypass", run_id()])?;
+
+                let selected_run_config_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
+                    row.get::<usize, RunConfigId>(0)
                 })?;
 
-                t.execute("INSERT INTO run_configs_input (run_id, input_run_id) VALUES (?, ?)", params![selected_run_id, input_run_id])?;
-                t.execute("INSERT INTO selected_motifs (run_id, motif_id, rate) SELECT ?, id, 1.0 FROM motifs WHERE run_id=?", params![selected_run_id, input_run_id])?;
-                selected_run_ids.push(selected_run_id);
+                t.execute("INSERT INTO run_configs_input (run_config_id, input_run_config_id) VALUES (?, ?)", params![selected_run_config_id, input_run_config_id])?;
+                t.execute("INSERT INTO selected_motifs (run_config_id, motif_id, rate) SELECT ?, id, 1.0 FROM motifs WHERE run_config_id=?", params![selected_run_config_id, input_run_config_id])?;
+                selected_run_config_ids.push(selected_run_config_id);
             }
 
             t.commit()?;
 
-            Ok(selected_run_ids)
+            Ok(selected_run_config_ids)
         })
         .await
     }
 
 
-    async fn list_output_run_ids(&self, input_run_id: RunId) -> Result<Vec<RunId>, ThoError> {
-        self.with_reader_conn("list_output_run_ids", move |conn| {
-            let q = "SELECT run_id FROM run_configs_input WHERE input_run_id=?";
+    async fn list_output_run_config_ids(&self, input_run_config_id: RunConfigId) -> Result<Vec<RunConfigId>, ThoError> {
+        self.with_reader_conn("list_output_run_config_ids", move |conn| {
+            let q = "SELECT run_config_id FROM run_configs_input WHERE input_run_config_id=?";
 
             let id_input_id = {
                 let mut stmt = conn.prepare(q)?;
-                stmt.query_map([input_run_id], |row| row.get::<usize, usize>(0))?
-                    .map(|v| v.map(|v| v as RunId).map_err(|e| e.into()))
+                stmt.query_map([input_run_config_id], |row| row.get::<usize, usize>(0))?
+                    .map(|v| v.map(|v| v as RunConfigId).map_err(|e| e.into()))
                     .collect::<Result<Vec<_>, ThoError>>()
             };
             id_input_id
@@ -2204,7 +2237,7 @@ impl Store for SqlStore {
      */
     async fn list_selected_motifs(
         &self,
-        motif_selection_id: RunId,
+        motif_selection_id: RunConfigId,
         channels: u32,
     ) -> Result<Vec<Vec<(u32, f64)>>, ThoError> {
         self.with_reader_conn("list_selected_motifs", move |conn| {
@@ -2213,7 +2246,7 @@ impl Store for SqlStore {
                 let mut stmt = conn.prepare(
                     "SELECT DISTINCT sm.motif_id, sm.rate, m.channel_id \
                     FROM selected_motifs sm LEFT JOIN motifs AS m ON m.id=sm.motif_id \
-                    WHERE sm.run_id=? ORDER BY motif_id"
+                    WHERE sm.run_config_id=? ORDER BY motif_id"
                 )?;
 
                 stmt.query_map([motif_selection_id], |row| {
@@ -2230,22 +2263,22 @@ impl Store for SqlStore {
         })
         .await
     }
-    async fn save_trained_net(//TODO there are no 'untrained' nets - it's 'trained' just to make name longer and more distinctive
-        &self,
-        run_id: RunId,
-        path: PathBuf,
-        loss: f32,
-        input_net_ids: Option<Vec<u32>>,
+    async fn save_trained_net( //TODO there are no 'untrained' nets - it's 'trained' just to make name longer and more distinctive
+                               &self,
+                               run_config_id: RunConfigId,
+                               path: PathBuf,
+                               loss: f32,
+                               input_net_ids: Option<Vec<u32>>,
     ) -> Result<(), ThoError> {
         self.with_writer_conn("save_trained_net", move |conn| {
             let t = conn.transaction()?;
             t.execute(
-                "INSERT INTO trained_nets (net_path, run_id, loss) VALUES (?, ?, ?)",
-                rusqlite::params![path.to_string_lossy().to_string(), run_id, loss],
+                "INSERT INTO trained_nets (net_path, run_config_id, loss) VALUES (?, ?, ?)",
+                rusqlite::params![path.to_string_lossy().to_string(), run_config_id, loss],
             )?;
 
             let net_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
-                row.get::<usize, RunId>(0)
+                row.get::<usize, RunConfigId>(0)
             })?;
 
 
@@ -2258,26 +2291,26 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_trained_nets(&self, run_ids: Vec<RunId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
+    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
         self.with_reader_conn("list_trained_nets", move |conn| {
-            if run_ids.is_empty() {
+            if run_config_ids.is_empty() {
                 return Ok(Vec::new());
             }
 
             let trained_nets = {
-                let run_ids_clause = run_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                let run_config_ids_clause = run_config_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                 let query = [
-                    "SELECT id, net_path, loss FROM trained_nets WHERE run_id IN (",
-                    &run_ids_clause,
+                    "SELECT id, net_path, loss FROM trained_nets WHERE run_config_id IN (",
+                    &run_config_ids_clause,
                     ")",
                     if loss.is_some() { " AND loss < ?" } else { "" },
                     " ORDER BY loss ASC",
                     if limit.is_some() { " LIMIT ?" } else { "" },
                 ].concat();
 
-                let mut params = run_ids
+                let mut params = run_config_ids
                     .iter()
-                    .map(|run_id| rusqlite::types::Value::Integer(*run_id as i64))
+                    .map(|run_config_id| rusqlite::types::Value::Integer(*run_config_id as i64))
                     .collect::<Vec<_>>();
                 if let Some(loss) = loss {
                     params.push(rusqlite::types::Value::Real(loss as f64));
@@ -2314,7 +2347,7 @@ impl Store for SqlStore {
 
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError> {
         self.with_reader_conn("list_label_trained_nets_before", move |conn| {
-            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type=? AND rc.run_on < ?")?;
+            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND rc.run_on < ?")?;
             stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, run_on_before], Self::trained_net_entry)?
                 .map(|v| v.map_err(ThoError::from))
                 .collect::<Result<Vec<_>, ThoError>>()
@@ -2323,7 +2356,7 @@ impl Store for SqlStore {
 
     async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError> {
         self.with_reader_conn("list_label_trained_nets_loss_gt", move |conn| {
-            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
+            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND tn.loss > ?")?;
             stmt.query_map(params![TRAIN_LABEL_NETS_RUN_CONFIG_TYPE, loss], Self::trained_net_entry)?
                 .map(|v| v.map_err(ThoError::from))
                 .collect::<Result<Vec<_>, ThoError>>()
@@ -2332,7 +2365,7 @@ impl Store for SqlStore {
 
     async fn list_unused_motif_trained_nets(&self) -> Result<Vec<TrainedNetEntry>, ThoError> {
         self.with_reader_conn("list_unused_motif_trained_nets", move |conn| {
-            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_id=rc.id WHERE rc.type=? AND NOT EXISTS (SELECT 1 FROM trained_nets_input nti WHERE nti.input_id=tn.id)")?;
+            let mut stmt = conn.prepare("SELECT tn.id, tn.net_path FROM trained_nets tn LEFT JOIN run_configs rc ON tn.run_config_id=rc.id WHERE rc.type=? AND NOT EXISTS (SELECT 1 FROM trained_nets_input nti WHERE nti.input_id=tn.id)")?;
             stmt.query_map(params![TRAIN_MOTIFS_NETS_RUN_CONFIG_TYPE], Self::trained_net_entry)?
                 .map(|v| v.map_err(ThoError::from))
                 .collect::<Result<Vec<_>, ThoError>>()
@@ -2355,9 +2388,9 @@ impl Store for SqlStore {
         }).await
     }
 
-    async fn update_run_config_run_on(&self, run_id: RunId, run_on: String) -> Result<(), ThoError> {
+    async fn update_run_config_run_on(&self, run_config_id: RunConfigId, run_on: String) -> Result<(), ThoError> {
         self.with_writer_conn("update_run_config_run_on", move |conn| {
-            conn.execute("UPDATE run_configs SET run_on=? WHERE id=?", params![run_on, run_id])?;
+            conn.execute("UPDATE run_configs SET run_on=? WHERE id=?", params![run_on, run_config_id])?;
             Ok(())
         }).await
     }
@@ -2365,7 +2398,7 @@ impl Store for SqlStore {
     //TODO test
     async fn list_input_nets(&self, net_id: u32) -> Result<Vec<u32>, ThoError> {
         self.with_reader_conn("list_input_nets", move |conn| {
-            let mut stmt = conn.prepare("SELECT tn.run_id, tn.net_path, tn.loss FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
+            let mut stmt = conn.prepare("SELECT tn.run_config_id, tn.net_path, tn.loss FROM trained_nets_input tni LEFT JOIN trained_nets tn ON tn.id = tni.input_id WHERE tni.net_id=?")?;
 
             stmt.query_map(params![net_id], |row| {
                 row.get::<usize, u32>(0)
@@ -2375,11 +2408,11 @@ impl Store for SqlStore {
         }).await
     }
 
-    async fn run_config_descr(&self, corr_run_id: RunId) -> Result<RunConfigRow, ThoError> {
+    async fn run_config_descr(&self, corr_run_config_id: RunConfigId) -> Result<RunConfigRow, ThoError> {
         self.with_reader_conn("run_config_descr", move |conn| {
-            let run_config = conn.query_row("SELECT id, type, descr, run_on FROM run_configs WHERE id=?", [corr_run_id], |row| {
+            let run_config = conn.query_row("SELECT id, type, descr, run_on FROM run_configs WHERE id=?", [corr_run_config_id], |row| {
                 Ok(RunConfigRow {
-                    id: row.get::<usize, RunId>(0)?,
+                    id: row.get::<usize, RunConfigId>(0)?,
                     r#type: row.get::<usize, String>(1)?,
                     descr: row.get::<usize, String>(2)?,
                     run_on: row.get::<usize, String>(3)?,
@@ -2552,7 +2585,7 @@ impl SqlStore {
 
     fn load_non_motif_resource_contexts(
         motif_id: u32,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: i64,
         input_len_adjuster: &(dyn Fn(u32) -> u32 + Send + Sync),
         conn: &Connection,
@@ -3082,38 +3115,49 @@ impl SqlStore {
 
             t.execute("CREATE INDEX IF NOT EXISTS idx_labeled_resources_label_id ON labeled_resources(label_id)", ())?;
 
-            //descr - dist, dist etc
+            t.execute(
+                "CREATE TABLE IF NOT EXISTS runs (
+                    id              INTEGER PRIMARY KEY,
+                    descr           VARCHAR(256),
+                    run_on          DATETIME DEFAULT CURRENT_TIMESTAMP
+                )",
+                (),
+            )?;
+
+
+        //descr - dist, dist etc
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_configs (
-                id              INTEGER PRIMARY KEY,
-                type            VARCHAR(256),
-                descr           VARCHAR(256),
-                run_on          DATETIME DEFAULT CURRENT_TIMESTAMP
+                id          INTEGER PRIMARY KEY,
+                type        VARCHAR(256),
+                descr       VARCHAR(256),
+                run_on      DATETIME DEFAULT CURRENT_TIMESTAMP,
+                run_id      NOT NULL REFERENCES runs(id) ON DELETE CASCADE
             )",
                 (),
             )?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_configs_input (
-                input_run_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
-                run_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                input_run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
 
-                PRIMARY KEY (input_run_id, run_id)
+                PRIMARY KEY (input_run_config_id, run_config_id)
             )",
                 (),
             )?;
 
             t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_type ON run_configs (type);", ())?;
             t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_run_on ON run_configs (run_on);", ())?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_input_run_id ON run_configs_input (run_id);", ())?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_run_configs_input_run_config_id ON run_configs_input (run_config_id);", ())?;
 
             //key - resource id  //TODO remove ord_id?
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_resources (
-                run_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id     NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 ord_id     INTEGER NOT NULL,
                 key        VARCHAR(256),
-                PRIMARY KEY (run_id, ord_id)
+                PRIMARY KEY (run_config_id, ord_id)
             )",
                 (),
             )?;
@@ -3121,7 +3165,7 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS run_config_values (
                 id          INTEGER PRIMARY KEY,
-                run_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 name        VARCHAR(256),
                 real_value  REAL,
                 int_value   INTEGER,
@@ -3132,34 +3176,34 @@ impl SqlStore {
                 )",
                 (),
             )?;
-            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_config_values_name_run_id ON run_config_values (run_id, name, label_id);", ())?;
+            t.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_run_config_values_name_run_config_id ON run_config_values (run_config_id, name, label_id);", ())?;
 
             t.execute(
                 //group - ordinal as appeared when grouping, not needed
                 "CREATE TABLE IF NOT EXISTS motifs (
                 id              INTEGER PRIMARY KEY,
                 group_ord       INTEGER NOT NULL,
-                run_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL
             )",
                 (),
             )?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_motifs_run_id ON motifs (run_id);", ())?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_motifs_run_config_id ON motifs (run_config_id);", ())?;
 
             //motif_id in UNIQUE constraint is needed when new slices are added from different find_motifs in same select_motifs run.
             t.execute(
                 "CREATE TABLE IF NOT EXISTS slices (
                 id              INTEGER PRIMARY KEY,
                 motif_id        NOT NULL REFERENCES motifs(id) ON DELETE CASCADE,
-                run_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id          NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 channel_id      INTEGER NOT NULL,
                 resource_id     REFERENCES resources(id) ON DELETE CASCADE,
                 slice_idx       INTEGER NOT NULL,
-                UNIQUE(motif_id, run_id, resource_id, slice_idx)
+                UNIQUE(motif_id, run_config_id, resource_id, slice_idx)
             )",
                 (),
             )?;
-            // The UNIQUE index on (motif_id, run_id, resource_id, slice_idx) already covers the
+            // The UNIQUE index on (motif_id, run_config_id, resource_id, slice_idx) already covers the
             // motif_id-led access pattern used by list_run_motifs. Keep inserts fast by ensuring
             // we do not maintain extra slices indexes.
             t.execute("DROP INDEX IF EXISTS idx_slices_motif_id;", ())?;
@@ -3180,18 +3224,18 @@ impl SqlStore {
             t.execute(
                 "CREATE TABLE IF NOT EXISTS selected_motifs (
                 motif_id   REFERENCES motifs(id),
-                run_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id      NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 rate    FLOAT NOT NULL
             )",
                 (),
             )?;
-            t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_id_motif_id ON selected_motifs (run_id, motif_id);", ())?;
+            t.execute("CREATE INDEX IF NOT EXISTS idx_selected_motifs_run_config_id_motif_id ON selected_motifs (run_config_id, motif_id);", ())?;
 
             t.execute(
                 "CREATE TABLE IF NOT EXISTS trained_nets (
                 id    INTEGER PRIMARY KEY,
                 net_path  VARCHAR(1024),
-                run_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
+                run_config_id  NOT NULL REFERENCES run_configs(id) ON DELETE CASCADE,
                 loss    FLOAT NOT NULL,
                 UNIQUE(net_path)
             )",
@@ -3711,26 +3755,26 @@ impl SqlStore {
 
     fn save_param_value(
         t: &Transaction,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         param_name: &str,
         value: Val,
         label_id: Option<usize>,
     ) -> Result<(), ThoError> {
         match value {
             Val::Real(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_config_id, label_id, name, real_value) VALUES (?, ?, ?, ?)", params![run_config_id, label_id, param_name, v])?;
             }
             Val::Int(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_config_id, label_id, name, int_value) VALUES (?, ?, ?, ?)", params![run_config_id, label_id, param_name, v])?;
             }
             Val::UInt(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, int_value, unsigned) VALUES (?, ?, ?, ?, 1)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_config_id, label_id, name, int_value, unsigned) VALUES (?, ?, ?, ?, 1)", params![run_config_id, label_id, param_name, v])?;
             }
             Val::Str(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_config_id, label_id, name, str_value) VALUES (?, ?, ?, ?)", params![run_config_id, label_id, param_name, v])?;
             }
             Val::Bool(v) => {
-                t.execute("INSERT INTO run_config_values (run_id, label_id, name, bool_value) VALUES (?, ?, ?, ?)", params![run_id, label_id, param_name, v])?;
+                t.execute("INSERT INTO run_config_values (run_config_id, label_id, name, bool_value) VALUES (?, ?, ?, ?)", params![run_config_id, label_id, param_name, v])?;
             }
 
         }
@@ -3800,19 +3844,19 @@ impl SqlStore {
 
     fn insert_slices(
         t: &Transaction,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: i64,
         motif_id: i64,
         chunk: IntoIter<IdSlice, 500>,
     ) -> Result<(), ThoError> {
-        let sql = "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
+        let sql = "INSERT INTO slices (run_config_id, channel_id, motif_id, resource_id, slice_idx) VALUES";
 
         let (mut q, params) = chunk.into_iter().fold(
             (vec![sql], vec![]),
             |mut a: (Vec<&str>, Vec<Value>), v: IdSlice| {
                 a.0.push("(?, ?, ?, ?, ?)");
                 a.0.push(", ");
-                a.1.push((run_id as i64).into());
+                a.1.push((run_config_id as i64).into());
                 a.1.push(channel.into());
                 a.1.push(motif_id.into());
                 a.1.push(v.1.into());
@@ -3834,7 +3878,7 @@ impl SqlStore {
                 debug!("insert_slices: slice_inserted={slice_inserted}");
             }
             Err(e) => {
-                debug!("insert_slices: e={e} sqlite_error={:?} run_id={run_id}, channel={channel}, motif_id={motif_id}",e.sqlite_error());
+                debug!("insert_slices: e={e} sqlite_error={:?} run_config_id={run_config_id}, channel={channel}, motif_id={motif_id}",e.sqlite_error());
             }
         };
 
@@ -3843,12 +3887,12 @@ impl SqlStore {
 
     fn insert_slices_matches_chunk_from_tmp(
         t: &Transaction,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: i64,
         motif_id: i64,
         chunk: IntoIter<IdSlice, 500>,
     ) -> Result<(), ThoError> {
-        Self::insert_slices(t, run_id, channel, motif_id, chunk.clone())?;
+        Self::insert_slices(t, run_config_id, channel, motif_id, chunk.clone())?;
 
         // let mut stmt = t.prepare("SELECT * FROM slices")?;
         // let mut res = stmt.query([])?;
@@ -3857,7 +3901,7 @@ impl SqlStore {
         // }
 
         let sql = format!("INSERT INTO slice_matches (motif_id, slice_id_0, slice_id_1, dist) \
-                            SELECT s_0.motif_id, s_0.id, s_1.id, dist FROM slices_{run_id}_{channel}_tmp.slice_matches tsm \
+                            SELECT s_0.motif_id, s_0.id, s_1.id, dist FROM slices_{run_config_id}_{channel}_tmp.slice_matches tsm \
                             JOIN slices s_0 on s_0.resource_id = tsm.tensor_id_0 AND s_0.slice_idx = tsm.slice_idx_0 \
                             JOIN slices s_1 on s_1.resource_id = tsm.tensor_id_1 AND s_1.slice_idx = tsm.slice_idx_1 \
                             WHERE s_0.motif_id=? AND s_1.motif_id=?
@@ -3876,34 +3920,34 @@ impl SqlStore {
         Ok(())
     }
 
-    fn get_input_run_ids_(
+    fn get_input_run_config_ids_(
         conn: &Connection,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         input_type: Option<&str>,
-    ) -> Result<Vec<RunId>, ThoError> {
-        let mut stmt = conn.prepare("SELECT rci.input_run_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_id WHERE run_id=?")?;
+    ) -> Result<Vec<RunConfigId>, ThoError> {
+        let mut stmt = conn.prepare("SELECT rci.input_run_config_id, rc.type FROM run_configs_input rci JOIN run_configs rc ON rc.id=rci.input_run_config_id WHERE run_config_id=?")?;
 
         let vec = stmt
-            .query_map([run_id], |row| {
-                Ok((row.get::<usize, RunId>(0)?, row.get::<usize, String>(1)?))
+            .query_map([run_config_id], |row| {
+                Ok((row.get::<usize, RunConfigId>(0)?, row.get::<usize, String>(1)?))
             })?
             .flat_map(|v| {
-                let (run_id, config_type) = v.expect("no run_id, config_type");
+                let (run_config_id, config_type) = v.expect("no run_config_id, config_type");
 
                 if input_type
                     .map(|input_type| input_type.to_string().ne(&config_type))
                     .unwrap_or(false)
                 {
                     Box::new(
-                        Self::get_input_run_ids_(conn, run_id, input_type)
+                        Self::get_input_run_config_ids_(conn, run_config_id, input_type)
                             .unwrap()
                             .into_iter(),
-                    ) as Box<dyn Iterator<Item = RunId>>
+                    ) as Box<dyn Iterator<Item =RunConfigId>>
                 } else {
-                    Box::new(std::iter::once(run_id)) as Box<dyn Iterator<Item = RunId>>
+                    Box::new(std::iter::once(run_config_id)) as Box<dyn Iterator<Item =RunConfigId>>
                 }
             })
-            .collect::<Vec<RunId>>();
+            .collect::<Vec<RunConfigId>>();
 
         Ok(vec)
     }
@@ -3943,19 +3987,19 @@ impl SqlStore {
         e
     }
 
-    fn _motif_meta(motif_id: u32, conn: &Connection) -> Result<(i64, RunId), ThoError> {
+    fn _motif_meta(motif_id: u32, conn: &Connection) -> Result<(i64, RunConfigId), ThoError> {
         // Pre-load the motif metadata to identify its channel and run.
-        let (channel, run_id): (i64, RunId) = conn.query_row(
-            "SELECT channel_id, run_id FROM motifs WHERE id=?",
+        let (channel, run_config_id): (i64, RunConfigId) = conn.query_row(
+            "SELECT channel_id, run_config_id FROM motifs WHERE id=?",
             [motif_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        Ok((channel, run_id))
+        Ok((channel, run_config_id))
     }
 
-    fn insert_input(input_run_id: Option<Vec<RunId>>, t: &Transaction, run_id: RunId, sql: &str) -> Result<(), ThoError> {
-        if let Some(input_run_ids) = input_run_id {
-            let (mut q, params) = input_run_ids.into_iter().fold(
+    fn insert_input(input_run_config_id: Option<Vec<RunConfigId>>, t: &Transaction, run_config_id: RunConfigId, sql: &str) -> Result<(), ThoError> {
+        if let Some(input_run_config_ids) = input_run_config_id {
+            let (mut q, params) = input_run_config_ids.into_iter().fold(
                 (
                     vec![sql],
                     vec![],
@@ -3964,8 +4008,8 @@ impl SqlStore {
                     q.push("(?, ?)");
                     q.push(",");
 
-                    params.push(Value::Integer(run_id as i64));
-                    params.push(Value::Integer(v as i64)); //input_run_id
+                    params.push(Value::Integer(run_config_id as i64));
+                    params.push(Value::Integer(v as i64)); //input_run_config_id
                     //
                     (q, params)
                 },
@@ -3999,7 +4043,7 @@ fn conds_to_q(input: &Vec<(String, SetCond)>) -> String {
 }
 
 pub struct SqlMotifTrackerStore {
-    run_id: RunId,
+    run_config_id: RunConfigId,
     channel: u32,
     conn: Mutex<Connection>,
     path: PathBuf,
@@ -4008,7 +4052,7 @@ pub struct SqlMotifTrackerStore {
 impl SqlMotifTrackerStore {
     pub fn new<P: AsRef<Path> + Sync + Send + Debug>(
         path: P,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel: u32,
     ) -> Result<Box<dyn MotifTrackerStore>, ThoError> {
         let mut conn = Connection::open(&path).expect("SqlMotifTrackerStore::new: connection");
@@ -4032,7 +4076,7 @@ impl SqlMotifTrackerStore {
             t.commit()?;
         }
         Ok(Box::new(Self {
-            run_id,
+            run_config_id,
             channel,
             conn: Mutex::new(conn),
             path: path.as_ref().to_path_buf(),
@@ -4049,7 +4093,7 @@ pub trait MotifTrackerStore: Debug + Send + Sync {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError>;
     async fn load_slices_into_groups(&mut self, store: &Arc<Box<dyn Store>>, max_slices_counts: Option<u32>) -> Result<usize, ThoError>;
 
-    fn run_id(&self) -> RunId;
+    fn run_config_id(&self) -> RunConfigId;
     fn channel(&self) -> u32;
 }
 
@@ -4070,7 +4114,7 @@ pub fn filter_groups_by_slices_count(max_slices_counts: Option<u32>, groups: Has
 #[async_trait]
 impl MotifTrackerStore for SqlMotifTrackerStore {
     fn save_slices(&mut self, slices: Vec<SlicesMatch>) -> Result<(), ThoError> {
-        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_id={:?}",slices.len(),self.run_id);
+        debug!("MotifTrackerStore::save_slices: motifs.len()={:?}, self.run_config_id={:?}",slices.len(),self.run_config_id);
 
         let mut conn_guard = self.conn.lock();
         let t = conn_guard.transaction()?;
@@ -4111,8 +4155,8 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         let groups = {
             let mut guard = self.conn.lock();
             debug!(
-                "set_motifs: run_id={:?}, channel={:?}",
-                self.run_id, self.channel
+                "set_motifs: run_config_id={:?}, channel={:?}",
+                self.run_config_id, self.channel
             );
 
             let mut stmt = guard.prepare(
@@ -4128,8 +4172,8 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
             })?)?;
 
             debug!(
-                "set_motifs: run_id={:?}, channel={:?} groups={:?}",
-                self.run_id, self.channel, groups
+                "set_motifs: run_config_id={:?}, channel={:?} groups={:?}",
+                self.run_config_id, self.channel, groups
             );
 
             drop(stmt);
@@ -4139,7 +4183,7 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         let groups_by_slices_count = filter_groups_by_slices_count(max_slices_counts, groups);
         let groups_len = groups_by_slices_count.len();
         store.save_groups_as_motifs_with_slices_matches(
-            self.run_id,
+            self.run_config_id,
             self.channel as i64,
             groups_by_slices_count,
             self.path.clone(),
@@ -4148,8 +4192,8 @@ impl MotifTrackerStore for SqlMotifTrackerStore {
         Ok(groups_len)
     }
 
-    fn run_id(&self) -> RunId {
-        self.run_id
+    fn run_config_id(&self) -> RunConfigId {
+        self.run_config_id
     }
 
     fn channel(&self) -> u32 {
@@ -4171,7 +4215,7 @@ mod store_tests {
     use rusqlite::params;
     use parking_lot::{Mutex, RawMutex, RwLock};
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::{RunConfigId, RUN_ID};
     use thoosa_shared::val::Val;
     use thoosa_shared::{TensorIdSliceIdx, cdt, cdt_for_dir, MotifSlice};
 
@@ -4573,6 +4617,8 @@ mod store_tests {
             test_dir.join("test_db.db3"),
         ).await?);
 
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+
         let resource_ids = init_test_store(&store).await?;
 
         let all_group_id = store.save_resource_set_group("group 1 labels/100/100-200".into()).await?;
@@ -4632,7 +4678,7 @@ mod store_tests {
             ),
         ];
 
-        let find_motifs_run_id = store.save_run_config(
+        let find_motifs_run_config_id = store.save_run_config(
             None,
             &"todo",
             "find_motifs",
@@ -4644,7 +4690,7 @@ mod store_tests {
         ).await?;
 
         let slices_store_path = test_dir.join("test_slices_db.db3");
-        let mut slices_store = SqlMotifTrackerStore::new(&slices_store_path, find_motifs_run_id, 7)
+        let mut slices_store = SqlMotifTrackerStore::new(&slices_store_path, find_motifs_run_config_id, 7)
             .expect("can't create tmp sotre");
 
         slices_store.save_slices(slices.clone())?;
@@ -4683,7 +4729,7 @@ mod store_tests {
             }
         };
 
-        let motif_slices_map = store.list_motifs_slices(find_motifs_run_id, None).await?;
+        let motif_slices_map = store.list_motifs_slices(find_motifs_run_config_id, None).await?;
         debug!("motif_slices_map={:?}", motif_slices_map);
 
         // assert_eq!(4, map.len());
@@ -4712,8 +4758,8 @@ mod store_tests {
         debug!("motif_slices_1111={motif_slices_1111:?}");
         debug!("motif_slices_444={motif_slices_444:?}");
 
-        let select_motifs_run_id = store.save_run_config(
-            Some(&[find_motifs_run_id]),
+        let select_motifs_run_config_id = store.save_run_config(
+            Some(&[find_motifs_run_config_id]),
             &"todo",
             "find_motifs",
             HashMap::from([
@@ -4723,22 +4769,22 @@ mod store_tests {
             ]),
         ).await?;
 
-        let _select_motifs_run_id = store.save_selected_motifs(
-            select_motifs_run_id,
+        let _select_motifs_run_config_id = store.save_selected_motifs(
+            select_motifs_run_config_id,
             vec![
                 (motif_slices_444[0].motif_id, 0.1),  //motif_id corr
                 (motif_slices_1111[0].motif_id, 0.2), //motif_id corr
             ],
         ).await?;
 
-        let input_run_ids = store.get_input_run_ids(select_motifs_run_id, None).await?;
+        let input_run_config_ids = store.get_input_run_config_ids(select_motifs_run_config_id, None).await?;
 
         assert_eq!(
-            vec![find_motifs_run_id],
-            input_run_ids
+            vec![find_motifs_run_config_id],
+            input_run_config_ids
         );
 
-        let motifs = store.list_selected_motifs(select_motifs_run_id, 20).await?;
+        let motifs = store.list_selected_motifs(select_motifs_run_config_id, 20).await?;
 
         debug!("motifs: {:?}", motifs);
 
@@ -4749,7 +4795,7 @@ mod store_tests {
         expected_ids.sort();
         assert_eq!(expected_ids, motif_ids);
 
-        let selected_run_motifs = store.list_run_motifs(select_motifs_run_id).await?;
+        let selected_run_motifs = store.list_run_motifs(select_motifs_run_config_id).await?;
         assert_eq!(2, selected_run_motifs.len());
         assert!(selected_run_motifs.iter().all(|entry| entry.channel_id == 7));
         let selected_run_motifs_by_id =
@@ -4758,28 +4804,28 @@ mod store_tests {
         let motif_444_entry = selected_run_motifs_by_id.get(&motif_slices_444[0].motif_id).unwrap();
         assert_eq!(Some(0.2), motif_1111_entry.score);
         assert_eq!(Some(0.1), motif_444_entry.score);
-        assert_eq!(find_motifs_run_id, motif_1111_entry.source_run_id);
-        assert_eq!(find_motifs_run_id, motif_444_entry.source_run_id);
+        assert_eq!(find_motifs_run_config_id, motif_1111_entry.source_run_config_id);
+        assert_eq!(find_motifs_run_config_id, motif_444_entry.source_run_config_id);
 
-        let (_channel, _run_id, motif_1111_slices_all, motif_1111_resources_map) =
+        let (_channel, _run_config_id, motif_1111_slices_all, motif_1111_resources_map) =
             store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
-        let (_channel, _run_id, motif_444_slices_all, motif_444_resources_map) =
+        let (_channel, _run_config_id, motif_444_slices_all, motif_444_resources_map) =
             store.list_motif_slices(motif_slices_444[0].motif_id, None, None, None).await?;
         assert_eq!(motif_1111_slices_all.len(), motif_1111_entry.slices_cnt);
         assert_eq!(motif_1111_resources_map.len(), motif_1111_entry.resources_cnt);
         assert_eq!(motif_444_slices_all.len(), motif_444_entry.slices_cnt);
         assert_eq!(motif_444_resources_map.len(), motif_444_entry.resources_cnt);
 
-        let find_run_motifs = store.list_run_motifs(find_motifs_run_id).await?;
+        let find_run_motifs = store.list_run_motifs(find_motifs_run_config_id).await?;
         assert_eq!(2, find_run_motifs.len());
         assert!(find_run_motifs.iter().all(|entry| entry.score.is_none()));
-        assert!(find_run_motifs.iter().all(|entry| entry.source_run_id == find_motifs_run_id));
+        assert!(find_run_motifs.iter().all(|entry| entry.source_run_config_id == find_motifs_run_config_id));
         let mut find_run_motif_ids = find_run_motifs.iter().map(|entry| entry.motif_id).collect::<Vec<_>>();
         find_run_motif_ids.sort();
         assert_eq!(expected_ids, find_run_motif_ids);
         //
         // //TODO
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
+        let (channel, run_config_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, None, None).await?;
         slices.sort();
 
         debug!("slices={slices:?}");
@@ -4794,20 +4840,20 @@ mod store_tests {
         );
 
         assert_eq!(7, channel);
-        assert_eq!(find_motifs_run_id, run_id_);
+        assert_eq!(find_motifs_run_config_id, run_config_id_);
 
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None).await?;
+        let (channel, run_config_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(1), None).await?;
         slices.sort();
 
 
         let resources = store.list_resources_not_in_group("pure group 10", 10).await;
         debug!("resources={resources:?}");
 
-        let (channel, run_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0))).await?;
+        let (channel, run_config_id_, mut slices, resources_map) = store.list_motif_slices(motif_slices_1111[0].motif_id, None, Some(3), Some((0, 0))).await?;
 
         debug!("random slices={slices:?}");
         //
-        // // let (_channel, _run_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_id, channel as usize))).await?;
+        // // let (_channel, _run_config_id_, mut slices) = store.list_motif_slices(1, Some(10), Some((run_config_id, channel as usize))).await?;
         // //
         // // slices.sort();
         // //
@@ -4825,10 +4871,10 @@ mod store_tests {
         //
         // assert_eq!(
         //     vec![(1, "seizure_vote".into()), (0, "lpd_vote".into()), (0, "gpd_vote".into()), (0, "lrda_vote".into()), (0, "grda_vote".into()), (0, "other_vote".into())],
-        //     store.run_configs_descr(select_motifs_run_id)?
+        //     store.run_configs_descr(select_motifs_run_config_id)?
         // );
         //
-        // store.lock().delete_slices_without_matches(run_id)?;
+        // store.lock().delete_slices_without_matches(run_config_id)?;
 
         Ok(())
     }
@@ -4836,45 +4882,46 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_select_all_motifs_creates_bypass_selection_runs() -> Result<(), ThoError> {
         let store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let first_find_run_id = store.save_run_config(None, &"FindMotifsRunConfig", "first", HashMap::new()).await?;
-        let second_find_run_id = store.save_run_config(None, &"BucketingRunConfig", "second", HashMap::new()).await?;
+        let first_find_run_config_id = store.save_run_config(None, &"FindMotifsRunConfig", "first", HashMap::new()).await?;
+        let second_find_run_config_id = store.save_run_config(None, &"BucketingRunConfig", "second", HashMap::new()).await?;
 
         let (first_motif_ids, second_motif_ids) = {
             let mut guard = store.conn().lock();
             let t = guard.transaction()?;
-            let insert_motif = |run_id: RunId, channel_id: i64, group_ord: i64| -> Result<u32, ThoError> {
-                t.execute("INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)", params![group_ord, run_id as i64, channel_id])?;
+            let insert_motif = |run_config_id: RunConfigId, channel_id: i64, group_ord: i64| -> Result<u32, ThoError> {
+                t.execute("INSERT INTO motifs (group_ord, run_config_id, channel_id) VALUES (?, ?, ?)", params![group_ord, run_config_id as i64, channel_id])?;
                 let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
                     row.get::<usize, u32>(0)
                 })?;
                 Ok(motif_id)
             };
 
-            let first_motif_ids = vec![insert_motif(first_find_run_id, 0, 0)?, insert_motif(first_find_run_id, 1, 1)?];
-            let second_motif_ids = vec![insert_motif(second_find_run_id, 1, 0)?];
+            let first_motif_ids = vec![insert_motif(first_find_run_config_id, 0, 0)?, insert_motif(first_find_run_config_id, 1, 1)?];
+            let second_motif_ids = vec![insert_motif(second_find_run_config_id, 1, 0)?];
             t.commit()?;
             (first_motif_ids, second_motif_ids)
         };
 
-        let selected_run_ids = store.select_all_motifs(&[first_find_run_id, second_find_run_id]).await?;
+        let selected_run_config_ids = store.select_all_motifs(&[first_find_run_config_id, second_find_run_config_id]).await?;
 
-        assert_eq!(2, selected_run_ids.len());
+        assert_eq!(2, selected_run_config_ids.len());
 
-        let configs = store.list_run_configs_by_ids(&selected_run_ids).await?;
+        let configs = store.list_run_configs_by_ids(&selected_run_config_ids).await?;
         assert_eq!(2, configs.len());
         assert!(configs.iter().all(|run_config| run_config.run_config_type == "SelectMotifsRunConfig"));
         assert!(configs.iter().all(|run_config| run_config.descr == "bypass"));
 
-        let input_run_ids = store.list_input_run_ids(&selected_run_ids).await?;
-        assert!(input_run_ids.contains(&(selected_run_ids[0], first_find_run_id)));
-        assert!(input_run_ids.contains(&(selected_run_ids[1], second_find_run_id)));
+        let input_run_config_ids = store.list_input_run_config_ids(&selected_run_config_ids).await?;
+        assert!(input_run_config_ids.contains(&(selected_run_config_ids[0], first_find_run_config_id)));
+        assert!(input_run_config_ids.contains(&(selected_run_config_ids[1], second_find_run_config_id)));
 
-        let first_selected = store.list_selected_motifs(selected_run_ids[0], 2).await?;
+        let first_selected = store.list_selected_motifs(selected_run_config_ids[0], 2).await?;
         assert_eq!(vec![(first_motif_ids[0], 1.0)], first_selected[0]);
         assert_eq!(vec![(first_motif_ids[1], 1.0)], first_selected[1]);
 
-        let second_selected = store.list_selected_motifs(selected_run_ids[1], 2).await?;
+        let second_selected = store.list_selected_motifs(selected_run_config_ids[1], 2).await?;
         assert_eq!(Vec::<(u32, f64)>::new(), second_selected[0]);
         assert_eq!(vec![(second_motif_ids[0], 1.0)], second_selected[1]);
 
@@ -4884,8 +4931,9 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_save_list_trained_nets() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let run_id = store.save_run_config(
+        let run_config_id = store.save_run_config(
             None,
             &"trained_nets",
             "trained_nets",
@@ -4893,53 +4941,54 @@ mod store_tests {
         ).await?;
 
         for i in 0..105 {
-            store.save_trained_net(run_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
+            store.save_trained_net(run_config_id, PathBuf::from(format!("nets/{i:03}")), i as f32, None).await?;
         }
 
-        let selected = store.list_trained_nets(vec![run_id], None, None).await?;
+        let selected = store.list_trained_nets(vec![run_config_id], None, None).await?;
         assert_eq!(105, selected.len());
         assert_eq!(PathBuf::from("nets/000"), selected[0].1);
         assert_eq!(0.0, selected[0].2);
         assert_eq!(PathBuf::from("nets/104"), selected[104].1);
         assert_eq!(104.0, selected[104].2);
 
-        let limited = store.list_trained_nets(vec![run_id], None, Some(3)).await?;
+        let limited = store.list_trained_nets(vec![run_config_id], None, Some(3)).await?;
         assert_eq!(3, limited.len());
         assert_eq!(PathBuf::from("nets/000"), limited[0].1);
         assert_eq!(PathBuf::from("nets/001"), limited[1].1);
         assert_eq!(PathBuf::from("nets/002"), limited[2].1);
 
-        let filtered = store.list_trained_nets(vec![run_id], Some(15.0), None).await?;
+        let filtered = store.list_trained_nets(vec![run_config_id], Some(15.0), None).await?;
         assert_eq!(15, filtered.len());
         assert_eq!(PathBuf::from("nets/000"), filtered[0].1);
         assert_eq!(PathBuf::from("nets/014"), filtered[14].1);
 
-        let filtered_limited = store.list_trained_nets(vec![run_id], Some(15.0), Some(5)).await?;
+        let filtered_limited = store.list_trained_nets(vec![run_config_id], Some(15.0), Some(5)).await?;
         assert_eq!(5, filtered_limited.len());
         assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].1);
         assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].1);
 
-        let second_run_id = store.save_run_config(
+        let second_run_config_id = store.save_run_config(
             None,
             &"trained_nets",
             "trained_nets_2",
             HashMap::new(),
         ).await?;
-        store.save_trained_net(second_run_id, PathBuf::from("nets/second"), 0.5, None).await?;
-        let multi_run = store.list_trained_nets(vec![run_id, second_run_id], Some(1.0), None).await?;
+        store.save_trained_net(second_run_config_id, PathBuf::from("nets/second"), 0.5, None).await?;
+        let multi_run = store.list_trained_nets(vec![run_config_id, second_run_config_id], Some(1.0), None).await?;
         assert_eq!(2, multi_run.len());
         assert_eq!(PathBuf::from("nets/000"), multi_run[0].1);
         assert_eq!(PathBuf::from("nets/second"), multi_run[1].1);
 
-        let empty_run_ids = store.list_trained_nets(vec![], None, None).await?;
-        assert!(empty_run_ids.is_empty());
+        let empty_run_config_ids = store.list_trained_nets(vec![], None, None).await?;
+        assert!(empty_run_config_ids.is_empty());
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_motifs_slices_filters_slice_run_ids() -> Result<(), ThoError> {
+    async fn test_list_motifs_slices_filters_slice_run_config_ids() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = {
             let import_id = store.save_import("test".to_string()).await?;
@@ -4955,10 +5004,10 @@ mod store_tests {
             ids
         };
 
-        let find_run_id =
+        let find_run_config_id =
             store.save_run_config(None, &"find", "find_motifs", HashMap::new()).await?;
-        let select_run_id = store.save_run_config(
-            Some(&[find_run_id]),
+        let select_run_config_id = store.save_run_config(
+            Some(&[find_run_config_id]),
             &"select",
             "select_motifs",
             HashMap::new(),
@@ -4969,17 +5018,17 @@ mod store_tests {
             let t = guard.transaction()?;
 
             t.execute(
-                "INSERT INTO motifs (id, group_ord, run_id, channel_id) VALUES (1, 0, ?, ?)",
-                params![find_run_id, 0i64],
+                "INSERT INTO motifs (id, group_ord, run_config_id, channel_id) VALUES (1, 0, ?, ?)",
+                params![find_run_config_id, 0i64],
             )?;
 
             t.execute(
-                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (1, ?, ?, ?, ?)",
-                params![find_run_id, 0i64, resource_ids[0], 10i64],
+                "INSERT INTO slices (motif_id, run_config_id, channel_id, resource_id, slice_idx) VALUES (1, ?, ?, ?, ?)",
+                params![find_run_config_id, 0i64, resource_ids[0], 10i64],
             )?;
             t.execute(
-                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (1, ?, ?, ?, ?)",
-                params![select_run_id, 0i64, resource_ids[0], 30i64],
+                "INSERT INTO slices (motif_id, run_config_id, channel_id, resource_id, slice_idx) VALUES (1, ?, ?, ?, ?)",
+                params![select_run_config_id, 0i64, resource_ids[0], 30i64],
             )?;
 
             t.commit()?;
@@ -4987,10 +5036,10 @@ mod store_tests {
 
         let resource = store.list_resources_by_ids(&resource_ids).await?.remove(0);
 
-        let find_only = store.list_motifs_slices(find_run_id, Some(vec![])).await?;
-        let all_runs = store.list_motifs_slices(find_run_id, None).await?;
+        let find_only = store.list_motifs_slices(find_run_config_id, Some(vec![])).await?;
+        let all_runs = store.list_motifs_slices(find_run_config_id, None).await?;
         let both_runs =
-            store.list_motifs_slices(find_run_id, Some(vec![select_run_id, select_run_id])).await?;
+            store.list_motifs_slices(find_run_config_id, Some(vec![select_run_config_id, select_run_config_id])).await?;
 
         let find_only_slices = find_only.get(&resource).expect("resource slices");
         assert_eq!(1, find_only_slices.len());
@@ -5010,8 +5059,9 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_motif_slices_filters_slice_run_ids() -> Result<(), ThoError> {
+    async fn test_list_motif_slices_filters_slice_run_config_ids() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = {
             let import_id = store.save_import("test".to_string()).await?;
@@ -5027,10 +5077,10 @@ mod store_tests {
             ids
         };
 
-        let find_run_id =
+        let find_run_config_id =
             store.save_run_config(None, &"find", "find_motifs", HashMap::new()).await?;
-        let select_run_id = store.save_run_config(
-            Some(&[find_run_id]),
+        let select_run_config_id = store.save_run_config(
+            Some(&[find_run_config_id]),
             &"select",
             "select_motifs",
             HashMap::new(),
@@ -5041,24 +5091,24 @@ mod store_tests {
             let t = guard.transaction()?;
 
             t.execute(
-                "INSERT INTO motifs (id, group_ord, run_id, channel_id) VALUES (2, 0, ?, ?)",
-                params![find_run_id, 0i64],
+                "INSERT INTO motifs (id, group_ord, run_config_id, channel_id) VALUES (2, 0, ?, ?)",
+                params![find_run_config_id, 0i64],
             )?;
 
             t.execute(
-                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (2, ?, ?, ?, ?)",
-                params![find_run_id, 0i64, resource_ids[0], 12i64],
+                "INSERT INTO slices (motif_id, run_config_id, channel_id, resource_id, slice_idx) VALUES (2, ?, ?, ?, ?)",
+                params![find_run_config_id, 0i64, resource_ids[0], 12i64],
             )?;
             t.execute(
-                "INSERT INTO slices (motif_id, run_id, channel_id, resource_id, slice_idx) VALUES (2, ?, ?, ?, ?)",
-                params![select_run_id, 0i64, resource_ids[0], 32i64],
+                "INSERT INTO slices (motif_id, run_config_id, channel_id, resource_id, slice_idx) VALUES (2, ?, ?, ?, ?)",
+                params![select_run_config_id, 0i64, resource_ids[0], 32i64],
             )?;
 
             t.commit()?;
         }
 
-        let (_, run_id, all_slices, _) = store.list_motif_slices(2, None, None, None).await?;
-        assert_eq!(find_run_id, run_id);
+        let (_, run_config_id, all_slices, _) = store.list_motif_slices(2, None, None, None).await?;
+        assert_eq!(find_run_config_id, run_config_id);
         let mut idxs = all_slices.iter().map(|s| s.1).collect::<Vec<_>>();
         idxs.sort();
         assert_eq!(vec![12, 32], idxs);
@@ -5067,7 +5117,7 @@ mod store_tests {
         assert_eq!(vec![12], find_only.iter().map(|s| s.1).collect::<Vec<_>>());
 
         let (_, _, filtered, _) =
-            store.list_motif_slices(2, Some(vec![select_run_id, select_run_id]), None, None).await?;
+            store.list_motif_slices(2, Some(vec![select_run_config_id, select_run_config_id]), None, None).await?;
         let mut idxs = filtered.iter().map(|s| s.1).collect::<Vec<_>>();
         idxs.sort();
         assert_eq!(vec![12, 32], idxs);
@@ -5124,8 +5174,9 @@ mod store_tests {
         let mut store = Arc::new(SqlStore::from_path(
             test_dir.join("test_db.db3"),
         ).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let run_id = store.save_run_config(
+        let run_config_id = store.save_run_config(
             None,
             &"todo",
             "test",
@@ -5138,8 +5189,8 @@ mod store_tests {
             ]),
         ).await?;
 
-        let next_run_id = store.save_run_config(
-            Some(&[run_id]),
+        let next_run_config_id = store.save_run_config(
+            Some(&[run_config_id]),
             &"todo",
             "test next",
             HashMap::from([
@@ -5149,7 +5200,7 @@ mod store_tests {
             ]),
         ).await?;
 
-        let loaded_params = store.list_run_config_values(run_id).await?;
+        let loaded_params = store.list_run_config_values(run_config_id).await?;
 
         assert_eq!(loaded_params.get("prop1").expect("prop1"), &Val::Int(1));
         assert_eq!(loaded_params.get("prop2").expect("prop2"), &Val::Real(2.0));
@@ -5163,7 +5214,7 @@ mod store_tests {
         );
         assert_eq!(loaded_params.get("prop5").expect("prop5"), &Val::Bool(true));
 
-        let netx_loaded_params = store.list_run_config_values(next_run_id).await?;
+        let netx_loaded_params = store.list_run_config_values(next_run_config_id).await?;
 
         debug!("netx_loaded_params={netx_loaded_params:?}");
 
@@ -5186,19 +5237,20 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_configs_page_and_by_ids() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let run_id_1 = store.save_run_config(None, &"first", "test", HashMap::new()).await?;
-        let run_id_2 = store.save_run_config(None, &"second", "test", HashMap::new()).await?;
-        let run_id_3 = store.save_run_config(None, &"third", "test", HashMap::new()).await?;
+        let run_config_id_1 = store.save_run_config(None, &"first", "test", HashMap::new()).await?;
+        let run_config_id_2 = store.save_run_config(None, &"second", "test", HashMap::new()).await?;
+        let run_config_id_3 = store.save_run_config(None, &"third", "test", HashMap::new()).await?;
 
         let first_page = store.list_run_configs_page(2, 0).await?;
-        assert_eq!(vec![run_id_3, run_id_2], first_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+        assert_eq!(vec![run_config_id_3, run_config_id_2], first_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         let second_page = store.list_run_configs_page(2, 2).await?;
-        assert_eq!(vec![run_id_1], second_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+        assert_eq!(vec![run_config_id_1], second_page.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
-        let loaded_by_ids = store.list_run_configs_by_ids(&[run_id_1, run_id_3]).await?;
-        assert_eq!(vec![run_id_3, run_id_1], loaded_by_ids.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+        let loaded_by_ids = store.list_run_configs_by_ids(&[run_config_id_1, run_config_id_3]).await?;
+        assert_eq!(vec![run_config_id_3, run_config_id_1], loaded_by_ids.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         Ok(())
     }
@@ -5206,29 +5258,30 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_run_configs_filtered_returns_matches_and_ancestors() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let root_run_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
-        let select_run_id = store.save_run_config(Some(&[root_run_id]), &"SelectMotifsRunConfig", "alpha motif selection", HashMap::new()).await?;
-        let child_run_id = store.save_run_config(Some(&[select_run_id]), &"TrainMotifNetRunConfig", "child", HashMap::new()).await?;
-        let _other_run_id = store.save_run_config(None, &"OtherRunConfig", "beta", HashMap::new()).await?;
+        let root_run_config_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
+        let select_run_config_id = store.save_run_config(Some(&[root_run_config_id]), &"SelectMotifsRunConfig", "alpha motif selection", HashMap::new()).await?;
+        let child_run_config_id = store.save_run_config(Some(&[select_run_config_id]), &"TrainMotifNetRunConfig", "child", HashMap::new()).await?;
+        let _other_run_config_id = store.save_run_config(None, &"OtherRunConfig", "beta", HashMap::new()).await?;
 
         let by_id = store.list_run_configs_filtered(RunConfigFilter {
-            id: Some(select_run_id),
+            id: Some(select_run_config_id),
             ..RunConfigFilter::default()
         }).await?;
-        assert_eq!(vec![select_run_id, root_run_id], by_id.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+        assert_eq!(vec![select_run_config_id, root_run_config_id], by_id.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         let by_type = store.list_run_configs_filtered(RunConfigFilter {
             run_config_type: Some("TrainMotifNetRunConfig".to_string()),
             ..RunConfigFilter::default()
         }).await?;
-        assert_eq!(vec![child_run_id, select_run_id, root_run_id], by_type.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+        assert_eq!(vec![child_run_config_id, select_run_config_id, root_run_config_id], by_type.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         let by_descr = store.list_run_configs_filtered(RunConfigFilter {
             descr_substr: Some("alpha".to_string()),
             ..RunConfigFilter::default()
         }).await?;
-        assert_eq!(vec![select_run_id, root_run_id], by_descr.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
+        assert_eq!(vec![select_run_config_id, root_run_config_id], by_descr.into_iter().map(|entry| entry.id).collect::<Vec<_>>());
 
         Ok(())
     }
@@ -5245,48 +5298,50 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_get_prev_run_id() -> Result<(), ThoError> {
+    async fn test_get_prev_run_config_id() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let input_run_id = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
-        let run_id =
-            store.save_run_config(Some(&[input_run_id]), &"aaa", "test 1", HashMap::new()).await?;
+        let input_run_config_id = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
+        let run_config_id =
+            store.save_run_config(Some(&[input_run_config_id]), &"aaa", "test 1", HashMap::new()).await?;
 
-        assert_eq!(store.get_input_run_ids(run_id, None).await?[0], input_run_id);
+        assert_eq!(store.get_input_run_config_ids(run_config_id, None).await?[0], input_run_config_id);
 
-        let input_run_id_0 = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
-        let input_run_id_1 = store.save_run_config(
-            Some(&[input_run_id_0]),
+        let input_run_config_id_0 = store.save_run_config(None, &"aaa", "test 0", HashMap::new()).await?;
+        let input_run_config_id_1 = store.save_run_config(
+            Some(&[input_run_config_id_0]),
             &"bbb",
             "test 1",
             HashMap::new(),
         ).await?;
-        let run_id = store.save_run_config(
-            Some(&[input_run_id_1]),
+        let run_config_id = store.save_run_config(
+            Some(&[input_run_config_id_1]),
             &"ccc",
             "test 1",
             HashMap::new(),
         ).await?;
 
         assert_eq!(
-            store.get_input_run_ids(run_id, Some(&"aaa")).await?[0],
-            input_run_id_0
+            store.get_input_run_config_ids(run_config_id, Some(&"aaa")).await?[0],
+            input_run_config_id_0
         );
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_input_run_ids_reads_large_sets_in_chunks() -> Result<(), ThoError> {
+    async fn test_list_input_run_config_ids_reads_large_sets_in_chunks() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let input_run_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
-        let mut run_ids = Vec::with_capacity(1001);
+        let input_run_config_id = store.save_run_config(None, &"root", "root", HashMap::new()).await?;
+        let mut run_config_ids = Vec::with_capacity(1001);
         for idx in 0..1001 {
-            run_ids.push(
+            run_config_ids.push(
                 store
                     .save_run_config(
-                        Some(&[input_run_id]),
+                        Some(&[input_run_config_id]),
                         &format!("task-{idx}"),
                         "chunked",
                         HashMap::new(),
@@ -5295,12 +5350,12 @@ mod store_tests {
             );
         }
 
-        let mut input_pairs = store.list_input_run_ids(&run_ids).await?;
+        let mut input_pairs = store.list_input_run_config_ids(&run_config_ids).await?;
         input_pairs.sort();
 
-        let mut expected_pairs = run_ids
+        let mut expected_pairs = run_config_ids
             .into_iter()
-            .map(|run_id| (run_id, input_run_id))
+            .map(|run_config_id| (run_config_id, input_run_config_id))
             .collect::<Vec<_>>();
         expected_pairs.sort();
 
@@ -5310,29 +5365,30 @@ mod store_tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_list_run_ids_with_outputs_reads_large_sets_in_chunks() -> Result<(), ThoError> {
+    async fn test_list_run_config_ids_with_outputs_reads_large_sets_in_chunks() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
-        let mut parent_run_ids = Vec::with_capacity(1001);
+        let mut parent_run_config_ids = Vec::with_capacity(1001);
         for idx in 0..1001 {
-            let parent_run_id = store.save_run_config(None, &format!("parent-{idx}"), "parent", HashMap::new()).await?;
+            let parent_run_config_id = store.save_run_config(None, &format!("parent-{idx}"), "parent", HashMap::new()).await?;
             if idx % 2 == 0 {
-                store.save_run_config(Some(&[parent_run_id]), &format!("child-{idx}"), "child", HashMap::new()).await?;
+                store.save_run_config(Some(&[parent_run_config_id]), &format!("child-{idx}"), "child", HashMap::new()).await?;
             }
-            parent_run_ids.push(parent_run_id);
+            parent_run_config_ids.push(parent_run_config_id);
         }
 
-        let mut run_ids_with_outputs = store.list_run_ids_with_outputs(&parent_run_ids).await?;
-        run_ids_with_outputs.sort();
+        let mut run_config_ids_with_outputs = store.list_run_config_ids_with_outputs(&parent_run_config_ids).await?;
+        run_config_ids_with_outputs.sort();
 
-        let mut expected_run_ids = parent_run_ids
+        let mut expected_run_config_ids = parent_run_config_ids
             .into_iter()
             .enumerate()
-            .filter_map(|(idx, run_id)| if idx % 2 == 0 { Some(run_id) } else { None })
+            .filter_map(|(idx, run_config_id)| if idx % 2 == 0 { Some(run_config_id) } else { None })
             .collect::<Vec<_>>();
-        expected_run_ids.sort();
+        expected_run_config_ids.sort();
 
-        assert_eq!(expected_run_ids, run_ids_with_outputs);
+        assert_eq!(expected_run_config_ids, run_config_ids_with_outputs);
 
         Ok(())
     }
@@ -5453,10 +5509,11 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_respects_constraints() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_a", 2048), ("res_b", 2048)]).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "random test", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"find_motifs", "random test", HashMap::new()).await?;
         let channel_id = 3i64;
 
         let res_a = fetch_resource_id(&store, "res_a")?;
@@ -5464,21 +5521,21 @@ mod store_tests {
 
         let motif_id = insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             0,
             &[(res_a, 100), (res_a, 320)],
         )?;
         insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             1,
             &[(res_b, 50), (res_b, 400)],
         )?;
 
         const WIDTH: u32 = 40;
-        let (channel, run_id, random_slices, resources_map) =
+        let (channel, run_config_id, random_slices, resources_map) =
             store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::new(|length: u32| length), Some(2usize)).await?;
 
         assert_eq!(channel_id, channel);
@@ -5516,17 +5573,18 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_respects_min_distance() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_main", 4096)]).await?;
 
-        let run_id =
+        let run_config_id =
             store.save_run_config(None, &"find_motifs", "random spacing", HashMap::new()).await?;
         let channel_id = 5i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
         let motif_id = insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             0,
             &[(res_main, 200), (res_main, 1200)],
@@ -5534,7 +5592,7 @@ mod store_tests {
 
         const WIDTH: u32 = 50;
         const MIN_DISTANCE: u32 = 300;
-        let (channel, run_id, random_slices, resources_map) =
+        let (channel, run_config_id, random_slices, resources_map) =
             store.list_random_slices_out_of_motif(motif_id, WIDTH, Some(MIN_DISTANCE), Arc::new(|length: u32| length), Some(2usize)).await?;
 
         assert_eq!(channel_id, channel);
@@ -5562,16 +5620,17 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_uses_input_len_adjuster() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_main", 2000)]).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"find_motifs", "length adjust", HashMap::new()).await?;
         let channel_id = 6i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
 
         let motif_id = insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             0,
             &[(res_main, 100), (res_main, 250)],
@@ -5601,14 +5660,14 @@ mod store_tests {
 
         create_resources(&store, (0..100).map(|i| (&*format!("res_{i}").leak(), 2000u32)).collect::<Vec<_>>().as_slice()).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "length adjust", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"find_motifs", "length adjust", HashMap::new()).await?;
         let channel_id = 6i64;
         let res_0 = fetch_resource_id(&store, "res_0")?;
         let res_10 = fetch_resource_id(&store, "res_1")?;
 
         let motif_id = insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             0,
             &[
@@ -5631,35 +5690,36 @@ mod store_tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_list_random_slices_falls_back_to_other_resources() -> Result<(), ThoError> {
         let mut store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         create_resources(&store, &[("res_main", 220), ("res_other", 500)]).await?;
 
-        let run_id = store.save_run_config(None, &"find_motifs", "fallback negatives", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"find_motifs", "fallback negatives", HashMap::new()).await?;
         let channel_id = 7i64;
         let res_main = fetch_resource_id(&store, "res_main")?;
         let res_other = fetch_resource_id(&store, "res_other")?;
 
         let motif_id = insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             0,
             &[(res_main, 40), (res_main, 100), (res_main, 160)],
         )?;
         insert_motif_with_slices(
             &store,
-            run_id,
+            run_config_id,
             channel_id,
             1,
             &[(res_other, 60), (res_other, 260)],
         )?;
 
         const WIDTH: u32 = 50;
-        let (channel, returned_run_id, random_slices, resources_map) =
+        let (channel, returned_run_config_id, random_slices, resources_map) =
             store.list_random_slices_out_of_motif(motif_id, WIDTH, None, Arc::new(|length: u32| length), None).await?;
 
         assert_eq!(channel_id, channel);
-        assert_eq!(run_id, returned_run_id);
+        assert_eq!(run_config_id, returned_run_config_id);
         assert_eq!(random_slices.len(), 3);
         assert!(random_slices.iter().all(|slice| slice.0 == res_other), "random_slices={random_slices:?}");
         assert_eq!(resources_map.len(), 1);
@@ -5706,7 +5766,7 @@ mod store_tests {
 
     fn insert_motif_with_slices(
         store: &Box<dyn Store>,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         channel_id: i64,
         group_ord: i64,
         slices: &[(ResourceId, i64)],
@@ -5718,8 +5778,8 @@ mod store_tests {
 
 
         t.execute(
-            "INSERT INTO motifs (group_ord, run_id, channel_id) VALUES (?, ?, ?)",
-            params![group_ord, run_id as i64, channel_id],
+            "INSERT INTO motifs (group_ord, run_config_id, channel_id) VALUES (?, ?, ?)",
+            params![group_ord, run_config_id as i64, channel_id],
         )?;
 
         let motif_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
@@ -5728,8 +5788,8 @@ mod store_tests {
 
         for (resource_id, slice_idx) in slices {
             t.execute(
-                "INSERT INTO slices (run_id, channel_id, motif_id, resource_id, slice_idx) VALUES (?, ?, ?, ?, ?)",
-                params![run_id as i64, channel_id, motif_id as i64, *resource_id as i64, *slice_idx],
+                "INSERT INTO slices (run_config_id, channel_id, motif_id, resource_id, slice_idx) VALUES (?, ?, ?, ?, ?)",
+                params![run_config_id as i64, channel_id, motif_id as i64, *resource_id as i64, *slice_idx],
             )?;
         }
 
@@ -5757,8 +5817,8 @@ impl MockStoreBuilder {
         }
     }
 
-    //run_id, motif_id, channel, slices
-    pub fn with_add_slices_to_motif(mut self, inputs:impl IntoIterator<Item=(RunId, u32, i64, HashSet<IdSlice>)> + Debug ) -> Self {
+    //run_config_id, motif_id, channel, slices
+    pub fn with_add_slices_to_motif(mut self, inputs:impl IntoIterator<Item=(RunConfigId, u32, i64, HashSet<IdSlice>)> + Debug ) -> Self {
         debug!("with_add_slices_to_motif: inputs={inputs:?}");
         for inps in inputs {
             self.store.expect_add_slices_to_motif().with(
@@ -5778,7 +5838,7 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_get_motif_meta<R:Into<HashMap<u32, Result<(usize, RunId), ThoError>>>>(mut self, results: R) -> Self {
+    pub fn with_get_motif_meta<R:Into<HashMap<u32, Result<(usize, RunConfigId), ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_get_motif_meta().returning(
             move |motif_id|{
@@ -5791,21 +5851,21 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_get_input_run_ids<R:Into<HashMap<RunId, Result<Vec<RunId>, ThoError>>>>(mut self, results: R) -> Self{
+    pub fn with_get_input_run_config_ids<R:Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(mut self, results: R) -> Self{
         let map = results.into();
-        self.store.expect_get_input_run_ids().returning(
-            move |run_id, input_type|{
-                map.get(&run_id).cloned().expect(&format!("mock is not configured to return input_run_ids for run_id {run_id}"))
+        self.store.expect_get_input_run_config_ids().returning(
+            move |run_config_id, input_type|{
+                map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return input_run_config_ids for run_config_id {run_config_id}"))
             }
         );
         self
     }
 
-    pub fn with_run_config_descr<R: Into<HashMap<RunId, Result<RunConfigRow, ThoError>>>>(mut self, results: R) -> Self {
+    pub fn with_run_config_descr<R: Into<HashMap<RunConfigId, Result<RunConfigRow, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_run_config_descr().returning(
-            move |run_id| {
-                map.get(&run_id).cloned().expect(&format!("mock is not configured to return run_config_descr for run_id {run_id}"))
+            move |run_config_id| {
+                map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return run_config_descr for run_config_id {run_config_id}"))
             }
         );
         self
@@ -5813,31 +5873,31 @@ impl MockStoreBuilder {
 
     pub fn with_save_run_config(
         mut self,
-        input_run_id: Option<Vec<RunId>>,
+        input_run_config_id: Option<Vec<RunConfigId>>,
         run_config_type: &'static str,
         descr: &'static str,
         keys: &'static str,
         properties_vals: HashMap<String, Val>,
-        result: Result<RunId, ThoError>,
+        result: Result<RunConfigId, ThoError>,
     ) -> Self {
-        self.store.expect_save_run_config().returning(move |p_input_run_id, p_run_config_type, p_descr, p_properties_vals| {
-            let p_input_run_id = p_input_run_id.map(|ids| ids.to_vec());
-            if p_input_run_id == input_run_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
+        self.store.expect_save_run_config().returning(move |p_input_run_config_id, p_run_config_type, p_descr, p_properties_vals| {
+            let p_input_run_config_id = p_input_run_config_id.map(|ids| ids.to_vec());
+            if p_input_run_config_id == input_run_config_id && p_run_config_type == run_config_type && p_descr == descr && p_properties_vals == properties_vals {
                 result.clone()
             } else {
                 Err(ThoError::new(format!(
-                    "mock is not configured to save_run_config for input_run_id={p_input_run_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}"
+                    "mock is not configured to save_run_config for input_run_config_id={p_input_run_config_id:?} run_config_type={p_run_config_type} descr={p_descr} properties_vals={p_properties_vals:?}"
                 )))
             }
         });
         self
     }
 
-    pub fn with_list_motifs<R:Into<HashMap<RunId, Result<Vec<u32>, ThoError>>>>(mut self, results: R) -> Self {
+    pub fn with_list_motifs<R:Into<HashMap<RunConfigId, Result<Vec<u32>, ThoError>>>>(mut self, results: R) -> Self {
         let map = results.into();
         self.store.expect_list_motifs().returning(
-            move |run_id|{
-                map.get(&run_id).cloned().expect(&format!("mock is not configured to return motifs for run id {run_id}"))
+            move |run_config_id|{
+                map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return motifs for run id {run_config_id}"))
             }
         );
 
@@ -5847,13 +5907,13 @@ impl MockStoreBuilder {
     pub fn with_list_motif_slices(
         mut self,
         motif_id: u32,
-        select_motifs_run_id: Option<Vec<RunId>>,
+        select_motifs_run_config_id: Option<Vec<RunConfigId>>,
         _limit: Option<u32>,
-        _all_but_in_run_id: Option<(RunId, u32)>, r:Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
+        _all_but_in_run_config_id: Option<(RunConfigId, u32)>, r:Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
         self.store
             .expect_list_motif_slices()
-            .withf(move |p_motif_id, p_select_motifs_run_id, _limit, _all_but_in_run_id| *p_motif_id == motif_id && *p_select_motifs_run_id == select_motifs_run_id)
+            .withf(move |p_motif_id, p_select_motifs_run_config_id, _limit, _all_but_in_run_config_id| *p_motif_id == motif_id && *p_select_motifs_run_config_id == select_motifs_run_config_id)
             .times(1)
             .return_const(r);
 
@@ -5865,7 +5925,7 @@ impl MockStoreBuilder {
         motif_id: u32,
         motif_width: u32,
         min_distance: Option<u32>,
-        r: Result<(i64, RunId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
+        r: Result<(i64, RunConfigId, Vec<TensorIdSliceIdx>, HashMap<ResourceId, Resource>), ThoError>
     ) -> Self {
         self.store.expect_list_random_slices_out_of_motif().returning(
             move |p_motif_id, p_width, p_min_distance, _input_len_adjuster, desired_count| {
@@ -5880,14 +5940,14 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_selected_motifs<R:Into<HashMap<RunId, Result<Vec<Vec<(u32, f64)>>, ThoError>>>>(
+    pub fn with_list_selected_motifs<R:Into<HashMap<RunConfigId, Result<Vec<Vec<(u32, f64)>>, ThoError>>>>(
         mut self,
         results: R
     ) -> Self {
         let map = results.into();
         self.store.expect_list_selected_motifs().returning(
-            move |run_id, channels|{
-                map.get(&run_id).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_id}"))
+            move |run_config_id, channels|{
+                map.get(&run_config_id).cloned().expect(&format!("mock is not configured to return selected motifs for run id {run_config_id}"))
             }
         );
         self
@@ -5895,13 +5955,13 @@ impl MockStoreBuilder {
 
     pub fn with_save_trained_net(
         mut self,
-        inputs: impl IntoIterator<Item = (RunId, PathBuf, f32)> + Debug,
+        inputs: impl IntoIterator<Item = (RunConfigId, PathBuf, f32)> + Debug,
     ) -> Self {
         debug!("with_save_trained_net: inputs={inputs:?}");
-        for (run_id, path, loss) in inputs {
+        for (run_config_id, path, loss) in inputs {
             self.store
                 .expect_save_trained_net()
-                .with(eq(run_id), eq(path), eq(loss), eq(None))
+                .with(eq(run_config_id), eq(path), eq(loss), eq(None))
                 .times(1)
                 .return_const(Ok(()));
         }
@@ -5913,17 +5973,17 @@ impl MockStoreBuilder {
         inputs: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (Vec<RunId>, Option<f32>, Option<usize>, Result<Vec<(u32,PathBuf, f32)>, ThoError>)> + Debug,
+        I: IntoIterator<Item = (Vec<RunConfigId>, Option<f32>, Option<usize>, Result<Vec<(u32, PathBuf, f32)>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
         debug!("with_list_trained_nets: inputs={data:?}");
         let data = Arc::new(data);
         self.store.expect_list_trained_nets().returning(
-            move |run_ids, loss, limit| {
+            move |run_config_ids, loss, limit| {
                 data.iter()
-                    .find(|(expected_run_ids, expected_loss, expected_limit, _)| expected_run_ids.as_slice() == run_ids.as_slice() && *expected_loss == loss && *expected_limit == limit)
+                    .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_slice() && *expected_loss == loss && *expected_limit == limit)
                     .map(|(_, _, _, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run ids {run_ids:?} loss={loss:?} limit={limit:?}"))))
+                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
             }
         );
         self
@@ -5934,26 +5994,26 @@ impl MockStoreBuilder {
         inputs: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (RunId, Result<Vec<u32>, ThoError>)> + Debug,
+        I: IntoIterator<Item = (RunConfigId, Result<Vec<u32>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
         debug!("with_list_trained_nets: inputs={data:?}");
         let data = Arc::new(data);
         self.store.expect_list_input_nets().returning(
-            move |run_id| {
+            move |run_config_id| {
                 data.iter()
-                    .find(|(expected_run_id, _)| expected_run_id == &run_id)
+                    .find(|(expected_run_config_id, _)| expected_run_config_id == &run_config_id)
                     .map(|(_, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("with_list_input_nets is not configured to return  nets for run_id={run_id:?}"))))
+                    .unwrap_or_else(|| Err(ThoError::new(format!("with_list_input_nets is not configured to return  nets for run_config_id={run_config_id:?}"))))
             }
         );
         self
     }
 
-    pub fn with_list_run_config_values(mut self, run_id:RunId, r:Result<HashMap<String, Val>, ThoError>) -> Self {
+    pub fn with_list_run_config_values(mut self, run_config_id: RunConfigId, r:Result<HashMap<String, Val>, ThoError>) -> Self {
         self.store.expect_list_run_config_values()
-            .returning(move |p_run_id| {
-                if p_run_id == run_id {
+            .returning(move |p_run_config_id| {
+                if p_run_config_id == run_config_id {
                     r.clone()
                 } else {
                     Err(ThoError::new("Not found"))
@@ -5963,31 +6023,31 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_output_run_ids<R:Into<HashMap<RunId, Result<Vec<RunId>, ThoError>>>>(
+    pub fn with_list_output_run_config_ids<R:Into<HashMap<RunConfigId, Result<Vec<RunConfigId>, ThoError>>>>(
         mut self,
         results: R,
     ) -> Self {
         let map = results.into();
-        self.store.expect_list_output_run_ids().returning(
-            move |input_run_id| {
-                map.get(&input_run_id)
+        self.store.expect_list_output_run_config_ids().returning(
+            move |input_run_config_id| {
+                map.get(&input_run_config_id)
                     .cloned()
-                    .expect(&format!("mock is not configured to return output run ids for run id {input_run_id}"))
+                    .expect(&format!("mock is not configured to return output run ids for run id {input_run_config_id}"))
             },
         );
         self
     }
 
-    pub fn with_list_run_ids_with_outputs<R: Into<HashMap<Vec<RunId>, Result<Vec<RunId>, ThoError>>>>(
+    pub fn with_list_run_config_ids_with_outputs<R: Into<HashMap<Vec<RunConfigId>, Result<Vec<RunConfigId>, ThoError>>>>(
         mut self,
         results: R,
     ) -> Self {
         let map = results.into();
-        self.store.expect_list_run_ids_with_outputs().returning(
-            move |input_run_ids| {
-                map.get(&input_run_ids.to_vec())
+        self.store.expect_list_run_config_ids_with_outputs().returning(
+            move |input_run_config_ids| {
+                map.get(&input_run_config_ids.to_vec())
                     .cloned()
-                    .expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_ids:?}"))
+                    .expect(&format!("mock is not configured to return run ids with outputs for input ids {input_run_config_ids:?}"))
             },
         );
         self
@@ -6098,10 +6158,10 @@ impl MockStoreBuilder {
         let  i_atomic = AtomicUsize::new(0);
 
     self.store.expect_save_groups_as_motifs()
-        .withf(move |run_id, channel, groups|{
+        .withf(move |run_config_id, channel, groups|{
             let i = i_atomic.fetch_add(1, Relaxed);
 
-            debug!("with_save_groups_as_motifs: run_id={run_id:?}, channel={channel:?}, groups={groups:?} i={i}");
+            debug!("with_save_groups_as_motifs: run_config_id={run_config_id:?}, channel={channel:?}, groups={groups:?} i={i}");
 
             match &check_groups[i] {
                 CheckGroups::Lengths(expected_groups_lengths) => {
@@ -6124,20 +6184,20 @@ impl MockStoreBuilder {
 
     pub fn with_save_groups_as_motifs_inputs(
         mut self,
-        inputs: impl IntoIterator<Item = (RunId, i64, HashMap<u16, HashSet<IdSlice>>, Vec<u32>)> + Debug,
+        inputs: impl IntoIterator<Item = (RunConfigId, i64, HashMap<u16, HashSet<IdSlice>>, Vec<u32>)> + Debug,
     ) -> Self {
-        for (run_id, channel, groups, motif_ids) in inputs {
-            self.store.expect_save_groups_as_motifs().with(eq(run_id), eq(channel), eq(groups)).times(1).return_const(Ok(motif_ids));
+        for (run_config_id, channel, groups, motif_ids) in inputs {
+            self.store.expect_save_groups_as_motifs().with(eq(run_config_id), eq(channel), eq(groups)).times(1).return_const(Ok(motif_ids));
         }
         self
     }
 
     pub fn with_save_selected_motifs(
         mut self,
-        inputs: impl IntoIterator<Item = (RunId, Vec<(u32, f64)>, Result<RunId, ThoError>)> + Debug,
+        inputs: impl IntoIterator<Item = (RunConfigId, Vec<(u32, f64)>, Result<RunConfigId, ThoError>)> + Debug,
     ) -> Self {
-        for (run_id, selected_motifs, result) in inputs {
-            self.store.expect_save_selected_motifs().with(eq(run_id), eq(selected_motifs)).times(1).return_const(result);
+        for (run_config_id, selected_motifs, result) in inputs {
+            self.store.expect_save_selected_motifs().with(eq(run_config_id), eq(selected_motifs)).times(1).return_const(result);
         }
         self
     }
@@ -6156,7 +6216,7 @@ pub fn mock_store_with_find_motifs_run_config(
 ) -> Box<dyn Store> {
     let mut mock = MockStore::new();
 
-    mock.expect_get_input_run_ids().return_const(Ok(vec![0]));
+    mock.expect_get_input_run_config_ids().return_const(Ok(vec![0]));
     mock.expect_list_run_config_values()
         .return_const(Ok(HashMap::from([
             ("FindMotifsRunConfig::id".to_string(), 1.into()),

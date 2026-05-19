@@ -35,7 +35,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
@@ -270,7 +270,7 @@ where
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
-        train_motif_net_run_ids: Vec<RunId>,
+        train_motif_net_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx:R,
         max_loss: Option<f32>,
         trained_nets_limit: Option<usize>,
@@ -282,11 +282,11 @@ where
         R:RunCtx + Adjustable + 'static
     {
 
-        // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_ids.
-        let motif_nets = store.list_trained_nets(train_motif_net_run_ids.clone(), max_loss, trained_nets_limit).await?;
+        // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
+        let motif_nets = store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit).await?;
 
         if motif_nets.is_empty() {
-            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_ids={train_motif_net_run_ids:?}")));
+            return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}")));
         };
 
         Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
@@ -345,7 +345,7 @@ where
         };
 
         let mut motif_widths = HashSet::new();
-        let mut freq_filters_by_find_motifs_run_id: HashMap<RunId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
+        let mut freq_filters_by_find_motifs_run_config_id: HashMap<RunConfigId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
         for (net_id, motif_net) in loaded_motif_nets {
             let extra = motif_net.extra().await?;
@@ -354,24 +354,24 @@ where
             let motif_width = extra.motif_net_params.num_features();
             motif_widths.insert(motif_width);
 
-            let (_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?; //TODO if BucketingStage was used to find motifs it's bucketing_run_id, not find_motifs_run_id
-            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
+            let (_channel, find_motifs_run_config_id) = store.get_motif_meta(motif_id).await?; //TODO if BucketingStage was used to find motifs it's bucketing_run_config_id, not find_motifs_run_config_id
+            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_config_id).await?;
 
-            let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_id.get(&find_motifs_run_id) {
+            let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
                 freq_filter.clone()
             } else {
                 let freq_filter = find_motifs_run_config
                     .freq_filter
                     .as_ref()
-                    .map(|freq_filter| FreqFilter::<C>::new(freq_filter.as_slice(), ws, find_motifs_run_id))
+                    .map(|freq_filter| FreqFilter::<C>::new(freq_filter.as_slice(), ws, find_motifs_run_config_id))
                     .transpose()?
                     .map(Arc::new);
-                freq_filters_by_find_motifs_run_id.insert(find_motifs_run_id, freq_filter.clone());
+                freq_filters_by_find_motifs_run_config_id.insert(find_motifs_run_config_id, freq_filter.clone());
                 freq_filter
             };
 
-            let freq_filter_find_motifs_run_id = if freq_filter.is_some() { Some(find_motifs_run_id) } else { None };
-            loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_id, freq_filter));
+            let freq_filter_find_motifs_run_config_id = if freq_filter.is_some() { Some(find_motifs_run_config_id) } else { None };
+            loaded_motif_nets_with_filters.push((motif_id, net_id, motif_net, motif_width, freq_filter_find_motifs_run_config_id, freq_filter));
         }
 
         if motif_widths.len() > 1 {
@@ -392,11 +392,11 @@ where
             pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
-                .map(|(motif_id, net_id, net, motif_width, freq_filter_find_motifs_run_id, freq_filter)| (net_id, Arc::new(ApplyMotifNet::new(
+                .map(|(motif_id, net_id, net, motif_width, freq_filter_find_motifs_run_config_id, freq_filter)| (net_id, Arc::new(ApplyMotifNet::new(
                     motif_id,
                     net,
                     motif_width,
-                    freq_filter_find_motifs_run_id,
+                    freq_filter_find_motifs_run_config_id,
                     freq_filter,
                     slice_step, //TODO shouldn't be same as one used when training motif net
                     #[cfg(test)]
@@ -443,11 +443,11 @@ where
 
         let apply_motif_nets = self.apply_motif_nets.clone();
         let apply_motif_nets_len = apply_motif_nets.len();
-        let mut inputs_by_filter_group: HashMap<Option<RunId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
+        let mut inputs_by_filter_group: HashMap<Option<RunConfigId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
         inputs_by_filter_group.insert(None, Arc::clone(&input));
 
         for (net_id, apply_motif_net) in &apply_motif_nets {
-            let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
+            let group_key = apply_motif_net.freq_filter_find_motifs_run_config_id;
             if inputs_by_filter_group.contains_key(&group_key) {
                 continue;
             }
@@ -470,7 +470,7 @@ where
             .into_iter()
             .map(|(net_id, apply_motif_net)|{
                 let inputs_by_filter_group = Arc::clone(&inputs_by_filter_group);
-                let group_key = apply_motif_net.freq_filter_find_motifs_run_id;
+                let group_key = apply_motif_net.freq_filter_find_motifs_run_config_id;
                 let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
                 let motif_width = apply_motif_net.motif_width;
                 let motif_width_i64 = motif_width as i64;
@@ -1000,7 +1000,7 @@ where
     id: SynKey,
     net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
     motif_width: u32,
-    freq_filter_find_motifs_run_id: Option<RunId>,
+    freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
     freq_filter: Option<Arc<FreqFilter<C>>>,
     slice_step:u32,
     pd:PhantomData<C>,
@@ -1016,7 +1016,7 @@ where
         motif_id:u32,
         net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
         motif_width: u32,
-        freq_filter_find_motifs_run_id: Option<RunId>,
+        freq_filter_find_motifs_run_config_id: Option<RunConfigId>,
         freq_filter: Option<Arc<FreqFilter<C>>>,
         slice_step:u32,
         #[cfg(test)]
@@ -1030,7 +1030,7 @@ where
             id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + net_wrapper.id(),
             net_wrapper,
             motif_width,
-            freq_filter_find_motifs_run_id,
+            freq_filter_find_motifs_run_config_id,
             freq_filter,
             slice_step,
             pd: PhantomData ,
@@ -1283,7 +1283,7 @@ pub(crate) mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::traits::{Named, SimpleId};
@@ -1339,10 +1339,10 @@ pub(crate) mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id:RunId = 1;
-        let select_motifs_run_id:RunId = 2;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
 
-        let train_motifs_run_id:RunId = 3;
+        let train_motifs_run_config_id: RunConfigId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 2; //channel 1 motif 0
@@ -1351,9 +1351,9 @@ pub(crate) mod tests {
         let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
         let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Sin).f_mul_scalar(0.2)?)?);
 
-        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
-        let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
-        let net_id_1_0 = PathBuf::from(format!("1/{}_{}", motif_1_0_id, train_motifs_run_id));
+        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
+        let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
+        let net_id_1_0 = PathBuf::from(format!("1/{}_{}", motif_1_0_id, train_motifs_run_config_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
         let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step, 100);
         let (params_1_0, module_1_0) = motif_test_net_(Cpu, Arc::clone(&motif_1_0), step, 100);
@@ -1371,30 +1371,30 @@ pub(crate) mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([(
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     Ok(RunConfigRow {
-                        id: find_motifs_run_id,
+                        id: find_motifs_run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find motifs".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
                 )
 
-                .with_get_input_run_ids([
-                    (train_motifs_run_id, Ok(vec![select_motifs_run_id])),
-                    (select_motifs_run_id, Ok(vec![find_motifs_run_id]))
+                .with_get_input_run_config_ids([
+                    (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
+                    (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))
                 ])
                 .with_get_motif_meta([
-                    (motif_0_0_id, Ok((0usize, find_motifs_run_id))),
-                    (motif_0_1_id, Ok((0usize, find_motifs_run_id))),
-                    (motif_1_0_id, Ok((1usize, find_motifs_run_id))),
+                    (motif_0_0_id, Ok((0usize, find_motifs_run_config_id))),
+                    (motif_0_1_id, Ok((0usize, find_motifs_run_config_id))),
+                    (motif_1_0_id, Ok((1usize, find_motifs_run_config_id))),
                 ])
                 .with_list_selected_motifs([
-                    (select_motifs_run_id, Ok(
+                    (select_motifs_run_config_id, Ok(
                         vec![
                             vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
                             vec![(motif_1_0_id, 1.0f64)], //channel 1
@@ -1403,7 +1403,7 @@ pub(crate) mod tests {
                     ))
                 ])
                 .with_list_trained_nets([
-                    (vec![select_motifs_run_id], Some(0.3), None, Ok(vec![
+                    (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
                         (0, net_id_0_0.clone(), 0.1f32),
                         (0, net_id_0_1.clone(), 0.2f32),
                         (0, net_id_1_0.clone(), 0.25f32),
@@ -1415,7 +1415,7 @@ pub(crate) mod tests {
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
-            vec![select_motifs_run_id],
+            vec![select_motifs_run_config_id],
             mock_run_ctx::default(1),
             Some(0.3),
             None,
@@ -1496,9 +1496,9 @@ pub(crate) mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id: RunId = 1;
-        let select_motifs_run_id: RunId = 2;
-        let train_motifs_run_id: RunId = 3;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
+        let train_motifs_run_config_id: RunConfigId = 3;
         let step = 3;
         let input_len = 400usize;
 
@@ -1507,8 +1507,8 @@ pub(crate) mod tests {
         let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
         let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("mixed_motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(60, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
 
-        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
-        let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_id));
+        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
+        let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 50);
         let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step, 50);
 
@@ -1524,31 +1524,31 @@ pub(crate) mod tests {
         let store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([(
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     Ok(RunConfigRow {
-                        id: find_motifs_run_id,
+                        id: find_motifs_run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find motifs".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_get_input_run_ids([
-                    (train_motifs_run_id, Ok(vec![select_motifs_run_id])),
-                    (select_motifs_run_id, Ok(vec![find_motifs_run_id])),
+                .with_get_input_run_config_ids([
+                    (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
+                    (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id])),
                 ])
                 .with_get_motif_meta([
-                    (motif_0_0_id, Ok((0usize, find_motifs_run_id))),
-                    (motif_0_1_id, Ok((0usize, find_motifs_run_id))),
+                    (motif_0_0_id, Ok((0usize, find_motifs_run_config_id))),
+                    (motif_0_1_id, Ok((0usize, find_motifs_run_config_id))),
                 ])
                 .with_list_selected_motifs([
-                    (select_motifs_run_id, Ok(vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])),
+                    (select_motifs_run_config_id, Ok(vec![vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)]])),
                 ])
                 .with_list_trained_nets([
-                    (vec![select_motifs_run_id], Some(0.3), None, Ok(vec![
+                    (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
                         (0, net_id_0_0.clone(), 0.1f32),
                         (0, net_id_0_1.clone(), 0.2f32),
                     ])),
@@ -1559,7 +1559,7 @@ pub(crate) mod tests {
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
-            vec![select_motifs_run_id],
+            vec![select_motifs_run_config_id],
             mock_run_ctx::default(1),
             Some(0.3),
             None,
@@ -1599,15 +1599,15 @@ pub(crate) mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id:RunId = 1;
-        let select_motifs_run_id:RunId = 2;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
 
-        let train_motifs_run_id:RunId = 3;
+        let train_motifs_run_config_id: RunConfigId = 3;
         let motif_0_0_id = 0; //channel 0 motif 0
 
         let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
 
-        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_id));
+        let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
 
         let ws = Arc::new(RwLock::new(
@@ -1621,33 +1621,33 @@ pub(crate) mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
             .with_run_config_descr([(
-                find_motifs_run_id,
+                find_motifs_run_config_id,
                 Ok(RunConfigRow {
-                    id: find_motifs_run_id,
+                    id: find_motifs_run_config_id,
                     r#type: "FindMotifsRunConfig".to_string(),
                     descr: "test find motifs".to_string(),
                     run_on: "2026-01-01 00:00:00".to_string(),
                 }),
             )])
             .with_list_run_config_values(
-                find_motifs_run_id,
-                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                find_motifs_run_config_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
             )
 
-            .with_get_input_run_ids([
-                (train_motifs_run_id, Ok(vec![select_motifs_run_id])),
-                (select_motifs_run_id, Ok(vec![find_motifs_run_id]))
+            .with_get_input_run_config_ids([
+                (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
+                (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))
             ])
-            .with_get_motif_meta( [(motif_0_0_id, Ok((0usize, find_motifs_run_id)))])
+            .with_get_motif_meta( [(motif_0_0_id, Ok((0usize, find_motifs_run_config_id)))])
             .with_list_selected_motifs([
-                (select_motifs_run_id, Ok(
+                (select_motifs_run_config_id, Ok(
                     vec![
                         vec![(motif_0_0_id, 1.0f64)], //channel 0
                     ]
                 ))
             ])
             .with_list_trained_nets([
-                (vec![select_motifs_run_id], Some(0.3), None, Ok(vec![
+                (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
                     (0, net_id_0_0.clone(), 0.1f32),
                 ]))
             ])
@@ -1658,7 +1658,7 @@ pub(crate) mod tests {
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
-            vec![select_motifs_run_id],
+            vec![select_motifs_run_config_id],
             mock_run_ctx::default(1), Some(0.3) //Some(1000)
             ,
             None,

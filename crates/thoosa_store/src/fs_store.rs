@@ -13,7 +13,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{ThoError, group_slices};
 use zstd::stream::write::Encoder;
 
@@ -104,7 +104,7 @@ impl ChunkedWriter {
 }
 
 pub struct FileMotifTrackerStore {
-    run_id: RunId,
+    run_config_id: RunConfigId,
     channel: u32,
     writer: ChunkedWriter,
     path: PathBuf,
@@ -113,7 +113,7 @@ pub struct FileMotifTrackerStore {
 impl Debug for FileMotifTrackerStore {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("FileMotifTrackerStore")
-            .field("run_id", &self.run_id)
+            .field("run_config_id", &self.run_config_id)
             .field("channel", &self.channel)
             .field("path", &self.path)
             .finish()
@@ -121,17 +121,17 @@ impl Debug for FileMotifTrackerStore {
 }
 
 impl FileMotifTrackerStore {
-    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_id: RunId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoError> {
-        let file_path = path.as_ref().join(format!("{run_id}_{channel}_slices.zstd").as_str());
+    pub fn new<P: AsRef<Path> + Sync + Send + Debug>(path: P, run_config_id: RunConfigId, channel: u32) -> Result<Box<dyn MotifTrackerStore>, ThoError> {
+        let file_path = path.as_ref().join(format!("{run_config_id}_{channel}_slices.zstd").as_str());
 
         let file = std::fs::OpenOptions::new().create(true).read(true).write(true).open(&file_path)?;
 
-        debug!("FileMotifTrackerStore::new: path={path:?} run_id={run_id} channel={channel} file_path={file_path:?}");
+        debug!("FileMotifTrackerStore::new: path={path:?} run_config_id={run_config_id} channel={channel} file_path={file_path:?}");
 
         let writer = ChunkedWriter::new(file, 3)?;
 
         Ok(Box::new(Self {
-            run_id,
+            run_config_id,
             channel,
             writer,
             path: file_path,
@@ -164,15 +164,15 @@ impl MotifTrackerStore for FileMotifTrackerStore {
         }));
         debug!("MotifTrackerStore::load_slices_into_groups: inserting {} groups {} slices", groups.len(), groups.values().map(|s| s.len()).sum::<usize>());
         let groups_len = groups.len();
-        store.save_groups_as_motifs(self.run_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups)).await?;
+        store.save_groups_as_motifs(self.run_config_id, self.channel as i64, filter_groups_by_slices_count(max_slices_counts, groups)).await?;
 
         fs::remove_file(&self.path)?;
 
         Ok(groups_len)
     }
 
-    fn run_id(&self) -> RunId {
-        self.run_id
+    fn run_config_id(&self) -> RunConfigId {
+        self.run_config_id
     }
 
     fn channel(&self) -> u32 {
@@ -300,6 +300,7 @@ mod tests {
     use std::sync::Arc;
     use thoosa_shared::test_utils::init_test_logging;
     use thoosa_shared::{TensorIdSliceIdx, ThoError, cdt_for_dir, group_slices};
+    use thoosa_shared::run_configs::RUN_ID;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_single_part() -> Result<(), ThoError> {
@@ -308,12 +309,13 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
         let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
 
-        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_config_id, 3)?;
 
         file_store.save_slices(vec![
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 200), 0.1),
@@ -325,7 +327,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
-        let map = store.list_motifs_slices(run_id, None).await?;
+        let map = store.list_motifs_slices(run_config_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -343,12 +345,13 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
         let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
 
-        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_config_id, 3)?;
 
         file_store.save_slices(vec![
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 200), 0.1),
@@ -360,7 +363,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
-        let map = store.list_motifs_slices(run_id, None).await?;
+        let map = store.list_motifs_slices(run_config_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let resoruce_0_motifs = motifs_slices.iter().map(|ms| ms.motif_id).collect::<HashSet<_>>();
@@ -388,12 +391,13 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
         let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
 
-        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_config_id, 3)?;
 
         file_store.save_slices(vec![
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[1], 200), 0.1),
@@ -405,7 +409,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
-        let map = store.list_motifs_slices(run_id, None).await?;
+        let map = store.list_motifs_slices(run_config_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs_0 = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -430,12 +434,13 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
         let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
 
-        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_config_id, 3)?;
 
         file_store.save_slices(vec![
             SlicesMatch(TensorIdSliceIdx(resource_ids[0], 100), TensorIdSliceIdx(resource_ids[0], 200), 0.1),
@@ -450,7 +455,7 @@ mod tests {
         file_store.load_slices_into_groups(&store, None).await?;
 
         let resources = store.list_resources_by_ids(&resource_ids).await?;
-        let map = store.list_motifs_slices(run_id, None).await?;
+        let map = store.list_motifs_slices(run_config_id, None).await?;
 
         let motifs_slices = map.get(&resources[0]).expect("resource 0");
         let mut slise_idxs = motifs_slices.into_iter().map(|s| s.slice_idx).collect::<Vec<_>>();
@@ -469,16 +474,17 @@ mod tests {
         fs::create_dir_all(&test_dir)?;
 
         let mut store = Arc::new(SqlStore::from_path(test_dir.join("main_store.db3")).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_ids = crate::store_tests::init_test_store(&mut store).await?;
 
-        let run_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
+        let run_config_id = store.save_run_config(None, &"todo", "test", HashMap::new()).await?;
 
-        let mut file_store = FileMotifTrackerStore::new(test_dir, run_id, 3)?;
+        let mut file_store = FileMotifTrackerStore::new(test_dir, run_config_id, 3)?;
 
         file_store.load_slices_into_groups(&store, None).await?;
 
-        let map = store.list_motifs_slices(run_id, None).await?;
+        let map = store.list_motifs_slices(run_config_id, None).await?;
 
         assert_eq!(0, map.len());
 
@@ -491,13 +497,13 @@ mod tests {
      fn test_z() -> Result<(), ThoosaError>{
 
          let mut slice_id = 0;
-         let run_id=28;
+         let run_config_id=28;
          let channel=19;
 
          log::set_max_level(Trace);
          let groups:HashMap<u16, HashSet<IdSlice>> = group_slices(
 
-            // ChunkedSlicesReader::<SlicesMatch>::new(&PathBuf::from(format!("/tmp/ws_test/tmp/{run_id}_{channel}_slices.zstd").as_str()))?.flat_map(|slices|{
+            // ChunkedSlicesReader::<SlicesMatch>::new(&PathBuf::from(format!("/tmp/ws_test/tmp/{run_config_id}_{channel}_slices.zstd").as_str()))?.flat_map(|slices|{
             ChunkedSlicesReader::<SlicesMatch>::new(&PathBuf::from("/tmp/2024-12-12T12_54_47.820_01_00_3468226743/tmp/1_0_slices.zstd"))?.flat_map(|slices|{
                  slices.unwrap().into_iter().map(move |slices:SlicesMatch|{
                      slice_id+=1;
@@ -509,7 +515,7 @@ mod tests {
              })
          );
 
-         debug!("{run_id}_{channel}_slices slice_id={slice_id} groups.len={}", groups.len());
+         debug!("{run_config_id}_{channel}_slices slice_id={slice_id} groups.len={}", groups.len());
          let test_dir = Path::new("/tmp").join(cdt_for_dir());
          fs::create_dir_all(&test_dir)?;
          let sql_file = test_dir.join("test_store.db3");

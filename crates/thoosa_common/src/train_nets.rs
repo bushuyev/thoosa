@@ -46,15 +46,15 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
-use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::inference_mode::InferenceModeGuard;
 use crate::runner::global_ctx::GlobalCtx;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
-    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_ids)]
-    pub train_motif_nets_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_config_ids)]
+    pub train_motif_nets_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     pub train_resource_group: String,
@@ -103,7 +103,7 @@ impl TrainLabelNetsArgs {
 #[run_config_opt]
 pub struct TrainLabelNetRunConfig {//TODO rename to TrainLabelNetRunConfig
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -122,7 +122,7 @@ impl AsRef<CommonTrainingRunConfig> for TrainLabelNetRunConfig {
 
 impl TrainLabelNetRunConfig {
     pub fn new(
-        id: Option<RunId>,
+        id: Option<RunConfigId>,
         common_training_args: CommonTrainingRunConfig,
         net: LabelNetTypeArgs,
     ) -> Self {
@@ -136,7 +136,7 @@ impl TrainLabelNetRunConfig {
 
 #[derive(Debug)]
 pub struct TrainLabelNetRunConfigResult {
-    train_label_nets_run_id: Option<RunId>,
+    train_label_nets_run_config_id: Option<RunConfigId>,
     pub label: String,
     pub loss: f32,
     label_node_params: LabelNetParams,
@@ -163,7 +163,7 @@ impl TrainLabelNetRunConfigResult {
         var_store: VarStore,
     ) -> Self {
         Self {
-            train_label_nets_run_id: None,
+            train_label_nets_run_config_id: None,
             label,
             loss,
             label_node_params,
@@ -176,7 +176,7 @@ impl TrainLabelNetRunConfigResult {
 
 #[derive(Debug)]
 pub struct TrainLabelNetRunConfigResultParams<'a> {
-    pub train_motif_nets_run_ids: &'a Vec<RunId>,
+    pub train_motif_nets_run_config_ids: &'a Vec<RunConfigId>,
     pub motif_nets_ids: &'a Vec<u32>,
 }
 
@@ -194,7 +194,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
     ) -> Result<u32, ThoError> {
 
         let run_config_id = store.save_run_config(
-            Some(p.train_motif_nets_run_ids), //it's used as input for TrainLabelNetsOutput
+            Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput
             &TrainLabelNetRunConfig::type_name(),
             "Label",
             self.train_label_nets_run_config.to_properties_iter(None).collect(),
@@ -218,7 +218,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
 #[derive(Debug)]
 pub struct TrainFinalNetsRunConfigResult {
-    train_label_nodes_run_ids: Vec<RunId>,
+    train_label_nodes_run_config_ids: Vec<RunConfigId>,
     pub loss: f32,
     var_store: VarStore,
     final_node_params: FinalNetParams,
@@ -227,15 +227,15 @@ pub struct TrainFinalNetsRunConfigResult {
 
 impl TrainFinalNetsRunConfigResult {
     pub fn new(
-        train_label_nodes_run_ids: Option<&Vec<RunId>>,
+        train_label_nodes_run_config_ids: Option<&Vec<RunConfigId>>,
         loss: f32,
         var_store: VarStore,
         final_node_params: FinalNetParams,
         train_final_nodes_values: TrainFinalNetRunConfig,
     ) -> Self {
         Self {
-            train_label_nodes_run_ids: train_label_nodes_run_ids
-                .expect("train_label_nodes_run_ids")
+            train_label_nodes_run_config_ids: train_label_nodes_run_config_ids
+                .expect("train_label_nodes_run_config_ids")
                 .clone(),
             loss,
             var_store,
@@ -256,7 +256,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         let run_config_id = store.save_run_config(
-            Some(&self.train_label_nodes_run_ids),
+            Some(&self.train_label_nodes_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
             self.train_final_net_run_config.to_properties_iter(None).collect(),
@@ -523,7 +523,7 @@ where
 
 //TODO move to ws
 pub fn load_final_model(
-    run_id: RunId,
+    run_config_id: RunConfigId,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     device: &Device,
 ) -> Result<
@@ -533,15 +533,15 @@ pub fn load_final_model(
     ),
     ThoError,
 > {
-    let (model_path, params_path) = ws.read().final_model(run_id)?;
-    debug!("load_final_model: params_path={model_path:?} run_id={run_id}");
+    let (model_path, params_path) = ws.read().final_model(run_config_id)?;
+    debug!("load_final_model: params_path={model_path:?} run_config_id={run_config_id}");
 
     let final_node_params = FinalNetParams::from_file(&params_path)?;
     debug!("load_final_model:  final_node_params={final_node_params:?}");
 
     let final_params_for_builder = final_node_params.clone();
     let node = ThoModuleWithStore::load(
-        mono_key!(run_id, "final_model").into(),
+        mono_key!(run_config_id, "final_model").into(),
         move |path: &nn::Path| final_net(&final_params_for_builder)?.build_tch_module(path),
         model_path,
         *device,
@@ -552,8 +552,8 @@ pub fn load_final_model(
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainMotifsNetsArgs {
-    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_ids)]
-    pub select_motifs_run_ids: Option<Vec<RunId>>,
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_config_ids)]
+    pub select_motifs_run_config_ids: Option<Vec<RunConfigId>>,
 
     #[arg(long)]
     pub motif_id: Option<u32>,
@@ -570,8 +570,8 @@ pub struct TrainMotifsNetsArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, DummyData)]
 pub enum MotifsBy {
-    SelectMotifsRunIds { select_motifs_run_ids: Vec<RunId> },
-    MotifId { motif_id: u32, select_motifs_run_ids: Option<Vec<RunId>> },
+    SelectMotifsRunIds { select_motifs_run_config_ids: Vec<RunConfigId> },
+    MotifId { motif_id: u32, select_motifs_run_config_ids: Option<Vec<RunConfigId>> },
 }
 
 impl TrainMotifsNetsArgs {
@@ -580,9 +580,9 @@ impl TrainMotifsNetsArgs {
     }
 
     pub fn motifs_by(&self) -> Result<MotifsBy, ThoError> {
-        match (self.motif_id, self.select_motifs_run_ids.clone()) {
-            (Some(motif_id), select_motifs_run_ids) => Ok(MotifsBy::MotifId { motif_id, select_motifs_run_ids }),
-            (None, Some(select_motifs_run_ids)) => Ok(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids }),
+        match (self.motif_id, self.select_motifs_run_config_ids.clone()) {
+            (Some(motif_id), select_motifs_run_config_ids) => Ok(MotifsBy::MotifId { motif_id, select_motifs_run_config_ids }),
+            (None, Some(select_motifs_run_config_ids)) => Ok(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids }),
             (None, None) => Err(ThoError::new("TrainMotifsNetsArgs: either --select-motifs-run-ids or --motif-id must be provided")),
         }
     }
@@ -593,9 +593,9 @@ mod train_motifs_nets_args_tests {
     use super::{MotifsBy, OptConfig, TrainMotifsNetsArgs};
 
     #[test]
-    fn motifs_by_from_select_run_ids() {
+    fn motifs_by_from_select_run_config_ids() {
         let args = TrainMotifsNetsArgs {
-            select_motifs_run_ids: Some(vec![1, 2]),
+            select_motifs_run_config_ids: Some(vec![1, 2]),
             motif_id: None,
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
@@ -605,15 +605,15 @@ mod train_motifs_nets_args_tests {
         assert_eq!(
             args.motifs_by().unwrap(),
             MotifsBy::SelectMotifsRunIds {
-                select_motifs_run_ids: vec![1, 2],
+                select_motifs_run_config_ids: vec![1, 2],
             }
         );
     }
 
     #[test]
-    fn motifs_by_from_motif_id_and_optional_select_run_ids() {
+    fn motifs_by_from_motif_id_and_optional_select_run_config_ids() {
         let args = TrainMotifsNetsArgs {
-            select_motifs_run_ids: Some(vec![10, 11]),
+            select_motifs_run_config_ids: Some(vec![10, 11]),
             motif_id: Some(7),
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
@@ -624,7 +624,7 @@ mod train_motifs_nets_args_tests {
             args.motifs_by().unwrap(),
             MotifsBy::MotifId {
                 motif_id: 7,
-                select_motifs_run_ids: Some(vec![10, 11]),
+                select_motifs_run_config_ids: Some(vec![10, 11]),
             }
         );
     }
@@ -632,7 +632,7 @@ mod train_motifs_nets_args_tests {
     #[test]
     fn motifs_by_requires_one_source() {
         let args = TrainMotifsNetsArgs {
-            select_motifs_run_ids: None,
+            select_motifs_run_config_ids: None,
             motif_id: None,
             opt_config: OptConfig::new(10, 1),
             run_config_cnt: "{}".to_string(),
@@ -764,7 +764,7 @@ impl Default for MotifNetTypeArgs {
 #[run_config_opt]
 pub struct TrainMotifNetRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -1745,7 +1745,7 @@ pub struct TrainMotifNetResult {
     pub params: MotifNetParams,
     run_config_values: TrainMotifNetRunConfig,
     #[allow(dead_code)]
-    select_motifs_run_id: RunId,
+    select_motifs_run_config_id: RunConfigId,
     descr: Option<String>
 }
 
@@ -1755,7 +1755,7 @@ impl TrainMotifNetResult {
         channel: u32,
         motif_id: u32,
         vs: VarStore,
-        select_motifs_run_id: RunId,
+        select_motifs_run_config_id: RunConfigId,
         params: MotifNetParams,
         run_config_values: TrainMotifNetRunConfig,
         descr: Option<String>,
@@ -1767,7 +1767,7 @@ impl TrainMotifNetResult {
             vs,
             params,
             run_config_values,
-            select_motifs_run_id,
+            select_motifs_run_config_id,
             descr
         }
     }
@@ -1778,13 +1778,13 @@ impl TrainMotifNetResult {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainMotifsNetsResult {//TODO move to train_motif_nets.rs
-    select_motifs_run_ids: Vec<RunId>,
+    select_motifs_run_config_ids: Vec<RunConfigId>,
     pub train_motif_nets_results:Vec<TrainMotifNetResult>
 }
 
 impl TrainMotifsNetsResult {
-    pub fn new(select_motifs_run_ids: Vec<RunId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
-        Self {  select_motifs_run_ids, train_motif_nets_results }
+    pub fn new(select_motifs_run_config_ids: Vec<RunConfigId>, train_motif_nets_results: Vec<TrainMotifNetResult>) -> Self {
+        Self {  select_motifs_run_config_ids, train_motif_nets_results }
     }
 }
 
@@ -1797,7 +1797,7 @@ impl SavableResult for TrainMotifsNetsResult {
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
             result.push(
-            r.save(store, ws, self.select_motifs_run_ids.as_slice()).await?
+            r.save(store, ws, self.select_motifs_run_config_ids.as_slice()).await?
             );
         }
 
@@ -1821,7 +1821,7 @@ impl Output for TrainMotifsNetsResult {
 
 #[async_trait]
 impl SavableResult for TrainMotifNetResult {
-    type P<'a> =  &'a [RunId];
+    type P<'a> =  &'a [RunConfigId];
     type R = u32;
 
     async fn save(
@@ -1833,7 +1833,7 @@ impl SavableResult for TrainMotifNetResult {
 
         debug!("TrainMotifNetResult::save: self={:?}", self);
 
-        let train_motif_net_run_id = store.save_run_config(
+        let train_motif_net_run_config_id = store.save_run_config(
             Some(p),
             &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
@@ -1842,15 +1842,15 @@ impl SavableResult for TrainMotifNetResult {
 
         let path = ws.read().save_motif_net(
             &self.channel,
-            &train_motif_net_run_id,
+            &train_motif_net_run_config_id,
             &self.motif_id,
             &self.vs,
             &self.params,
         )?;
 
-        store.save_trained_net(train_motif_net_run_id, path, self.loss, None).await?;
+        store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None).await?;
 
-        Ok(train_motif_net_run_id)
+        Ok(train_motif_net_run_config_id)
 
     }
 }
@@ -2074,8 +2074,8 @@ impl WithId for LoadMotifNetOutput {
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainFinalNetArgs {
-    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_ids)]
-    pub train_label_nets_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = crate::utils::parse_run_config_ids)]
+    pub train_label_nets_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     train_resource_group: String,
@@ -2107,7 +2107,7 @@ impl TrainFinalNetArgs {
 #[run_config_opt]
 pub struct TrainFinalNetRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -2140,7 +2140,7 @@ impl FinalNetArgs {
 
 impl TrainFinalNetRunConfig {
     pub fn new(
-        id: Option<RunId>,
+        id: Option<RunConfigId>,
         common_training_args: CommonTrainingRunConfig,
         net: FinalNetArgs,
     ) -> Self {
@@ -2155,7 +2155,7 @@ impl TrainFinalNetRunConfig {
 #[derive(Debug, Args, Clone)]
 pub struct InferArgs {
     #[arg(long, default_value_t = 0)]
-    pub final_run_id: RunId,
+    pub final_run_config_id: RunConfigId,
 
     #[arg(long, default_value_t = 1000)]
     pub motif_slices_step: usize,
@@ -2182,13 +2182,13 @@ impl InferArgs {
     }
 
     pub fn new(
-        final_run_id: RunId,
+        final_run_config_id: RunConfigId,
         input_data: String,
         output: String,
         input_slice_step: usize,
     ) -> Self {
         Self {
-            final_run_id,
+            final_run_config_id,
             motif_slices_step: input_slice_step,
             input_dir: input_data,
             output_dir: output,
@@ -2409,7 +2409,7 @@ mod train_tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
+    use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
     use thoosa_shared::perf_logging::set_panic_hook;
     use thoosa_shared::val::Val;
     use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoError};
@@ -3195,11 +3195,11 @@ mod train_tests {
     //TODO remove?
     fn save_test_models(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        base_run_id: RunId,
+        base_run_config_id: RunConfigId,
         channels: u32,
         max_motif_batches: u32,
         max_batch_size: u32,
-        motif_node_params_run_id: RunId,
+        motif_node_params_run_config_id: RunConfigId,
         window: u32,
     ) -> Result<(), ThoError> {
         // fs::create_dir_all(models_path)?;
@@ -3208,7 +3208,7 @@ mod train_tests {
 
         save_test_label_model(
             &ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "seizure",
             3,
             4,
@@ -3217,17 +3217,17 @@ mod train_tests {
         )?;
         // fs::write(models_path.join("motif_model.json"), serde_json5::to_string(&MotifNodeParams::new(window))?)?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "0", 1, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "0", 2, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "0", 3, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 11, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "0", 1, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "0", 2, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "0", 3, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 11, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "lpd",
             1,
             1,
@@ -3235,13 +3235,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "gpd",
             1,
             1,
@@ -3249,13 +3249,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "lrda",
             1,
             1,
@@ -3263,13 +3263,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "grda",
             1,
             1,
@@ -3277,13 +3277,13 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
 
         save_test_label_model(
             ws,
-            base_run_id + 1,
+            base_run_config_id + 1,
             "other",
             1,
             1,
@@ -3291,9 +3291,9 @@ mod train_tests {
             max_batch_size,
         )?;
 
-        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_id)?;
-        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_id)?;
+        save_test_motif_model(ws, "0", 0, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "1", 10, window, motif_node_params_run_config_id)?;
+        save_test_motif_model(ws, "2", 20, window, motif_node_params_run_config_id)?;
         Ok(())
     }
 
@@ -3322,7 +3322,7 @@ mod train_tests {
 
     fn save_test_label_model(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         label: &str,
         channels: u32,
         max_motif_nets: u32,
@@ -3348,7 +3348,7 @@ mod train_tests {
         );
 
         ws.write()
-            .save_label_net(run_id, &label, &vs_0, &label_node_params)?;
+            .save_label_net(run_config_id, &label, &vs_0, &label_node_params)?;
         Ok(())
     }
 
@@ -3357,7 +3357,7 @@ mod train_tests {
         channel: &str,
         motif_id: u32,
         window: u32,
-        motif_node_params_run_id: RunId,
+        motif_node_params_run_config_id: RunConfigId,
     ) -> Result<(), ThoError> {
         let mut vs_0 = VarStore::new(Cpu);
         let _test_motif_model: Box<dyn ThoModule<AnyDims, AnyDims>> =
@@ -3384,7 +3384,7 @@ mod train_tests {
         );
         ws.write().save_motif_net(
             &channel,
-            &motif_node_params_run_id,
+            &motif_node_params_run_config_id,
             &motif_id,
             &vs_0,
             &MotifNetParams::new(100, 1, 1, 100, 32, 10),
@@ -3669,12 +3669,14 @@ mod train_tests {
     #[tokio::test]
     async fn test_save_train_label_net_result_persists_trained_net_and_loss() -> Result<(), ThoError> {
         let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let train_motif_nets_run_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
+        let train_motif_nets_run_config_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
 
         let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
-            // vec![source_run_id],
+            // vec![source_run_config_id],
             "alpha".to_string(),
             0.125,
             LabelNetParams::new(4, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(16, 2))),
@@ -3682,17 +3684,17 @@ mod train_tests {
             VarStore::new(Cpu),
         );
 
-        let train_motif_nets_run_id_vec = vec![train_motif_nets_run_id];
+        let train_motif_nets_run_config_id_vec = vec![train_motif_nets_run_config_id];
         let motif_nets_ids= vec![];
-        let train_label_nets_run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
-            train_motif_nets_run_ids: &train_motif_nets_run_id_vec,
+        let train_label_nets_run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, TrainLabelNetRunConfigResultParams{
+            train_motif_nets_run_config_ids: &train_motif_nets_run_config_id_vec,
             motif_nets_ids: &motif_nets_ids,
         }).await?;
-        let run_config_values = store.list_run_config_values(train_label_nets_run_id).await?;
-        let trained_nets = store.list_trained_nets(vec![train_label_nets_run_id], None, None).await?;
+        let run_config_values = store.list_run_config_values(train_label_nets_run_config_id).await?;
+        let trained_nets = store.list_trained_nets(vec![train_label_nets_run_config_id], None, None).await?;
 
-        assert_eq!(vec![train_label_nets_run_id], store.list_output_run_ids(train_motif_nets_run_id).await?);
-        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{train_label_nets_run_id}")), 0.125)], trained_nets);
+        assert_eq!(vec![train_label_nets_run_config_id], store.list_output_run_config_ids(train_motif_nets_run_config_id).await?);
+        assert_eq!(vec![(1, PathBuf::from(format!("alpha/{train_label_nets_run_config_id}")), 0.125)], trained_nets);
 
         Ok(())
     }
@@ -3700,21 +3702,22 @@ mod train_tests {
     #[tokio::test]
     async fn test_save_train_final_net_result_persists_loss_in_run_config_values() -> Result<(), ThoError> {
         let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
-        let label_run_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
-        let label_run_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
+        let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
+        let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(
-            Some(&vec![label_run_id_0, label_run_id_1]),
+            Some(&vec![label_run_config_id_0, label_run_config_id_1]),
             0.125,
             VarStore::new(Cpu),
             FinalNetParams::new(4, 2, 3),
             TrainFinalNetRunConfig::new(None, CommonTrainingRunConfig::default(), FinalNetArgs::new(3)),
         );
 
-        let run_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
-        let run_config_values = store.list_run_config_values(run_id).await?;
-        let trained_nets = store.list_trained_nets(vec![run_id], None, None).await?;
+        let run_config_id = crate::runs::SavableResult::save(&mut result, &store, &ws, ()).await?;
+        let run_config_values = store.list_run_config_values(run_config_id).await?;
+        let trained_nets = store.list_trained_nets(vec![run_config_id], None, None).await?;
 
         assert_eq!(vec![(1, PathBuf::from(format!("3")), 0.125)], trained_nets);
         Ok(())

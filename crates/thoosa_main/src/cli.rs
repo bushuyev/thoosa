@@ -27,7 +27,7 @@ use std::io::Write;
 use std::ops::{Deref, Range};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use std::{fs, process};
@@ -63,7 +63,7 @@ use thoosa_run_config_args::{GridRunConfigSource, OptRunConfigSource};
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
 use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, simple_id, CopyToDevice, RangeOrValue, StreamBuffering};
 use thoosa_shared::comp_id::SynKey;
@@ -137,6 +137,9 @@ pub struct Cli {
 
     #[arg(long, default_value_t = 100)]
     pub futures_channel_bound: usize,
+
+    #[arg(long)]
+    pub run_id:Option<u32>,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -445,6 +448,16 @@ where
      */
     let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
+    RUN_ID.set(match cli.run_id{
+        None => {
+            if let Some(Infer(_)) = &cli.command {
+                panic!("No run_id")
+            }
+            store.save_run(format!("{cli:?}")).await?
+        }
+        Some(run_id) => run_id
+    }).expect("can't set run_id");
+
     let devices = list_devices();
 
     let cpu_num = std::thread::available_parallelism()?;
@@ -587,7 +600,7 @@ where
             let init_loader = Arc::clone(&loader);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
-            let run_ids = run_grid (
+            let run_config_ids = run_grid (
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -610,7 +623,7 @@ where
                 || root_ctx.branch(Some("find motifs"), true),
             ).await?;
 
-            info!("FindMotifs done, run_ids={run_ids:?}");
+            info!("FindMotifs done, run_config_ids={run_config_ids:?}");
 
         }
 
@@ -622,7 +635,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(seq_scan_args.resource_config())));
 
-            let run_ids = run_grid(
+            let run_config_ids = run_grid(
                 None,
                 seq_scan_run_config_range_or_value,
                 input_wrapper,
@@ -640,7 +653,7 @@ where
                 || root_ctx.branch(Some("seq scan"), true),
             ).await?;
 
-            info!("SeqScan done, run_ids={run_ids:?}");
+            info!("SeqScan done, run_config_ids={run_config_ids:?}");
         }
 
         Some(SelectMotifs(select_motifs_args)) => {
@@ -656,7 +669,7 @@ where
                 &ws
             ));
 
-            let run_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+            let run_config_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
                 None,
                 select_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -670,7 +683,7 @@ where
                         loader,
                         motif_loader,
                         run_configs,
-                        select_motifs_args.find_motifs_run_ids.clone(),
+                        select_motifs_args.find_motifs_run_config_ids.clone(),
                         100_000, //TODO config
                         // #[cfg(test)]
                         None
@@ -679,7 +692,7 @@ where
                 || root_ctx.branch(Some("select motifs"), true),
             ).await?;
 
-            info!("SelectMotifs done, run_ids={run_ids:?}");
+            info!("SelectMotifs done, run_config_ids={run_config_ids:?}");
         }
 
         Some(Commands::MergeSelectedMotifs(merge_selected_motifs_args)) => {
@@ -696,7 +709,7 @@ where
             ));
 
             let output_wrap = Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
-                Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_ids.clone()))),
+                Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone()))),
                 root_ctx.branch(Some("select motifs"), true)
             ).await?;
 
@@ -713,7 +726,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()))));
 
-            let run_ids = run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
+            let run_config_ids = run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -732,7 +745,7 @@ where
                 || root_ctx.branch(Some("train motif nets"), true),
             ).await?;
 
-            info!("TrainMotifsNets: run_ids={run_ids:?}");
+            info!("TrainMotifsNets: run_config_ids={run_config_ids:?}");
         }
 
         Some(Commands::TrainLabelNets(train_label_nets_args)) => {
@@ -746,7 +759,7 @@ where
             let init_ctx = root_ctx.branch(Some("init label nets"), true);
             let labels_filter = train_label_nets_args.labels_filter();
 
-            let run_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
+            let run_config_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -754,7 +767,7 @@ where
                 async |run_configs| {
 
                     new_train_label_nets(
-                        train_label_nets_args.train_motif_nets_run_ids.clone(),
+                        train_label_nets_args.train_motif_nets_run_config_ids.clone(),
                         loader,
                         run_configs,
                         &ws,
@@ -784,7 +797,7 @@ where
 
             let opt_config = Arc::new(train_final_net_args.opt_config.clone());
             let init_ctx = root_ctx.branch(Some("init final nets"), true);
-            let run_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+            let run_config_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 train_final_net_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -792,7 +805,7 @@ where
                 async |run_configs| {
 
                     new_train_final_net(
-                        train_final_net_args.train_label_nets_run_ids.clone(),
+                        train_final_net_args.train_label_nets_run_config_ids.clone(),
                         loader,
                         run_configs,
                         &ws,
@@ -1034,25 +1047,25 @@ pub fn dyn_step_find_and_select(named_vals: &[NamedVal<FindAndSelectMotifsRunCon
 }
 
 async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
-    input_run_ids: Option<&[RunId]>,
+    input_run_config_ids: Option<&[RunConfigId]>,
     store: &Arc<Box<dyn Store>>,
     run_configs: &mut Vec<R>,
     descr: &str,
-) -> Result<Vec<RunId>, ThoError> {
-    let mut run_ids = Vec::with_capacity(run_configs.len());
+) -> Result<Vec<RunConfigId>, ThoError> {
+    let mut run_config_ids = Vec::with_capacity(run_configs.len());
     for run_config in run_configs.iter_mut() {
         let run_config_id = store
             .save_run_config(
-                input_run_ids,
+                input_run_config_ids,
                 &<R>::type_name(),
                 descr,
                 run_config.to_properties_iter(None).collect(),
             )
             .await?;
         run_config.set_id(run_config_id);
-        run_ids.push(run_config_id);
+        run_config_ids.push(run_config_id);
     }
-    Ok(run_ids)
+    Ok(run_config_ids)
 }
 
 pub async fn import_resources<F, R, S>(
@@ -1218,38 +1231,38 @@ where
             }
         }
         DataBy::RunId {
-            find_motifs_run_ids,
-            select_motifs_run_ids
+            find_motifs_run_config_ids,
+            select_motifs_run_config_ids
         } => {
 
-            debug!("run_plot: MotifsBy::RunId find_run_ids={find_motifs_run_ids:?} select_run_ids={select_motifs_run_ids:?}");
-            for find_motifs_run_id in find_motifs_run_ids {
+            debug!("run_plot: MotifsBy::RunId find_run_config_ids={find_motifs_run_config_ids:?} select_run_config_ids={select_motifs_run_config_ids:?}");
+            for find_motifs_run_config_id in find_motifs_run_config_ids {
                 plot_found_motifs(
                     ws,
                     store,
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     &motif_loader_impl,
                     &clc_dist,
-                    select_motifs_run_ids.clone(),
+                    select_motifs_run_config_ids.clone(),
                     resolution,
                     print_to_stdout,
-                    ctx.branch(Some(&format!("find_motifs_run_{find_motifs_run_id}")), true),
+                    ctx.branch(Some(&format!("find_motifs_run_{find_motifs_run_config_id}")), true),
                 )
                 .await?;
             }
         }
 
-        DataBy::SelectedMotifs { select_motifs_run_ids } => {
-            for select_motifs_run_id in select_motifs_run_ids {
+        DataBy::SelectedMotifs { select_motifs_run_config_ids } => {
+            for select_motifs_run_config_id in select_motifs_run_config_ids {
                 plot_selected_motifs(
                     ws,
                     store,
-                    select_motifs_run_id,
+                    select_motifs_run_config_id,
                     &motif_loader_impl,
                     &clc_dist,
                     resolution,
                     print_to_stdout,
-                    ctx.branch(Some(&format!("selected_motifs_run_{select_motifs_run_id}")), true),
+                    ctx.branch(Some(&format!("selected_motifs_run_{select_motifs_run_config_id}")), true),
                 )
                 .await?;
             }
@@ -1391,10 +1404,10 @@ where
 async fn plot_found_motifs<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    find_motifs_run_id: RunId,
+    find_motifs_run_config_id: RunConfigId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
-    select_motifs_run_ids: Option<Vec<RunId>>,
+    select_motifs_run_config_ids: Option<Vec<RunConfigId>>,
     resolution: Resolution,
     print_to_stdout: bool,
     mut ctx: C,
@@ -1402,7 +1415,7 @@ async fn plot_found_motifs<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let motifs = store.list_motifs(find_motifs_run_id).await?;
+    let motifs = store.list_motifs(find_motifs_run_config_id).await?;
     let motifs_len = motifs.len();
     let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -1413,11 +1426,11 @@ where
             let clc_dist = Arc::clone(clc_dist);
             let motif_loader_impl = Arc::clone(motif_loader_impl);
             let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true);
-            let select_motifs_run_ids = select_motifs_run_ids.clone();
+            let select_motifs_run_config_ids = select_motifs_run_config_ids.clone();
             async move {
                 debug!("run_plot: motif_id={motif_id}");
 
-                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_ids, resolution, print_to_stdout).await {
+                if let Err(e) = plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
@@ -1436,7 +1449,7 @@ where
         motifs_len,
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
         StreamBuffering::Unordered,
-        &format!("plot_found_motifs_for_run_id_{find_motifs_run_id}"),
+        &format!("plot_found_motifs_for_run_config_id_{find_motifs_run_config_id}"),
     )
     .await;
 
@@ -1446,7 +1459,7 @@ where
 async fn plot_selected_motifs<C>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    select_motifs_run_id: RunId,
+    select_motifs_run_config_id: RunConfigId,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     clc_dist: &Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
     resolution: Resolution,
@@ -1457,10 +1470,10 @@ where
     C: RunCtx + Adjustable,
 {
     let channels = ws.read().channels();
-    debug!("plot_selected_motifs: select_motifs_run_id={select_motifs_run_id} channels={channels}");
+    debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
 
     let motifs = store
-        .list_selected_motifs(select_motifs_run_id, channels)
+        .list_selected_motifs(select_motifs_run_config_id, channels)
         .await?;
 
     debug!("plot_selected_motifs: motifs={motifs:?}");
@@ -1471,13 +1484,13 @@ where
         .collect();
 
     if motif_ids.is_empty() {
-        warn!("plot_selected_motifs: no motifs found for select_motifs_run_id={select_motifs_run_id}");
+        warn!("plot_selected_motifs: no motifs found for select_motifs_run_config_id={select_motifs_run_config_id}");
         return Ok(());
     }
 
     let motifs_len = motif_ids.len();
     let done_cnt = Arc::new(AtomicU32::new(0));
-    let suffix = Some(vec![select_motifs_run_id]);
+    let suffix = Some(vec![select_motifs_run_config_id]);
     let futures = motif_ids
         .into_iter()
         .map(|motif_id| {
@@ -1508,7 +1521,7 @@ where
         motifs_len,
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
         StreamBuffering::Unordered,
-        &format!("plot_selected_motifs_for_run_id_{select_motifs_run_id}"),
+        &format!("plot_selected_motifs_for_run_config_id_{select_motifs_run_config_id}"),
     )
     .await;
 
@@ -1687,9 +1700,9 @@ where
     // }).await?;
 
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
-    let (store_channel, find_motifs_run_id) = store.get_motif_meta(motif_id).await?;
+    let (store_channel, find_motifs_run_config_id) = store.get_motif_meta(motif_id).await?;
 
-    let find_motifs_run_config:FindMotifsRunConfig = load_run_config(store, find_motifs_run_id).await?;
+    let find_motifs_run_config:FindMotifsRunConfig = load_run_config(store, find_motifs_run_config_id).await?;
 
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
@@ -1705,7 +1718,7 @@ where
 
 
     let filtered_or_raw = if let Some(freq_filters) = find_motifs_run_config.freq_filter.clone() {
-        let filtered = Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_id)?)
+        let filtered = Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id)?)
             .run(
                 Arc::clone(&raw),
                 ctx.branch(Some("plot_resource_motif_net_prefilter"), false),
@@ -1714,7 +1727,7 @@ where
 
         let channel_only_filtered = vec![channel];
         filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_id={find_motifs_run_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
+            plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         }).await?;
 
         filtered
@@ -1743,7 +1756,7 @@ where
             plot_single_line_tensor(
                 ws,
                 &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
-                &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_id={find_motifs_run_id} net={net_path:?}"),
+                &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_config_id={find_motifs_run_config_id} net={net_path:?}"),
                 out.t_ref(),
                 resolution,
                 print_to_stdout,
@@ -1762,14 +1775,14 @@ pub async fn plot_motif<C>(
     motif_id: usize,
     motif_loader_impl: &Arc<MotifLoader<RawTensorLoader<C>, C>>,
     motif_stats: Arc<MotifStats<MotifLoader<RawTensorLoader<C>, C>, RawTensorLoader<C>, C>>,
-    select_motif_run_ids: Option<Vec<RunId>>,
+    select_motif_run_config_ids: Option<Vec<RunConfigId>>,
     resolution: Resolution,
     print_to_stdout: bool,
 ) -> Result<(), ThoError>
 where
     C:RunCtx + Adjustable{
-    let select_motif_run_ids_sfx = select_motif_run_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
-    let motif_loader_input = MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), select_motif_run_ids);
+    let select_motif_run_config_ids_sfx = select_motif_run_config_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
+    let motif_loader_input = MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), select_motif_run_config_ids);
     let motif_id_arc = Arc::new(DevicesWrap::wrap(motif_loader_input.clone()));
     let metrics = Metrics::all();
     let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone())));
@@ -1801,7 +1814,7 @@ where
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
     let r = motif.with_data_ref(ctx.device_idx(), ctx.branch(Some("plot_motif_data"), false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
-            let run_id = motif.extra().find_motifs_run_id;
+            let run_config_id = motif.extra().find_motifs_run_config_id;
             let channel = motif.extra().channel;
 
             trace!("plot_motif: motif.t={}", motif.data().t_ref());
@@ -1823,9 +1836,9 @@ where
             emit_or_plot_series_with_sidebar_values(
                 print_to_stdout,
                 plot_data,
-                format!("Motif: {motif_id} run id: {run_id} channel: {channel} number of slices: {slices_len}").as_str(),
+                format!("Motif: {motif_id} run id: {run_config_id} channel: {channel} number of slices: {slices_len}").as_str(),
                 resolution.plot_size((2600, 1200)),
-                &ws.read().plots_path().join(format!("{run_id}{select_motif_run_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
+                &ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
                 "Motif Metrics",
                 metrics_for_plot_ref.as_slice(),
             )?;
@@ -1837,14 +1850,14 @@ where
 }
 
 pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
-    input_run_ids: Option<Vec<RunId>>,
+    input_run_config_ids: Option<Vec<RunConfigId>>,
     rcrv: RCRV,
     input: Arc<DevicesWrap<ST::In<'static>>>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     f: F,
     ctx_f: CtxF,
-) -> Result<Vec<RunId>, ThoError>
+) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
@@ -1867,8 +1880,8 @@ where
     info!("run_grid: run_configs.len={} ", run_configs.len());
     debug!("run_grid: run_configs={run_configs:?}");
 
-    let mut run_ids = save_run_configs(
-        input_run_ids.as_ref().map(|v| v.as_slice()),
+    let mut run_config_ids = save_run_configs(
+        input_run_config_ids.as_ref().map(|v| v.as_slice()),
         &store,
         &mut run_configs,
         "find motifs",//TODO
@@ -1885,7 +1898,7 @@ where
     savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()).await?;
 
 
-    Ok(run_ids)
+    Ok(run_config_ids)
 }
 
 pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
@@ -1895,7 +1908,7 @@ pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     store: &Arc<Box<dyn Store>>,
     init_stage: F,
     ctx_f: CtxF,
-) -> Result<Vec<RunId>, ThoError>
+) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(OptRunConfigs<
         Vec<NamedVal<<RCRV as OptRunConfigSource>::P>>,
@@ -1910,7 +1923,7 @@ where
     RCRV: OptRunConfigSource,
     for<'c> <ST as Stage>::In<'c>: Data + WithId + Send + Sync,
     for<'c> <<ST as Stage>::In<'c> as Data>::M: DevicesWrapCopyMode<<ST as Stage>::In<'c>>,
-    for<'a> <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<P<'a>:Default, R=Vec<RunId>>,
+    for<'a> <ST as Stage>::Out: Data + WithId + Send + Sync + SavableResult<P<'a>:Default, R=Vec<RunConfigId>>,
     <<ST as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ST as Stage>::Out>,
     CtxF: FnOnce() -> <ST as Stage>::Ctx,
 {
@@ -1921,9 +1934,9 @@ where
 
     let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
 
-    let run_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
+    let run_config_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
 
-    Ok(run_id)
+    Ok(run_config_id)
 }
 
 async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
@@ -2072,7 +2085,7 @@ mod cli_tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourcesConfig};
     use thoosa_shared::run_configs::RunConfig;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::{cdt, cdt_for_dir, mono_key, panic_to_err_async, random_saw, recurse_files, saw, saw_with_steps, sig_one_imp, sig_three_imp, sig_two_imp, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
@@ -2162,7 +2175,7 @@ mod cli_tests {
 
     #[test]
     fn test_convert_precision_command_parses() {
-        let cli = Cli::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_id:1,2", "--target-precision", "bf16"]);
+        let cli = Cli::parse_from(["thoosa_main", "convert-precision", "--nets-by", "run_config_id:1,2", "--target-precision", "bf16"]);
 
         match cli.command {
             Some(crate::cli::Commands::ConvertPrecision(args)) => {
@@ -2175,21 +2188,21 @@ mod cli_tests {
 
     #[test]
     fn test_merge_selected_motifs_ids_parse_single_spaced_and_csv_values() {
-        let single = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-ids=1"]);
+        let single = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1"]);
         match single.command {
-            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_ids, vec![1]),
+            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1]),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let spaced = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-ids='1, 2'"]);
+        let spaced = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids='1, 2'"]);
         match spaced.command {
-            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_ids, vec![1, 2]),
+            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2]),
             other => panic!("unexpected command: {other:?}"),
         }
 
-        let csv = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-ids=1,2,3"]);
+        let csv = Cli::parse_from(["thoosa_main", "merge-selected-motifs", "--select-motifs-run-config-ids=1,2,3"]);
         match csv.command {
-            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_ids, vec![1, 2, 3]),
+            Some(crate::cli::Commands::MergeSelectedMotifs(args)) => assert_eq!(args.select_motifs_run_config_ids, vec![1, 2, 3]),
             other => panic!("unexpected command: {other:?}"),
         }
     }

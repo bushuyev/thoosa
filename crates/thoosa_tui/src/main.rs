@@ -38,8 +38,8 @@ const DEFAULT_PLOT_PROJECT: &str = "thoosa_hbac";
 #[derive(Clone, Debug)]
 struct RunTreeNode {
     entry: RunConfigEntry,
-    input_run_ids: Vec<u32>,
-    output_run_ids: Vec<u32>,
+    input_run_config_ids: Vec<u32>,
+    output_run_config_ids: Vec<u32>,
     children_loaded: bool,
     expanded: bool,
 }
@@ -50,10 +50,10 @@ enum VisibleRunConfigRowKind {
         run_on_date: String,
     },
     RunConfig {
-        run_id: u32,
+        run_config_id: u32,
     },
     Motif {
-        run_id: u32,
+        run_config_id: u32,
         motif: RunMotifEntry,
     },
 }
@@ -76,28 +76,28 @@ impl VisibleRunConfigRow {
         }
     }
 
-    fn run_config(run_id: u32, depth: usize, has_children: bool, expanded: bool) -> Self {
+    fn run_config(run_config_id: u32, depth: usize, has_children: bool, expanded: bool) -> Self {
         Self {
-            kind: VisibleRunConfigRowKind::RunConfig { run_id },
+            kind: VisibleRunConfigRowKind::RunConfig { run_config_id },
             depth,
             has_children,
             expanded,
         }
     }
 
-    fn motif(run_id: u32, motif: RunMotifEntry, depth: usize) -> Self {
+    fn motif(run_config_id: u32, motif: RunMotifEntry, depth: usize) -> Self {
         Self {
-            kind: VisibleRunConfigRowKind::Motif { run_id, motif },
+            kind: VisibleRunConfigRowKind::Motif { run_config_id, motif },
             depth,
             has_children: false,
             expanded: false,
         }
     }
 
-    fn run_id(&self) -> Option<u32> {
+    fn run_config_id(&self) -> Option<u32> {
         match self.kind {
             VisibleRunConfigRowKind::RunOnDate { .. } => None,
-            VisibleRunConfigRowKind::RunConfig { run_id } => Some(run_id),
+            VisibleRunConfigRowKind::RunConfig { run_config_id } => Some(run_config_id),
             VisibleRunConfigRowKind::Motif { .. } => None,
         }
     }
@@ -143,7 +143,7 @@ impl RunConfigSearch {
     }
 
     fn normalized(&self) -> Result<NormalizedRunConfigSearch, String> {
-        let id = parse_run_id_filter(&self.id)?;
+        let id = parse_run_config_id_filter(&self.id)?;
         let descr = self.descr.trim().to_string();
         let run_on_from = normalize_run_on_filter(&self.run_on_from, false)?;
         let run_on_to = normalize_run_on_filter(&self.run_on_to, true)?;
@@ -299,8 +299,8 @@ struct App {
     db_path: PathBuf,
     all_run_configs: Vec<RunConfigEntry>,
     loaded_input_pairs: Vec<(u32, u32)>,
-    known_output_run_ids: HashMap<u32, Vec<u32>>,
-    known_run_ids_with_outputs: HashSet<u32>,
+    known_output_run_config_ids: HashMap<u32, Vec<u32>>,
+    known_run_config_ids_with_outputs: HashSet<u32>,
     paged_run_config_offset: usize,
     has_more_paged_run_configs: bool,
     run_config_tree: HashMap<u32, RunTreeNode>,
@@ -403,8 +403,8 @@ impl App {
             db_path,
             all_run_configs: vec![],
             loaded_input_pairs: vec![],
-            known_output_run_ids: HashMap::new(),
-            known_run_ids_with_outputs: HashSet::new(),
+            known_output_run_config_ids: HashMap::new(),
+            known_run_config_ids_with_outputs: HashSet::new(),
             paged_run_config_offset: 0,
             has_more_paged_run_configs: true,
             run_config_tree: HashMap::new(),
@@ -437,13 +437,13 @@ impl App {
         }
     }
 
-    fn selected_run_id(&self) -> Option<u32> {
-        self.run_configs.get(self.selected_idx).and_then(VisibleRunConfigRow::run_id)
+    fn selected_run_config_id(&self) -> Option<u32> {
+        self.run_configs.get(self.selected_idx).and_then(VisibleRunConfigRow::run_config_id)
     }
 
     fn selected_run_entry(&self) -> Option<&RunConfigEntry> {
-        self.selected_run_id()
-            .and_then(|run_id| self.run_config_tree.get(&run_id).map(|node| &node.entry))
+        self.selected_run_config_id()
+            .and_then(|run_config_id| self.run_config_tree.get(&run_config_id).map(|node| &node.entry))
     }
 
     fn selected_tree_row(&self) -> Option<&VisibleRunConfigRow> {
@@ -706,19 +706,19 @@ impl App {
         self.ensure_motif_selection_visible();
     }
 
-    async fn load_run_motifs(&mut self, run_id: u32) -> Result<Vec<RunMotifEntry>, ThoError> {
-        if let Some(cached) = self.run_motifs_cache.get(&run_id).cloned() {
+    async fn load_run_motifs(&mut self, run_config_id: u32) -> Result<Vec<RunMotifEntry>, ThoError> {
+        if let Some(cached) = self.run_motifs_cache.get(&run_config_id).cloned() {
             return Ok(cached);
         }
 
-        let motifs = self.store.list_run_motifs(run_id).await?;
-        self.run_motifs_cache.insert(run_id, motifs.clone());
+        let motifs = self.store.list_run_motifs(run_config_id).await?;
+        self.run_motifs_cache.insert(run_config_id, motifs.clone());
         Ok(motifs)
     }
 
     async fn load_selected_run_motifs(&mut self) -> bool {
         let keep_motif_id = self.selected_motif().map(|motif| motif.motif_id);
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             self.selected_run_motifs.clear();
             self.selected_motif_idx = 0;
             self.motif_list_offset = 0;
@@ -732,11 +732,11 @@ impl App {
             return false;
         }
 
-        match self.load_run_motifs(run_id).await {
+        match self.load_run_motifs(run_config_id).await {
             Ok(motifs) => {
                 self.apply_selected_run_motifs(motifs, keep_motif_id);
                 if self.selected_run_motifs.is_empty() {
-                    self.status = Some(format!("No motifs found for run_id={run_id}."));
+                    self.status = Some(format!("No motifs found for run_config_id={run_config_id}."));
                     false
                 } else {
                     self.status = None;
@@ -744,74 +744,74 @@ impl App {
                 }
             }
             Err(e) => {
-                warn!("load_selected_run_motifs failed: run_id={} err={e:?}", run_id);
-                self.status = Some(format!("Failed to list motifs for run_id={run_id}: {e:?}"));
+                warn!("load_selected_run_motifs failed: run_config_id={} err={e:?}", run_config_id);
+                self.status = Some(format!("Failed to list motifs for run_config_id={run_config_id}: {e:?}"));
                 false
             }
         }
     }
 
     async fn toggle_selected_run_inline_motifs(&mut self) -> bool {
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
         if !self.selected_run_supports_inline_motif_rows() {
             return false;
         }
 
-        if self.run_config_tree.get(&run_id).map(|node| node.expanded).unwrap_or(false) {
-            if let Some(node) = self.run_config_tree.get_mut(&run_id) {
+        if self.run_config_tree.get(&run_config_id).map(|node| node.expanded).unwrap_or(false) {
+            if let Some(node) = self.run_config_tree.get_mut(&run_config_id) {
                 node.expanded = false;
             }
-            self.rebuild_visible_run_configs(Some(run_id));
+            self.rebuild_visible_run_configs(Some(run_config_id));
             return true;
         }
 
-        match self.load_run_motifs(run_id).await {
+        match self.load_run_motifs(run_config_id).await {
             Ok(motifs) if motifs.is_empty() => {
-                self.status = Some(format!("No motifs found for run_id={run_id}."));
+                self.status = Some(format!("No motifs found for run_config_id={run_config_id}."));
                 false
             }
             Ok(_) => {
-                if let Some(node) = self.run_config_tree.get_mut(&run_id) {
+                if let Some(node) = self.run_config_tree.get_mut(&run_config_id) {
                     node.expanded = true;
                 }
-                self.rebuild_visible_run_configs(Some(run_id));
+                self.rebuild_visible_run_configs(Some(run_config_id));
                 self.status = None;
                 true
             }
             Err(e) => {
-                warn!("toggle_selected_run_inline_motifs failed: run_id={} err={e:?}", run_id);
-                self.status = Some(format!("Failed to list motifs for run_id={run_id}: {e:?}"));
+                warn!("toggle_selected_run_inline_motifs failed: run_config_id={} err={e:?}", run_config_id);
+                self.status = Some(format!("Failed to list motifs for run_config_id={run_config_id}: {e:?}"));
                 false
             }
         }
     }
 
     async fn expand_selected_run_inline_motifs(&mut self) -> bool {
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
-        if !self.selected_run_supports_inline_motif_rows() || self.run_config_tree.get(&run_id).map(|node| node.expanded).unwrap_or(false) {
+        if !self.selected_run_supports_inline_motif_rows() || self.run_config_tree.get(&run_config_id).map(|node| node.expanded).unwrap_or(false) {
             return false;
         }
 
-        match self.load_run_motifs(run_id).await {
+        match self.load_run_motifs(run_config_id).await {
             Ok(motifs) if motifs.is_empty() => {
-                self.status = Some(format!("No motifs found for run_id={run_id}."));
+                self.status = Some(format!("No motifs found for run_config_id={run_config_id}."));
                 false
             }
             Ok(_) => {
-                if let Some(node) = self.run_config_tree.get_mut(&run_id) {
+                if let Some(node) = self.run_config_tree.get_mut(&run_config_id) {
                     node.expanded = true;
                 }
-                self.rebuild_visible_run_configs(Some(run_id));
+                self.rebuild_visible_run_configs(Some(run_config_id));
                 self.status = None;
                 true
             }
             Err(e) => {
-                warn!("expand_selected_run_inline_motifs failed: run_id={} err={e:?}", run_id);
-                self.status = Some(format!("Failed to list motifs for run_id={run_id}: {e:?}"));
+                warn!("expand_selected_run_inline_motifs failed: run_config_id={} err={e:?}", run_config_id);
+                self.status = Some(format!("Failed to list motifs for run_config_id={run_config_id}: {e:?}"));
                 false
             }
         }
@@ -836,7 +836,7 @@ impl App {
         }
     }
 
-    async fn load_next_run_config_page(&mut self, keep_run_id: Option<u32>) -> Result<bool, ThoError> {
+    async fn load_next_run_config_page(&mut self, keep_run_config_id: Option<u32>) -> Result<bool, ThoError> {
         if !self.has_more_paged_run_configs {
             return Ok(false);
         }
@@ -846,83 +846,83 @@ impl App {
         if page.is_empty() {
             self.has_more_paged_run_configs = false;
             let loaded_input_pairs = self.loaded_input_pairs.clone();
-            let known_output_run_ids = self.known_output_run_ids.clone();
-            self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
-            self.rebuild_visible_run_configs(keep_run_id);
+            let known_output_run_config_ids = self.known_output_run_config_ids.clone();
+            self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_config_ids);
+            self.rebuild_visible_run_configs(keep_run_config_id);
             return Ok(false);
         }
 
         let page_ids = page.iter().map(|entry| entry.id).collect::<Vec<u32>>();
-        let run_ids_with_outputs = if page_ids.is_empty() {
+        let run_config_ids_with_outputs = if page_ids.is_empty() {
             vec![]
         } else {
-            self.store.list_run_ids_with_outputs(&page_ids).await?
+            self.store.list_run_config_ids_with_outputs(&page_ids).await?
         };
         let input_pairs = if page_ids.is_empty() {
             vec![]
         } else {
-            self.store.list_input_run_ids(&page_ids).await?
+            self.store.list_input_run_config_ids(&page_ids).await?
         };
 
         self.paged_run_config_offset += page.len();
         self.has_more_paged_run_configs = page.len() == limit;
         self.merge_run_configs(page);
-        self.known_run_ids_with_outputs.extend(run_ids_with_outputs);
+        self.known_run_config_ids_with_outputs.extend(run_config_ids_with_outputs);
         self.loaded_input_pairs.extend(input_pairs);
         let loaded_input_pairs = self.loaded_input_pairs.clone();
-        let known_output_run_ids = self.known_output_run_ids.clone();
-        self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
-        self.rebuild_visible_run_configs(keep_run_id);
+        let known_output_run_config_ids = self.known_output_run_config_ids.clone();
+        self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_config_ids);
+        self.rebuild_visible_run_configs(keep_run_config_id);
         Ok(true)
     }
 
-    async fn ensure_all_run_configs_loaded(&mut self, keep_run_id: Option<u32>) -> Result<(), ThoError> {
+    async fn ensure_all_run_configs_loaded(&mut self, keep_run_config_id: Option<u32>) -> Result<(), ThoError> {
         while self.has_more_paged_run_configs {
-            if !self.load_next_run_config_page(keep_run_id).await? {
+            if !self.load_next_run_config_page(keep_run_config_id).await? {
                 break;
             }
         }
         Ok(())
     }
 
-    async fn ensure_run_ids_loaded(&mut self, run_ids: &[u32], keep_run_id: Option<u32>) -> Result<bool, ThoError> {
+    async fn ensure_run_config_ids_loaded(&mut self, run_config_ids: &[u32], keep_run_config_id: Option<u32>) -> Result<bool, ThoError> {
         let existing_ids = self.all_run_configs.iter().map(|entry| entry.id).collect::<HashSet<u32>>();
-        let missing_ids = run_ids
+        let missing_ids = run_config_ids
             .iter()
             .copied()
-            .filter(|run_id| !existing_ids.contains(run_id))
+            .filter(|run_config_id| !existing_ids.contains(run_config_id))
             .collect::<Vec<u32>>();
         if missing_ids.is_empty() {
             return Ok(false);
         }
 
         let run_configs = self.store.list_run_configs_by_ids(&missing_ids).await?;
-        let input_pairs = self.store.list_input_run_ids(&missing_ids).await?;
+        let input_pairs = self.store.list_input_run_config_ids(&missing_ids).await?;
         self.merge_run_configs(run_configs);
         self.loaded_input_pairs.extend(input_pairs);
         let loaded_input_pairs = self.loaded_input_pairs.clone();
-        let known_output_run_ids = self.known_output_run_ids.clone();
-        self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
-        self.rebuild_visible_run_configs(keep_run_id);
+        let known_output_run_config_ids = self.known_output_run_config_ids.clone();
+        self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_config_ids);
+        self.rebuild_visible_run_configs(keep_run_config_id);
         Ok(true)
     }
 
-    async fn ensure_run_children_loaded(&mut self, run_id: u32, keep_run_id: Option<u32>) -> Result<bool, ThoError> {
-        let output_run_ids = self.store.list_output_run_ids(run_id).await?;
-        if output_run_ids.is_empty() {
-            self.known_run_ids_with_outputs.remove(&run_id);
+    async fn ensure_run_children_loaded(&mut self, run_config_id: u32, keep_run_config_id: Option<u32>) -> Result<bool, ThoError> {
+        let output_run_config_ids = self.store.list_output_run_config_ids(run_config_id).await?;
+        if output_run_config_ids.is_empty() {
+            self.known_run_config_ids_with_outputs.remove(&run_config_id);
         } else {
-            self.known_run_ids_with_outputs.insert(run_id);
+            self.known_run_config_ids_with_outputs.insert(run_config_id);
         }
-        self.known_output_run_ids.insert(run_id, output_run_ids.clone());
-        let loaded_any = self.ensure_run_ids_loaded(&output_run_ids, keep_run_id).await?;
+        self.known_output_run_config_ids.insert(run_config_id, output_run_config_ids.clone());
+        let loaded_any = self.ensure_run_config_ids_loaded(&output_run_config_ids, keep_run_config_id).await?;
         if !loaded_any {
             let loaded_input_pairs = self.loaded_input_pairs.clone();
-            let known_output_run_ids = self.known_output_run_ids.clone();
-            self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_ids);
-            self.rebuild_visible_run_configs(keep_run_id);
+            let known_output_run_config_ids = self.known_output_run_config_ids.clone();
+            self.rebuild_run_config_tree(&loaded_input_pairs, &known_output_run_config_ids);
+            self.rebuild_visible_run_configs(keep_run_config_id);
         }
-        Ok(!output_run_ids.is_empty())
+        Ok(!output_run_config_ids.is_empty())
     }
 
     async fn maybe_load_more_run_configs(&mut self) -> Result<bool, ThoError> {
@@ -930,7 +930,7 @@ impl App {
             && self.has_more_paged_run_configs
             && self.selected_idx + self.main_page_size() >= self.run_configs.len()
         {
-            return self.load_next_run_config_page(self.selected_run_id()).await;
+            return self.load_next_run_config_page(self.selected_run_config_id()).await;
         }
 
         Ok(false)
@@ -1093,7 +1093,7 @@ impl App {
 
     async fn move_main_to_bottom_lazy(&mut self) -> bool {
         if self.search_filters.is_empty() && self.has_more_paged_run_configs {
-            if let Err(err) = self.ensure_all_run_configs_loaded(self.selected_run_id()).await {
+            if let Err(err) = self.ensure_all_run_configs_loaded(self.selected_run_config_id()).await {
                 warn!("move_main_to_bottom_lazy failed to load all run configs: {err:?}");
                 self.status = Some(format!("Failed to load all run_configs: {err:?}"));
                 return false;
@@ -1287,9 +1287,9 @@ impl App {
     async fn apply_search_from_popup(&mut self) -> bool {
         match self.search_popup.draft.normalized() {
             Ok(_) => {
-                let keep_run_id = self.selected_run_id();
+                let keep_run_config_id = self.selected_run_config_id();
                 self.search_filters = self.search_popup.draft.clone();
-                if let Err(err) = self.try_refresh_run_configs(keep_run_id).await {
+                if let Err(err) = self.try_refresh_run_configs(keep_run_config_id).await {
                     warn!("apply_search_from_popup failed to refresh run configs: {err:?}");
                     self.status = Some(format!("Failed to list run_configs for filter: {err:?}"));
                     return false;
@@ -1406,11 +1406,11 @@ impl App {
         lines
     }
 
-    fn rebuild_run_config_tree(&mut self, input_pairs: &[(u32, u32)], outputs_by_run_id: &HashMap<u32, Vec<u32>>) {
+    fn rebuild_run_config_tree(&mut self, input_pairs: &[(u32, u32)], outputs_by_run_config_id: &HashMap<u32, Vec<u32>>) {
         let old_expanded = self
             .run_config_tree
             .iter()
-            .map(|(run_id, node)| (*run_id, node.expanded))
+            .map(|(run_config_id, node)| (*run_config_id, node.expanded))
             .collect::<HashMap<u32, bool>>();
         let run_on_by_id = self
             .all_run_configs
@@ -1426,45 +1426,45 @@ impl App {
         let mut input_map = HashMap::<u32, HashSet<u32>>::new();
         let mut output_map = HashMap::<u32, HashSet<u32>>::new();
 
-        for (run_id, input_run_id) in input_pairs {
-            if entries_by_id.contains_key(run_id) && entries_by_id.contains_key(input_run_id) {
-                input_map.entry(*run_id).or_default().insert(*input_run_id);
-                output_map.entry(*input_run_id).or_default().insert(*run_id);
+        for (run_config_id, input_run_config_id) in input_pairs {
+            if entries_by_id.contains_key(run_config_id) && entries_by_id.contains_key(input_run_config_id) {
+                input_map.entry(*run_config_id).or_default().insert(*input_run_config_id);
+                output_map.entry(*input_run_config_id).or_default().insert(*run_config_id);
             }
         }
 
-        for (run_id, output_run_ids) in outputs_by_run_id {
-            if !entries_by_id.contains_key(run_id) {
+        for (run_config_id, output_run_config_ids) in outputs_by_run_config_id {
+            if !entries_by_id.contains_key(run_config_id) {
                 continue;
             }
 
-            let outputs = output_map.entry(*run_id).or_default();
-            for output_run_id in output_run_ids {
-                if entries_by_id.contains_key(output_run_id) {
-                    outputs.insert(*output_run_id);
+            let outputs = output_map.entry(*run_config_id).or_default();
+            for output_run_config_id in output_run_config_ids {
+                if entries_by_id.contains_key(output_run_config_id) {
+                    outputs.insert(*output_run_config_id);
                 }
             }
         }
 
         self.run_config_tree = entries_by_id
             .into_iter()
-            .map(|(run_id, entry)| {
-                let mut input_run_ids = input_map.remove(&run_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
-                let mut output_run_ids = output_map.remove(&run_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
-                let children_loaded = outputs_by_run_id.contains_key(&run_id)
+            .map(|(run_config_id, entry)| {
+                let mut input_run_config_ids = input_map.remove(&run_config_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
+                let mut output_run_config_ids = output_map.remove(&run_config_id).unwrap_or_default().into_iter().collect::<Vec<u32>>();
+                let children_loaded = outputs_by_run_config_id.contains_key(&run_config_id)
                     || !self.has_more_paged_run_configs
-                    || (output_run_ids.is_empty() && !self.known_run_ids_with_outputs.contains(&run_id));
-                let default_expanded = !output_run_ids.is_empty();
-                sort_run_ids(&mut input_run_ids, &run_on_by_id, self.run_on_sort_order);
-                sort_run_ids(&mut output_run_ids, &run_on_by_id, self.run_on_sort_order);
+                    || (output_run_config_ids.is_empty() && !self.known_run_config_ids_with_outputs.contains(&run_config_id));
+                let default_expanded = !output_run_config_ids.is_empty();
+                sort_run_config_ids(&mut input_run_config_ids, &run_on_by_id, self.run_on_sort_order);
+                sort_run_config_ids(&mut output_run_config_ids, &run_on_by_id, self.run_on_sort_order);
                 (
-                    run_id,
+                    run_config_id,
                     RunTreeNode {
                         entry,
-                        input_run_ids,
-                        output_run_ids,
+                        input_run_config_ids,
+                        output_run_config_ids,
                         children_loaded,
-                        expanded: old_expanded.get(&run_id).copied().unwrap_or(default_expanded),
+                        expanded: old_expanded.get(&run_config_id).copied().unwrap_or(default_expanded),
                     },
                 )
             })
@@ -1473,102 +1473,102 @@ impl App {
 
     fn run_visible_with_descendants(
         &self,
-        run_id: u32,
+        run_config_id: u32,
         filter_active: bool,
-        matching_run_ids: &HashSet<u32>,
+        matching_run_config_ids: &HashSet<u32>,
         memo: &mut HashMap<u32, bool>,
         path: &mut HashSet<u32>,
     ) -> bool {
-        if let Some(visible) = memo.get(&run_id) {
+        if let Some(visible) = memo.get(&run_config_id) {
             return *visible;
         }
 
-        if !path.insert(run_id) {
+        if !path.insert(run_config_id) {
             return false;
         }
 
         let visible = !filter_active
-            || matching_run_ids.contains(&run_id)
+            || matching_run_config_ids.contains(&run_config_id)
             || self
                 .run_config_tree
-                .get(&run_id)
+                .get(&run_config_id)
                 .map(|node| {
-                    node.output_run_ids.iter().any(|child_run_id| {
-                        self.run_visible_with_descendants(*child_run_id, filter_active, matching_run_ids, memo, path)
+                    node.output_run_config_ids.iter().any(|child_run_config_id| {
+                        self.run_visible_with_descendants(*child_run_config_id, filter_active, matching_run_config_ids, memo, path)
                     })
                 })
                 .unwrap_or(false);
-        path.remove(&run_id);
-        memo.insert(run_id, visible);
+        path.remove(&run_config_id);
+        memo.insert(run_config_id, visible);
         visible
     }
 
     fn append_visible_run_rows(
         &self,
-        run_id: u32,
+        run_config_id: u32,
         depth: usize,
         filter_active: bool,
-        matching_run_ids: &HashSet<u32>,
+        matching_run_config_ids: &HashSet<u32>,
         memo: &mut HashMap<u32, bool>,
         path: &mut HashSet<u32>,
-        mut appended_run_ids: Option<&mut HashSet<u32>>,
+        mut appended_run_config_ids: Option<&mut HashSet<u32>>,
         rows: &mut Vec<VisibleRunConfigRow>,
     ) {
-        let already_appended = appended_run_ids
+        let already_appended = appended_run_config_ids
             .as_ref()
-            .map(|appended_run_ids| appended_run_ids.contains(&run_id))
+            .map(|appended_run_config_ids| appended_run_config_ids.contains(&run_config_id))
             .unwrap_or(false);
-        if already_appended || !path.insert(run_id) {
+        if already_appended || !path.insert(run_config_id) {
             return;
         }
 
-        let Some(node) = self.run_config_tree.get(&run_id) else {
-            path.remove(&run_id);
+        let Some(node) = self.run_config_tree.get(&run_config_id) else {
+            path.remove(&run_config_id);
             return;
         };
         let visible_children = node
-            .output_run_ids
+            .output_run_config_ids
             .iter()
-            .filter(|child_run_id| self.run_visible_with_descendants(**child_run_id, filter_active, matching_run_ids, memo, path))
+            .filter(|child_run_config_id| self.run_visible_with_descendants(**child_run_config_id, filter_active, matching_run_config_ids, memo, path))
             .copied()
             .collect::<Vec<u32>>();
         let inline_motifs = if node.expanded && run_config_type_supports_inline_motif_rows(node.entry.run_config_type.as_str()) {
-            self.run_motifs_cache.get(&run_id).cloned().unwrap_or_default()
+            self.run_motifs_cache.get(&run_config_id).cloned().unwrap_or_default()
         } else {
             vec![]
         };
         let has_inline_motif_rows = run_config_type_supports_inline_motif_rows(node.entry.run_config_type.as_str())
-            && self.run_motifs_cache.get(&run_id).map(|motifs| !motifs.is_empty()).unwrap_or(true);
+            && self.run_motifs_cache.get(&run_config_id).map(|motifs| !motifs.is_empty()).unwrap_or(true);
 
         rows.push(VisibleRunConfigRow::run_config(
-            run_id,
+            run_config_id,
             depth,
             !visible_children.is_empty() || !node.children_loaded || has_inline_motif_rows,
             node.expanded,
         ));
-        if let Some(appended_run_ids) = appended_run_ids.as_mut() {
-            appended_run_ids.insert(run_id);
+        if let Some(appended_run_config_ids) = appended_run_config_ids.as_mut() {
+            appended_run_config_ids.insert(run_config_id);
         }
 
         if node.expanded {
             for motif in inline_motifs {
-                rows.push(VisibleRunConfigRow::motif(run_id, motif, depth + 1));
+                rows.push(VisibleRunConfigRow::motif(run_config_id, motif, depth + 1));
             }
-            for child_run_id in visible_children {
+            for child_run_config_id in visible_children {
                 self.append_visible_run_rows(
-                    child_run_id,
+                    child_run_config_id,
                     depth + 1,
                     filter_active,
-                    matching_run_ids,
+                    matching_run_config_ids,
                     memo,
                     path,
-                    appended_run_ids.as_deref_mut(),
+                    appended_run_config_ids.as_deref_mut(),
                     rows,
                 );
             }
         }
 
-        path.remove(&run_id);
+        path.remove(&run_config_id);
     }
 
     fn group_visible_run_rows_by_date(&self, rows: Vec<VisibleRunConfigRow>) -> Vec<VisibleRunConfigRow> {
@@ -1584,8 +1584,8 @@ impl App {
                 }
 
                 let run_on_date = row
-                    .run_id()
-                    .and_then(|run_id| self.run_config_tree.get(&run_id))
+                    .run_config_id()
+                    .and_then(|run_config_id| self.run_config_tree.get(&run_config_id))
                     .map(|node| run_on_date_label(node.entry.run_on.as_str()))
                     .unwrap_or_else(|| "<unknown>".to_string());
                 if !rows_by_date.contains_key(&run_on_date) {
@@ -1616,8 +1616,8 @@ impl App {
         grouped_rows
     }
 
-    fn rebuild_visible_run_configs(&mut self, keep_run_id: Option<u32>) {
-        let keep_run_on_date = if keep_run_id.is_none() {
+    fn rebuild_visible_run_configs(&mut self, keep_run_config_id: Option<u32>) {
+        let keep_run_on_date = if keep_run_config_id.is_none() {
             self.selected_run_on_date().map(|run_on_date| run_on_date.to_string())
         } else {
             None
@@ -1628,7 +1628,7 @@ impl App {
             .iter()
             .map(|entry| (entry.id, entry.run_on.as_str()))
             .collect::<HashMap<u32, &str>>();
-        let matching_run_ids = if filter_active {
+        let matching_run_config_ids = if filter_active {
             self.search_filters
                 .normalized()
                 .ok()
@@ -1644,63 +1644,63 @@ impl App {
             HashSet::new()
         };
 
-        let mut root_run_ids = self
+        let mut root_run_config_ids = self
             .run_config_tree
             .iter()
-            .filter_map(|(run_id, node)| {
+            .filter_map(|(run_config_id, node)| {
                 if node
-                    .input_run_ids
+                    .input_run_config_ids
                     .iter()
-                    .all(|input_run_id| !self.run_config_tree.contains_key(input_run_id))
+                    .all(|input_run_config_id| !self.run_config_tree.contains_key(input_run_config_id))
                 {
-                    Some(*run_id)
+                    Some(*run_config_id)
                 } else {
                     None
                 }
             })
             .collect::<Vec<u32>>();
-        sort_run_ids(&mut root_run_ids, &run_on_by_id, self.run_on_sort_order);
+        sort_run_config_ids(&mut root_run_config_ids, &run_on_by_id, self.run_on_sort_order);
 
         let mut memo = HashMap::new();
         let mut rows = vec![];
-        let mut dedup_run_ids = filter_active.then(HashSet::new);
-        for run_id in root_run_ids {
-            if self.run_visible_with_descendants(run_id, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new()) {
+        let mut dedup_run_config_ids = filter_active.then(HashSet::new);
+        for run_config_id in root_run_config_ids {
+            if self.run_visible_with_descendants(run_config_id, filter_active, &matching_run_config_ids, &mut memo, &mut HashSet::new()) {
                 self.append_visible_run_rows(
-                    run_id,
+                    run_config_id,
                     0,
                     filter_active,
-                    &matching_run_ids,
+                    &matching_run_config_ids,
                     &mut memo,
                     &mut HashSet::new(),
-                    dedup_run_ids.as_mut(),
+                    dedup_run_config_ids.as_mut(),
                     &mut rows,
                 );
             }
         }
 
-        let appended_run_ids = dedup_run_ids.clone().unwrap_or_else(|| {
+        let appended_run_config_ids = dedup_run_config_ids.clone().unwrap_or_else(|| {
             rows.iter()
-                .filter_map(VisibleRunConfigRow::run_id)
+                .filter_map(VisibleRunConfigRow::run_config_id)
                 .collect::<HashSet<u32>>()
         });
-        let mut remaining_run_ids = self
+        let mut remaining_run_config_ids = self
             .run_config_tree
             .keys()
-            .filter(|run_id| !appended_run_ids.contains(run_id))
+            .filter(|run_config_id| !appended_run_config_ids.contains(run_config_id))
             .copied()
             .collect::<Vec<u32>>();
-        sort_run_ids(&mut remaining_run_ids, &run_on_by_id, self.run_on_sort_order);
-        for run_id in remaining_run_ids {
-            if self.run_visible_with_descendants(run_id, filter_active, &matching_run_ids, &mut memo, &mut HashSet::new()) {
+        sort_run_config_ids(&mut remaining_run_config_ids, &run_on_by_id, self.run_on_sort_order);
+        for run_config_id in remaining_run_config_ids {
+            if self.run_visible_with_descendants(run_config_id, filter_active, &matching_run_config_ids, &mut memo, &mut HashSet::new()) {
                 self.append_visible_run_rows(
-                    run_id,
+                    run_config_id,
                     0,
                     filter_active,
-                    &matching_run_ids,
+                    &matching_run_config_ids,
                     &mut memo,
                     &mut HashSet::new(),
-                    dedup_run_ids.as_mut(),
+                    dedup_run_config_ids.as_mut(),
                     &mut rows,
                 );
             }
@@ -1711,8 +1711,8 @@ impl App {
             self.panel_search.current_match_idx = None;
         }
 
-        if let Some(run_id) = keep_run_id {
-            if let Some(idx) = self.run_configs.iter().position(|entry| entry.run_id() == Some(run_id)) {
+        if let Some(run_config_id) = keep_run_config_id {
+            if let Some(idx) = self.run_configs.iter().position(|entry| entry.run_config_id() == Some(run_config_id)) {
                 self.selected_idx = idx;
                 self.ensure_main_selection_visible();
                 return;
@@ -1748,37 +1748,37 @@ impl App {
             return true;
         }
 
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
         let needs_children_load = self
             .run_config_tree
-            .get(&run_id)
+            .get(&run_config_id)
             .map(|node| !node.children_loaded)
             .unwrap_or(false);
         if needs_children_load {
-            match self.ensure_run_children_loaded(run_id, Some(run_id)).await {
+            match self.ensure_run_children_loaded(run_config_id, Some(run_config_id)).await {
                 Ok(false) => {
-                    self.status = Some(format!("No child runs found for run_id={run_id}."));
+                    self.status = Some(format!("No child runs found for run_config_id={run_config_id}."));
                     return false;
                 }
                 Ok(true) => {}
                 Err(e) => {
-                    warn!("toggle_selected_run_expanded failed to lazy-load children: run_id={run_id} err={e:?}");
-                    self.status = Some(format!("Failed to list child runs for run_id={run_id}: {e:?}"));
+                    warn!("toggle_selected_run_expanded failed to lazy-load children: run_config_id={run_config_id} err={e:?}");
+                    self.status = Some(format!("Failed to list child runs for run_config_id={run_config_id}: {e:?}"));
                     return false;
                 }
             }
         }
 
-        let Some(node) = self.run_config_tree.get_mut(&run_id) else {
+        let Some(node) = self.run_config_tree.get_mut(&run_config_id) else {
             return false;
         };
-        if node.output_run_ids.is_empty() {
+        if node.output_run_config_ids.is_empty() {
             return false;
         }
         node.expanded = !node.expanded;
-        self.rebuild_visible_run_configs(Some(run_id));
+        self.rebuild_visible_run_configs(Some(run_config_id));
         true
     }
 
@@ -1792,37 +1792,37 @@ impl App {
             return true;
         }
 
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
         let needs_children_load = self
             .run_config_tree
-            .get(&run_id)
+            .get(&run_config_id)
             .map(|node| !node.children_loaded)
             .unwrap_or(false);
         if needs_children_load {
-            match self.ensure_run_children_loaded(run_id, Some(run_id)).await {
+            match self.ensure_run_children_loaded(run_config_id, Some(run_config_id)).await {
                 Ok(false) => {
-                    self.status = Some(format!("No child runs found for run_id={run_id}."));
+                    self.status = Some(format!("No child runs found for run_config_id={run_config_id}."));
                     return false;
                 }
                 Ok(true) => {}
                 Err(e) => {
-                    warn!("expand_selected_run failed to lazy-load children: run_id={run_id} err={e:?}");
-                    self.status = Some(format!("Failed to list child runs for run_id={run_id}: {e:?}"));
+                    warn!("expand_selected_run failed to lazy-load children: run_config_id={run_config_id} err={e:?}");
+                    self.status = Some(format!("Failed to list child runs for run_config_id={run_config_id}: {e:?}"));
                     return false;
                 }
             }
         }
 
-        let Some(node) = self.run_config_tree.get_mut(&run_id) else {
+        let Some(node) = self.run_config_tree.get_mut(&run_config_id) else {
             return false;
         };
-        if node.output_run_ids.is_empty() || node.expanded {
+        if node.output_run_config_ids.is_empty() || node.expanded {
             return false;
         }
         node.expanded = true;
-        self.rebuild_visible_run_configs(Some(run_id));
+        self.rebuild_visible_run_configs(Some(run_config_id));
         true
     }
 
@@ -1877,17 +1877,17 @@ impl App {
             return true;
         }
 
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             return false;
         };
-        let Some(node) = self.run_config_tree.get_mut(&run_id) else {
+        let Some(node) = self.run_config_tree.get_mut(&run_config_id) else {
             return false;
         };
-        if node.output_run_ids.is_empty() || !node.expanded {
+        if node.output_run_config_ids.is_empty() || !node.expanded {
             return false;
         }
         node.expanded = false;
-        self.rebuild_visible_run_configs(Some(run_id));
+        self.rebuild_visible_run_configs(Some(run_config_id));
         true
     }
 
@@ -1897,17 +1897,17 @@ impl App {
             SortOrder::Desc => SortOrder::Asc,
         };
 
-        let keep_run_id = self.selected_run_id();
-        self.rebuild_visible_run_configs(keep_run_id);
+        let keep_run_config_id = self.selected_run_config_id();
+        self.rebuild_visible_run_configs(keep_run_config_id);
         debug!("toggle_run_on_sort_order: order={}", self.sort_order_label());
     }
 
     async fn reset_search_filters(&mut self) {
         if !self.search_filters.is_empty() {
-            let keep_run_id = self.selected_run_id();
+            let keep_run_config_id = self.selected_run_config_id();
             self.search_filters = RunConfigSearch::default();
             self.search_popup = SearchPopupState::default();
-            match self.try_refresh_run_configs(keep_run_id).await {
+            match self.try_refresh_run_configs(keep_run_config_id).await {
                 Ok(()) => {
                     self.status = Some("Run config filters reset.".to_string());
                     debug!("reset_search_filters");
@@ -1922,9 +1922,9 @@ impl App {
 
     async fn apply_type_filter_from_popup(&mut self) {
         if let Some(selected_type) = self.selected_popup_type() {
-            let keep_run_id = self.selected_run_id();
+            let keep_run_config_id = self.selected_run_config_id();
             self.search_filters.run_config_type = Some(selected_type.clone());
-            if let Err(err) = self.try_refresh_run_configs(keep_run_id).await {
+            if let Err(err) = self.try_refresh_run_configs(keep_run_config_id).await {
                 warn!("apply_type_filter_from_popup failed to refresh run configs: {err:?}");
                 self.status = Some(format!("Failed to list run_configs for type filter: {err:?}"));
                 return;
@@ -1960,7 +1960,7 @@ impl App {
         }
     }
 
-    async fn load_filtered_run_configs(&mut self, keep_run_id: Option<u32>) -> Result<(), ThoError> {
+    async fn load_filtered_run_configs(&mut self, keep_run_config_id: Option<u32>) -> Result<(), ThoError> {
         let normalized = self.search_filters.normalized().map_err(ThoError::new)?;
         let run_configs = self
             .store
@@ -1972,46 +1972,46 @@ impl App {
                 run_on_to: normalized.run_on_to,
             })
             .await?;
-        let run_ids = run_configs.iter().map(|entry| entry.id).collect::<Vec<u32>>();
-        let input_pairs = if run_ids.is_empty() {
+        let run_config_ids = run_configs.iter().map(|entry| entry.id).collect::<Vec<u32>>();
+        let input_pairs = if run_config_ids.is_empty() {
             vec![]
         } else {
-            self.store.list_input_run_ids(run_ids.as_slice()).await?
+            self.store.list_input_run_config_ids(run_config_ids.as_slice()).await?
         };
 
         self.all_run_configs = run_configs;
         self.loaded_input_pairs = input_pairs;
-        self.known_output_run_ids.clear();
-        self.known_run_ids_with_outputs.clear();
+        self.known_output_run_config_ids.clear();
+        self.known_run_config_ids_with_outputs.clear();
         self.paged_run_config_offset = self.all_run_configs.len();
         self.has_more_paged_run_configs = false;
         let loaded_input_pairs = self.loaded_input_pairs.clone();
-        let known_output_run_ids = self.known_output_run_ids.clone();
-        self.rebuild_run_config_tree(loaded_input_pairs.as_slice(), &known_output_run_ids);
-        self.rebuild_visible_run_configs(keep_run_id);
+        let known_output_run_config_ids = self.known_output_run_config_ids.clone();
+        self.rebuild_run_config_tree(loaded_input_pairs.as_slice(), &known_output_run_config_ids);
+        self.rebuild_visible_run_configs(keep_run_config_id);
         Ok(())
     }
 
-    async fn try_refresh_run_configs(&mut self, keep_run_id: Option<u32>) -> Result<(), ThoError> {
+    async fn try_refresh_run_configs(&mut self, keep_run_config_id: Option<u32>) -> Result<(), ThoError> {
         self.all_run_configs.clear();
         self.loaded_input_pairs.clear();
-        self.known_output_run_ids.clear();
-        self.known_run_ids_with_outputs.clear();
+        self.known_output_run_config_ids.clear();
+        self.known_run_config_ids_with_outputs.clear();
         self.paged_run_config_offset = 0;
         self.has_more_paged_run_configs = true;
         self.run_config_tree.clear();
         self.run_configs.clear();
 
         if self.search_filters.is_empty() {
-            self.load_next_run_config_page(keep_run_id).await.map(|_| ())
+            self.load_next_run_config_page(keep_run_config_id).await.map(|_| ())
         } else {
-            self.load_filtered_run_configs(keep_run_id).await
+            self.load_filtered_run_configs(keep_run_config_id).await
         }
     }
 
     async fn refresh_run_configs(&mut self) {
-        let keep_run_id = self.selected_run_id();
-        match self.try_refresh_run_configs(keep_run_id).await {
+        let keep_run_config_id = self.selected_run_config_id();
+        match self.try_refresh_run_configs(keep_run_config_id).await {
             Ok(()) => {
                 self.status = None;
                 debug!(
@@ -2027,8 +2027,8 @@ impl App {
                 warn!("refresh_run_configs failed: {e:?}");
                 self.all_run_configs.clear();
                 self.loaded_input_pairs.clear();
-                self.known_output_run_ids.clear();
-                self.known_run_ids_with_outputs.clear();
+                self.known_output_run_config_ids.clear();
+                self.known_run_config_ids_with_outputs.clear();
                 self.paged_run_config_offset = 0;
                 self.has_more_paged_run_configs = false;
                 self.run_config_tree.clear();
@@ -2067,12 +2067,12 @@ impl App {
             return;
         }
 
-        let Some(run_id) = self.selected_run_id() else {
+        let Some(run_config_id) = self.selected_run_config_id() else {
             self.status = None;
             return;
         };
 
-        match self.store.list_run_config_values(run_id).await {
+        match self.store.list_run_config_values(run_config_id).await {
             Ok(values) => {
                 self.status = None;
                 let mut rows = values
@@ -2080,16 +2080,16 @@ impl App {
                     .map(|(name, value)| (name, value_to_string(&value)))
                     .collect::<Vec<(String, String)>>();
                 rows.sort_by(|a, b| a.0.cmp(&b.0));
-                debug!("refresh_selected_values: run_id={} rows={}", run_id, rows.len());
+                debug!("refresh_selected_values: run_config_id={} rows={}", run_config_id, rows.len());
                 self.selected_values = rows;
             }
             Err(e) => {
-                warn!("refresh_selected_details failed to list values: run_id={} err={e:?}", run_id);
-                self.status = Some(format!("Failed to list run_config_values for run_id={run_id}: {e:?}"));
+                warn!("refresh_selected_details failed to list values: run_config_id={} err={e:?}", run_config_id);
+                self.status = Some(format!("Failed to list run_config_values for run_config_id={run_config_id}: {e:?}"));
             }
         }
 
-        if let Some(cached_motifs) = self.run_motifs_cache.get(&run_id).cloned() {
+        if let Some(cached_motifs) = self.run_motifs_cache.get(&run_config_id).cloned() {
             self.apply_selected_run_motifs(cached_motifs, None);
         }
     }
@@ -2642,14 +2642,14 @@ fn format_run_tree_row(app: &App, row: &VisibleRunConfigRow) -> String {
             let tree_marker = if row.expanded { "▼" } else { "▶" };
             format!("{}{} {}", indent, tree_marker, run_on_date)
         }
-        VisibleRunConfigRowKind::RunConfig { run_id } => {
-            let Some(node) = app.run_config_tree.get(run_id) else {
-                return format!("<missing run {}>", run_id);
+        VisibleRunConfigRowKind::RunConfig { run_config_id } => {
+            let Some(node) = app.run_config_tree.get(run_config_id) else {
+                return format!("<missing run {}>", run_config_id);
             };
             let tree_marker = if row.has_children {
                 if row.expanded {
                     "▼"
-                } else if node.children_loaded || !node.output_run_ids.is_empty() {
+                } else if node.children_loaded || !node.output_run_config_ids.is_empty() {
                     "▶"
                 } else {
                     "▷"
@@ -2676,7 +2676,7 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
     let mut right_lines = vec![];
 
     if let Some(run_entry) = app.selected_run_entry() {
-        right_lines.push(format!("run_id: {}", run_entry.id));
+        right_lines.push(format!("run_config_id: {}", run_entry.id));
         right_lines.push(format!("type: {}", run_entry.run_config_type));
         right_lines.push(format!("run_on: {}", run_entry.run_on));
         right_lines.push(format!("descr: {}", run_entry.descr));
@@ -2684,7 +2684,7 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
         right_lines.push(format!("run_on date: {}", run_on_date));
     } else if let Some(motif) = app.selected_tree_motif() {
         right_lines.push(format!("motif_id: {}", motif.motif_id));
-        right_lines.push(format!("source_run_id: {}", motif.source_run_id));
+        right_lines.push(format!("source_run_config_id: {}", motif.source_run_config_id));
         right_lines.push(format!("channel: {}", motif.channel_id));
         if motif_counts_loaded(motif) {
             right_lines.push(format!("slices: {}", motif.slices_cnt));
@@ -2694,7 +2694,7 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
             right_lines.push("resources: <not loaded>".to_string());
         }
     } else {
-        right_lines.push("run_id: <none>".to_string());
+        right_lines.push("run_config_id: <none>".to_string());
     }
 
     right_lines.push(format!("filters: {}", app.search_filters.summary()));
@@ -2707,8 +2707,8 @@ fn render_run_value_lines(app: &App) -> Vec<String> {
 
     if app.selected_run_supports_motifs() && !app.motif_panel_visible() {
         let motifs_line = app
-            .selected_run_id()
-            .and_then(|run_id| app.run_motifs_cache.get(&run_id))
+            .selected_run_config_id()
+            .and_then(|run_config_id| app.run_motifs_cache.get(&run_config_id))
             .map(|motifs| {
                 if motifs.is_empty() {
                     "motifs: none".to_string()
@@ -2755,7 +2755,7 @@ fn render_motif_detail_lines(app: &App) -> Vec<String> {
     let mut lines = vec![];
 
     if let Some(run_entry) = app.selected_run_entry() {
-        lines.push(format!("run_id: {}", run_entry.id));
+        lines.push(format!("run_config_id: {}", run_entry.id));
         lines.push(format!("type: {}", run_entry.run_config_type));
         lines.push(format!("descr: {}", run_entry.descr));
     }
@@ -2765,7 +2765,7 @@ fn render_motif_detail_lines(app: &App) -> Vec<String> {
     if let Some(motif) = app.selected_motif() {
         lines.push(format!("motif_id: {}", motif.motif_id));
         lines.push(format!("channel: {}", motif.channel_id));
-        lines.push(format!("source find_motifs run_id: {}", motif.source_run_id));
+        lines.push(format!("source find_motifs run_config_id: {}", motif.source_run_config_id));
         lines.push(format!("score: {}", motif.score.map(|value| format!("{value:.6}")).unwrap_or_else(|| "<n/a>".to_string())));
         if motif_counts_loaded(motif) {
             lines.push(format!("slices: {}", motif.slices_cnt));
@@ -3114,15 +3114,15 @@ fn popup_height(term_rows: u16, items_count: usize) -> u16 {
     desired.clamp(3, max_h)
 }
 
-fn sort_run_ids(run_ids: &mut Vec<u32>, run_on_by_id: &HashMap<u32, &str>, sort_order: SortOrder) {
+fn sort_run_config_ids(run_config_ids: &mut Vec<u32>, run_on_by_id: &HashMap<u32, &str>, sort_order: SortOrder) {
     match sort_order {
-        SortOrder::Asc => run_ids.sort_by(|a, b| {
+        SortOrder::Asc => run_config_ids.sort_by(|a, b| {
             run_on_by_id
                 .get(a)
                 .cmp(&run_on_by_id.get(b))
                 .then_with(|| a.cmp(b))
         }),
-        SortOrder::Desc => run_ids.sort_by(|a, b| {
+        SortOrder::Desc => run_config_ids.sort_by(|a, b| {
             run_on_by_id
                 .get(b)
                 .cmp(&run_on_by_id.get(a))
@@ -3285,7 +3285,7 @@ fn append_run_on_char(target: &mut String, ch: char) -> bool {
     }
 }
 
-fn parse_run_id_filter(value: &str) -> Result<Option<u32>, String> {
+fn parse_run_config_id_filter(value: &str) -> Result<Option<u32>, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -3667,10 +3667,10 @@ fn run_non_interactive(app: &App) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!();
-    if let Some(run_id) = app.selected_run_id() {
-        println!("selected run_id: {run_id}");
+    if let Some(run_config_id) = app.selected_run_config_id() {
+        println!("selected run_config_id: {run_config_id}");
     } else {
-        println!("selected run_id: <none>");
+        println!("selected run_config_id: <none>");
     }
 
     for (name, value) in &app.selected_values {
@@ -3692,6 +3692,7 @@ mod tests {
     use interprocess::local_socket::ListenerOptions;
     use thoosa_store::MockStore;
     use tokio::io::AsyncWriteExt;
+    use thoosa_shared::run_configs::RUN_ID;
 
     #[test]
     fn test_value_to_string_all_variants() {
@@ -3775,15 +3776,17 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_apply_search_from_popup_filters_visible_rows() {
-        let store = SqlStore::in_mem().await.unwrap();
-        let alpha_run_id = store.save_run_config(None, "select_motifs", "first alpha", HashMap::new()).await.unwrap();
-        let _beta_run_id = store.save_run_config(None, "train_motif_nets", "second beta", HashMap::new()).await.unwrap();
+    async fn test_apply_search_from_popup_filters_visible_rows() ->Result<(), ThoError>{
+        let store = SqlStore::in_mem().await?;
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+
+        let alpha_run_config_id = store.save_run_config(None, "select_motifs", "first alpha", HashMap::new()).await.unwrap();
+        let _beta_run_config_id = store.save_run_config(None, "train_motif_nets", "second beta", HashMap::new()).await.unwrap();
 
         let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
         app.selected_area = SelectedArea::SearchPopup;
         app.search_popup.draft = RunConfigSearch {
-            id: alpha_run_id.to_string(),
+            id: alpha_run_config_id.to_string(),
             run_config_type: Some("select_motifs".to_string()),
             descr: "alpha".to_string(),
             run_on_from: String::new(),
@@ -3792,10 +3795,12 @@ mod tests {
 
         assert!(app.apply_search_from_popup().await);
         assert_eq!(app.selected_area, SelectedArea::LeftRunConfigs);
-        assert_eq!(app.search_filters.id, alpha_run_id.to_string());
+        assert_eq!(app.search_filters.id, alpha_run_config_id.to_string());
         assert_eq!(app.run_configs.len(), 2);
         assert!(app.run_configs[0].run_on_date().is_some());
-        assert_eq!(app.run_configs[1].run_id(), Some(alpha_run_id));
+        assert_eq!(app.run_configs[1].run_config_id(), Some(alpha_run_config_id));
+
+        Ok(())
     }
 
     #[test]
@@ -3827,12 +3832,12 @@ mod tests {
         app.rebuild_visible_run_configs(None);
 
         assert_eq!(Some("2026-03-15"), app.run_configs.get(0).and_then(VisibleRunConfigRow::run_on_date));
-        assert_eq!(Some(2), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some(2), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_config_id));
         assert_eq!(1, app.run_configs.get(1).map(|row| row.depth).unwrap_or_default());
-        assert_eq!(Some(3), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some(3), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_config_id));
         assert_eq!(2, app.run_configs.get(2).map(|row| row.depth).unwrap_or_default());
         assert_eq!(Some("2026-03-14"), app.run_configs.get(3).and_then(VisibleRunConfigRow::run_on_date));
-        assert_eq!(Some(1), app.run_configs.get(4).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some(1), app.run_configs.get(4).and_then(VisibleRunConfigRow::run_config_id));
         assert_eq!(1, app.run_configs.get(4).map(|row| row.depth).unwrap_or_default());
     }
 
@@ -3889,9 +3894,9 @@ mod tests {
         app.rebuild_run_config_tree(&[(3, 1), (3, 2)], &HashMap::new());
         app.rebuild_visible_run_configs(Some(3));
 
-        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_id() == Some(1)).count());
-        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_id() == Some(2)).count());
-        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_id() == Some(3)).count());
+        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_config_id() == Some(1)).count());
+        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_config_id() == Some(2)).count());
+        assert_eq!(1, app.run_configs.iter().filter(|row| row.run_config_id() == Some(3)).count());
     }
 
 
@@ -3916,11 +3921,11 @@ mod tests {
                 },
             ])
         });
-        store.expect_list_run_ids_with_outputs().times(1).returning(|ids| {
+        store.expect_list_run_config_ids_with_outputs().times(1).returning(|ids| {
             assert_eq!(vec![2, 1], ids.to_vec());
             Ok(vec![1])
         });
-        store.expect_list_input_run_ids().times(1).returning(|ids| {
+        store.expect_list_input_run_config_ids().times(1).returning(|ids| {
             assert_eq!(vec![2, 1], ids.to_vec());
             Ok(vec![(2, 1)])
         });
@@ -3932,8 +3937,8 @@ mod tests {
         assert_eq!(3, app.run_configs.len());
         assert!(!app.has_more_paged_run_configs);
         assert_eq!(Some("2026-03-14"), app.run_configs.first().and_then(VisibleRunConfigRow::run_on_date));
-        assert_eq!(Some(1), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_id));
-        assert_eq!(Some(2), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some(1), app.run_configs.get(1).and_then(VisibleRunConfigRow::run_config_id));
+        assert_eq!(Some(2), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_config_id));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3949,11 +3954,11 @@ mod tests {
                 run_on: "2026-03-14 09:00:00".to_string(),
             }])
         });
-        store.expect_list_run_ids_with_outputs().times(1).returning(|ids| {
+        store.expect_list_run_config_ids_with_outputs().times(1).returning(|ids| {
             assert_eq!(vec![7], ids.to_vec());
             Ok(vec![])
         });
-        store.expect_list_input_run_ids().times(1).returning(|ids| {
+        store.expect_list_input_run_config_ids().times(1).returning(|ids| {
             assert_eq!(vec![7], ids.to_vec());
             Ok(vec![])
         });
@@ -3972,8 +3977,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_expand_selected_run_lazy_loads_children() {
         let mut store = MockStore::new();
-        store.expect_list_output_run_ids().times(1).returning(|run_id| {
-            assert_eq!(1, run_id);
+        store.expect_list_output_run_config_ids().times(1).returning(|run_config_id| {
+            assert_eq!(1, run_config_id);
             Ok(vec![2])
         });
         store.expect_list_run_configs_by_ids().times(1).returning(|ids| {
@@ -3985,7 +3990,7 @@ mod tests {
                 run_on: "2026-03-14 09:00:00".to_string(),
             }])
         });
-        store.expect_list_input_run_ids().times(1).returning(|ids| {
+        store.expect_list_input_run_config_ids().times(1).returning(|ids| {
             assert_eq!(vec![2], ids.to_vec());
             Ok(vec![(2, 1)])
         });
@@ -3997,13 +4002,13 @@ mod tests {
             descr: "root run".to_string(),
             run_on: "2026-03-14 08:00:00".to_string(),
         }];
-        app.known_run_ids_with_outputs.insert(1);
+        app.known_run_config_ids_with_outputs.insert(1);
         app.rebuild_run_config_tree(&[], &HashMap::new());
         app.rebuild_visible_run_configs(Some(1));
 
         assert!(app.expand_selected_run().await);
         assert_eq!(3, app.run_configs.len());
-        assert_eq!(Some(2), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_id));
+        assert_eq!(Some(2), app.run_configs.get(2).and_then(VisibleRunConfigRow::run_config_id));
         assert!(app.run_config_tree.get(&1).map(|node| node.children_loaded).unwrap_or(false));
         assert!(app.run_config_tree.get(&1).map(|node| node.expanded).unwrap_or(false));
     }
@@ -4011,8 +4016,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_refresh_selected_details_skips_motif_loading_until_requested() {
         let mut store = MockStore::new();
-        store.expect_list_run_config_values().times(1).returning(|run_id| {
-            assert_eq!(7, run_id);
+        store.expect_list_run_config_values().times(1).returning(|run_config_id| {
+            assert_eq!(7, run_config_id);
             Ok(HashMap::new())
         });
         let mut app = App::new(Box::new(store) as Box<dyn Store>, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
@@ -4034,13 +4039,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_selected_run_motifs_fetches_on_demand() {
         let mut store = MockStore::new();
-        store.expect_list_run_motifs().times(1).returning(|run_id| {
-            assert_eq!(7, run_id);
+        store.expect_list_run_motifs().times(1).returning(|run_config_id| {
+            assert_eq!(7, run_config_id);
             Ok(vec![RunMotifEntry {
                 motif_id: 11,
                 channel_id: 2,
                 score: Some(0.4),
-                source_run_id: 6,
+                source_run_config_id: 6,
                 slices_cnt: 5,
                 resources_cnt: 3,
             }])
@@ -4064,13 +4069,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_motifs_opens_motifs_for_leaf() {
         let mut store = MockStore::new();
-        store.expect_list_run_motifs().times(1).returning(|run_id| {
-            assert_eq!(86439, run_id);
+        store.expect_list_run_motifs().times(1).returning(|run_config_id| {
+            assert_eq!(86439, run_config_id);
             Ok(vec![RunMotifEntry {
                 motif_id: 11,
                 channel_id: 2,
                 score: Some(0.4),
-                source_run_id: 86434,
+                source_run_config_id: 86434,
                 slices_cnt: 5,
                 resources_cnt: 3,
             }])
@@ -4095,13 +4100,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_toggle_selected_run_motifs_panel_hides_loaded_motifs() {
         let mut store = MockStore::new();
-        store.expect_list_run_motifs().times(1).returning(|run_id| {
-            assert_eq!(86439, run_id);
+        store.expect_list_run_motifs().times(1).returning(|run_config_id| {
+            assert_eq!(86439, run_config_id);
             Ok(vec![RunMotifEntry {
                 motif_id: 11,
                 channel_id: 2,
                 score: Some(0.4),
-                source_run_id: 86434,
+                source_run_config_id: 86434,
                 slices_cnt: 5,
                 resources_cnt: 3,
             }])
@@ -4131,13 +4136,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_motifs_opens_motifs_even_with_children() {
         let mut store = MockStore::new();
-        store.expect_list_run_motifs().times(1).returning(|run_id| {
-            assert_eq!(86439, run_id);
+        store.expect_list_run_motifs().times(1).returning(|run_config_id| {
+            assert_eq!(86439, run_config_id);
             Ok(vec![RunMotifEntry {
                 motif_id: 11,
                 channel_id: 2,
                 score: Some(0.4),
-                source_run_id: 86434,
+                source_run_config_id: 86434,
                 slices_cnt: 5,
                 resources_cnt: 3,
             }])
@@ -4174,13 +4179,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_from_left_expands_find_motifs_inline() {
         let mut store = MockStore::new();
-        store.expect_list_run_motifs().times(1).returning(|run_id| {
-            assert_eq!(86434, run_id);
+        store.expect_list_run_motifs().times(1).returning(|run_config_id| {
+            assert_eq!(86434, run_config_id);
             Ok(vec![RunMotifEntry {
                 motif_id: 123,
                 channel_id: 1,
                 score: None,
-                source_run_id: 86434,
+                source_run_config_id: 86434,
                 slices_cnt: 20,
                 resources_cnt: 7,
             }])
@@ -4206,13 +4211,13 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_open_selected_run_right_expands_find_motifs_inline() {
         let mut store = MockStore::new();
-        store.expect_list_run_motifs().times(1).returning(|run_id| {
-            assert_eq!(86434, run_id);
+        store.expect_list_run_motifs().times(1).returning(|run_config_id| {
+            assert_eq!(86434, run_config_id);
             Ok(vec![RunMotifEntry {
                 motif_id: 123,
                 channel_id: 1,
                 score: None,
-                source_run_id: 86434,
+                source_run_config_id: 86434,
                 slices_cnt: 20,
                 resources_cnt: 7,
             }])

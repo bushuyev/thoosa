@@ -4,7 +4,7 @@ use crate::val::{GridValueSet, NamedRange, NamedVal};
 use crate::make_combos;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
 pub struct ConstConfigs<CP> {
@@ -155,12 +155,21 @@ impl<T: FieldName + 'static> OptRunConfigs<Vec<NamedVal<T>>, Vec<NamedRange<T>>,
     }
 }
 
+pub type RunConfigId = u32;
 pub type RunId = u32;
 
-impl Named for RunId {}
+impl Named for RunConfigId {}
 
 pub trait RunConfig: Debug {
-    fn set_id(&mut self, id: RunId);
+    fn set_id(&mut self, id: RunConfigId);
 
     fn type_name() -> &'static str;
+}
+
+
+pub static RUN_ID: OnceLock<RunId> = OnceLock::new();
+
+
+pub fn run_id() -> RunId {
+    RUN_ID.get().map(|v|*v).unwrap_or(0)
 }
