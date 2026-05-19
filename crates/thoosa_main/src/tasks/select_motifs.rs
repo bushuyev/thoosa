@@ -1663,7 +1663,7 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
+        let motif_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -1740,7 +1740,7 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
+        let motif_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
@@ -1819,8 +1819,8 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_0_t = motifs_tensor(100, 3, MotifKind::Pulse);
-        let motif_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
+        let motif_0_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
+        let motif_1_t = tch_test_utils::motifs_tensor(100, 2, MotifKind::Triangle, 0.3, 0.4);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t.shallow_clone())),
@@ -1964,9 +1964,9 @@ pub mod tests {
                 .finish(),
         );
 
-        let motif_0_0_t = motifs_tensor(100, 3, MotifKind::Pulse);
-        let motif_0_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
-        let motif_1_0_t = motifs_tensor(100, 4, MotifKind::Sin);
+        let motif_0_0_t = tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4);
+        let motif_0_1_t = tch_test_utils::motifs_tensor(100, 2, MotifKind::Triangle, 0.3, 0.4);
+        let motif_1_0_t = tch_test_utils::motifs_tensor(100, 4, MotifKind::Sin, 0.3, 0.4);
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (MotifLoaderInput::all_slices(DataId(channel_0_motif_0)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_0_t.shallow_clone())),
             (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_0, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_0_t)),
@@ -1994,22 +1994,6 @@ pub mod tests {
         let result = select_motifs_stage.run(standalone_select_input(resources_group), mock_run_ctx::default(1)).await?;
 
         Ok(())
-    }
-
-    ///found motif's slices of same kind
-    //TODO make slices a bit different
-    pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: MotifKind) -> Tensor {
-
-
-        let t = Tensor::stack(
-            generate_motifs_with_avg_distance(
-                gen_motif(motif_len, &motif_kind).as_slice(), num_slices, 0.3, 0.4, None, 10.0
-            ).0.into_iter().map(|motif| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>().as_slice(), 0
-        );
-
-        debug!("motifs_tensor: t.size={:?}", t.size());
-
-        t
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -2817,7 +2801,7 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached(
-            motif_ids.iter().map(|m|((*m).into(), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
+            motif_ids.iter().map(|m|((*m).into(), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, tch_test_utils::motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4))))
         ).finish());
 
 

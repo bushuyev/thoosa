@@ -23,6 +23,7 @@ use crate::builder::{clc_avg_pool1d_out, clc_conv1d_out, clc_max_pool1d_out, Nod
 // use crate::{data, utils};
 use crate::builder::SeqBuilder;
 use crate::dims::{AnyDims, Dims, MotifSlices};
+use crate::my_tch::MotifInitMode::{CenteredMean, L2NormalizedMean, ZScoreMean};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::*;
 
@@ -425,10 +426,34 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
         Ok(self.conv.forward_t(t.as_ref(), train).into())//TODO custom conv for errors
     }
 }
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Copy)]
+pub enum MotifInitMode {
+    Mean,
+    Median,
+    TrimmedMean { trim_frac: f64 },
+    CenteredMean,
+    L2NormalizedMean,
+    ZScoreMean,
+    CenteredL2NormalizedMean,
+}
 
+impl MotifInitMode {
+    pub fn list(trim_frac: f64) ->Vec<MotifInitMode> {
+        vec![
+            MotifInitMode::Mean,
+            MotifInitMode::Median,
+            MotifInitMode::TrimmedMean { trim_frac },
+            CenteredMean,
+            L2NormalizedMean,
+            ZScoreMean,
+            CenteredMean
+        ]
+    }
+}
 
 #[derive(Debug)]
 pub struct MyCosineConv1d {
+    /// Learnable kernel, shape [1, 1, L]
     pub kernel: Tensor,
 
     /// Learnable logit scale
@@ -436,50 +461,71 @@ pub struct MyCosineConv1d {
 
     /// Learnable logit bias
     pub beta: Tensor,
+
     l: i64,
 }
 
 impl MyCosineConv1d {
+    pub fn new(
+        vs: &Path,
+        l: i64,
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init_mode: MotifInitMode,
+        a: f64,
+        b: f64,
+    ) -> Result<Self, TchError> {
+        debug!("MyCosineConv1d::new: l={l}, init_mode={init_mode:?}");
 
-    pub fn new(vs: &Path, l: i64, init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>, a: f64, b: f64) -> Result<Self, TchError> {
-        debug!("MyCosineConv1d::new: l={l}");
         let kernel = match init {
             None => {
+                // No motif slices provided: start from zeros.
                 vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?
             }
             Some(motif_slices) => {
-                let l = motif_slices.size()[1];
-                let proto = motif_slices.as_ref().as_ref().f_mean_dim(0, false, Float)?; // [L]
+                let motif_slices = motif_slices.as_ref().as_ref(); // [N, L]
+                let sz = motif_slices.size();
+                if sz.len() != 2 {
+                    return Err(TchError::Torch(
+                        format!(
+                            "motif_slices must have shape [num_slices, motif_width], got {:?}",
+                            sz
+                        )
+                            .into(),
+                    ));
+                }
 
+                let motif_l = sz[1];
+                if motif_l != l {
+                    return Err(TchError::Torch(
+                        format!(
+                            "MyCosineConv1d::new: provided l={} but motif_slices width={}",
+                            l, motif_l
+                        )
+                            .into(),
+                    ));
+                }
+
+                let proto = Self::build_motif_prototype(motif_slices, init_mode)?;
                 debug!("MyCosineConv1d::new: proto={proto:?}");
 
-                // zero-mean prototype
-                let proto_mean = proto.f_mean(Float)?;
-                let proto_zm = proto.f_sub(&proto_mean)?; // [L]
+                // Final normalization for cosine matching:
+                // zero-mean + unit-L2, then reshape to [1,1,L]
+                let kernel_init = Self::finalize_prototype(&proto, true, true)?; // [1,1,L]
 
-                // Normalize to unit norm for cosine similarity init
-                let proto_sq = proto_zm.f_mul(&proto_zm)?;
-                let proto_norm = proto_sq
-                    .f_sum(Kind::Float)?
-                    .f_sqrt()?
-                    .f_clamp_min(1e-12)?;
-                let proto_unit = proto_zm.f_div(&proto_norm)?; // [L]
+                let mut kernel = vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?;
 
-                // Learnable kernel [1,1,L], initialized with prototype
-                let mut kernel = vs.var("kernel", &[1, 1, l], nn::Init::Const(0.0))
-                    .set_requires_grad(false);
-
-
-                kernel.f_copy_(&proto_unit.f_view([1, 1, l])?)?;
+                tch::no_grad(|| -> Result<(), TchError> {
+                    kernel.f_copy_(&kernel_init)?;
+                    Ok(())
+                })?;
 
                 debug!("MyCosineConv1d::new: kernel={kernel:?}");
-
-                kernel.set_requires_grad(true)
+                kernel
             }
         };
 
-        let alpha = vs.var("alpha", &[], nn::Init::Const(a));
-        let beta = vs.var("beta", &[], nn::Init::Const(b));
+        let alpha = vs.f_var("alpha", &[], nn::Init::Const(a))?;
+        let beta = vs.f_var("beta", &[], nn::Init::Const(b))?;
 
         Ok(Self {
             kernel,
@@ -489,68 +535,190 @@ impl MyCosineConv1d {
         })
     }
 
-    /// Ensure input is 3D [B, C, T] (adds singleton channel if needed).
-    pub fn ensure_3d(x: &Tensor) -> Tensor {
+    /// Accept [B, L] or [B, 1, L].
+    pub fn ensure_3d(x: &Tensor) -> Result<Tensor, ThoError> {
         match x.size().as_slice() {
-            // [B, T] -> [B, 1, T]
-            [b, t] => x.f_unsqueeze(1).unwrap_or_else(|_| x.shallow_clone()).f_view([*b, 1, *t]).unwrap(),
-            _      => x.shallow_clone(),
+            [b, t] => Ok(x.f_unsqueeze(1)?.f_view([*b, 1, *t])?),
+            [_, 1, _] => Ok(x.shallow_clone()),
+            other => Err(ThoError::new(format!("input must have shape [B,L] or [B,1,L], got {:?}", other))),
         }
+    }
+
+    /// Forward:
+    /// x: [B, L] or [B,1,L]
+    /// returns logits: [B, 1]
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+        let x = Self::ensure_3d(&x)?;
+        let sz = x.size();
+
+        if sz[2] != self.l {
+            return Err(ThoError::new(format!("MyCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2])));
+        }
+
+        // Normalize kernel each forward: [1,1,L] / ||kernel||
+        let k_sq = self.kernel.f_mul(&self.kernel)?;
+        let k_norm = k_sq
+            .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
+            .f_sqrt()?
+            .f_clamp_min(1e-12)?;
+        let k_unit = self.kernel.f_div(&k_norm)?;
+
+        // Full-width conv -> [B,1,1]
+        let num = x.f_conv1d(
+            &k_unit,
+            Option::<&Tensor>::None,
+            [1],
+            [0],
+            [1],
+            1,
+        )?;
+
+        // ||x|| over channel+time -> [B,1,1]
+        let x_sq = x.f_mul(&x)?;
+        let x_norm = x_sq
+            .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
+            .f_sqrt()?
+            .f_clamp_min(1e-12)?;
+
+        // cosine similarity in [-1, 1]
+        let score = num.f_div(&x_norm)?; // [B,1,1]
+
+        // logit = alpha * score + beta
+        Ok(score
+            .f_mul(&self.alpha)?
+            .f_add(&self.beta)?
+            .f_squeeze_dim(2)?)// [B,1]
+    }
+
+    fn build_motif_prototype(
+        motif_slices: &Tensor, // [N, L]
+        mode: MotifInitMode,
+    ) -> Result<Tensor, TchError> {
+        match mode {
+            MotifInitMode::Mean => Self::motif_proto_mean(motif_slices),
+            MotifInitMode::Median => Self::motif_proto_median(motif_slices),
+            MotifInitMode::TrimmedMean { trim_frac } => {
+                Self::motif_proto_trimmed_mean(motif_slices, trim_frac)
+            }
+            MotifInitMode::CenteredMean => Self::motif_proto_centered_mean(motif_slices),
+            MotifInitMode::L2NormalizedMean => {
+                Self::motif_proto_l2_normalized_mean(motif_slices)
+            }
+            MotifInitMode::ZScoreMean => Self::motif_proto_zscore_mean(motif_slices),
+            MotifInitMode::CenteredL2NormalizedMean => {
+                Self::motif_proto_centered_l2_normalized_mean(motif_slices)
+            }
+        }
+    }
+
+    fn finalize_prototype(
+        proto: &Tensor, // [L]
+        zero_mean: bool,
+        unit_l2: bool,
+    ) -> Result<Tensor, TchError> {
+        let mut p = proto.shallow_clone();
+
+        if zero_mean {
+            let m = p.f_mean(Kind::Float)?;
+            p = p.f_sub(&m)?;
+        }
+
+        if unit_l2 {
+            let p2 = p.f_mul(&p)?;
+            let norm = p2.f_sum(Kind::Float)?.f_sqrt()?.f_clamp_min(1e-12)?;
+            p = p.f_div(&norm)?;
+        }
+
+        p.f_view([1, 1, p.size()[0]])
+    }
+
+    fn motif_proto_mean(motif_slices: &Tensor) -> Result<Tensor, TchError> {
+        motif_slices.f_mean_dim(&[0i64][..], false, Kind::Float)
+    }
+
+    fn motif_proto_median(motif_slices: &Tensor) -> Result<Tensor, TchError> {
+        let (values, _indices) = motif_slices.f_median_dim(0, false)?;
+        Ok(values)
+    }
+
+    fn motif_proto_trimmed_mean(
+        motif_slices: &Tensor,
+        trim_frac: f64,
+    ) -> Result<Tensor, TchError> {
+        let sz = motif_slices.size();
+        let n = sz[0];
+
+        if !(0.0..0.5).contains(&trim_frac) {
+            return Err(TchError::Torch(
+                format!("trim_frac must be in [0.0, 0.5), got {trim_frac}").into(),
+            ));
+        }
+
+        let trim = ((n as f64) * trim_frac).floor() as i64;
+        let keep = n - 2 * trim;
+        if keep <= 0 {
+            return Err(TchError::Torch(
+                format!(
+                    "trim_frac={} is too large for number of slices n={}",
+                    trim_frac, n
+                )
+                    .into(),
+            ));
+        }
+
+        let (sorted, _idx) = motif_slices.f_sort(0, false)?;
+        let trimmed = sorted.f_narrow(0, trim, keep)?;
+        trimmed.f_mean_dim(&[0i64][..], false, Kind::Float)
+    }
+
+    fn motif_proto_centered_mean(motif_slices: &Tensor) -> Result<Tensor, TchError> {
+        let row_mean = motif_slices.f_mean_dim(&[1i64][..], true, Kind::Float)?; // [N,1]
+        let centered = motif_slices.f_sub(&row_mean)?;
+        centered.f_mean_dim(&[0i64][..], false, Kind::Float)
+    }
+
+    fn motif_proto_l2_normalized_mean(motif_slices: &Tensor) -> Result<Tensor, TchError> {
+        let x2 = motif_slices.f_mul(motif_slices)?;
+        let row_norm = x2
+            .f_sum_dim_intlist(&[1i64][..], true, Kind::Float)?
+            .f_sqrt()?
+            .f_clamp_min(1e-12)?;
+        let normed = motif_slices.f_div(&row_norm)?;
+        normed.f_mean_dim(&[0i64][..], false, Kind::Float)
+    }
+
+    fn motif_proto_zscore_mean(motif_slices: &Tensor) -> Result<Tensor, TchError> {
+        let row_mean = motif_slices.f_mean_dim(&[1i64][..], true, Kind::Float)?;
+        let centered = motif_slices.f_sub(&row_mean)?;
+
+        let c2 = centered.f_mul(&centered)?;
+        let row_var = c2.f_mean_dim(&[1i64][..], true, Kind::Float)?;
+        let row_std = row_var.f_sqrt()?.f_clamp_min(1e-12)?;
+
+        let z = centered.f_div(&row_std)?;
+        z.f_mean_dim(&[0i64][..], false, Kind::Float)
+    }
+
+    fn motif_proto_centered_l2_normalized_mean(
+        motif_slices: &Tensor,
+    ) -> Result<Tensor, TchError> {
+        let row_mean = motif_slices.f_mean_dim(&[1i64][..], true, Kind::Float)?;
+        let centered = motif_slices.f_sub(&row_mean)?;
+
+        let c2 = centered.f_mul(&centered)?;
+        let row_norm = c2
+            .f_sum_dim_intlist(&[1i64][..], true, Kind::Float)?
+            .f_sqrt()?
+            .f_clamp_min(1e-12)?;
+
+        let normed = centered.f_div(&row_norm)?;
+        normed.f_mean_dim(&[0i64][..], false, Kind::Float)
     }
 }
 
 impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv1d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        debug!("MyCosineConv1d::tho_forward: x_in={:?} lengths={lengths:?}", x_in);
-        let in_kind = x_in.as_ref().kind();
-
-        if let Some(lengths) = lengths.as_deref_mut() {//this can't be used in with other layers so length update is no needed
-            for len in lengths.as_mut_slice().iter_mut() {
-                if *len < 0 {
-                    return Err(ThoError::new(format!("MyCosineConv1d::tho_forward length must be >= 0, got {len}")));
-                }
-                *len = clc_conv1d_out(*len as u32, self.l as u32, ConvConfig::default(), "")? as i64;
-            }
-        }
-
-        let x = Self::ensure_3d(x_in.as_ref());
-        // Normalize kernel each forward so it stays unit-ish during training
-        let k_sq = self.kernel.f_mul(&self.kernel)?;
-        let k_norm = k_sq
-            .f_sum_dim_intlist(&[1, 2][..], true, in_kind)? // [1,1,1]
-            .f_sqrt()?
-            .f_clamp_min(1e-12)?;
-        let k_unit = self.kernel.f_div(&k_norm)?; // [1,1,L]
-
-        // Numerator = full-width conv => [B,1,1]
-        let num = x.f_conv1d(
-            &k_unit,
-            None::<Tensor>,
-            &[1], // stride
-            &[0], // padding
-            &[1], // dilation
-            1,    // groups
-        )?;
-
-        // Denominator = ||x||
-        let x_sq = x.f_mul(&x)?;
-        let x_norm = x_sq
-            .f_sum_dim_intlist(&[1, 2][..], true, in_kind)? // [B,1,1]
-            .f_sqrt()?
-            .f_clamp_min(1e-12)?;
-
-        // Cosine similarity in [-1,1], shape [B,1,1]
-        let score = num.f_div(&x_norm)?;
-
-        // Logit = alpha * score + beta
-        let logits = score
-            .f_mul(&self.alpha)?
-            .f_add(&self.beta)?
-            .f_squeeze_dim(2)?; // [B,1]
-
-        debug!("MyCosineConv1d::tho_forward: logits={logits:?}");
-
-        Ok(logits.into())
+       Ok(self.forward(x_in.as_ref())?.into())
     }
 }
 
@@ -1379,7 +1547,7 @@ mod tch_tests {
     use crate::builder::SeqBuilder;
     use crate::builder::{Node, clc_conv1d_out};
     use crate::dims::{AnyDims, Batch, Dims};
-    use crate::my_tch::{valid_time_mask, MyLinear, ThoModule};
+    use crate::my_tch::{valid_time_mask, MotifInitMode, MyLinear, ThoModule};
     use crate::train_nets::ThoModuleWithStore;
 
     #[test]
@@ -1493,7 +1661,7 @@ mod tch_tests {
                 })),
                 None,
             )?
-            .cosine_conv_1d("cosine", 3, None, 0.5, 0.1)?
+            .cosine_conv_1d("cosine", 3, None, 0.5, 0.1, MotifInitMode::Mean)?
             .end_seq()?;
 
         let vs = nn::VarStore::new(Cpu);

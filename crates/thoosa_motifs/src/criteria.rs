@@ -1204,7 +1204,7 @@ mod tests {
     fn test_interesting_entropy_gauss_01_matches_spectral_entropy_gaussian() -> Result<(), ThoError> {
         for i in 1..=8 {
             let signal = make_entropy_signal(2048, i);//3 frequencies
-            thoosa_common::utils::debug_plot_impl(&signal, &format!("entropy_gauss_signal_{i}"), 0)?;
+            // thoosa_common::utils::debug_plot_impl(&signal, &format!("entropy_gauss_signal_{i}"), 0)?;
 
             let eps = 1e-8;
             let entropy = super::interesting_spectral_entropy(&signal, eps)?;
@@ -1230,7 +1230,7 @@ mod tests {
     fn test_interesting_entropy_band_01_uses_spectral_entropy_and_sorts_bounds() -> Result<(), ThoError> {
         for i in 1..=8 {
             let signal = make_entropy_signal(2048, i);
-            thoosa_common::utils::debug_plot_impl(&signal, "entropy_band_signal.png", 0)?;
+            // thoosa_common::utils::debug_plot_impl(&signal, "entropy_band_signal.png", 0)?;
 
             let eps = 1e-8;
             let entropy = super::interesting_spectral_entropy(&signal, eps)?;
@@ -1294,7 +1294,7 @@ mod tests {
         let mut scores = Vec::new();
         for periods in 1..=8 {
             let x = utils::make_periodic_signal(width, periods);
-            thoosa_common::utils::debug_plot_impl(&x, &format!("periodic_signal_{periods}"), 0)?;
+            // thoosa_common::utils::debug_plot_impl(&x, &format!("periodic_signal_{periods}"), 0)?;
 
             let s = periodicity_acf_01(
                 &x,

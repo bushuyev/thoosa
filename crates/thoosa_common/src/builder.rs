@@ -6,7 +6,7 @@ use tch::{Tensor, nn, no_grad};
 
 use crate::batches::BatchLengths;
 use crate::dims::{AnyDims, Dims, MotifSlices};
-use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear};
+use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear, MotifInitMode};
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
@@ -93,7 +93,8 @@ pub enum Node {
         kernel: u32,
         a: f64,
         b: f64,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init_mode:MotifInitMode
     },
     SharpeningHead1d {
         path: String,
@@ -278,10 +279,13 @@ impl Node {
                 kernel,
                 a, b,
                 init,
+                init_mode
             } => Box::new(MyCosineConv1d::new(
                 &(vs / path),
                 kernel as i64,
-                init, a, b
+                init,
+                init_mode,
+                a, b
             )?),
 
             Node::SharpeningHead1d {
@@ -486,14 +490,16 @@ impl SeqBuilder {
         kernel: u32,
         init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
         a: f64,
-        b: f64
+        b: f64,
+        init_mode: MotifInitMode
     ) -> Result<&mut Self, ThoError> {
 
         self.elts.push(Node::CosineConv1d {
             path:path.to_string(),
             kernel,
             a, b,
-            init
+            init,
+            init_mode
         });
 
         self.num_features = clc_conv1d_out(self.num_features, kernel, ConvConfig::default(),  "")?;

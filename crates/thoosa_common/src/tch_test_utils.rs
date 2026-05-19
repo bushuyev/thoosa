@@ -1,6 +1,7 @@
 use tch::Tensor;
 use rand::{Rng, RngExt, SeedableRng};
 use rand::prelude::{SliceRandom, StdRng};
+use log::debug;
 use thoosa_shared::test_utils::{gen_motif, MotifKind};
 use thoosa_shared::ThoError;
 use crate::utils::to_vec_f32;
@@ -223,7 +224,7 @@ mod tests {
     }
 }
 
-pub fn z_norm(x: &mut [f32]) {
+fn z_norm(x: &mut [f32]) {
     let n = x.len() as f32;
     let mean = x.iter().sum::<f32>() / n;
     let mut var = 0.0;
@@ -669,4 +670,20 @@ pub fn resource_tensor_two_easy_motifs(
     )?;
 
     Ok((t, channels_intervals, (t0, t1)))
+}
+
+///found motif's slices of same kind
+//TODO make slices a bit different
+pub fn motifs_tensor(motif_len:usize, num_slices: usize, motif_kind: MotifKind, d0: f32, d1: f32) -> Tensor {
+
+
+    let t = Tensor::stack(
+        generate_motifs_with_avg_distance(
+            gen_motif(motif_len, &motif_kind).as_slice(), num_slices, d0, d1, None, 10.0
+        ).0.into_iter().map(|motif| Tensor::from_slice(motif.as_slice())).collect::<Vec<_>>().as_slice(), 0
+    );
+
+    debug!("motifs_tensor: t.size={:?}", t.size());
+
+    t
 }
