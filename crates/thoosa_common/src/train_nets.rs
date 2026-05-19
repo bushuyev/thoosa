@@ -50,6 +50,9 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::inference_mode::InferenceModeGuard;
 use crate::runner::global_ctx::GlobalCtx;
+use crate::my_tch::MotifInitModeRangeOrValue;
+use crate::my_tch::MotifInitModeFields;
+use crate::my_tch::MotifInitModeBuilder;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -699,6 +702,11 @@ pub struct MotifCosineNetArgs {
     #[in_map]
     #[run_config]
     pub b: f64,
+
+    #[in_map]
+    #[run_config]
+    pub init_mode:MotifInitMode
+
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -1617,7 +1625,6 @@ pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, T
         .closure(
             Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                 debug!("lin_label_node: out={:?}", t.size());
-                // Ok(t.transpose(1, 2))
                 Ok(t.f_mean_dim(1, false, None)?)
             })),
             Some(params.motif_nets),
@@ -2681,8 +2688,8 @@ mod train_tests {
         let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
         debug_plot_impl(&x_eval, "x_eval", 0)?;
 
-        for init_mode in crate::my_tch::MotifInitMode::list(0.4) {
-            let result = run_cosine_motif_node(&mut vs_0, motifs.shallow_clone(), &x_train, &y_train, &x_eval, &y_eval, &MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode));
+        for init_mode in &crate::my_tch::MotifInitMode::list(0.4) {
+            let result = run_cosine_motif_node(&mut vs_0, motifs.shallow_clone(), &x_train, &y_train, &x_eval, &y_eval, &MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode.clone()));
             debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
         }
 

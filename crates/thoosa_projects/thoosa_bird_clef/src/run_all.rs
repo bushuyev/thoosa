@@ -4,6 +4,7 @@ use parking_lot::RwLock;
 use std::sync::Arc;
 use log::{debug, error, info};
 use tch::Device::Cpu;
+use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue, TrimmedMeanRangeOrValue};
 use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, Metrics, NormThicknessRunConfig};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::RunCtx;
@@ -222,7 +223,7 @@ pub(crate) async fn run_all(
                         info!("train motif nets done: label={label} train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}");
 
                         // Pre-create context and shared handles for label-net stage construction.
-                        let init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
+                        let mut init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
                         let store_in_train_labels = Arc::clone(&store);
                         let ws_in_train_labels = Arc::clone(&ws);
 
@@ -231,38 +232,68 @@ pub(crate) async fn run_all(
                             run_all_args.train_resource_config()
                         )/*.check(&store).await?*/));
 
-                        // Run a grid over label-net training configs; consumes motif nets from previous stage.
-                        let train_label_net_run_config_ids =  match run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
-                            train_label_nets_run_config_range_or_value,
-                            train_labels_input,
-                            &ws,
-                            &store,
-                            async move |run_configs| {
-                                new_train_label_nets(
-                                    train_motif_net_run_config_ids,
-                                    Arc::clone(&loader),
-                                    run_configs,
-                                    &ws_in_train_labels,
-                                    &store_in_train_labels,
-                                    init_ctx_train_labels,
-                                    train_labels_opt_config,
-                                    Some(vec![label.clone()]),
-                                    Some(run_all_args.max_motif_net_loss), //to RunAll args,
-                                    run_all_args.selected_motif_nets_limit,
-                                    run_all_args.motif_slices_step
-                                ).await.map(|v| Arc::new(v))
-                            },
-                            || label_ctx.branch(Some("train label nets"), false),
-                        ).await {
-                            Ok(train_label_nets_run_config_ids) => {
-                                info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
-                            }
-                            Err(e) => {
-                                info!("train label nets failed: label={label} e={e:?}");
-                            }
-                        };
+                         let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(3));
+                        let limit = combo_sets.len().min(100);//TODO ..100
 
-                        info!("train label nets done: label={label} train_label_net_run_config_ids={train_label_net_run_config_ids:?}");
+                        let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
+                        let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 1);
+
+                        for train_motif_net_run_config_ids_combo in train_motif_net_run_config_ids_combos {
+                            let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
+                            let train_labels_input = Arc::clone(&train_labels_input);
+                            let train_motif_net_run_config_ids = train_motif_net_run_config_ids.clone();
+                            let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
+                            let store_in_train_labels = Arc::clone(&store_in_train_labels);
+
+                            let mut label_ctx = label_ctx.branch(Some("label combo"), false);
+                            let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
+                            let init_ctx_train_labels =  init_ctx_train_labels.branch(Some("init label nets"), false);
+                            match panic_to_err_async!(
+                                  run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
+                                    train_label_nets_run_config_range_or_value,
+                                    train_labels_input,
+                                    &ws,
+                                    &store,
+                                    async move |run_configs| {
+                                        new_train_label_nets(
+                                            train_motif_net_run_config_ids,
+                                            Arc::clone(&loader),
+                                            run_configs,
+                                            &ws_in_train_labels,
+                                            &store_in_train_labels,
+                                            init_ctx_train_labels,
+                                            train_labels_opt_config,
+                                            Some(vec![label.clone()]),
+                                            Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                                            run_all_args.selected_motif_nets_limit,
+                                            run_all_args.motif_slices_step
+                                        ).await.map(|v| Arc::new(v))
+                                    },
+                                    || label_ctx.branch(Some("train label nets"), false),
+                                )
+                            ) {
+                                Ok(train_label_nets_run_config_ids) => {
+                                    info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
+                                    let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).await?
+                                        .into_iter().map(|(.., loss)|loss).reduce(f32::min).unwrap_or(f32::MAX);
+
+                                    if min_loss < 0.1 {
+                                        info!("stopping training label {label} got loss={min_loss}");
+
+                                        break
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("train label nets failed: label={label} e={e:?}");
+                                }
+                            };
+
+
+                            collect_eta_record_completion(combos_eta.id());
+
+                        }
+
+                        info!("train label nets done: label={label}");
 
                         Ok::<_, ThoError>(())
                     })
@@ -500,6 +531,15 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
             a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
             b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+            init_mode: MotifInitModeRangeOrValue::Vec(vec![
+                MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                MotifInitModeRangeOrValue::Median(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                MotifInitModeRangeOrValue::TrimmedMean(TrimmedMeanRangeOrValue { trim_frac: RangeOrValue::Value(0.3) }),
+                MotifInitModeRangeOrValue::CenteredMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                MotifInitModeRangeOrValue::L2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                MotifInitModeRangeOrValue::ZScoreMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                MotifInitModeRangeOrValue::CenteredL2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+            ]),
         })
 
     };
