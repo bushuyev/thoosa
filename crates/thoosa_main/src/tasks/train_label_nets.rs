@@ -788,7 +788,7 @@ mod tests {
     use crate::tasks::apply_motif_nets::motif_test_net_;
     use crate::tasks::cross_dims::ChannelsData2;
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::select_motifs::tests::motifs_tensor;
+    use thoosa_common::tch_test_utils::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_label_nets::{new_train_label_nets, ResourcesBatch, TrainLabelNets, TrainLabelNetsInput, TrainLabelNetsOutput};
 
@@ -822,9 +822,9 @@ mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 0; //channel 1 motif 0
 
-        let pulse_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse))?);
-        let triangle_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, MotifKind::Triangle))?);
-        let sin_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Sin))?);
+        let pulse_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Pulse, 0.3, 0.4))?);
+        let triangle_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), motifs_tensor(100, 3, MotifKind::Triangle, 0.3, 0.4))?);
+        let sin_motif = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), motifs_tensor(100, 3, MotifKind::Sin, 0.3, 0.4))?);
         let train_group = "train_group";
         let valid_group = "valid_group";
 
