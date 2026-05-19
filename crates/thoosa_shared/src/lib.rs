@@ -1641,7 +1641,7 @@ pub enum RangeOrValue<V, T: FieldName = String> {
     Range {
         range: Range<V>,
         step: Option<(V, u32)>,//(value, number of digits to round to)
-    }, //TODO replace step in params with number of steps? how choose number of decimals in step=to-from/steps?
+    },
     Value(V),
     Dynamic(Arc<dyn Fn(&[NamedVal<T>]) -> RangeOrValue<V> + Send + Sync>),
 }
