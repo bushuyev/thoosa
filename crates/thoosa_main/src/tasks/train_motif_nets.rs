@@ -367,7 +367,7 @@ where
                         let params = match &rc.net {
                             MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
-                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b, MotifInitMode::Mean),
+                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone()),
                         };
                         let motif = if matches!(&rc.net, MotifNetTypeArgs::CosineNet(_)) { cosine_motif.as_ref().map(Arc::clone) } else { None };
                         Ok((params.motif_net(motif)?.build_tch_module(&vs.root())?, params))
@@ -663,6 +663,7 @@ mod tests {
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_common::dims::MotifSlices;
+    use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
@@ -686,13 +687,15 @@ mod tests {
 
         let (resources_map, motif_intervals) = resources.iter().try_fold((HashMap::new(), vec![]), |mut a, r| {
 
-            let (t, intervals) = resource_tensor(r.length() as usize, &[
-                            vec![(3, motif_width, MotifKind::Pulse)],
-                            vec![(1, motif_width, MotifKind::Sin)],
-                            vec![]
-                        ], 100, 10.0,
-                                                 true,
-                                                 true)?;
+            let (t, intervals) = resource_tensor
+                (r.length() as usize,
+                 &[
+                    vec![(3, motif_width, MotifKind::Pulse)],
+                    vec![(1, motif_width, MotifKind::Sin)],
+                    vec![]
+                ],
+                 100, 10.0, true, true
+            )?;
 
             a.0.insert(r.clone(), t);
 
@@ -838,6 +841,7 @@ mod tests {
                     // NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.0001)),
                     // NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::A)), Val::Real(5.0)),
                     NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::B)), Val::Real(0.0)),
+                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(MotifCosineNetArgsFields::InitMode(MotifInitModeFields::Mean__Selected))), Val::UInt(0)),
                 ]),
                 vec![
                     // NamedRange::new(TrainMotifNetRunConfigFields::NumLayers, Val::Int(0)..Val::Int(10), (Val::Int(10), 0))

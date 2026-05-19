@@ -92,8 +92,8 @@ fn test_grid_param() -> Result<(), ThoError> {
 
 
     assert_eq!(grid_runs.len(), 20);
-    assert!(grid_runs.iter().enumerate().all(|(i, (_, opt_params))| {
-        // debug!("opt_params={opt_params:?}");
+    assert!(grid_runs.iter().enumerate().all(|(i, (grid_params, opt_params))| {
+        debug!("grid_params={grid_params:?}");
         if i % 2 == 0 {
             opt_params == &vec![Hyperparameter::UniformInt {
                 name: TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)),

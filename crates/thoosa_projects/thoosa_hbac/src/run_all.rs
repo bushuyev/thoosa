@@ -3,6 +3,7 @@ use std::sync::Arc;
 use log::info;
 use parking_lot::RwLock;
 use tch::Device::Cpu;
+use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
 use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::RunCtx;
@@ -348,6 +349,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> AllConfigs {
             // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
             a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
             b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+            init_mode: MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
         })
 
         // net: train_nets::MotifNetTypeArgsRangeOrValue::ConvNet(train_nets::MotifConvNetArgsRangeOrValue {
@@ -569,6 +571,7 @@ mod tests {
     use rand::{rng, RngExt};
     use tch::{Device, Tensor};
     use thoosa_common::{debug_plot, train_nets};
+    use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
     use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -862,6 +865,9 @@ mod tests {
             net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
                 a: RangeOrValue::Range { range: Range { start: 1.0, end: 10.0 }, step: None },
                 b: RangeOrValue::Range { range: Range { start: 0.0, end: 1.0 }, step: None },
+                init_mode: MotifInitModeRangeOrValue::Vec(vec![
+                    MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() })
+                ])
             }),
             // num_layers: RangeOrValue::Range { range: Range { start: 2, end: 8 }, step: None },
 
