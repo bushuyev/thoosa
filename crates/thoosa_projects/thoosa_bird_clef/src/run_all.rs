@@ -34,7 +34,7 @@ use thoosa_shared::{collect_futures_with_progress, panic_to_err_async, RangeOrVa
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::math::unordered_sets_of_size;
 use thoosa_shared::ResourceType::NotInGroup;
-use thoosa_shared::run_configs::{RunConfig, RunConfigId};
+use thoosa_shared::run_configs::{run_id, RunConfig, RunConfigId};
 use thoosa_store::Store;
 
 pub enum RunMode {
@@ -283,9 +283,6 @@ pub(crate) async fn run_all(
             let train_label_nets_run_config_range_or_value = Arc::new(train_label_nets_run_config_range_or_value);
 
 
-            let clef_run_config_id = Some(vec![store //to select models for inference
-                .save_run_config(None, ClefRunConfig::type_name(), "RunLabels", HashMap::new())
-                .await?]);
 
             let futures = labels.iter().filter(|label|
                 {
@@ -305,7 +302,7 @@ pub(crate) async fn run_all(
                 let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
                     run_all_args.train_resource_config()
                 )));
-                let clef_run_config_id = clef_run_config_id.clone();
+
                 async move {
                     let train_motif_net_run_config_ids = store.list_run_config_ids_by_descr(label.clone(), TrainMotifNetRunConfig::type_name()).await?;
                     if train_motif_net_run_config_ids.is_empty(){
@@ -328,7 +325,6 @@ pub(crate) async fn run_all(
                         let init_ctx_train_labels = init_ctx_train_labels.branch(Some("init combo"), false);
                         let mut label_ctx = label_ctx.branch(Some("label combo"), false);
                         let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
-                        let clef_run_config_id = clef_run_config_id.clone();
                         match panic_to_err_async!(
                               run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                                 train_label_nets_run_config_range_or_value,
@@ -388,7 +384,7 @@ pub(crate) async fn run_all(
                 "bird_clef_labels",
             ).await;
 
-            info!("Clef train labels done, clef_run_config_id={clef_run_config_id:?}");
+            info!("Clef train labels done, run_id={:?}", run_id());
 
             Ok::<_, ThoError>(())
         }
