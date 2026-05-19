@@ -2369,7 +2369,7 @@ mod train_tests {
     };
     use crate::my_tch::ThoModule;
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, cosine_motif_node, MotifCosineNetParams};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
@@ -2421,6 +2421,7 @@ mod train_tests {
 
     use rand::rngs::StdRng;
     use rand_distr::{Distribution, Normal};
+    use thoosa_shared::test_utils::MotifKind;
     use thoosa_shims::inference_mode::InferenceModeGuard;
 
     #[ctor::ctor]
@@ -2653,6 +2654,76 @@ mod train_tests {
 
         Ok(())
     }
+
+    fn gen_motifs() -> Result<(Tensor, Tensor, Vec<usize>), ThoError>{
+        // let motif_t = motifs_tensor(100, 3, MotifKind::Pulse);
+        //
+        // let x = Tensor::from_slice(&data).reshape([
+        //     batch as i64,
+        //     motif_nets as i64,
+        //     max_l as i64,
+        // ]);
+        //
+        // let y = Tensor::from_slice(&labels).to_kind(Kind::Float);
+        //
+        // Ok((x, y, lengths))
+        //
+        // Ok(motif_t)
+        todo!()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_cosine_motif_node() -> Result<(), ThoError> {
+        let motif_width= 100;
+        let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
+
+        let params = MotifCosineNetParams::new(motif_width, 10.0, 1.0);
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_motif_node(&params, None)?.build_tch_module(&vs_0.root())?;
+        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
+
+        let batch = 64usize;
+        let (x_train, y_train, lengths_train) = gen_motifs()?;
+        let target_train = y_train.unsqueeze(1);
+        let lengths_train = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
+        let (x_eval, y_eval, lengths_eval) = gen_motifs()?;
+        let target_eval = y_eval.unsqueeze(1);
+        let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
+        let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(&mut eval_lengths_before), false)?;
+        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        let mut first_loss = None;
+        let mut last_loss = 0.0;
+        for _ in 0..50 {
+            let mut batch_lengths = BatchLengths::new(lengths_train.clone());
+            let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
+            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            if first_loss.is_none() {
+                first_loss = Some(loss.double_value(&[]));
+            }
+            last_loss = loss.double_value(&[]);
+            opt.backward_step(&loss);
+        }
+
+        let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
+        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
+        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        debug!(
+            "heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
+            first_loss,
+        );
+
+        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
+        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_train_self_attention_label_node() -> Result<(), ThoError> {
