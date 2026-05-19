@@ -1575,9 +1575,7 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
 
 
     builder .end_seq()
-
 }
-
 
 pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, ThoError> {
     debug!("lin_label_node: params={params:?} quantize={quantize}");

@@ -129,8 +129,8 @@ fn main() -> Result<(), ThoError>{
                 run_all_args: &RunAllArgs
             |{
                 debug!("bird_clef run all");
-                // let run_mode = run_all_config_0(run_all_args);
-                let run_mode = run_labels_config_0(run_all_args);
+                let run_mode = run_all_config_0(run_all_args);
+                // let run_mode = run_labels_config_0(run_all_args);
 
                 //gpt run-all starts here after run_cli has opened the workspace/store and built the RawTensorLoader over saved *.pt tensors.
                 run_all(
