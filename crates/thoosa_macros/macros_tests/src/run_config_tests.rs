@@ -68,28 +68,50 @@ fn test_grid_param() -> Result<(), ThoError> {
                     match named_vals.iter().find(|f|f.path().eq(&TestRunConfigFields::SimpleField)){
                         None => RangeOrValue::Value(0),
                         Some(_v) => {
-                            debug!("val={:?}", _v.val().to_f64());
+                            RangeOrValue::Range{ range: 0 .._v.val().to_i64(1) as u32, step: None }
+                        },
+                    }
+                })
+            }),
+            CatEnumRangeOrValue::Two(TwoRangeOrValue {
+                inner_field_two: RangeOrValue::dynamic(|named_vals: &[NamedVal<TestRunConfigFields>]| {
+                    match named_vals.iter().find(|f|f.path().eq(&TestRunConfigFields::SimpleField)){
+                        None => RangeOrValue::Value(0),
+                        Some(_v) => {
                             RangeOrValue::Range{ range: 0 .._v.val().to_i64(1) as u32, step: None }
                         },
                     }
                 })
             })
+
         ])
     };
 
     let opt_configs = test_config.opt_run_configs()?;
     let grid_runs = opt_configs.grid_to_vals_and_opt_params();
-    assert_eq!(grid_runs.len(), 10);
+
+
+    assert_eq!(grid_runs.len(), 20);
     assert!(grid_runs.iter().enumerate().all(|(i, (_, opt_params))| {
-        opt_params == &vec![Hyperparameter::UniformInt {
-            name: TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)),
-            lower: 0,
-            upper: i as i64,
-        }]
+        // debug!("opt_params={opt_params:?}");
+        if i % 2 == 0 {
+            opt_params == &vec![Hyperparameter::UniformInt {
+                name: TestRunConfigFields::CatField(CatEnumFields::One(OneFields::InnerFieldOne)),
+                lower: 0,
+                upper: (i / 2) as i64,
+            }]
+        } else {
+            opt_params == &vec![Hyperparameter::UniformInt {
+                name: TestRunConfigFields::CatField(CatEnumFields::Two(TwoFields::InnerFieldTwo)),
+                lower: 0,
+                upper: (i / 2) as i64,
+            }]
+        }
     }));
 
     Ok(())
 }
+
 
 #[test]
 fn test_dynamic_grid_param() -> Result<(), ThoError> {

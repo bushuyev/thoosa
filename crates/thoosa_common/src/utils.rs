@@ -2037,19 +2037,7 @@ pub mod tests {
             net_type_1: Option<NetType>,
         }
 
-        // impl RunConfig for TrainLabelsRunConfig {
-        //     fn from_properties_map(run_config_id: RunId, properties: HashMap<String, Val>) -> Self {
-        //         todo!()
-        //     }
-        //
-        //     fn set_id(&mut self, id: RunId) {
-        //         todo!()
-        //     }
-        //
-        //     fn type_name() -> &'static str {
-        //         todo!()
-        //     }
-        // }
+
 
         #[derive(Parser, Clone)]
         #[command(version, about, long_about = None)]
@@ -2104,20 +2092,6 @@ pub mod tests {
                 "#,
         ]);
 
-        #[derive(Debug, Default)]
-        struct TestNodeParams {
-            layers: u32,
-        }
-
-        fn test_train_label(
-            vs: &VarStore,
-            run_config: &TrainLabelsRunConfig,
-            ls: &mut dyn TrainListener,
-        ) -> Result<(f32, TestNodeParams), ThoError> {
-            debug!("test_train_label: run_config={:?}", run_config);
-
-            Ok((0.1, TestNodeParams { layers: 0 }))
-        }
 
         let opt_sources = match &cli.command {
             Commands::TrainLabels(train_labels_args) => {
@@ -2229,7 +2203,6 @@ pub mod tests {
             opt_sources.opt_params()
         );
 
-        // opt_train_2(test_train_label, &opt_sources, Cpu, "test").unwrap();
     }
 
     #[test]
