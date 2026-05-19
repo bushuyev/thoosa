@@ -316,11 +316,13 @@ mod motif_find_tests {
     }
 
     #[test]
-    fn test_z_norm() {
+    fn test_z_norm()  -> Result<(), ThoError>{
         assert_eq!(
             vec![-1.2247449, 0.0, 1.2247449],
-            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64))
+            to_vec_f32(&z_norm(&Tensor::from_slice(&[1., 2., 3.]), 0i64)?)
         );
+
+        Ok(())
     }
 
     #[test]

@@ -1547,7 +1547,7 @@ pub mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::tch_test_utils;
-    use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm, z_norm_2};
+    use thoosa_common::utils::{draw_function_plot, reset_print_options, to_vec_f32, z_norm};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_motifs::criteria::mock_criteria;
     use thoosa_common::tch_test_utils::generate_motifs_with_avg_distance;

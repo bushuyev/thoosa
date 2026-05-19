@@ -1089,17 +1089,10 @@ pub fn mask_from_lengths(lengths: &[i64], max_len: i64, device: Device) -> Resul
 }
 
 
-pub fn z_norm(t: &Tensor, dim: i64) -> Tensor {
-    let mean_t = t.mean_dim(dim, true, Float);
-    let std_t = t.std(false);
-    let z_t = (t - mean_t) / std_t;
-    z_t
-}
+pub fn z_norm(t_0: &Tensor, dim: i64) -> Result<Tensor, ThoError> {
+    let std = t_0.f_std_dim(dim, false, true)?.f_add_scalar_(f64::EPSILON)?;
 
-pub fn z_norm_2(t_0: &Tensor, _dim: i64) -> Result<Tensor, ThoError> {
-    let std = t_0.f_std_dim(1, true, true)?.f_add_scalar_(f64::EPSILON)?;
-    //TODO std - 0
-    Ok(t_0.f_sub(&t_0.f_mean_dim(1, true, Float)?)?.f_div(&std)?)
+    Ok(t_0.f_sub(&t_0.f_mean_dim(dim, true, t_0.kind())?)?.f_div(&std)?)
 }
 
 pub fn z_norm_dims(x: &Tensor, dims: &[i64], eps: f64) -> Result<Tensor, ThoError> {
