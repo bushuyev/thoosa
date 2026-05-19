@@ -40,7 +40,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
@@ -65,8 +65,8 @@ where
     LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
-    train_motif_nets_run_ids: Vec<RunId>,
-    motif_nets_ids: Vec<RunId>,
+    train_motif_nets_run_config_ids: Vec<RunConfigId>,
+    motif_nets_ids: Vec<RunConfigId>,
     run_configs: Arc<OptRunConfigs<
         Vec<NamedVal<TrainLabelNetRunConfigFields>>,
         Vec<NamedRange<TrainLabelNetRunConfigFields>>,
@@ -84,7 +84,7 @@ where
 }
 
 pub async fn new_train_label_nets<L, C, R>(
-    train_motif_net_run_ids: Vec<RunId>,
+    train_motif_net_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -101,13 +101,13 @@ where
     C: RunCtx + Adjustable + 'static,
     R:RunCtx + Adjustable + 'static
 {
-    let id = mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_ids.iter().map(|run_id| mono_key!(*run_id, format!("train_motif_nets_run_ids_{run_id}"))).collect::<Vec<_>>());
+    let id = mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_config_ids.iter().map(|run_config_id| mono_key!(*run_config_id, format!("train_motif_nets_run_config_ids_{run_config_id}"))).collect::<Vec<_>>());
 
     //gpt Build a motif-net application stage to turn raw resources into motif probabilities.
     let apply_motif_nets = Arc::new(ApplyMotifNets::new(
         ws,
         store,
-        train_motif_net_run_ids.clone(),
+        train_motif_net_run_config_ids.clone(),
         stage_ctx,
         max_loss, //max_loss and selected_motif_nets_limit are used to select motif_nets_ids which will be saved as label net input
         selected_motif_nets_limit,
@@ -124,14 +124,14 @@ where
 
 
     let applied_motif_loader = Arc::new(ABStage::new(
-        //train_motif_nets_run_ids are only for logging. can't get RawTensorLoader id, but it's a singleton and ABStage isn't used - A instances are cached under A::out_id key.
+        //train_motif_nets_run_config_ids are only for logging. can't get RawTensorLoader id, but it's a singleton and ABStage isn't used - A instances are cached under A::out_id key.
         id,
         loader,
         apply_motif_nets
     ));
 
     TrainLabelNets::new(
-        train_motif_net_run_ids,
+        train_motif_net_run_config_ids,
         motif_nets_ids,
         applied_motif_loader,
         num_nets,
@@ -151,7 +151,7 @@ where
 {
 
     pub async fn new(
-        train_motif_nets_run_ids: Vec<RunId>,
+        train_motif_nets_run_config_ids: Vec<RunConfigId>,
         motif_nets_ids: Vec<u32>,
         applied_motif_loader: Arc<LM>,
         num_nets:u32,
@@ -173,7 +173,7 @@ where
             .filter(|labels| !labels.is_empty());
 
         Ok(Self {
-            train_motif_nets_run_ids,
+            train_motif_nets_run_config_ids,
             motif_nets_ids,
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
@@ -240,13 +240,13 @@ impl WithId for TrainLabelNetsInput {
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct TrainLabelNetsOutput {
-    id: RunId,
-    train_motif_nets_run_ids: Vec<RunId>,
+    id: RunConfigId,
+    train_motif_nets_run_config_ids: Vec<RunConfigId>,
     motif_nets_ids:Vec<u32>,
     results: Vec<TrainLabelNetRunConfigResult>
 }
 impl WithId for TrainLabelNetsOutput {
-    type ID = RunId;
+    type ID = RunConfigId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -254,7 +254,7 @@ impl WithId for TrainLabelNetsOutput {
 }
 
 impl WithId for Box<TrainLabelNetsOutput> {
-    type ID = RunId;
+    type ID = RunConfigId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -270,27 +270,27 @@ impl SavableResult for TrainLabelNetsOutput {
 
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
 
-        let mut run_ids = Vec::with_capacity(self.results.len());
+        let mut run_config_ids = Vec::with_capacity(self.results.len());
 
         for result in &mut self.results {
 
-            run_ids.push(
+            run_config_ids.push(
                 result.save(store, ws, TrainLabelNetRunConfigResultParams {
-                    train_motif_nets_run_ids:&self.train_motif_nets_run_ids,
+                    train_motif_nets_run_config_ids:&self.train_motif_nets_run_config_ids,
                     motif_nets_ids:&self.motif_nets_ids
                 }).await?
             );
         }
 
-        Ok(run_ids)
+        Ok(run_config_ids)
     }
 }
 
 impl TrainLabelNetsOutput {
-    pub fn new(train_motif_nets_run_ids: Vec<RunId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetRunConfigResult>) -> Self {
+    pub fn new(train_motif_nets_run_config_ids: Vec<RunConfigId>, motif_nets_ids:Vec<u32>, results: Vec<TrainLabelNetRunConfigResult>) -> Self {
         Self {
             id: 0,
-            train_motif_nets_run_ids,
+            train_motif_nets_run_config_ids,
             motif_nets_ids,
             results
         }
@@ -377,7 +377,7 @@ where
                 let train_label_nets_run_configs = Arc::clone(&train_label_nets_run_configs);
                 let applied_motif_loader = Arc::clone(&self.applied_motif_loader);
 
-                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_ids={:?} train_label_nets_run_configs={train_label_nets_run_configs:?}", self.train_motif_nets_run_ids);
+                debug!("TrainLabelNets::run: label={label} train_motif_nets_run_config_ids={:?} train_label_nets_run_configs={train_label_nets_run_configs:?}", self.train_motif_nets_run_config_ids);
                 let motif_nets_ids = self.motif_nets_ids.clone();
 
                 let labels_others_train_valid_resources = Arc::clone(&labels_others_train_valid_resources);
@@ -529,7 +529,7 @@ where
                 "train labels",
             ).await;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_ids.clone(), self.motif_nets_ids.clone(), results))))
+            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results))))
         }
     }
 }
@@ -774,7 +774,7 @@ mod tests {
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_common::utils;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
@@ -814,8 +814,8 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let input_n_0 = 1000;
-        let find_motifs_run_id:RunId = 1;
-        let select_motifs_run_id:RunId = 2;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
         let motif_width = 100;
 
         let motif_0_0_id = 0; //channel 0 motif 0
@@ -918,7 +918,7 @@ mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
             .with_list_selected_motifs([
-                (select_motifs_run_id, Ok(
+                (select_motifs_run_config_id, Ok(
                     vec![
                         vec![(motif_0_0_id, 1.0f64), (motif_0_1_id, 1.0f64)], //channel 0
                         vec![(motif_1_0_id, 1.0f64)], //channel 1
@@ -955,7 +955,7 @@ mod tests {
                 (valid_group, Ok(resources_x.clone())),
             ])
             .with_list_trained_nets([
-                (vec![select_motifs_run_id], Some(0.3), Some(3), Ok(vec![
+                (vec![select_motifs_run_config_id], Some(0.3), Some(3), Ok(vec![
                     (0, PathBuf::new(), 0.1f32),
                     (0, PathBuf::new(), 0.2f32),
                 ])),
@@ -985,7 +985,7 @@ mod tests {
         // ctx.expect().with(always()).times(1..).returning( |_| Box::pin(async { Ok(()) }));
 
         let train_label_nets = Arc::new(new_train_label_nets(
-            vec![select_motifs_run_id],
+            vec![select_motifs_run_config_id],
             loader,
             run_configs,
             &ws,

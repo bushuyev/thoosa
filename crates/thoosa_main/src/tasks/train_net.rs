@@ -746,7 +746,7 @@ mod tests {
     use thoosa_run_config_args::OptRunConfigSource;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_shared::{RangeOrValue, ThoError};
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::MonoMetrics;
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
@@ -795,7 +795,7 @@ mod tests {
     #[run_config_opt]
     struct DummyRunConfig {
         #[in_map]
-        pub id: Option<RunId>,
+        pub id: Option<RunConfigId>,
 
         #[in_map]
         #[run_config]
@@ -807,7 +807,7 @@ mod tests {
     }
 
     impl DummyRunConfig {
-        pub fn new(id: Option<RunId>, num_layers: u32) -> Self {
+        pub fn new(id: Option<RunConfigId>, num_layers: u32) -> Self {
             Self { id, num_layers, common_config: CommonTrainingRunConfig::new(10, 10, 0.0001) }
         }
     }

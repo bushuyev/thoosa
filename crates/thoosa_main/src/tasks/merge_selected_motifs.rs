@@ -17,7 +17,7 @@ use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::group_slices;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_store::{IdSlice, Store};
@@ -30,27 +30,27 @@ use crate::tasks::stage_ids::MERGE_SELECTED_MOTIFS;
 
 #[derive(Debug, Args, Clone)]
 pub struct MergeSelectedMotifsArgs {
-    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_ids)]
-    pub select_motifs_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_config_ids)]
+    pub select_motifs_run_config_ids: Vec<RunConfigId>,
 }
 
 #[derive(Debug, DummyData)]
 #[dummy_data(no_clone)]
 pub struct MergeSelectedMotifsInput {
     id: SynKey,
-    run_ids: Vec<RunId>,
+    run_config_ids: Vec<RunConfigId>,
 }
 
 impl MergeSelectedMotifsInput {
-    pub fn new(run_ids: Vec<RunId>) -> Self {
+    pub fn new(run_config_ids: Vec<RunConfigId>) -> Self {
         Self {
             id: SynKey::new([mono_key!("MergeSelectedMotifsInput", "stage")]),
-            run_ids,
+            run_config_ids,
         }
     }
 
-    pub fn run_ids(&self) -> &Vec<RunId> {
-        &self.run_ids
+    pub fn run_config_ids(&self) -> &Vec<RunConfigId> {
+        &self.run_config_ids
     }
 }
 
@@ -67,12 +67,12 @@ impl WithId for MergeSelectedMotifsInput {
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(no_clone)]
 pub struct MergeSelectedMotifsOutput {
-    id: RunId,
+    id: RunConfigId,
     merged_groups_by_channel: Vec<usize>,
 }
 
 impl MergeSelectedMotifsOutput {
-    pub fn new(id: RunId, merged_groups_by_channel: Vec<usize>) -> Self {
+    pub fn new(id: RunConfigId, merged_groups_by_channel: Vec<usize>) -> Self {
         Self { id, merged_groups_by_channel }
     }
 
@@ -82,7 +82,7 @@ impl MergeSelectedMotifsOutput {
 }
 
 impl WithId for MergeSelectedMotifsOutput {
-    type ID = RunId;
+    type ID = RunConfigId;
 
     fn id(&self) -> &Self::ID {
         &self.id
@@ -93,17 +93,17 @@ impl Output for MergeSelectedMotifsOutput {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SelectedMotifKey {
-    select_run_id: RunId,
+    select_run_config_id: RunConfigId,
     motif_id: u32,
 }
 
 impl SelectedMotifKey {
-    fn new(select_run_id: RunId, motif_id: u32) -> Self {
-        Self { select_run_id, motif_id }
+    fn new(select_run_config_id: RunConfigId, motif_id: u32) -> Self {
+        Self { select_run_config_id, motif_id }
     }
 
     fn motif_loader_input(&self) -> MotifLoaderInput {
-        MotifLoaderInput::new((self.motif_id, "motif_id").into(), Some(vec![self.select_run_id]))
+        MotifLoaderInput::new((self.motif_id, "motif_id").into(), Some(vec![self.select_run_config_id]))
     }
 }
 
@@ -188,30 +188,30 @@ where
         }
     }
 
-    async fn load_candidates_by_channel(&self, run_ids: &[RunId]) -> Result<Vec<Vec<SelectedMotifCandidate>>, ThoError> {
+    async fn load_candidates_by_channel(&self, run_config_ids: &[RunConfigId]) -> Result<Vec<Vec<SelectedMotifCandidate>>, ThoError> {
         let channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();
         let mut candidates_by_channel = vec![Vec::new(); channels as usize];
-        let mut run_config_cache = HashMap::<RunId, FindMotifsRunConfig>::new();
+        let mut run_config_cache = HashMap::<RunConfigId, FindMotifsRunConfig>::new();
 
-        for select_run_id in run_ids {
-            let selected_motifs = self.store.list_selected_motifs(*select_run_id, channels).await?;
+        for select_run_config_id in run_config_ids {
+            let selected_motifs = self.store.list_selected_motifs(*select_run_config_id, channels).await?;
             for (channel_idx, channel_motifs) in selected_motifs.into_iter().enumerate() {
                 for (motif_id, _score) in channel_motifs {
-                    let (motif_channel, find_motifs_run_id) = self.store.get_motif_meta(motif_id).await?;
+                    let (motif_channel, find_motifs_run_config_id) = self.store.get_motif_meta(motif_id).await?;
 
                     if motif_channel != channel_idx {
                         return Err(ThoError::new(format!("MergeSelectedMotifs::run: motif_id={motif_id} listed under channel={channel_idx}, but store returned channel={motif_channel}")));
                     }
 
-                    if !run_config_cache.contains_key(&find_motifs_run_id) {
-                        let run_config = load_run_config(&self.store, find_motifs_run_id).await?;
-                        run_config_cache.insert(find_motifs_run_id, run_config);
+                    if !run_config_cache.contains_key(&find_motifs_run_config_id) {
+                        let run_config = load_run_config(&self.store, find_motifs_run_config_id).await?;
+                        run_config_cache.insert(find_motifs_run_config_id, run_config);
                     }
 
-                    let find_motifs_run_config = run_config_cache.get(&find_motifs_run_id).expect("set above");
+                    let find_motifs_run_config = run_config_cache.get(&find_motifs_run_config_id).expect("set above");
                     candidates_by_channel[channel_idx].push(SelectedMotifCandidate {
-                        key: SelectedMotifKey::new(*select_run_id, motif_id),
+                        key: SelectedMotifKey::new(*select_run_config_id, motif_id),
                         channel: channel_idx,
                         comparison: MotifComparisonConfig::from_find_motifs_run_config(find_motifs_run_config)?,
                     });
@@ -259,9 +259,9 @@ where
     async fn collect_group_slices(&self, channel: usize, motif_keys: &HashSet<SelectedMotifKey>) -> Result<HashSet<IdSlice>, ThoError> {
         let mut merged_slices = HashSet::new();
         for motif_key in motif_keys {
-            let (motif_channel, _find_run_id, slices, _resources_map) = self
+            let (motif_channel, _find_run_config_id, slices, _resources_map) = self
                 .store
-                .list_motif_slices(motif_key.motif_id, Some(vec![motif_key.select_run_id]), None, None)
+                .list_motif_slices(motif_key.motif_id, Some(vec![motif_key.select_run_config_id]), None, None)
                 .await?;
 
             if motif_channel != channel as i64 {
@@ -296,21 +296,21 @@ where
         for<'a> Self::In<'a>: Send + Sync,
     {
         async move {
-            let mut run_ids = with_data!(ctx.branch(Some("merge_selected_motifs_input"), false), input; |_ctx, input: &MergeSelectedMotifsInput| {
-                Ok::<_, ThoError>(input.run_ids().clone())
+            let mut run_config_ids = with_data!(ctx.branch(Some("merge_selected_motifs_input"), false), input; |_ctx, input: &MergeSelectedMotifsInput| {
+                Ok::<_, ThoError>(input.run_config_ids().clone())
             })?;
-            if run_ids.is_empty() {
-                return Err(ThoError::new("MergeSelectedMotifs::run: run_ids is empty"));
+            if run_config_ids.is_empty() {
+                return Err(ThoError::new("MergeSelectedMotifs::run: run_config_ids is empty"));
             }
-            run_ids.sort();
-            run_ids.dedup();
+            run_config_ids.sort();
+            run_config_ids.dedup();
 
-            let merge_run_id = self
+            let merge_run_config_id = self
                 .store
-                .save_run_config(Some(run_ids.as_slice()), "MergeMotifs", "MergeMotifs", HashMap::new())
+                .save_run_config(Some(run_config_ids.as_slice()), "MergeMotifs", "MergeMotifs", HashMap::new())
                 .await?;
 
-            let candidates_by_channel = self.load_candidates_by_channel(run_ids.as_slice()).await?;
+            let candidates_by_channel = self.load_candidates_by_channel(run_config_ids.as_slice()).await?;
             let mut merged_groups_by_channel = Vec::with_capacity(candidates_by_channel.len());
             let mut motif_ids = vec![];
             for (channel, candidates) in candidates_by_channel.into_iter().enumerate() {
@@ -375,7 +375,7 @@ where
                 if !slice_groups.is_empty() {
                     motif_ids.extend(
                         self.store
-                            .save_groups_as_motifs(merge_run_id, channel as i64, slice_groups)
+                            .save_groups_as_motifs(merge_run_config_id, channel as i64, slice_groups)
                             .await?
                             .into_iter()
                             .map(|motif_id| (motif_id, 1.0)),
@@ -384,9 +384,9 @@ where
             }
 
             motif_ids.sort_by_key(|(motif_id, _)| *motif_id);
-            let select_motifs_run_id = self.store.save_selected_motifs(merge_run_id, motif_ids).await?;
+            let select_motifs_run_config_id = self.store.save_selected_motifs(merge_run_config_id, motif_ids).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(MergeSelectedMotifsOutput::new(select_motifs_run_id, merged_groups_by_channel))))
+            Ok(Arc::new(DevicesWrap::wrap(MergeSelectedMotifsOutput::new(select_motifs_run_config_id, merged_groups_by_channel))))
         }
     }
 }
@@ -417,63 +417,63 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let find_run_id = 10;
-        let select_run_id_0 = 100;
-        let select_run_id_1 = 200;
-        let merge_run_id = 300;
+        let find_run_config_id = 10;
+        let select_run_config_id_0 = 100;
+        let select_run_config_id_1 = 200;
+        let merge_run_config_id = 300;
         let store = Arc::new(
             MockStoreBuilder::new()
                 .with_save_run_config(
-                    Some(vec![select_run_id_0, select_run_id_1]),
+                    Some(vec![select_run_config_id_0, select_run_config_id_1]),
                     "MergeMotifs",
                     "MergeMotifs",
-                    "run_ids",
+                    "run_config_ids",
                     HashMap::new(),
-                    Ok(merge_run_id),
+                    Ok(merge_run_config_id),
                 )
                 .with_list_selected_motifs([
-                    (select_run_id_0, Ok(vec![vec![(1u32, 1.0f64)]])),
-                    (select_run_id_1, Ok(vec![vec![(2u32, 1.0f64)]])),
+                    (select_run_config_id_0, Ok(vec![vec![(1u32, 1.0f64)]])),
+                    (select_run_config_id_1, Ok(vec![vec![(2u32, 1.0f64)]])),
                 ])
                 .with_get_motif_meta([
-                    (1u32, Ok((0usize, find_run_id))),
-                    (2u32, Ok((0usize, find_run_id))),
+                    (1u32, Ok((0usize, find_run_config_id))),
+                    (2u32, Ok((0usize, find_run_config_id))),
                 ])
                 .with_run_config_descr([(
-                    find_run_id,
+                    find_run_config_id,
                     Ok(RunConfigRow {
-                        id: find_run_id,
+                        id: find_run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find motifs".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
                 .with_list_run_config_values(
-                    find_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_run_id), 1, 3, None, Some(1.0)).to_properties_iter(None).collect()),
+                    find_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_run_config_id), 1, 3, None, Some(1.0)).to_properties_iter(None).collect()),
                 )
-                .with_list_motif_slices(1u32, Some(vec![select_run_id_0]), None, None, Ok((0i64, find_run_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
-                .with_list_motif_slices(2u32, Some(vec![select_run_id_1]), None, None, Ok((0i64, find_run_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
+                .with_list_motif_slices(1u32, Some(vec![select_run_config_id_0]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
+                .with_list_motif_slices(2u32, Some(vec![select_run_config_id_1]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
                 .with_save_groups_as_motifs(vec![CheckGroups::Lengths(vec![4])])
-                .with_save_selected_motifs([(merge_run_id, vec![(1u32, 1.0f64)], Ok(merge_run_id))])
+                .with_save_selected_motifs([(merge_run_config_id, vec![(1u32, 1.0f64)], Ok(merge_run_config_id))])
                 .build(),
         );
-        let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_run_id_0]));
-        let motif_input_1 = MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_run_id_1]));
+        let motif_input_0 = MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_run_config_id_0]));
+        let motif_input_1 = MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_run_config_id_1]));
         let motif_loader = Arc::new(
             mock_motif_loader::build()
                 .with_run_cached([
                     (
                         motif_input_0.clone(),
                         (
-                            MotifMeta { channel: 0, find_motifs_run_id: find_run_id, window: 3 },
+                            MotifMeta { channel: 0, find_motifs_run_config_id: find_run_config_id, window: 3 },
                             Tensor::from_slice(&[0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0]).view((2, 3)),
                         ),
                     ),
                     (
                         motif_input_1.clone(),
                         (
-                            MotifMeta { channel: 0, find_motifs_run_id: find_run_id, window: 3 },
+                            MotifMeta { channel: 0, find_motifs_run_config_id: find_run_config_id, window: 3 },
                             Tensor::from_slice(&[0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0]).view((2, 3)),
                         ),
                     ),
@@ -491,13 +491,13 @@ mod tests {
 
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(vec![select_run_id_0, select_run_id_1]))),
+                Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1]))),
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(Some("merge_selected_motifs"), false),
             )
             .await?;
 
-        let (run_id, merged_groups_by_channel) = output
+        let (run_config_id, merged_groups_by_channel) = output
             .with_data_ref(
                 0,
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
@@ -507,7 +507,7 @@ mod tests {
             )
             .await?;
 
-        assert_eq!(run_id, merge_run_id);
+        assert_eq!(run_config_id, merge_run_config_id);
         assert_eq!(merged_groups_by_channel, vec![1]);
 
         Ok(())

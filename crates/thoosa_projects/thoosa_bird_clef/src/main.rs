@@ -272,13 +272,13 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 
 async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
-    let run_ids = store.list_label_nets_run_ids(label).await?;
-    debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_ids={run_ids:?}");
+    let run_config_ids = store.list_label_nets_run_config_ids(label).await?;
+    debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_config_ids={run_config_ids:?}");
 
     let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
         &ws,
         &store,
-        run_ids,
+        run_config_ids,
         ctx,
         motif_slices_step,
         batch_in_chunks,

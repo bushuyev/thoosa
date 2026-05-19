@@ -19,7 +19,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::ResourceId;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, WithId};
 use thoosa_shared::{mono_key, ThoError};
@@ -446,22 +446,22 @@ impl<'a> Input for ClcResourcesMotifsDistInput<'a> {}
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistOutput {
     pub id: SynKey,
-    pub find_motifs_run_id: RunId,
+    pub find_motifs_run_config_id: RunConfigId,
     pub channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<SynKey>)>>,
     pub resources_iter: SlicesIter,
 }
 
 impl ClcResourcesMotifsDistOutput {
     pub fn new(
-        find_motifs_run_id: RunId,
+        find_motifs_run_config_id: RunConfigId,
         channel_masks_dists_ids: Vec<Option<(DistsMask, Vec<SynKey>)>>,
         resources_iter: SlicesIter,
     ) -> Self {
-        debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_id={find_motifs_run_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
+        debug!("ClcResourcesMotifsDistOutput::new: select_motifs_run_config_id={find_motifs_run_config_id} channel_masks_dists_ids={channel_masks_dists_ids:?} resources_iter={resources_iter:?}");
 
         Self {
             id: SynKey::new([mono_key!("ClcResourcesMotifsDistOutput", "stage")]),
-            find_motifs_run_id,
+            find_motifs_run_config_id,
             channel_masks_dists_ids,
             resources_iter,
         }
@@ -480,7 +480,7 @@ impl ClcResourcesMotifsDistOutput {
 
         Ok(ClcResourcesMotifsDistOutput {
             id: self.id,
-            find_motifs_run_id: self.find_motifs_run_id,
+            find_motifs_run_config_id: self.find_motifs_run_config_id,
             channel_masks_dists_ids,
             resources_iter: self.resources_iter,
         })

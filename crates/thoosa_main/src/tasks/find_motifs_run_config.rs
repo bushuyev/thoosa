@@ -20,7 +20,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::{F64BitsKey, ThoError};
 use thoosa_shared::applicables_runner::Output;
-use thoosa_shared::run_configs::{RunConfig, RunId};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{Named, WithId};
 use thoosa_shared::val::Val;
 use thoosa_store::Store;
@@ -37,7 +37,7 @@ use crate::tasks::bucketing::BucketRunConfigBuilder;
 #[run_config_grid]
 pub struct FindMotifsRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[run_config]
     #[in_map]
@@ -195,7 +195,7 @@ impl From<&InputFilter> for StatsKey {
 impl FindMotifsRunConfig {
 
     pub fn from_properties_map_with_id(
-        id: RunId,
+        id: RunConfigId,
         properties: &HashMap<String, Val>,
     ) -> Result<FindMotifsRunConfig, thoosa_shared::ThoError> {
         let mut find_motifs_run_config = FindMotifsRunConfig::from_properties_map(None, properties)?;
@@ -234,7 +234,7 @@ impl FindMotifsRunConfig {
         }
     }
 
-    pub fn new(id: Option<RunId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
+    pub fn new(id: Option<RunConfigId>, step: u32, window: u32, freq_filter: Option<Vec<InputFilter>>, similarity_metric: SimilarityMetric, slices_filter: SlicesFilter, max_slices: Option<MaxSlices>) -> Self {
         Self { id, step, window, freq_filter, max_slices, finder_kind: FinderKind::CrossLoader(CrossLoaderRunConfig::new(similarity_metric, slices_filter)) }
     }
 }
@@ -1385,7 +1385,7 @@ impl MotifCriterionConstraint {
 #[run_config_grid]
 pub struct SelectMotifsRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -1401,11 +1401,11 @@ pub struct SelectMotifsRunConfig {
 }
 
 impl SelectMotifsRunConfig {
-    pub fn new_with_fields(id: Option<RunId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: Vec<MotifCriterionConstraint>) -> Self {
+    pub fn new_with_fields(id: Option<RunConfigId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: Vec<MotifCriterionConstraint>) -> Self {
         Self { id, extend_config, motif_criteria, extend_max_slices: None }
     }
 
-    pub fn new(id: Option<RunId>) -> Self {
+    pub fn new(id: Option<RunConfigId>) -> Self {
         Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), vec![])
     }
 
@@ -1436,14 +1436,14 @@ impl SelectMotifsRunResult {
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
-    dummy_id:RunId,
+    dummy_id: RunConfigId,
     run_results: Vec<SelectMotifsRunResult>,
 }
 
 impl Output for SelectMotifsSavableResult {}
 
 impl WithId for SelectMotifsSavableResult {
-    type ID = RunId;
+    type ID = RunConfigId;
 
     fn id(&self) -> &Self::ID {
         &self.dummy_id

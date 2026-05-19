@@ -72,7 +72,7 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::parse_range_or_value;
 use thoosa_shared::parse_resources;
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStore, ResourcesConfig};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::val::Val::UInt;
 use thoosa_shared::panic_to_err;
@@ -235,7 +235,7 @@ impl<'a> SimpleMotifTracker<'a> {
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsParams {
     #[arg(long)]
-    find_motifs_run_ids: Vec<RunId>,
+    find_motifs_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     pub resources_group: String,
@@ -243,8 +243,8 @@ pub struct SelectMotifsParams {
 
 #[derive(Debug, Args, Clone)]
 pub struct SelectMotifsArgs {
-    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_ids)]
-    pub find_motifs_run_ids: Vec<RunId>,
+    #[arg(long, value_delimiter = ',', value_parser = thoosa_common::utils::parse_run_config_ids)]
+    pub find_motifs_run_config_ids: Vec<RunConfigId>,
 
     #[arg(long)]
     pub resources_group: String,
@@ -305,7 +305,7 @@ mod motif_find_tests {
     use thoosa_shared::colors_iter::DistinctColorIter;
     use thoosa_shared::resource::{Resource, ResourceId, ResourceStats};
     use thoosa_shared::run_configs::RunConfig;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::val::Val;
     use thoosa_shared::val::Val::UInt;
     use thoosa_store::{IdSlice, SlicesMatch, SqlStore, Store};
@@ -451,7 +451,7 @@ mod motif_find_tests {
             todo!()
         }
 
-        fn run_id(&self) -> RunId {
+        fn run_config_id(&self) -> RunConfigId {
             todo!()
         }
 

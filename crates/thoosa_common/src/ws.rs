@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tch::nn::{self, VarStore};
 use tch::{Device, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key, panic_to_err};
 
 pub const NET_PARAMS_FILE: &str = "parameters.json";
@@ -148,20 +148,20 @@ impl FsWorkspace {
 
 
     /*
-       select_motifs_run_id/channel/motif_id
+       select_motifs_run_config_id/channel/motif_id
     */
 
-    pub fn net_path_to_run_id(model_path: &Path) -> RunId {
+    pub fn net_path_to_run_config_id(model_path: &Path) -> RunConfigId {
         model_path
             .file_stem()
-            .and_then(|s| s.to_str().and_then(|v| v.parse::<RunId>().ok()))
+            .and_then(|s| s.to_str().and_then(|v| v.parse::<RunConfigId>().ok()))
             .or_else(|| {
                 model_path
                     .parent()
                     .and_then(|p| p.file_name())
-                    .and_then(|s| s.to_str().and_then(|v| v.parse::<RunId>().ok()))
+                    .and_then(|s| s.to_str().and_then(|v| v.parse::<RunConfigId>().ok()))
             })
-            .expect("can't parse run_id from {model_path}")
+            .expect("can't parse run_config_id from {model_path}")
     }
 
     pub fn parse_motif_path(net_id: &Path) -> Result<(u32, u32), ThoError> {
@@ -229,7 +229,7 @@ impl FsWorkspace {
         device: &Device,
     ) -> Result<
         (
-            RunId,
+            RunConfigId,
             LabelNetParams,
             ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
         ),
@@ -254,18 +254,18 @@ impl FsWorkspace {
         #[cfg(not(debug_assertions))]
         let _ = &label;
 
-        let run_id = FsWorkspace::net_path_to_run_id(&model_path);
+        let run_config_id = FsWorkspace::net_path_to_run_config_id(&model_path);
         let label_node_params = LabelNetParams::from_file(&params_path)?;
         let params_for_builder = label_node_params.clone();
 
         let module = ThoModuleWithStore::load(
-            mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
+            mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
             move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
             model_path,
             *device,
         )?;
 
-        Ok((run_id, label_node_params, module))
+        Ok((run_config_id, label_node_params, module))
     }
 
     pub fn load_final_net(
@@ -282,12 +282,12 @@ impl FsWorkspace {
         let base_path = resolve_net_base_path(&self.final_nets_path, net_path);
         let (model_path, params_path) = net_files_from_base(&base_path);
 
-        let run_id = FsWorkspace::net_path_to_run_id(&model_path);
+        let run_config_id = FsWorkspace::net_path_to_run_config_id(&model_path);
         let final_node_params = FinalNetParams::from_file(&params_path)?;
         let params_for_builder = final_node_params.clone();
 
         let module = ThoModuleWithStore::load(
-            mono_key!(run_id, "final_model").into(),
+            mono_key!(run_config_id, "final_model").into(),
             move |path: &nn::Path| final_net(&params_for_builder)?.build_tch_module(path),
             model_path,
             *device,
@@ -370,8 +370,8 @@ impl Workspace for FsWorkspace {
         &self.store_path
     }
 
-    fn tmp_run_store_path(&self, run_id: RunId, channel: u32) -> PathBuf {
-        self.tmp_path.join(format!("{run_id}_{channel}.db3"))
+    fn tmp_run_store_path(&self, run_config_id: RunConfigId, channel: u32) -> PathBuf {
+        self.tmp_path.join(format!("{run_config_id}_{channel}.db3"))
     }
 
     fn tmp_path(&self) -> &PathBuf {
@@ -404,13 +404,13 @@ impl Workspace for FsWorkspace {
     }
     fn save_final_net(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         vs: &VarStore,
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError> {
-        debug!("FsWorkspace::save_final_net: run_id={run_id}  params={params:?} final_models_path={:?}",self.final_nets_path);
+        debug!("FsWorkspace::save_final_net: run_config_id={run_config_id}  params={params:?} final_models_path={:?}",self.final_nets_path);
 
-        let net_id = PathBuf::from(format!("{run_id}"));
+        let net_id = PathBuf::from(format!("{run_config_id}"));
         let base_path = self.final_nets_path.join(&net_id);
 
         fs::create_dir_all(&base_path)?;
@@ -427,7 +427,7 @@ impl Workspace for FsWorkspace {
     fn save_motif_net(
         &self,
         channel: &dyn Display,
-        train_motif_net_run_id: &dyn Display,
+        train_motif_net_run_config_id: &dyn Display,
         motif_id: &dyn Display,
         vs: &VarStore,
         params: &MotifNetParams,
@@ -436,13 +436,13 @@ impl Workspace for FsWorkspace {
         let channel_models = self.motifs_nets_path.join(&channel_part);
         fs::create_dir_all(&channel_models)?;
 
-        let net_dir_name = format!("{motif_id}_{train_motif_net_run_id}");
+        let net_dir_name = format!("{motif_id}_{train_motif_net_run_config_id}");
         let net_id = PathBuf::from(&channel_part).join(&net_dir_name);
         let base_path = channel_models.join(&net_dir_name);
         fs::create_dir_all(&base_path)?;
         let vs_path = base_path.join(NET_WEIGHTS_FILE);
 
-        info!("FsWorkspace::save_motif_net:  motif_id={motif_id} motif_model_run_id={train_motif_net_run_id} saved to {vs_path:?}");
+        info!("FsWorkspace::save_motif_net:  motif_id={motif_id} motif_model_run_config_id={train_motif_net_run_config_id} saved to {vs_path:?}");
 
         vs.save(vs_path)?;
 
@@ -468,7 +468,7 @@ impl Workspace for FsWorkspace {
         device: &Device,
     ) -> Result<
         (
-            RunId,
+            RunConfigId,
             LabelNetParams,
             ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
         ),
@@ -491,7 +491,7 @@ impl Workspace for FsWorkspace {
         FsWorkspace::load_final_net(self, net_path, device)
     }
 
-    //TODO filter by loss and/or train_motif_nets_run_id
+    //TODO filter by loss and/or train_motif_nets_run_config_id
     fn load_motif_nets<'a>(
         &self,
         channel: u32,
@@ -522,13 +522,13 @@ impl Workspace for FsWorkspace {
 
     fn load_label_nets(
         &self,
-        train_label_nets_run_ids: Option<&[RunId]>,
+        train_label_nets_run_config_ids: Option<&[RunConfigId]>,
         device: &Device,
     ) -> Result<
         HashMap<
             String,
             Vec<(
-                RunId,
+                RunConfigId,
                 LabelNetParams,
                 ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
             )>,
@@ -537,10 +537,10 @@ impl Workspace for FsWorkspace {
     > {
         let label_models_paths = self.label_models()?;
 
-        let train_label_nodes_run_ids_set = train_label_nets_run_ids
+        let train_label_nodes_run_config_ids_set = train_label_nets_run_config_ids
             .map(|v| v.iter().cloned().collect::<HashSet<_>>());
 
-        debug!("load_label_nets: label_models_paths={label_models_paths:?} train_label_nodes_run_ids={train_label_nets_run_ids:?} train_label_nodes_run_ids_hash={train_label_nodes_run_ids_set:?}");
+        debug!("load_label_nets: label_models_paths={label_models_paths:?} train_label_nodes_run_config_ids={train_label_nets_run_config_ids:?} train_label_nodes_run_config_ids_hash={train_label_nodes_run_config_ids_set:?}");
 
         label_models_paths
             .into_iter()
@@ -548,14 +548,14 @@ impl Workspace for FsWorkspace {
                 let models = paths.into_iter().try_fold(
                     Vec::new(),
                     |mut models, (model_path, params_path)| -> Result<_, ThoError> {
-                        let run_id = FsWorkspace::net_path_to_run_id(&model_path);
+                        let run_config_id = FsWorkspace::net_path_to_run_config_id(&model_path);
 
 
-                        if train_label_nodes_run_ids_set
+                        if train_label_nodes_run_config_ids_set
                             .as_ref()
-                            .is_some_and(|set| !set.contains(&run_id))
+                            .is_some_and(|set| !set.contains(&run_config_id))
                         {
-                            debug!("load_label_nets: skipping run_id={run_id}");
+                            debug!("load_label_nets: skipping run_config_id={run_config_id}");
                             return Ok(models);
                         }
 
@@ -563,12 +563,12 @@ impl Workspace for FsWorkspace {
                             .map_err(|e| {
                                 ThoError::from_msg(format!("can't read label net params from {params_path:?}: {e}")) })?;
 
-                        debug!("load_label_nets: model={model_path:?} run_id={run_id} label_node_params={label_node_params:?}");
+                        debug!("load_label_nets: model={model_path:?} run_config_id={run_config_id} label_node_params={label_node_params:?}");
 
                         let params_for_builder = label_node_params.clone();
 
                         let module = ThoModuleWithStore::load(
-                            mono_key!(run_id, format!("Label_model_{label}_{run_id}")).into(),
+                            mono_key!(run_config_id, format!("Label_model_{label}_{run_config_id}")).into(),
                             move |path: &nn::Path| {
                                 LabelNetParams::label_net(&params_for_builder, true)?
                                     .build_tch_module(path)
@@ -580,9 +580,9 @@ impl Workspace for FsWorkspace {
                             ThoError::from_msg(format!("can't load label net model from {model_path:?}: {e}"))
                         })?;
 
-                        debug!("load_label_nets: model={model_path:?} run_id={run_id} loaded");
+                        debug!("load_label_nets: model={model_path:?} run_config_id={run_config_id} loaded");
 
-                        models.push((run_id, label_node_params, module));
+                        models.push((run_config_id, label_node_params, module));
 
                         Ok(models)
                     },
@@ -637,7 +637,7 @@ impl Workspace for FsWorkspace {
 
     fn save_label_net(
         &self,
-        label_node_run_id: u32,
+        label_node_run_config_id: u32,
         label: &dyn Display,
         vs: &VarStore,
         params: &LabelNetParams,
@@ -647,13 +647,13 @@ impl Workspace for FsWorkspace {
 
         fs::create_dir_all(&label_models_path)?;
 
-        let net_dir_name = format!("{label_node_run_id}");
+        let net_dir_name = format!("{label_node_run_config_id}");
         let net_id = PathBuf::from(&label_part).join(&net_dir_name);
         let base_path = label_models_path.join(&net_dir_name);
         fs::create_dir_all(&base_path)?;
         let vs_path = base_path.join(NET_WEIGHTS_FILE);
 
-        info!("save_label_net:  run_id={label_node_run_id} label={label} saved to {vs_path:?}");
+        info!("save_label_net:  run_config_id={label_node_run_config_id} label={label} saved to {vs_path:?}");
 
         panic_to_err!(vs.save(vs_path))?; //View for SafeView unwraps, it should be retried
 
@@ -693,7 +693,7 @@ impl Workspace for FsWorkspace {
     }
 
     /// returns (safetensors_path, json_path)
-    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoError> {
+    fn final_model(&self, id: RunConfigId) -> Result<(PathBuf, PathBuf), ThoError> {
         let base_path = self.final_nets_path.join(format!("{id}"));
         let safetensors_path = base_path.join(NET_WEIGHTS_FILE);
         let json_path = base_path.join(NET_PARAMS_FILE);
@@ -779,7 +779,7 @@ pub trait Workspace: Sync + Send + Debug {
     fn store_path(&self) -> &PathBuf;
     fn log_path(&self) -> &PathBuf;
     fn tmp_path(&self) -> &PathBuf;
-    fn tmp_run_store_path(&self, run_id: RunId, channel: u32) -> PathBuf;
+    fn tmp_run_store_path(&self, run_config_id: RunConfigId, channel: u32) -> PathBuf;
     fn tensors_path(&self) -> &PathBuf;
     fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
@@ -789,14 +789,14 @@ pub trait Workspace: Sync + Send + Debug {
     fn final_nets_path(&self) -> &PathBuf;
     fn save_final_net(
         &self,
-        run_id: RunId,
+        run_config_id: RunConfigId,
         vs: &VarStore,
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError>;
     fn save_motif_net(
         &self,
         channel: &dyn Display,
-        motif_node_params_run_id: &dyn Display,
+        train_motif_net_run_config_id: &dyn Display,
         motif_id: &dyn Display,
         vs: &VarStore,
         params: &MotifNetParams,
@@ -812,7 +812,7 @@ pub trait Workspace: Sync + Send + Debug {
         device: &Device,
     ) -> Result<
         (
-            RunId,
+            RunConfigId,
             LabelNetParams,
             ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
         ),
@@ -839,13 +839,13 @@ pub trait Workspace: Sync + Send + Debug {
     ) -> Result<Vec<(MotifNetParams, ThoModuleWithStore<Batch<Slice>, MotifProbability>)>, ThoError>;
     fn load_label_nets<'a>(
         &self,
-        train_label_nodes_run_ids: Option<&'a [RunId]>,
+        train_label_nodes_run_config_ids: Option<&'a [RunConfigId]>,
         device: &'a Device,
     ) -> Result<
         HashMap<
             String,
             Vec<(
-                RunId,
+                RunConfigId,
                 LabelNetParams,
                 ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
             )>,
@@ -862,13 +862,13 @@ pub trait Workspace: Sync + Send + Debug {
     ) -> Result<Vec<(PathBuf, PathBuf)>, ThoError>;
     fn save_label_net(
         &self,
-        label_node_run_id: u32,
+        label_node_run_config_id: u32,
         label: &dyn Display,
         vs: &VarStore,
         params: &LabelNetParams,
     ) -> Result<PathBuf, ThoError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoError>;
-    fn final_model(&self, id: RunId) -> Result<(PathBuf, PathBuf), ThoError>;
+    fn final_model(&self, id: RunConfigId) -> Result<(PathBuf, PathBuf), ThoError>;
 
     fn channels(&self) -> u32;
     fn sample_rate(&self) -> u32;
@@ -977,7 +977,7 @@ impl WsMockBuilder {
         label_nets: HashMap<
             String,
             Vec<(
-                RunId,
+                RunConfigId,
                 Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
                 Box<
                     dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>
@@ -990,14 +990,14 @@ impl WsMockBuilder {
     ) -> Self {
         self.mock
             .expect_load_label_nets()
-            .returning(move |_train_label_nodes_run_ids, _device| {
+            .returning(move |_train_label_nodes_run_config_ids, _device| {
                 Ok(HashMap::from_iter(label_nets.iter().map(
                     |(label, nodes)| {
                         (
                             label.clone(),
                             nodes
                                 .into_iter()
-                                .map(|(run_id, params, module)| (*run_id, params(), module()))
+                                .map(|(run_config_id, params, module)| (*run_config_id, params(), module()))
                                 .collect::<Vec<_>>(),
                         )
                     },
@@ -1232,9 +1232,9 @@ mod tests {
 
         debug!("test_load_label_net:net_id={net_id:?}");
 
-        let (run_id, loaded_params, loaded_module) = ws.load_label_net(&net_id, &Cpu)?;
+        let (run_config_id, loaded_params, loaded_module) = ws.load_label_net(&net_id, &Cpu)?;
 
-        assert_eq!(run_id, 7);
+        assert_eq!(run_config_id, 7);
         assert_eq!(format!("{:?}", params), format!("{:?}", loaded_params));
         assert_eq!(vs.variables(), loaded_module.var_store().variables());
 

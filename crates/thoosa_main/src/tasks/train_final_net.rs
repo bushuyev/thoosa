@@ -29,7 +29,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
@@ -47,19 +47,19 @@ where
     LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    train_label_nets_run_ids: Vec<RunId>,
+    train_label_nets_run_config_ids: Vec<RunConfigId>,
     run_configs: Arc<OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>>,
     pd: PhantomData<L>,
     label_loader: Arc<LL>,
     num_label_nets: u32,
-    label_net_run_ids: Vec<RunId>,
+    label_net_run_config_ids: Vec<RunConfigId>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     opt_config: Arc<OptConfig>,
 }
 
 pub async fn new_train_final_net<L, C, R>(
-    train_label_nets_run_ids: Vec<RunId>,
+    train_label_nets_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -75,15 +75,15 @@ where
     R: RunCtx + Adjustable + 'static,
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_ids.clone(), stage_ctx, slices_step, 0).await?);
+    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step, 0).await?);
 
     let label_loader = Arc::new(ABStage::new(
-        SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_ids:?}"), "train_label_nets_run_ids")]),
+        SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_config_ids:?}"), "train_label_nets_run_config_ids")]),
         Arc::clone(&loader),
         Arc::clone(&apply_label_nets),
     ));
 
-    TrainFinalNet::new(train_label_nets_run_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config).await
+    TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config).await
 }
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
@@ -93,7 +93,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
-        train_label_nets_run_ids: Vec<RunId>,
+        train_label_nets_run_config_ids: Vec<RunConfigId>,
         label_loader: Arc<LL>,
         num_label_nets: u32,
         run_configs: OptRunConfigs<Vec<NamedVal<TrainFinalNetRunConfigFields>>, Vec<NamedRange<TrainFinalNetRunConfigFields>>, Vec<Hyperparameter<TrainFinalNetRunConfigFields>>, TrainFinalNetRunConfigFields>,
@@ -102,27 +102,27 @@ where
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
         //gpt Collect all label-net output run ids produced by the input train_label_nets runs.
-        let label_net_run_ids = {
+        let label_net_run_config_ids = {
             let store_guard = store;
-            let mut run_ids = HashSet::new();
-            for run_id in &train_label_nets_run_ids {
-                run_ids.extend(store_guard.list_output_run_ids(*run_id).await?);
+            let mut run_config_ids = HashSet::new();
+            for run_config_id in &train_label_nets_run_config_ids {
+                run_config_ids.extend(store_guard.list_output_run_config_ids(*run_config_id).await?);
             }
-            let mut run_ids = run_ids.into_iter().collect::<Vec<_>>();
-            run_ids.sort();
-            run_ids
+            let mut run_config_ids = run_config_ids.into_iter().collect::<Vec<_>>();
+            run_config_ids.sort();
+            run_config_ids
         };
-        if label_net_run_ids.is_empty() {
+        if label_net_run_config_ids.is_empty() {
             return Err(ThoError::new("TrainFinalNet::new: no label nets found"));
         }
 
         Ok(Self {
-            train_label_nets_run_ids,
+            train_label_nets_run_config_ids,
             run_configs: Arc::new(run_configs),
             pd: PhantomData,
             label_loader,
             num_label_nets,
-            label_net_run_ids,
+            label_net_run_config_ids,
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             opt_config,
@@ -187,7 +187,7 @@ where
 
         let train_final_run_configs = Arc::clone(&self.run_configs);
         let label_loader = Arc::clone(&self.label_loader);
-        let label_net_run_ids = self.label_net_run_ids.clone();
+        let label_net_run_config_ids = self.label_net_run_config_ids.clone();
         let num_label_nets = self.num_label_nets;
         let opt_config = Arc::clone(&self.opt_config);
         let store = Arc::clone(&self.store);
@@ -249,7 +249,7 @@ where
                 .take_data(0)
                 .await?;
 
-            let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
+            let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_config_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
             debug!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
             Ok(Arc::new(DevicesWrap::wrap(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result))))
@@ -419,7 +419,7 @@ mod tests {
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::OptRunConfigs;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::runnable::AsyncStage;
@@ -460,8 +460,8 @@ mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let train_motif_nets_run_id: RunId = 2;
-        let train_label_nets_run_id: RunId = 3;
+        let train_motif_nets_run_config_id: RunConfigId = 2;
+        let train_label_nets_run_config_id: RunConfigId = 3;
         let motif_width = 4;
         let step = 1;
         let device = Device::Cpu;
@@ -508,10 +508,10 @@ mod tests {
 
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_get_input_run_ids([(train_label_nets_run_id, Ok(vec![train_motif_nets_run_id]))])
+                .with_get_input_run_config_ids([(train_label_nets_run_config_id, Ok(vec![train_motif_nets_run_config_id]))])
                 .with_list_trained_nets([
                     (
-                        vec![train_motif_nets_run_id],
+                        vec![train_motif_nets_run_config_id],
                         Some(0.3),
                         Some(2),
                         Ok(vec![
@@ -537,7 +537,7 @@ mod tests {
                     0,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(0), 10, 100, None, None).to_properties_iter(None).collect()),
                 )
-                .with_list_output_run_ids([(train_label_nets_run_id, Ok(vec![100, 200]))])
+                .with_list_output_run_config_ids([(train_label_nets_run_config_id, Ok(vec![100, 200]))])
                 .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
                 .build(),
         );
@@ -561,7 +561,7 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
+        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
 
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string())))));
 

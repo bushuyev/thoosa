@@ -41,7 +41,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{hump, Adjustable, Data, DataId, MonoMetrics, WithId};
@@ -81,7 +81,7 @@ use crate::tasks::stage_ids::SELECT_MOTIFS;
 //  Select Motifs
 //    1. if SelectMotifsRunConfigRangeOrValue::extend_config is set
 //       for each select_motif_config
-//        multiple find_motifs_run_ids -> select_motif_run_id
+//        multiple find_motifs_run_config_ids -> select_motif_run_config_id
 //
 //       calculate threshold distance from motifs found during Find Motifs stage
 //       optionally add slices to motifs which is less than threshold distance.
@@ -183,12 +183,12 @@ where
     loader:Arc<L>,
     stacked_motifs_loader:Arc<StackedMotifsLoader<ML, C>>,
     run_configs:Vec<SelectMotifsRunConfig>,//TODO map to Vec<Arc in new
-    find_motifs_run_ids:Vec<RunId>,
+    find_motifs_run_config_ids:Vec<RunConfigId>,
     clc_resources_motifs_dist:Arc<ClcResourcesMotifsDist<C>>,
     max_batch:i64,//TODO to SelectMotifsSFixedConfig,
     motif_stats:Arc<MotifStats<ML, L, C>>,
 
-    find_motif_run_ids_motif_ids: HashMap<RunId, Vec<u32>>
+    find_motif_run_config_ids_motif_ids: HashMap<RunConfigId, Vec<u32>>
 }
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
@@ -200,7 +200,7 @@ where
         f.debug_struct("SelectMotifsStage")
             .field("id", self.id())
             .field("run_configs", &self.run_configs)
-            .field("find_motifs_run_ids", &self.find_motifs_run_ids)
+            .field("find_motifs_run_config_ids", &self.find_motifs_run_config_ids)
             .finish()
     }
 }
@@ -318,7 +318,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         .collect::<Result<Vec<_>, ThoError>>()?;
 
         Ok(ClcResourcesMotifsDistOutput::new(
-            self.id.find_motifs_run_id,
+            self.id.find_motifs_run_config_id,
             channel_masks_dists_ids,
             SlicesIter::new_with_offsets(self.step, resource_ids_sizes)
         ))
@@ -765,7 +765,7 @@ where
         loader:Arc<L>,
         motif_loader:Arc<ML>,
         run_configs:Vec<SelectMotifsRunConfig>,
-        find_motifs_run_ids:Vec<RunId>,
+        find_motifs_run_config_ids:Vec<RunConfigId>,
         max_batch: i64,
         // #[cfg(test)]
         fail_if_size_bigger_than:Option<usize>
@@ -778,10 +778,10 @@ where
             Arc::clone(&motif_loader),
         ));
 
-        //gpt Snapshot motif ids for each find_motifs_run_id; used later for criteria filtering.
-        let mut find_motif_run_ids_motif_ids = HashMap::new();
-        for find_motifs_run_id in &find_motifs_run_ids {
-            find_motif_run_ids_motif_ids.insert(*find_motifs_run_id, store.list_motifs(*find_motifs_run_id).await?);
+        //gpt Snapshot motif ids for each find_motifs_run_config_id; used later for criteria filtering.
+        let mut find_motif_run_config_ids_motif_ids = HashMap::new();
+        for find_motifs_run_config_id in &find_motifs_run_config_ids {
+            find_motif_run_config_ids_motif_ids.insert(*find_motifs_run_config_id, store.list_motifs(*find_motifs_run_config_id).await?);
         }
 
         let channels = perf_log!(sync_read_lock!(ws))
@@ -794,7 +794,7 @@ where
             loader,
             stacked_motifs_loader: Arc::new(StackedMotifsLoader::new(Arc::clone(ws), Arc::clone(&motif_loader), Arc::clone(store))),
             run_configs,
-            find_motifs_run_ids,
+            find_motifs_run_config_ids,
             clc_resources_motifs_dist: Arc::new(ClcResourcesMotifsDist::<C>::new(
                 channels,
                 #[cfg(test)]
@@ -802,7 +802,7 @@ where
             )),
             max_batch,
             motif_stats: clc_dist,
-            find_motif_run_ids_motif_ids,
+            find_motif_run_config_ids_motif_ids,
         })
     }
 
@@ -818,12 +818,12 @@ where
 
     #[inline]
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::load_stacked_motifs"))]
-    async fn load_stacked_motifs(store:&Arc<Box<dyn Store>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_ids: &Vec<RunId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
-        let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_ids.len());
+    async fn load_stacked_motifs(store:&Arc<Box<dyn Store>>, stacked_motifs_loader: &Arc<StackedMotifsLoader<ML, C>>, mut ctx_for_loader: C, find_motifs_run_config_ids: &Vec<RunConfigId>) -> Result<Vec<(Arc<FindMotifsRunConfig>, Arc<DevicesWrap<StackedMotifsOutput>>)>, ThoError> {
+        let mut find_motifs_run_configs = Vec::with_capacity(find_motifs_run_config_ids.len());
 
 
-        for find_motifs_run_id in find_motifs_run_ids {
-            find_motifs_run_configs.push(Arc::new(load_run_config(store, *find_motifs_run_id).await?));
+        for find_motifs_run_config_id in find_motifs_run_config_ids {
+            find_motifs_run_configs.push(Arc::new(load_run_config(store, *find_motifs_run_config_id).await?));
         }
             let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
@@ -885,13 +885,13 @@ where
             Self::slices_selector_aggr_to_stats(extend_config.slices_selector_aggr),
         );
         // This stays inside the run-config loop.
-        // Stacked motifs are cached by find_motifs_run_id, while stats depend on metric/aggr (including floats in aggr).
+        // Stacked motifs are cached by find_motifs_run_config_id, while stats depend on metric/aggr (including floats in aggr).
         // Stats must be computed separately so motifs and statistics can be cached independently.
         let run_configs__stacked_motifs = Self::load_stacked_motifs(
             &self.store,
             &self.stacked_motifs_loader,
             ctx.branch("load_stacked_motifs".into(), true),
-            &self.find_motifs_run_ids,
+            &self.find_motifs_run_config_ids,
         )
         .await?;
 
@@ -1064,11 +1064,11 @@ where
             .collect::<Result<Vec<_>, ThoError>>()?;
 
         let channels_motifs_stats_t = Tensor::f_stack(&channels_motifs_stats_tensors, 0)?;
-        let find_motifs_run_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("SelectMotifsStage::clc_stacked_motifs_statistics: no id in find_motifs_run_config"))?;
+        let find_motifs_run_config_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("SelectMotifsStage::clc_stacked_motifs_statistics: no id in find_motifs_run_config"))?;
         let motifs_stats = ThoTensor::new(
             SynKey::new([
                 mono_key!("motifs_stats", "motifs_stats"),
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
+                mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id_{find_motifs_run_config_id}")),
                 mono_key!(format!("{slices_selector_metric:?}"), "slices_selector_metric"),
             ]),
             channels_motifs_stats_t,
@@ -1138,7 +1138,7 @@ where
             .channels();
 
             let ClcResourcesMotifsDistOutput {
-                find_motifs_run_id,
+                find_motifs_run_config_id,
                 channel_masks_dists_ids,
                 resources_iter,
                 ..
@@ -1181,7 +1181,7 @@ where
                 }
             }).unwrap_or(u32::MAX) as usize;
 
-            debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_id={find_motifs_run_id}");
+            debug!("SelectMotifsStage::run: channel_masks_dists_ids={channel_masks_dists_ids:?} find_motifs_run_config_id={find_motifs_run_config_id}");
             let resources_slices = Arc::new(resources_iter.clone().collect::<Vec<_>>());
             let channel_masks_dists_ids_len = channel_masks_dists_ids.len();
             let futures = channel_masks_dists_ids
@@ -1321,21 +1321,21 @@ where
         mut ctx: C,
     ) -> Result<Vec<SelectedMotifEvaluation>, ThoError> {
 
-        debug!("SelectMotifsStage::run: 0. self.find_motif_run_ids_motif_ids={:?}", self.find_motif_run_ids_motif_ids);
+        debug!("SelectMotifsStage::run: 0. self.find_motif_run_config_ids_motif_ids={:?}", self.find_motif_run_config_ids_motif_ids);
 
         let criteria_constraints = select_motifs_run_config.motif_criteria.clone();
         if criteria_constraints.is_empty() {
             warn!("SelectMotifsStage::run: no motif criteria configured");
-            return Ok(self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| SelectedMotifEvaluation {
+            return Ok(self.find_motif_run_config_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).map(|v| SelectedMotifEvaluation {
                 motif_id: *v,
                 criterion_scores: vec![],
                 weighted_criterion_scores: vec![],
             }).collect::<Vec<_>>());
         }
 
-        let motif_ids = self.find_motif_run_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
+        let motif_ids = self.find_motif_run_config_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
 
-        let select_motifs_run_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
+        let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
         let criteria_metrics = criteria_constraints.iter().map(|constraint| constraint.metric.clone()).collect::<Vec<_>>();
         info!("SelectMotifsStage::run: 1. motif_ids.len={} criteria_metrics={criteria_metrics:?}", motif_ids.len());
         let motif_stats = Arc::clone(&self.motif_stats);
@@ -1352,7 +1352,7 @@ where
                 let motif_stats_output = Arc::clone(&motif_stats)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
-                            MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_id])),
+                            MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                             criteria_metrics.clone(),
                         ))),
                         ctx.branch(Some("select_motifs_filter_motif_stats"), false),
@@ -1463,7 +1463,7 @@ where
             async move {
                 if let Some(extend_config) = select_motifs_run_config.extend_config.as_ref() {
 
-                    // TODO(perf): extension recomputes resource/motif distance masks per select config; cache intermediate masks by find_motifs_run_id and resources set before filtering.
+                    // TODO(perf): extension recomputes resource/motif distance masks per select config; cache intermediate masks by find_motifs_run_config_id and resources set before filtering.
                     let channels_motifs_added_slices = self_for_futs.extend_motifs_for_run_config(
                         select_motifs_run_config,
                         extend_config,
@@ -1557,7 +1557,7 @@ pub mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::{cdt_for_dir, TensorIdSliceIdx, ThoError};
     use thoosa_shared::ResourceType::NotInGroup;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::traits::DataId;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
@@ -1593,11 +1593,11 @@ pub mod tests {
         Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
     }
 
-    fn find_motifs_run_config_descr(run_id: RunId) -> (RunId, Result<RunConfigRow, ThoError>) {
+    fn find_motifs_run_config_descr(run_config_id: RunConfigId) -> (RunConfigId, Result<RunConfigRow, ThoError>) {
         (
-            run_id,
+            run_config_id,
             Ok(RunConfigRow {
-                id: run_id,
+                id: run_config_id,
                 r#type: "FindMotifsRunConfig".to_string(),
                 descr: "test find motifs".to_string(),
                 run_on: "2026-01-01 00:00:00".to_string(),
@@ -1626,8 +1626,8 @@ pub mod tests {
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 10000);
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 2;
 
         let channel_0_motifs_ids = vec![1];
 
@@ -1638,18 +1638,18 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
-                    (find_motifs_run_id as RunId, Ok(channel_0_motifs_ids.clone()))
+                    (find_motifs_run_config_id as RunConfigId, Ok(channel_0_motifs_ids.clone()))
                 ])
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_config_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build());
 
         debug!("test_single_label_one_motif: resource_a_t={resource_a_t:?} resource_a_intervals={resource_a_intervals:?}");
@@ -1667,8 +1667,8 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t)),
         ]).finish());
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -1676,8 +1676,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             1000,
             None,
         ).await?);
@@ -1702,8 +1702,8 @@ pub mod tests {
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 800);
         let resource_b: Resource = Resource::new(2, 1, "resource_b", 600);
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 2;
 
         let channel_0_motifs_ids = vec![1];
 
@@ -1715,18 +1715,18 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
-                    (find_motifs_run_id as RunId, Ok(channel_0_motifs_ids.clone()))
+                    (find_motifs_run_config_id as RunConfigId, Ok(channel_0_motifs_ids.clone()))
                 ])
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone(), resource_b.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_config_id, &channel_0_motifs_ids, &resources_channels_intervals))//<-- assert
                 .build());
 
 
@@ -1744,8 +1744,8 @@ pub mod tests {
 
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id: find_motifs_run_id, window: 100 }, motif_t)),
+            (MotifLoaderInput::all_slices(DataId(1)), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id: find_motifs_run_config_id, window: 100 }, motif_t)),
         ]).finish());
 
 
@@ -1754,8 +1754,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             1000,
             None
         ).await?);
@@ -1780,8 +1780,8 @@ pub mod tests {
 
         let resource_a: Resource = Resource::new(1, 1, "resource_a", 1000);
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 2;
 
         let motifs_ids = vec![1, 2];
 
@@ -1793,18 +1793,18 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
-                    (find_motifs_run_id as RunId, Ok(motifs_ids.clone()))
+                    (find_motifs_run_config_id as RunConfigId, Ok(motifs_ids.clone()))
                 ])
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![resource_a.clone()])),
                 ])
-                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_id, &motifs_ids, &resources_channels_intervals))//<-- assert
+                .with_add_slices_to_motif(resources_add_slices_to_motif_expectations(select_motifs_run_config_id, &motifs_ids, &resources_channels_intervals))//<-- assert
                 .build());
 
 
@@ -1823,10 +1823,10 @@ pub mod tests {
         let motif_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_t)),
-            (MotifLoaderInput::all_slices(DataId(motifs_ids[1])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(motifs_ids[1], "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_1_t)),
+            (MotifLoaderInput::all_slices(DataId(motifs_ids[0])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_t)),
+            (MotifLoaderInput::all_slices(DataId(motifs_ids[1])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_1_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(motifs_ids[1], "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_1_t)),
         ]).finish());
 
 
@@ -1835,8 +1835,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             1000,
             None
         ).await?);
@@ -1847,7 +1847,7 @@ pub mod tests {
         Ok(())
     }
 
-    fn resources_add_slices_to_motif_expectations(run_id: RunId, channel_0_motifs_ids: &[u32], resources_channel_intervals: &[(&Resource, &[&[u32]], &Vec<Vec<Vec<Interval>>>)]) -> Vec<(RunId, u32, i64, HashSet<IdSlice>)> {
+    fn resources_add_slices_to_motif_expectations(run_config_id: RunConfigId, channel_0_motifs_ids: &[u32], resources_channel_intervals: &[(&Resource, &[&[u32]], &Vec<Vec<Vec<Interval>>>)]) -> Vec<(RunConfigId, u32, i64, HashSet<IdSlice>)> {
 
         let mut motif_hash = HashMap::new();
         for (resource, channel_0_motifs_ids, channel_intervals) in resources_channel_intervals {
@@ -1866,7 +1866,7 @@ pub mod tests {
             }
         }
 
-        motif_hash.into_iter().map(|(motif_id_channel, v)| (run_id, motif_id_channel.0, motif_id_channel.1 as i64, v)).collect::<Vec<_>>()
+        motif_hash.into_iter().map(|(motif_id_channel, v)| (run_config_id, motif_id_channel.0, motif_id_channel.1 as i64, v)).collect::<Vec<_>>()
 
     }
 
@@ -1883,8 +1883,8 @@ pub mod tests {
         let resource_b: Resource = Resource::new(2, 1, "resource_b", 800);
         let resource_c: Resource = Resource::new(3, 1, "resource_c", 600);
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 2;
 
         let channel_0_motif_0 = 1;
         let channel_0_motif_1 = 2;
@@ -1929,18 +1929,18 @@ pub mod tests {
 
         debug!("test_3_resources_2_labels_3_channels_3_motifs: resources_channels_intervals={resources_channels_intervals:?}");
 
-        let expected_add_slices_to_motif_calls = resources_add_slices_to_motif_expectations(select_motifs_run_id, &channel_0_motifs_ids, &resources_channels_intervals);
+        let expected_add_slices_to_motif_calls = resources_add_slices_to_motif_expectations(select_motifs_run_config_id, &channel_0_motifs_ids, &resources_channels_intervals);
         debug!("test_3_resources_2_labels_3_channels_3_motifs: expected_add_slices_to_motif_calls={expected_add_slices_to_motif_calls:?}");
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
-                    (find_motifs_run_id as RunId, Ok(vec![
+                    (find_motifs_run_config_id as RunConfigId, Ok(vec![
                         channel_0_motif_0,
                         channel_0_motif_1,
                         channel_1_motif_0
@@ -1968,14 +1968,14 @@ pub mod tests {
         let motif_0_1_t = motifs_tensor(100, 2, MotifKind::Triangle);
         let motif_1_0_t = motifs_tensor(100, 4, MotifKind::Sin);
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(channel_0_motif_0)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_0, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_0_t)),
+            (MotifLoaderInput::all_slices(DataId(channel_0_motif_0)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_0_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_0, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_0_t)),
 
-            (MotifLoaderInput::all_slices(DataId(channel_0_motif_1)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_0_1_t)),
+            (MotifLoaderInput::all_slices(DataId(channel_0_motif_1)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_1_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_0_motif_1, "motif").into()), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_0_1_t)),
 
-            (MotifLoaderInput::all_slices(DataId(channel_1_motif_0)), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t.shallow_clone())),
-            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_1_motif_0, "motif").into()), (MotifMeta { channel: 1, find_motifs_run_id, window: 100 }, motif_1_0_t)),
+            (MotifLoaderInput::all_slices(DataId(channel_1_motif_0)), (MotifMeta { channel: 1, find_motifs_run_config_id, window: 100 }, motif_1_0_t.shallow_clone())),
+            (MotifLoaderInput::find_motif_slices_only(mono_key!(channel_1_motif_0, "motif").into()), (MotifMeta { channel: 1, find_motifs_run_config_id, window: 100 }, motif_1_0_t)),
         ]).finish());
 
 
@@ -1984,8 +1984,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             10000, //TODO fails with max_batch 1000
             Some(801) //TODO check if ran through OOMHandler
         ).await?);
@@ -2017,18 +2017,18 @@ pub mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id: RunId = 11;
-        let select_motifs_run_id: RunId = 22;
+        let find_motifs_run_config_id: RunConfigId = 11;
+        let select_motifs_run_config_id: RunConfigId = 22;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_id, Ok(vec![1, 2, 3, 4]))]).build());
+        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new((3u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new((4u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((3u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((4u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
         ]).finish());
 
         let stage = SelectMotifsStage::new(
@@ -2036,8 +2036,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             1024,
             None,
         ).await?;
@@ -2057,7 +2057,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
         select_motifs_run_config.motif_criteria = vec![
             MotifCriterionConstraint { metric: Metrics::NormThickness(NormThicknessRunConfig { eps: 1e-8 }), min: Metrics::DEFAULT_CRITERION_MIN },
             MotifCriterionConstraint { metric: Metrics::InlierRatio(InlierRatioRunConfig { k: 3.0, eps: 1e-8 }), min: Metrics::DEFAULT_CRITERION_MIN },
@@ -2076,18 +2076,18 @@ pub mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id: RunId = 11;
-        let select_motifs_run_id: RunId = 22;
+        let find_motifs_run_config_id: RunConfigId = 11;
+        let select_motifs_run_config_id: RunConfigId = 22;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_id, Ok(vec![1, 2, 3, 4]))]).build());
+        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2, 3, 4]))]).build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new((3u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
-            (MotifLoaderInput::new((4u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[9, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[10, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((3u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[101, 4], (Kind::Float, tch::Device::Cpu)))),
+            (MotifLoaderInput::new((4u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros(&[100, 4], (Kind::Float, tch::Device::Cpu)))),
         ]).finish());
 
         let stage = SelectMotifsStage::new(
@@ -2095,8 +2095,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             1024,
             None,
         ).await?;
@@ -2108,7 +2108,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
         select_motifs_run_config.motif_criteria = vec![
             MotifCriterionConstraint { metric: Metrics::NormThickness(NormThicknessRunConfig { eps: 1e-8 }), min: Metrics::DEFAULT_CRITERION_MIN },
         ];
@@ -2126,16 +2126,16 @@ pub mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id: RunId = 41;
-        let select_motifs_run_id: RunId = 42;
+        let find_motifs_run_config_id: RunConfigId = 41;
+        let select_motifs_run_config_id: RunConfigId = 42;
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
-        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_id, Ok(vec![1, 2]))]).build());
+        let store = Arc::new(MockStoreBuilder::new().with_list_motifs([(find_motifs_run_config_id, Ok(vec![1, 2]))]).build());
         let loader = Arc::new(mock_tensor_loader::build().finish());
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros([4, 4], FLOAT_CPU))),
-            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::zeros([5, 4], FLOAT_CPU))),
+            (MotifLoaderInput::new((1u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros([4, 4], FLOAT_CPU))),
+            (MotifLoaderInput::new((2u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::zeros([5, 4], FLOAT_CPU))),
         ]).finish());
 
         let stage = SelectMotifsStage::new(
@@ -2143,8 +2143,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             1024,
             None,
         ).await?;
@@ -2160,7 +2160,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
         select_motifs_run_config.motif_criteria = vec![
             MotifCriterionConstraint { metric: Metrics::NormThickness(NormThicknessRunConfig { eps: 1e-8 }), min: 0.5 },
             MotifCriterionConstraint { metric: Metrics::InlierRatio(InlierRatioRunConfig { k: 3.0, eps: 1e-8 }), min: 0.5 },
@@ -2179,8 +2179,8 @@ pub mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let find_motifs_run_id: RunId = 31;
-        let select_motifs_run_id: RunId = 32;
+        let find_motifs_run_config_id: RunConfigId = 31;
+        let select_motifs_run_config_id: RunConfigId = 32;
         let resources_group = "constraint_metrics_group";
         let norm_thickness_calls = Arc::new(AtomicUsize::new(0));
         let inlier_ratio_calls = Arc::new(AtomicUsize::new(0));
@@ -2188,7 +2188,7 @@ pub mod tests {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 1000)));
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_list_motifs([(find_motifs_run_id, Ok(vec![101, 102]))])
+                .with_list_motifs([(find_motifs_run_config_id, Ok(vec![101, 102]))])
                 .with_list_resources_not_in_group([
                     (resources_group, Ok(vec![Resource::new(1, 1, "resource_a", 1000)])),
                 ])
@@ -2197,16 +2197,16 @@ pub mod tests {
         let loader = Arc::new(mock_tensor_loader::build().finish());
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
             (
-                MotifLoaderInput::new((101u32, "motif_id").into(), Some(vec![select_motifs_run_id])),
+                MotifLoaderInput::new((101u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                 (
-                    MotifMeta { channel: 0, find_motifs_run_id, window: 4 },
+                    MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 },
                     Tensor::zeros([2, 4], FLOAT_CPU),
                 ),
             ),
             (
-                MotifLoaderInput::new((102u32, "motif_id").into(), Some(vec![select_motifs_run_id])),
+                MotifLoaderInput::new((102u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                 (
-                    MotifMeta { channel: 0, find_motifs_run_id, window: 4 },
+                    MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 },
                     Tensor::zeros([4, 4], FLOAT_CPU),
                 ),
             ),
@@ -2227,7 +2227,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
+        let mut select_motifs_run_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
         select_motifs_run_config.extend_config = None;
         select_motifs_run_config.motif_criteria = vec![
             MotifCriterionConstraint { metric: Metrics::NormThickness(NormThicknessRunConfig { eps: 1e-8 }), min: 0.7 },
@@ -2240,7 +2240,7 @@ pub mod tests {
             loader,
             motif_loader,
             vec![select_motifs_run_config],
-            vec![find_motifs_run_id],
+            vec![find_motifs_run_config_id],
             1024,
             None,
         ).await?);
@@ -2317,8 +2317,8 @@ pub mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
-        let find_motifs_run_id = 7u32;
-        let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 3, None, None));
+        let find_motifs_run_config_id = 7u32;
+        let find_motifs_run_config = Arc::new(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 3, None, None));
 
         let channels_motif_ids = vec![
             vec![(11u32, "motif_id").into(), (11u32, "motif_id").into(), (12u32, "motif_id").into()],
@@ -2336,21 +2336,21 @@ pub mod tests {
             (
                 MotifLoaderInput::find_motif_slices_only((11u32, "motif_id").into()),
                 (
-                    MotifMeta { channel: 0, find_motifs_run_id, window: 3 },
+                    MotifMeta { channel: 0, find_motifs_run_config_id, window: 3 },
                     Tensor::from_slice(&[0.0f32, 0.0, 0.0, 3.0, 0.0, 0.0]).view([2, 3]),
                 ),
             ),
             (
                 MotifLoaderInput::find_motif_slices_only((12u32, "motif_id").into()),
                 (
-                    MotifMeta { channel: 0, find_motifs_run_id, window: 3 },
+                    MotifMeta { channel: 0, find_motifs_run_config_id, window: 3 },
                     Tensor::from_slice(&[0.0f32, 0.0, 0.0, 4.0, 0.0, 0.0]).view([2, 3]),
                 ),
             ),
             (
                 MotifLoaderInput::find_motif_slices_only((13u32, "motif_id").into()),
                 (
-                    MotifMeta { channel: 1, find_motifs_run_id, window: 3 },
+                    MotifMeta { channel: 1, find_motifs_run_config_id, window: 3 },
                     Tensor::from_slice(&[0.0f32, 0.0, 0.0, 5.0, 0.0, 0.0]).view([2, 3]),
                 ),
             ),
@@ -2397,8 +2397,8 @@ pub mod tests {
         let resources_group = "group";
         let resource_a = Resource::new(1, 1, "resource_a", 1000);
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 2;
 
         let mut store_mock = MockStore::new();
         let resource_for_resources_query = resource_a.clone();
@@ -2409,9 +2409,9 @@ pub mod tests {
                 Err(ThoError::new(format!("unexpected resources group: {group}")))
             }
         });
-        store_mock.expect_list_motifs().times(1).returning(move |run_id| {
-            if run_id != find_motifs_run_id {
-                return Err(ThoError::new(format!("unexpected find_motifs_run_id: {run_id}")));
+        store_mock.expect_list_motifs().times(1).returning(move |run_config_id| {
+            if run_config_id != find_motifs_run_config_id {
+                return Err(ThoError::new(format!("unexpected find_motifs_run_config_id: {run_config_id}")));
             }
             Ok(vec![11, 12])
         });
@@ -2432,11 +2432,11 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::all_slices(DataId(11)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_11_t)),
-            (MotifLoaderInput::all_slices(DataId(12)), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_12_t)),
+            (MotifLoaderInput::all_slices(DataId(11)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_11_t)),
+            (MotifLoaderInput::all_slices(DataId(12)), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_12_t)),
         ]).finish());
 
-        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
+        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
         select_config.extend_config = None;
 
         let select_motifs_stage: Arc<SelectMotifsStage<_, _, MockRunCtx>> = Arc::new(SelectMotifsStage::new(
@@ -2445,7 +2445,7 @@ pub mod tests {
             loader,
             motif_loader,
             vec![select_config],
-            vec![find_motifs_run_id],
+            vec![find_motifs_run_config_id],
             1000,
             None,
         ).await?);
@@ -2477,8 +2477,8 @@ pub mod tests {
         let resources_group = "group";
         let resource_a = Resource::new(1, 1, "resource_a", 1000);
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 2;
 
         let mut store_mock = MockStore::new();
         let resource_for_resources_query = resource_a.clone();
@@ -2489,9 +2489,9 @@ pub mod tests {
                 Err(ThoError::new(format!("unexpected resources group: {group}")))
             }
         });
-        store_mock.expect_list_motifs().times(1).returning(move |run_id| {
-            if run_id != find_motifs_run_id {
-                return Err(ThoError::new(format!("unexpected find_motifs_run_id: {run_id}")));
+        store_mock.expect_list_motifs().times(1).returning(move |run_config_id| {
+            if run_config_id != find_motifs_run_config_id {
+                return Err(ThoError::new(format!("unexpected find_motifs_run_config_id: {run_config_id}")));
             }
             Ok(vec![21, 22])
         });
@@ -2515,8 +2515,8 @@ pub mod tests {
             .view([3, 3]);
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached([
-            (MotifLoaderInput::new((21u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_21_t)),
-            (MotifLoaderInput::new((22u32, "motif_id").into(), Some(vec![select_motifs_run_id])), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motif_22_t)),
+            (MotifLoaderInput::new((21u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_21_t)),
+            (MotifLoaderInput::new((22u32, "motif_id").into(), Some(vec![select_motifs_run_config_id])), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motif_22_t)),
         ]).finish());
 
         let _criteria_mocks = mock_criteria::build()
@@ -2526,7 +2526,7 @@ pub mod tests {
             })
             .install();
 
-        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_id));
+        let mut select_config = SelectMotifsRunConfig::new(Some(select_motifs_run_config_id));
         select_config.extend_config = None;
         select_config.motif_criteria = vec![MotifCriterionConstraint {
             metric: Metrics::NormThickness(NormThicknessRunConfig { eps: 1e-8 }),
@@ -2539,7 +2539,7 @@ pub mod tests {
             loader,
             motif_loader,
             vec![select_config],
-            vec![find_motifs_run_id],
+            vec![find_motifs_run_config_id],
             1000,
             None,
         ).await?);
@@ -2752,7 +2752,7 @@ pub mod tests {
         GlobalCtx::init_devices(2);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
-        let run_id = 1;
+        let run_config_id = 1;
 
 
         let resource_len = 100_000;
@@ -2760,8 +2760,8 @@ pub mod tests {
         let resources_label_1 = (0..100).map(|i|Resource::new(i, 1, format!("resource_l1_{i}"), resource_len)).collect::<Vec<_>>();
         let resources_x = (0..100).map(|i|Resource::new(i, 1, format!("resource_x_{i}"), resource_len)).collect::<Vec<_>>();
 
-        let find_motifs_run_id = 1;
-        let select_motifs_run_id = 1;
+        let find_motifs_run_config_id = 1;
+        let select_motifs_run_config_id = 1;
 
         let motif_ids = (0..10000u32).collect::<Vec<_>>();
 
@@ -2771,13 +2771,13 @@ pub mod tests {
 
         let mut store = Arc::new(
             MockStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(run_id)])
+                .with_run_config_descr([find_motifs_run_config_descr(run_config_id)])
                 .with_list_run_config_values(
-                    run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 10, 100, None, None).to_properties_iter(None).collect()),
+                    run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 10, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_motifs([
-                    (find_motifs_run_id as RunId, Ok(motif_ids.clone()))
+                    (find_motifs_run_config_id as RunConfigId, Ok(motif_ids.clone()))
                 ])
                 .with_list_group_labeled_resources_sets([
                     (resources_group, Ok(vec![
@@ -2817,7 +2817,7 @@ pub mod tests {
         );
 
         let motif_loader = Arc::new(mock_motif_loader::build().with_run_cached(
-            motif_ids.iter().map(|m|((*m).into(), (MotifMeta { channel: 0, find_motifs_run_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
+            motif_ids.iter().map(|m|((*m).into(), (MotifMeta { channel: 0, find_motifs_run_config_id, window: 100 }, motifs_tensor(100, 3, MotifKind::Pulse))))
         ).finish());
 
 
@@ -2826,8 +2826,8 @@ pub mod tests {
             &store,
             loader,
             motif_loader,
-            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_id))],
-            vec![find_motifs_run_id],
+            vec![SelectMotifsRunConfig::new(Some(select_motifs_run_config_id))],
+            vec![find_motifs_run_config_id],
             30_000_000, //slices
             None
         ).await?);

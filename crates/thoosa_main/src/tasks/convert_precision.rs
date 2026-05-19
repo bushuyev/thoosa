@@ -17,7 +17,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, StreamBuffering, ThoError};
 
@@ -100,7 +100,7 @@ impl ConvertPrecisionNetType {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ConvertPrecisionBy {
     Path(PathBuf),
-    RunId(Vec<RunId>),
+    RunId(Vec<RunConfigId>),
     Type(ConvertPrecisionNetType),
 }
 
@@ -114,16 +114,16 @@ impl FromStr for ConvertPrecisionBy {
                 return Err("path payload is empty".to_string());
             }
             Ok(Self::Path(PathBuf::from(path)))
-        } else if let Some(rest) = v.strip_prefix("run_id:").or_else(|| v.strip_prefix("run_ids:")) {
-            let run_ids = thoosa_common::utils::parse_run_ids_vec(rest)?;
-            if run_ids.is_empty() {
-                return Err("run_id payload is empty".to_string());
+        } else if let Some(rest) = v.strip_prefix("run_config_id:").or_else(|| v.strip_prefix("run_config_ids:")) {
+            let run_config_ids = thoosa_common::utils::parse_run_config_ids_vec(rest)?;
+            if run_config_ids.is_empty() {
+                return Err("run_config_id payload is empty".to_string());
             }
-            Ok(Self::RunId(run_ids))
+            Ok(Self::RunId(run_config_ids))
         } else if let Some(rest) = v.strip_prefix("type:").or_else(|| v.strip_prefix("net_type:")) {
             Ok(Self::Type(ConvertPrecisionNetType::parse(rest)?))
         } else {
-            Err(format!("unexpected selector {v:?}; expected path:<path>, run_id:<id[,id]>, or type:motifs|labels|final|all"))
+            Err(format!("unexpected selector {v:?}; expected path:<path>, run_config_id:<id[,id]>, or type:motifs|labels|final|all"))
         }
     }
 }
@@ -307,11 +307,11 @@ struct NetEntry {
 fn selected_entries(ws: &dyn Workspace, selector: ConvertPrecisionBy) -> Result<Vec<NetEntry>, ThoError> {
     match selector {
         ConvertPrecisionBy::Path(path) => entries_for_path(ws, &path),
-        ConvertPrecisionBy::RunId(run_ids) => {
-            let run_ids = run_ids.into_iter().collect::<HashSet<_>>();
+        ConvertPrecisionBy::RunId(run_config_ids) => {
+            let run_config_ids = run_config_ids.into_iter().collect::<HashSet<_>>();
             entries_for_type(ws, ConvertPrecisionNetType::All)?
                 .into_iter()
-                .filter(|entry| entry_run_id(entry).is_some_and(|run_id| run_ids.contains(&run_id)))
+                .filter(|entry| entry_run_config_id(entry).is_some_and(|run_config_id| run_config_ids.contains(&run_config_id)))
                 .collect::<Vec<_>>()
                 .dedup_entries()
         }
@@ -416,7 +416,7 @@ fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
     }
 }
 
-fn entry_run_id(entry: &NetEntry) -> Option<RunId> {
+fn entry_run_config_id(entry: &NetEntry) -> Option<RunConfigId> {
     let base_path = if entry.weights_path.file_name().and_then(|v| v.to_str()) == Some(NET_WEIGHTS_FILE) {
         entry.weights_path.parent()?
     } else {
@@ -427,12 +427,12 @@ fn entry_run_id(entry: &NetEntry) -> Option<RunId> {
         ConvertPrecisionNetType::Motifs => base_path
             .file_stem()
             .and_then(|v| v.to_str())
-            .and_then(|v| v.rsplit_once('_').map(|(_, run_id)| run_id).or(Some(v)))
-            .and_then(|v| v.parse::<RunId>().ok()),
+            .and_then(|v| v.rsplit_once('_').map(|(_, run_config_id)| run_config_id).or(Some(v)))
+            .and_then(|v| v.parse::<RunConfigId>().ok()),
         ConvertPrecisionNetType::Labels | ConvertPrecisionNetType::Final => base_path
             .file_stem()
             .and_then(|v| v.to_str())
-            .and_then(|v| v.parse::<RunId>().ok()),
+            .and_then(|v| v.parse::<RunConfigId>().ok()),
         ConvertPrecisionNetType::All => None,
     }
 }
