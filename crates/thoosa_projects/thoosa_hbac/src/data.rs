@@ -823,7 +823,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunId};
+    use thoosa_shared::run_configs::{ConstConfigs, GridRunConfigs, OptRunConfigs, RunConfigId};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
@@ -1106,9 +1106,9 @@ mod tests {
         }
         GlobalCtx::init_devices(2);
 
-        let find_motifs_run_id: RunId = 1;
-        let select_motifs_run_id: RunId = 2;
-        let train_motif_nets_run_id: RunId = 3;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
+        let train_motif_nets_run_config_id: RunConfigId = 3;
         let motif_id = 10u32;
         let motif_width = 200u32;
         let max_slices = 500u32;
@@ -1161,7 +1161,7 @@ mod tests {
 
         /*
         it's applied  when being loaded
-        let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_id)?)
+        let filtered: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::new(FreqFilter::<MockRunCtx>::new(freq_filters.as_slice(), &ws, find_motifs_run_config_id)?)
             .run(Arc::new(DevicesWrap::wrap(raw_tensor, CacheArea::default())), mock_run_ctx::default(1))
             .await?;
 
@@ -1175,7 +1175,7 @@ mod tests {
             return Err(ThoError::new(format!("filtered tensor is too short: filtered_len={input_len} motif_width={motif_width}")));
         }
         let find_motifs_config = FindMotifsRunConfig::new_with_running_mean(
-            Some(find_motifs_run_id),
+            Some(find_motifs_run_config_id),
             1,
             motif_width,
             Some(freq_filters.clone()),
@@ -1203,30 +1203,30 @@ mod tests {
 
         let mut selected_motifs = vec![Vec::<(u32, f64)>::new(); channels as usize];
         selected_motifs[0].push((motif_id, 1.0));
-        let trained_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_id));
+        let trained_net_path = PathBuf::from(format!("0/{}_{}", motif_id, train_motif_nets_run_config_id));
 
         let find_motifs_props = find_motifs_config.to_properties_iter(None).collect();
 
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_list_run_config_values(find_motifs_run_id, Ok(find_motifs_props))
-                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_id)))])
-                .with_list_selected_motifs([(select_motifs_run_id, Ok(selected_motifs))])
+                .with_list_run_config_values(find_motifs_run_config_id, Ok(find_motifs_props))
+                .with_get_motif_meta([(motif_id, Ok((0usize, find_motifs_run_config_id)))])
+                .with_list_selected_motifs([(select_motifs_run_config_id, Ok(selected_motifs))])
                 .with_list_motif_slices(
                     motif_id,
-                    Some(vec![select_motifs_run_id]),
+                    Some(vec![select_motifs_run_config_id]),
                     None,
                     None,
-                    Ok((0i64, find_motifs_run_id, motif_slices, motif_resources_by_id.clone())),
+                    Ok((0i64, find_motifs_run_config_id, motif_slices, motif_resources_by_id.clone())),
                 )
                 .with_list_random_slices_out_of_motif(
                     motif_id,
                     motif_width,
                     None,
-                    Ok((0i64, find_motifs_run_id, random_slices, random_resources_by_id)),
+                    Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)),
                 )
                 .with_list_trained_nets([
-                    (vec![train_motif_nets_run_id], None, None, Ok(vec![(0, trained_net_path.clone(), 0.01)])),
+                    (vec![train_motif_nets_run_config_id], None, None, Ok(vec![(0, trained_net_path.clone(), 0.01)])),
                 ])
                 .build(),
         );
@@ -1254,7 +1254,7 @@ mod tests {
         let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_conv_net_run_configs(Val::Int(10), Val::Int(300), Val::Int(100)), 10, None));
         // let train_motif_nets = Arc::new(TrainMotifNets::new(loader, &ws, &store, _test_lin_net_run_configs(Val::Int(100), Val::Int(300), Val::Int(10))));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(100, 10)))));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(100, 10)))));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
@@ -1269,13 +1269,13 @@ mod tests {
         assert!(!result.train_motif_nets_results.is_empty());
 
         let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
-        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_id, &motif_id, &train_result.vs, &train_result.params)?;
+        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_config_id, &motif_id, &train_result.vs, &train_result.params)?;
         assert_eq!(saved_path, trained_net_path);
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
             &ws,
             &store,
-            vec![train_motif_nets_run_id],
+            vec![train_motif_nets_run_config_id],
             mock_run_ctx::default(1),
             None,
             None,

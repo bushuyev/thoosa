@@ -29,7 +29,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::z_norm_2;
 use thoosa_common::ws::Workspace;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::stage_ids::FREQ_FILTER;
@@ -102,7 +102,7 @@ impl<C> FreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunId) -> Result<Self, ThoError> {
+    pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunConfigId) -> Result<Self, ThoError> {
         let (num_channels, sample_rate)  = {
             let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
             (guard.channels() as i64, guard.sample_rate() as f64)

@@ -53,7 +53,7 @@ use crate::tasks::slices_stats::{Aggr as StatsAggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_with_data::with_data;
 use crate::buffer_limits::{CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
@@ -74,7 +74,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     CrossLoader {
-        id: RunId,
+        id: RunConfigId,
         cross_loader: Arc<CrossLoader<
             RC,
             L,
@@ -85,7 +85,7 @@ where
         >>
     },
     Bucketing {
-        id: RunId,
+        id: RunConfigId,
         bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData2, SynKey, C>>,
     },
 }
@@ -97,7 +97,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new_cross_loader(
-        id: RunId,
+        id: RunConfigId,
         cross_loader: Arc<CrossLoader<
             RC,
             L,
@@ -114,7 +114,7 @@ where
     }
 
     pub fn new_bucketing(
-        id: RunId,
+        id: RunConfigId,
         bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData2, SynKey, C>>,
     ) -> Result<Self, ThoError> {
         Ok(Self::Bucketing {
@@ -123,7 +123,7 @@ where
         })
     }
 
-    pub fn id(&self) -> &RunId{
+    pub fn id(&self) -> &RunConfigId {
         match self {
             Self::CrossLoader { id, .. } => id,
             Self::Bucketing { id, .. } => id,
@@ -240,8 +240,8 @@ where
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
                 let motif_stats = Arc::clone(&motif_stats);
-                let run_id = run_config.id.expect("should be pre saved");
-                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_id}")), false);
+                let run_config_id = run_config.id.expect("should be pre saved");
+                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_config_id}")), false);
 
                 async move {
                     let ctx_id = ctx.id().clone();
@@ -287,7 +287,7 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_id, vec![comparison_metric.clone()]))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+                                    let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
@@ -532,11 +532,11 @@ where
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_deref() {
         None | Some([]) => {
-            debug!("MotifLoader::run: find_motifs_run_id={:?} no filter", find_motifs_run_config.id);
+            debug!("MotifLoader::run: find_motifs_run_config_id={:?} no filter", find_motifs_run_config.id);
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader)))
         },
         Some(freq_filter) => {
-            debug!("MotifLoader::run: find_motifs_run_id={:?} freq_filter={freq_filter:?}", find_motifs_run_config.id);
+            debug!("MotifLoader::run: find_motifs_run_config_id={:?} freq_filter={freq_filter:?}", find_motifs_run_config.id);
 
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!(find_motifs_run_config.id.expect("find_motifs_run_config"), "ab_stage")]),
@@ -626,7 +626,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
-        let find_motifs_run_id = 1;
+        let find_motifs_run_config_id = 1;
 
 
         let resources = (0..3).map(|i| {
@@ -651,17 +651,17 @@ mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([(
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     Ok(RunConfigRow {
-                        id: find_motifs_run_id,
+                        id: find_motifs_run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find motifs".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_group_labeled_resources_sets([
                     (resources_group, Ok(vec![

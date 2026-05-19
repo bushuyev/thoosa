@@ -45,7 +45,7 @@ use thoosa_shared::traits::MonoMetrics;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_with_data::with_data;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
@@ -169,7 +169,7 @@ where
     > + Stage<Ctx=C> + Send + Sync + 'static,
 
 {
-    pub(crate) find_motifs_run_config_id: RunId,
+    pub(crate) find_motifs_run_config_id: RunConfigId,
     configured_loader: Arc<L>,
     store: Arc<Box<dyn Store>>,
     cross_unfold_clc: Arc<CLC>,
@@ -206,7 +206,7 @@ where
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
 {
     pub fn new<ReceiverFactory, OnAllDone, OnBatchDone>(
-        find_motifs_run_config_id: RunId, //fod logging
+        find_motifs_run_config_id: RunConfigId, //fod logging
         configured_loader: Arc<L>,
         store: &Arc<Box<dyn Store>>,
         cross_unfold_clc: Arc<CLC>,
@@ -316,7 +316,7 @@ where
         let mut t_1_batch: Vec<_> = vec![];
         let mut t_1_batch_resources: Vec<_> = vec![];
         let mut t_1_batch_len = 0;
-        let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
+        let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
         for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
             let t_1 = Arc::clone(&self.configured_loader)
@@ -478,7 +478,7 @@ where
 
         let mut skip_0_i = 0;
 
-        let cross_loader_outer = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, outer: run_id={}", self.find_motifs_run_config_id), resources.len(), 1);
+        let cross_loader_outer = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, outer: run_config_id={}", self.find_motifs_run_config_id), resources.len(), 1);
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
@@ -1325,6 +1325,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::Cause::SomethingElse;
     use thoosa_shared::perf_logging::set_perf_log_level;
+    use thoosa_shared::run_configs::RUN_ID;
 
     #[ctor::ctor]
     fn init() {
@@ -1679,6 +1680,7 @@ mod tests {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 1, 1000, 32000)?));
         let store_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).store_path().to_path_buf());
         let store = Arc::new(SqlStore::from_path(&store_path).await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let resource_keys: Vec<String> = vec!["111", "222", "333", "444", "555", "666"]
             .into_iter()
@@ -1696,13 +1698,13 @@ mod tests {
         let import_id = store.save_import("test resources".to_string()).await?;
         store.save_resources_labels(&resource_stats, import_id).await?;
 
-        let run_id = store.save_run_config(
+        let run_config_id = store.save_run_config(
             None,
             &"find_motifs",
             "test_cross_clc",
             HashMap::new(),
         ).await?;
-        let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, 2, None, None);
+        let run_config = FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 1, 2, None, None);
         let fixed_config = FixedFindMotifsConfig::new(2, false);
 
         let resource_key_refs = resource_keys.iter().map(|v| v.as_str()).collect::<Vec<_>>();
@@ -1826,7 +1828,7 @@ mod tests {
         let expected_len = expected.len();
         assert!(expected_len > 0);
 
-        let slices_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).tmp_path().join(format!("{run_id}_0_slices.zstd")));
+        let slices_path = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws).tmp_path().join(format!("{run_config_id}_0_slices.zstd")));
         let reader = ChunkedSlicesReader::<SlicesMatch>::new(&slices_path)
             .map_err(|e| ThoError::from_error(format!("read slices file {slices_path:?}"), e))?;
 

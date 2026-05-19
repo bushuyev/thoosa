@@ -22,7 +22,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{collect_futures_with_progress, mono_key, sample_n_owned, CopyToDevice, StreamBuffering, ThoError};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
@@ -42,10 +42,10 @@ pub struct StackedMotifsInput {
 impl StackedMotifsInput {
     pub fn new(find_config: Arc<FindMotifsRunConfig>) -> Result<Self, ThoError> {
         debug!("StackedMotifsInput: find_config={find_config:?}");
-        let find_motifs_run_id = find_config.id.ok_or_else(|| ThoError::new("StackedMotifsInput::new: no id in find_config"))?;
+        let find_motifs_run_config_id = find_config.id.ok_or_else(|| ThoError::new("StackedMotifsInput::new: no id in find_config"))?;
         Ok(Self {
             id: SynKey::new([
-                mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+                mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
             ]),
             find_motifs_run_config: find_config,
         })
@@ -64,13 +64,13 @@ impl WithId for StackedMotifsInput {
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
 #[name = "n/a"]
 pub struct StackedMotifsOutputId {
-    pub(crate)  find_motifs_run_id:RunId,
-    pub(crate)  select_motifs_run_id:Vec<RunId>//not used, can be used to return previously ran select_motifs ids
+    pub(crate)  find_motifs_run_config_id: RunConfigId,
+    pub(crate)  select_motifs_run_config_id:Vec<RunConfigId>//not used, can be used to return previously ran select_motifs ids
 }
 
 impl StackedMotifsOutputId {
-    pub fn new(find_motifs_run_id: RunId, select_motifs_run_id: Vec<RunId>) -> Self {
-        Self { find_motifs_run_id, select_motifs_run_id }
+    pub fn new(find_motifs_run_config_id: RunConfigId, select_motifs_run_config_id: Vec<RunConfigId>) -> Self {
+        Self { find_motifs_run_config_id, select_motifs_run_config_id }
     }
 }
 
@@ -223,13 +223,13 @@ where
                 let mut ctx = ctx.branch(Some("stacked_motifs_loader_task"), false);
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_ids StackedMotifsInput
+                    let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
 
                     match motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(Some("stacked_motifs_loader_motif"), false)
                     ).await {
                         Ok(motif) => {
-                            debug!("StackedMotifsLoader::run: find_motifs_run_id={:?} motif={motif:?}", find_motifs_run_config_id);
+                            debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
                             Ok::<_, ThoError>(Some(motif))
                         }
                         Err(e) => {
@@ -329,16 +329,16 @@ where
             debug!("StackedMotifsLoader::run: num_channels={num_channels}, channels_motif_ids={channels_motif_ids:?} channels_motifs_t.size={:?}", channels_motifs_t.size());
             trace!("StackedMotifsLoader::run: channels_motifs_t=\n{channels_motifs_t}");
 
-            let find_motifs_run_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
+            let find_motifs_run_config_id = find_motifs_run_config.id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
 
 
             let motifs = ThoTensor::new(
-                mono_key!("motifs", "motifs") + &mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
+                mono_key!("motifs", "motifs") + &mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id_{find_motifs_run_config_id}")),
                 channels_motifs_t,
             )?;
 
             Ok(Arc::new(DevicesWrap::wrap(StackedMotifsOutput::new(
-                mono_key!("StackedMotifsOutput", "StackedMotifsOutput") + &mono_key!(find_motifs_run_id, format!("find_motifs_run_id_{find_motifs_run_id}")),
+                mono_key!("StackedMotifsOutput", "StackedMotifsOutput") + &mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id_{find_motifs_run_config_id}")),
                 DataWithExtra::new(
                     motifs,
                     (channels_motif_ids, Arc::clone(&find_motifs_run_config), vec![])

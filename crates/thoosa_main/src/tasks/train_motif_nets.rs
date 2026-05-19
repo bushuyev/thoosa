@@ -42,7 +42,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -186,13 +186,13 @@ fn train_motif_run_configs_may_use_cosine_net(run_configs: &OptRunConfigs<Vec<Na
         || run_configs.grid_to_vals_and_opt_params().into_iter().any(|(vals, opt_params)| vals.iter().any(|v| is_cosine_net_field(v.path())) || opt_params.iter().any(|p| is_cosine_net_field(p.name())))
 }
 
-async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs_run_ids: &[RunId]) -> Result<Vec<CompletedTrial>, ThoError> {
+async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs_run_config_ids: &[RunConfigId]) -> Result<Vec<CompletedTrial>, ThoError> {
     let mut train_parent_ids = Vec::new();
     let mut seen_parent_candidates = HashSet::new();
-    for select_motifs_run_id in select_motifs_run_ids {
-        for output_run_id in store.list_output_run_ids(*select_motifs_run_id).await? {
-            if seen_parent_candidates.insert(output_run_id) {
-                train_parent_ids.push(output_run_id);
+    for select_motifs_run_config_id in select_motifs_run_config_ids {
+        for output_run_config_id in store.list_output_run_config_ids(*select_motifs_run_config_id).await? {
+            if seen_parent_candidates.insert(output_run_config_id) {
+                train_parent_ids.push(output_run_config_id);
             }
         }
     }
@@ -212,9 +212,9 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
     let mut child_ids = Vec::new();
     let mut seen_child_candidates = HashSet::new();
     for train_parent_id in train_parent_ids {
-        for output_run_id in store.list_output_run_ids(train_parent_id).await? {
-            if seen_child_candidates.insert(output_run_id) {
-                child_ids.push(output_run_id);
+        for output_run_config_id in store.list_output_run_config_ids(train_parent_id).await? {
+            if seen_child_candidates.insert(output_run_config_id) {
+                child_ids.push(output_run_config_id);
             }
         }
     }
@@ -272,49 +272,49 @@ where
 
         debug!("TrainMotifNets::run: motifs_by={motifs_by:?} opt_config={opt_config:?}");
 
-        let (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids) = match motifs_by {
-            MotifsBy::SelectMotifsRunIds { select_motifs_run_ids } => {
-                let mut motifs_rates_selected_motifs_run_ids = Vec::new();
-                for select_motifs_run_id in &select_motifs_run_ids {
-                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).await?;
-                    debug!("TrainMotifNets::run: select_motifs_run_id={select_motifs_run_id} selected_motifs={selected_motifs:?}");
-                    motifs_rates_selected_motifs_run_ids.extend(
+        let (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids) = match motifs_by {
+            MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids } => {
+                let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
+                for select_motifs_run_config_id in &select_motifs_run_config_ids {
+                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).await?;
+                    debug!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs={selected_motifs:?}");
+                    motifs_rates_selected_motifs_run_config_ids.extend(
                         selected_motifs
                             .into_iter()
-                            .flat_map(|channels_motifs| channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, *select_motifs_run_id))),
+                            .flat_map(|channels_motifs| channels_motifs.into_iter().map(move |motif_id_rate| (motif_id_rate, *select_motifs_run_config_id))),
                     );
                 }
-                (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids)
+                (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids)
             }
-            MotifsBy::MotifId { motif_id, select_motifs_run_ids } => {
-                let (channel, find_motifs_run_id) = self.store.get_motif_meta(motif_id).await?;
-                let select_motifs_run_ids = match select_motifs_run_ids {
-                    Some(select_motifs_run_ids) => select_motifs_run_ids,
-                    None => self.store.list_output_run_ids(find_motifs_run_id).await?,
+            MotifsBy::MotifId { motif_id, select_motifs_run_config_ids } => {
+                let (channel, find_motifs_run_config_id) = self.store.get_motif_meta(motif_id).await?;
+                let select_motifs_run_config_ids = match select_motifs_run_config_ids {
+                    Some(select_motifs_run_config_ids) => select_motifs_run_config_ids,
+                    None => self.store.list_output_run_config_ids(find_motifs_run_config_id).await?,
                 };
-                let mut motifs_rates_selected_motifs_run_ids = Vec::new();
-                for select_motifs_run_id in &select_motifs_run_ids {
-                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_id, channels).await?;
+                let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
+                for select_motifs_run_config_id in &select_motifs_run_config_ids {
+                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).await?;
                     let motif_is_selected = selected_motifs
                         .get(channel)
                         .map(|channel_motifs| channel_motifs.iter().any(|(selected_motif_id, _)| *selected_motif_id == motif_id))
                         .unwrap_or(false);
                     if motif_is_selected {
-                        motifs_rates_selected_motifs_run_ids.push(((motif_id, 1.0f64), *select_motifs_run_id));
+                        motifs_rates_selected_motifs_run_config_ids.push(((motif_id, 1.0f64), *select_motifs_run_config_id));
                     }
                 }
-                (select_motifs_run_ids, motifs_rates_selected_motifs_run_ids)
+                (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids)
             }
         };
-        let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
-        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_ids={motifs_rates_selected_motifs_run_ids:?}");
-        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_ids_len={motifs_rates_selected_motifs_run_ids_len}");
+        let motifs_rates_selected_motifs_run_config_ids_len = motifs_rates_selected_motifs_run_config_ids.len();
+        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
+        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len}");
 
-        let reusable_completed_trials = completed_train_motif_trials(&self.store, &select_motifs_run_ids).await?;
+        let reusable_completed_trials = completed_train_motif_trials(&self.store, &select_motifs_run_config_ids).await?;
         debug!("TrainMotifNets::run: reusable_completed_trials.len={}", reusable_completed_trials.len());
 
-        let futures = motifs_rates_selected_motifs_run_ids.into_iter()
-        .map(|(motif_id_rate, select_motifs_run_id)|{
+        let futures = motifs_rates_selected_motifs_run_config_ids.into_iter()
+        .map(|(motif_id_rate, select_motifs_run_config_id)|{
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
 
@@ -328,7 +328,7 @@ where
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = motif_loader.run(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_id])))),
+                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id])))),
                     ctx.branch(Some("train_motif_nets_motif_loader"), false),
                 ).await?;
 
@@ -403,13 +403,13 @@ where
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", train_net_output.min_loss);
 
-                let (channel, _find_motifs_run_id) = store.get_motif_meta(motif_id_rate.0).await?;
+                let (channel, _find_motifs_run_config_id) = store.get_motif_meta(motif_id_rate.0).await?;
                 Ok(TrainMotifNetResult::new(
                     train_net_output.min_loss,
                     channel as u32,
                     motif_id_rate.0,
                     train_net_output.var_store,
-                    select_motifs_run_id,
+                    select_motifs_run_config_id,
                     train_net_output.node_params,
                     train_net_output.run_config,
                     descr
@@ -423,13 +423,13 @@ where
 
         let results = collect_futures_with_progress(
             futures,
-            motifs_rates_selected_motifs_run_ids_len,
+            motifs_rates_selected_motifs_run_config_ids_len,
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "train motif",
         ).await;
 
-        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_ids, results))))
+        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_config_ids, results))))
     }
 
 }
@@ -652,7 +652,7 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{OptRunConfigs, RunId};
+    use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_shared::traits::Named;
     use thoosa_shared::hyperparameter::Hyperparameter;
@@ -677,8 +677,8 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
-        let find_motifs_run_id:RunId = 1;
-        let select_motifs_run_id:RunId = 2;
+        let find_motifs_run_config_id: RunConfigId = 1;
+        let select_motifs_run_config_id: RunConfigId = 2;
         let motif_width = 100;
 
         let resources = (0..10).map(|i|Resource::new(i, 1, format!("resource_{i}"), 900)).collect::<Vec<_>>();
@@ -711,32 +711,32 @@ mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 50, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 50, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_run_config_descr([(
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     Ok(RunConfigRow {
-                        id: find_motifs_run_id,
+                        id: find_motifs_run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_id]), None, None, Ok((0i64, find_motifs_run_id, motif_intervals, resources_id_map.clone()
+                .with_list_motif_slices(motif_id, Some(vec![select_motifs_run_config_id]), None, None, Ok((0i64, find_motifs_run_config_id, motif_intervals, resources_id_map.clone()
 
                 )))
-                .with_list_random_slices_out_of_motif(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_id, (0..10).flat_map(|i|vec![
+                .with_list_random_slices_out_of_motif(motif_id, motif_width as u32, None, Ok((0i64, find_motifs_run_config_id, (0..10).flat_map(|i|vec![
                     TensorIdSliceIdx(i, 100),
                     TensorIdSliceIdx(i, 300),
                     TensorIdSliceIdx(i, 500)
                 ]).collect(), resources_id_map)))
 
                 .with_list_selected_motifs([
-                    (select_motifs_run_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
+                    (select_motifs_run_config_id, Ok(vec![vec![(motif_id, 1.0f64)]]))
                 ])
-                .with_list_output_run_ids([(select_motifs_run_id, Ok(vec![]))])
-                .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_id)))])
+                .with_list_output_run_config_ids([(select_motifs_run_config_id, Ok(vec![]))])
+                .with_get_motif_meta( [(motif_id, Ok((0usize, find_motifs_run_config_id)))])
 
                 .build());
 
@@ -760,7 +760,7 @@ mod tests {
             None
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_ids: vec![select_motifs_run_id] }, Arc::new(OptConfig::new(3, 2)))));
+        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)))));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(Some("train_motif_nets_run"), false);

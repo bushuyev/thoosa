@@ -25,7 +25,7 @@ use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunId};
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
@@ -43,7 +43,7 @@ use crate::cli::run_plot;
 #[run_config_opt]
 pub struct FindAndSelectMotifsRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -108,7 +108,7 @@ impl FindAndSelectEvalMetrics {
 }
 
 impl WithId for FindAndSelectMotifsResult {
-    type ID = RunId;
+    type ID = RunConfigId;
 
     fn id(&self) -> &Self::ID {
         &0
@@ -127,14 +127,14 @@ impl SavableResult for FindAndSelectMotifsResult {
     ) -> Result<Vec<u32>, ThoError> {
 
 
-        let best_run_ids = self
+        let best_run_config_ids = self
             .best_configs
             .iter()
             .map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config"))
             .collect::<Vec<_>>();
 
         let id = store.save_run_config(
-            Some(&best_run_ids),
+            Some(&best_run_config_ids),
             FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
             HashMap::from([]),
@@ -192,18 +192,18 @@ impl FindAndSelectMotifsStage {
 
     async fn save_run_config_with_input<R>(
         store: &Arc<Box<dyn Store>>,
-        input_run_ids: Option<&[RunId]>,
+        input_run_config_ids: Option<&[RunConfigId]>,
         run_config: &mut R,
         descr: &str,
-    ) -> Result<RunId, ThoError>
+    ) -> Result<RunConfigId, ThoError>
     where
         R: RunConfig + ToHashmap,
     {
-        let run_id = store
-            .save_run_config(input_run_ids, R::type_name(), descr, run_config.to_properties_iter(None).collect())
+        let run_config_id = store
+            .save_run_config(input_run_config_ids, R::type_name(), descr, run_config.to_properties_iter(None).collect())
             .await?;
-        run_config.set_id(run_id);
-        Ok(run_id)
+        run_config.set_id(run_config_id);
+        Ok(run_config_id)
     }
 
     async fn run_find_and_select<C:RunCtx + Adjustable>(
@@ -220,7 +220,7 @@ impl FindAndSelectMotifsStage {
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
         let find_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store).await?));
         //code in FindMotifsStage and SelectMotifsStage expects pre saved run configurations
-        let find_run_id = Self::save_run_config_with_input(
+        let find_run_config_id = Self::save_run_config_with_input(
             store,
             None,
             &mut run_config.find_motifs_run_config,
@@ -228,9 +228,9 @@ impl FindAndSelectMotifsStage {
         ).await?;
 
         #[allow(unused_variables)]
-        let select_run_id = Self::save_run_config_with_input(
+        let select_run_config_id = Self::save_run_config_with_input(
             store,
-            Some(&[find_run_id]),
+            Some(&[find_run_config_id]),
             &mut run_config.select_motifs_run_config,
             "FindAndSelectMotifs/select",
         ).await?;
@@ -252,7 +252,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_ids: None }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_config_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_config_ids: None }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
 
         let select_stage = Arc::new(
             SelectMotifsStage::<
@@ -265,7 +265,7 @@ impl FindAndSelectMotifsStage {
                 Arc::clone(&loader),
                 Arc::new(MotifLoader::new(Arc::clone(store), Arc::clone(&loader), ws)),
                 vec![run_config.select_motifs_run_config.clone()],
-                vec![find_run_id],
+                vec![find_run_config_id],
                 max_chunk_size,
                 // #[cfg(test)]
                 None,
@@ -290,7 +290,7 @@ impl FindAndSelectMotifsStage {
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_ids: vec![select_run_id] }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
+        run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![select_run_config_id] }), Resolution::Normal, &Cpu, ctx.branch(Some("plot"), false)).await?;
 
         Ok(FindAndSelectEvalMetrics { score_sum })
     }

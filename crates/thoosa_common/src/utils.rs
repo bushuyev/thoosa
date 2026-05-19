@@ -38,28 +38,28 @@ use lazy_static::lazy_static;
 use thoosa_shared::colors_iter::DistinctColorIter;
 use sha2::{Digest, Sha256};
 use thoosa_properties_map::FromHashmap;
-use thoosa_shared::run_configs::{RunConfig, RunId};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 
-pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_run_id: RunId) -> Result<FH, ThoError>
+pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_id: RunConfigId) -> Result<FH, ThoError>
 where
     FH: FromHashmap + RunConfig + Debug
 {
-    let real_find_motifs_run_id = if store.run_config_descr(find_motifs_run_id).await?.r#type == "FindMotifsRunConfig" {
-        find_motifs_run_id
+    let real_find_motifs_run_config_id = if store.run_config_descr(find_motifs_id).await?.r#type == "FindMotifsRunConfig" {
+        find_motifs_id
     } else {
-        let find_motifs_run_ids = store.get_input_run_ids(find_motifs_run_id, Some("FindMotifsRunConfig")).await?;
-        *find_motifs_run_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_id={find_motifs_run_id}")))?
+        let find_motifs_run_config_ids = store.get_input_run_config_ids(find_motifs_id, Some("FindMotifsRunConfig")).await?;
+        *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={find_motifs_id}")))?
     };
 
     // FindMotifsRunConfig::from_properties_map_with_id(
-    //     real_find_motifs_run_id,
-    //     &store.list_run_config_values(real_find_motifs_run_id).await?,
+    //     real_find_motifs_run_config_id,
+    //     &store.list_run_config_values(real_find_motifs_run_config_id).await?,
     // )
-    let mut find_motifs_run_config = FH::from_properties_map(None, &store.list_run_config_values(real_find_motifs_run_id).await?)?;
+    let mut find_motifs_run_config = FH::from_properties_map(None, &store.list_run_config_values(real_find_motifs_run_config_id).await?)?;
 
     debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
 
-    find_motifs_run_config.set_id(real_find_motifs_run_id);
+    find_motifs_run_config.set_id(real_find_motifs_run_config_id);
 
     Ok(find_motifs_run_config)
 }
@@ -1708,7 +1708,7 @@ pub fn stretch<T: AsRef<Tensor>>(
     Ok(t.f_index_select(dim as i64, &index)?)
 }
 
-pub fn parse_run_ids_vec(payload: &str) -> Result<Vec<RunId>, String> {
+pub fn parse_run_config_ids_vec(payload: &str) -> Result<Vec<RunConfigId>, String> {
     payload
         .trim()
         .trim_matches(|ch| ch == '\'' || ch == '"')
@@ -1719,13 +1719,13 @@ pub fn parse_run_ids_vec(payload: &str) -> Result<Vec<RunId>, String> {
                 .trim()
                 .trim_matches(|ch| ch == '\'' || ch == '"')
                 .replace(" ", "")
-                .parse::<RunId>()
+                .parse::<RunConfigId>()
                 .map_err(|e| format!("can't parse {part:?}: {e}"))
         })
         .collect()
 }
 
-pub fn parse_run_ids(s: &str) -> Result<u32, String> {
+pub fn parse_run_config_ids(s: &str) -> Result<u32, String> {
     s.trim()
         .trim_matches(|ch| ch == '\'' || ch == '"')
         .replace(" ", "")
@@ -1766,7 +1766,7 @@ pub mod tests {
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoError};
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
     use crate::train_nets::{self_attention_label_node, LabelNetParams, LabelNetTypeParams, SelfAttentionNetParams};
@@ -2025,7 +2025,7 @@ pub mod tests {
         #[run_config_opt]
         struct TrainLabelsRunConfig {
             #[in_map]
-            pub id: Option<RunId>,
+            pub id: Option<RunConfigId>,
 
             #[in_map]
             #[run_config]
@@ -2045,7 +2045,7 @@ pub mod tests {
         }
 
         // impl RunConfig for TrainLabelsRunConfig {
-        //     fn from_properties_map(run_id: RunId, properties: HashMap<String, Val>) -> Self {
+        //     fn from_properties_map(run_config_id: RunId, properties: HashMap<String, Val>) -> Self {
         //         todo!()
         //     }
         //
@@ -2381,7 +2381,7 @@ pub mod tests {
         #[derive(ThoosaRunConfig, Debug)]
         #[run_config_opt]
         struct SomeStruct {
-            pub id: Option<RunId>,
+            pub id: Option<RunConfigId>,
 
             #[run_config]
             field_00: u32,

@@ -23,7 +23,7 @@ use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_shared::traits::{CachableIdTr, Data, DataId, WithId};
 use thoosa_store::Store;
@@ -59,7 +59,7 @@ use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
     pub id:SynKey,
-    select_motifs_run_id: Option<Vec<RunId>>,
+    select_motifs_run_config_id: Option<Vec<RunConfigId>>,
     motif_id:SynKey
 }
 
@@ -76,7 +76,7 @@ impl MotifLoaderInput {
         Self {
             id: mono_key!(motif_id.0, "motif_id").into(),
             motif_id: mono_key!(motif_id.0, "motif_id").into(),
-            select_motifs_run_id: None //all slices loaded
+            select_motifs_run_config_id: None //all slices loaded
         }
     }
 
@@ -84,24 +84,24 @@ impl MotifLoaderInput {
         Self {
             id: motif_id.clone(),
             motif_id,
-            select_motifs_run_id: Some(vec![]) //only slices found during find_motifs loaded
+            select_motifs_run_config_id: Some(vec![]) //only slices found during find_motifs loaded
         }
     }
 
-    pub fn new(motif_id: SynKey, select_motifs_run_id: Option<Vec<RunId>>) -> Self {
+    pub fn new(motif_id: SynKey, select_motifs_run_config_id: Option<Vec<RunConfigId>>) -> Self {
         Self {
-            id: select_motifs_run_id.iter().flat_map(|v|v).fold(motif_id.clone(), |a, v:&RunId|{
-                &a + mono_key!(*v, "select_motifs_run_id")
+            id: select_motifs_run_config_id.iter().flat_map(|v|v).fold(motif_id.clone(), |a, v:&RunConfigId|{
+                &a + mono_key!(*v, "select_motifs_run_config_id")
             }),
-            select_motifs_run_id,
+            select_motifs_run_config_id,
             motif_id
-        }// slices found during find_motifs + select_motifs_run_id
+        }// slices found during find_motifs + select_motifs_run_config_id
     }
 }
 impl Input for MotifLoaderInput {
 }
 
-//TODO composite id with select_motifs_run_id
+//TODO composite id with select_motifs_run_config_id
 impl WithId for MotifLoaderInput {
     type ID = SynKey;
 
@@ -158,7 +158,7 @@ where
 #[derive(Debug, Clone)]
 pub struct MotifMeta {
     pub channel:i64,
-    pub find_motifs_run_id: RunId,
+    pub find_motifs_run_config_id: RunConfigId,
     pub window:u32
 }
 
@@ -224,8 +224,8 @@ impl Output for LoadedMotifResource {}
 struct SyncMotifLoaderInput {
     id: SynKey,
     motif_id: DataId,
-    select_motifs_run_id: Option<Vec<RunId>>,
-    find_motifs_run_id: RunId,
+    select_motifs_run_config_id: Option<Vec<RunConfigId>>,
+    find_motifs_run_config_id: RunConfigId,
     channel: i64,
     window: u32,
     loaded_resources: Vec<LoadedMotifResource>,
@@ -236,14 +236,14 @@ impl SyncMotifLoaderInput {
     fn new(
         id: SynKey,
         motif_id: DataId,
-        select_motifs_run_id: Option<Vec<RunId>>,
-        find_motifs_run_id: RunId,
+        select_motifs_run_config_id: Option<Vec<RunConfigId>>,
+        find_motifs_run_config_id: RunConfigId,
         channel: i64,
         window: u32,
         loaded_resources: Vec<LoadedMotifResource>,
         descr: &'static str,
     ) -> Self {
-        Self { id, motif_id, select_motifs_run_id, find_motifs_run_id, channel, window, loaded_resources, descr }
+        Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr }
     }
 }
 
@@ -289,8 +289,8 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
         Ok(Self {
             id: self.id.clone(),
             motif_id: self.motif_id.clone(),
-            select_motifs_run_id: self.select_motifs_run_id.clone(),
-            find_motifs_run_id: self.find_motifs_run_id,
+            select_motifs_run_config_id: self.select_motifs_run_config_id.clone(),
+            find_motifs_run_config_id: self.find_motifs_run_config_id,
             channel: self.channel,
             window: self.window,
             loaded_resources,
@@ -303,8 +303,8 @@ impl thoosa_shared::CopyToDevice for SyncMotifLoaderInput {
 struct SyncMotifLoaderInputWrapper {
     id: SynKey,
     motif_id: DataId,
-    select_motifs_run_id: Option<Vec<RunId>>,
-    find_motifs_run_id: RunId,
+    select_motifs_run_config_id: Option<Vec<RunConfigId>>,
+    find_motifs_run_config_id: RunConfigId,
     channel: i64,
     window: u32,
     loaded_resources: TmpCached<LoadedMotifResource>,
@@ -315,14 +315,14 @@ impl SyncMotifLoaderInputWrapper {
     fn new(
         id: SynKey,
         motif_id: DataId,
-        select_motifs_run_id: Option<Vec<RunId>>,
-        find_motifs_run_id: RunId,
+        select_motifs_run_config_id: Option<Vec<RunConfigId>>,
+        find_motifs_run_config_id: RunConfigId,
         channel: i64,
         window: u32,
         loaded_resources: TmpCached<LoadedMotifResource>,
         descr: &'static str,
     ) -> Self {
-        Self { id, motif_id, select_motifs_run_id, find_motifs_run_id, channel, window, loaded_resources, descr }
+        Self { id, motif_id, select_motifs_run_config_id, find_motifs_run_config_id, channel, window, loaded_resources, descr }
     }
 }
 
@@ -352,8 +352,8 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
             let SyncMotifLoaderInputWrapper {
                 id,
                 motif_id,
-                select_motifs_run_id,
-                find_motifs_run_id,
+                select_motifs_run_config_id,
+                find_motifs_run_config_id,
                 channel,
                 window,
                 loaded_resources,
@@ -367,8 +367,8 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                         input: SyncMotifLoaderInput::new(
                             id,
                             motif_id,
-                            select_motifs_run_id,
-                            find_motifs_run_id,
+                            select_motifs_run_config_id,
+                            find_motifs_run_config_id,
                             channel,
                             window,
                             err.data,
@@ -382,8 +382,8 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
             let input = SyncMotifLoaderInput::new(
                 id,
                 motif_id,
-                select_motifs_run_id,
-                find_motifs_run_id,
+                select_motifs_run_config_id,
+                find_motifs_run_config_id,
                 channel,
                 window,
                 loaded_resources,
@@ -418,8 +418,8 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
             SyncMotifLoaderInputWrapper::new(
                 o.id,
                 o.motif_id,
-                o.select_motifs_run_id,
-                o.find_motifs_run_id,
+                o.select_motifs_run_config_id,
+                o.find_motifs_run_config_id,
                 o.channel,
                 o.window,
                 loaded_resources,
@@ -483,8 +483,8 @@ where
     fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
         let motif = match build_motif_from_loaded_resources(
             input.motif_id.clone(),
-            input.select_motifs_run_id.as_ref(),
-            input.find_motifs_run_id,
+            input.select_motifs_run_config_id.as_ref(),
+            input.find_motifs_run_config_id,
             input.channel,
             input.window,
             &input.loaded_resources,
@@ -498,7 +498,7 @@ where
             motif,
             MotifMeta {
                 channel: input.channel,
-                find_motifs_run_id: input.find_motifs_run_id,
+                find_motifs_run_config_id: input.find_motifs_run_config_id,
                 window: input.window,
             },
         ))
@@ -533,22 +533,22 @@ where
     {
         let input_id = input.id().clone();
 
-        let (motif_id, select_motifs_run_id) = with_data!(ctx.branch(Some("motif_loader_input"), false), input; |_ctx, input: &MotifLoaderInput| {
-            Ok::<_, ThoError>((input.motif_id.clone(), input.select_motifs_run_id.clone()))
+        let (motif_id, select_motifs_run_config_id) = with_data!(ctx.branch(Some("motif_loader_input"), false), input; |_ctx, input: &MotifLoaderInput| {
+            Ok::<_, ThoError>((input.motif_id.clone(), input.select_motifs_run_config_id.clone()))
         })?;
 
         let motif_id_value = motif_id.vals[0].to_data_id();
-        let select_motifs_run_id_for_key = select_motifs_run_id.clone();
+        let select_motifs_run_config_id_for_key = select_motifs_run_config_id.clone();
         // TODO(perf): cache motif slice lists/resource grouping by motif_id; repeated DB reads dominate MotifLoader elapsed time in traced runs.
-        let (channel, find_motifs_run_id, slices, resources_map) = self
+        let (channel, find_motifs_run_config_id, slices, resources_map) = self
             .store
-            .list_motif_slices(motif_id_value.0, select_motifs_run_id, Some(1000), None)
+            .list_motif_slices(motif_id_value.0, select_motifs_run_config_id, Some(1000), None)
             .await?;
 
-        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_id).await?;
-        let real_find_motifs_run_id = find_motifs_run_config.id.unwrap_or(find_motifs_run_id);
+        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_config_id).await?;
+        let real_find_motifs_run_config_id = find_motifs_run_config.id.unwrap_or(find_motifs_run_config_id);
 
-        debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={real_find_motifs_run_id}");
+        debug!("MotifLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_config_id={real_find_motifs_run_config_id}");
 
         let window = find_motifs_run_config.window;
         let resource_ids_slices = slices.iter().fold(HashMap::new(), |mut acc, slice| {
@@ -560,7 +560,7 @@ where
         let loaded_resources = load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
-            real_find_motifs_run_id,
+            real_find_motifs_run_config_id,
             window,
             resources_map,
             resource_ids_slices,
@@ -574,8 +574,8 @@ where
         let sync_input = SyncMotifLoaderInputWrapper::new(
             input_id.clone(),
             motif_id_value,
-            select_motifs_run_id_for_key,
-            real_find_motifs_run_id,
+            select_motifs_run_config_id_for_key,
+            real_find_motifs_run_config_id,
             channel,
             window,
             loaded_resources,
@@ -705,17 +705,17 @@ where
         })?;
 
 
-        let (channel, find_motifs_run_id) = self.store.get_motif_meta(*motif_id).await?;
+        let (channel, find_motifs_run_config_id) = self.store.get_motif_meta(*motif_id).await?;
 
-        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_id).await?;
+        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_config_id).await?;
 
 
-        debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_id={find_motifs_run_id}");
+        debug!("RandomSlicesLoader::run: motif_id={motif_id} channel={channel} ctx={ctx:?} find_motifs_run_config_id={find_motifs_run_config_id}");
 
         let motif_id_value = motif_id.clone().0;
         let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
         // TODO(perf): precompute or cache random-slice pools for (motif_id, limit, input_len_adjuster) so each batch does not wait on fresh SQL selection.
-        let (channel, find_motifs_run_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize)).await?;
+        let (channel, find_motifs_run_config_id, slices, resources_map) = self.store.list_random_slices_out_of_motif(motif_id_value, find_motifs_run_config.window, None, input_len_adjuster, Some(limit as usize)).await?;
 
 
         let motif_id_value = motif_id.clone();
@@ -731,7 +731,7 @@ where
         let loaded_resources = load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
-            find_motifs_run_id,
+            find_motifs_run_config_id,
             find_motifs_run_config.window,
             resources_map,
             resource_ids_slices,
@@ -745,7 +745,7 @@ where
             mono_key!(*motif_id_value, "random_slices_loader_input").into(),
             motif_id_value,
             None,
-            find_motifs_run_id,
+            find_motifs_run_config_id,
             channel,
             find_motifs_run_config.window,
             loaded_resources,
@@ -786,7 +786,7 @@ where
 async fn load_motif_resource_tensors<L, C>(
     motif_id: DataId,
     channel: i64,
-    find_motifs_run_id: u32,
+    find_motifs_run_config_id: u32,
     window: u32,
     resources_map: HashMap<ResourceId, Resource>,
     resource_ids_slices: HashMap<ResourceId, Vec<u32>>,
@@ -815,12 +815,12 @@ where
 
             for &slice in &slices {
                 let Some(slice_end) = slice.checked_add(window) else {
-                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} overflows for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} overflows for resource_id={resource_id} in find_motifs_run_config_id={find_motifs_run_config_id} in {descr}");
                     continue;
                 };
 
                 if slice_end as i64 > size[1] {
-                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_config_id={find_motifs_run_config_id} in {descr}");
                 } else {
                     valid_slices.push(slice);
                 }
@@ -844,14 +844,14 @@ where
         });
         loaded_resources_count += 1;
     }
-    debug!("load_motif_resource_tensors: motif_id={motif_id} find_motifs_run_id={find_motifs_run_id} loaded_resources={loaded_resources_count} descr={descr}");
+    debug!("load_motif_resource_tensors: motif_id={motif_id} find_motifs_run_config_id={find_motifs_run_config_id} loaded_resources={loaded_resources_count} descr={descr}");
     Ok(loaded_resources)
 }
 
 fn build_motif_from_loaded_resources(
     motif_id: DataId,
-    select_motifs_run_id: Option<&Vec<RunId>>,
-    find_motifs_run_id: u32,
+    select_motifs_run_config_id: Option<&Vec<RunConfigId>>,
+    find_motifs_run_config_id: u32,
     channel: i64,
     window: u32,
     loaded_resources: &[LoadedMotifResource],
@@ -859,13 +859,13 @@ fn build_motif_from_loaded_resources(
     descr: &str,
 ) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError> {
     let total_slices = loaded_resources.iter().map(|resource| resource.raw_tensor.t_ref().size()[0]).sum::<i64>();
-    debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} select_motifs_run_id={select_motifs_run_id:?} find_motifs_run_id={find_motifs_run_id} channel={channel} window={window} total_slices={total_slices} loaded_resources={} device_idx={device_idx} descr={descr}", loaded_resources.len());
+    debug!("build_motif_slices_from_loaded_resources: motif_id={motif_id} select_motifs_run_config_id={select_motifs_run_config_id:?} find_motifs_run_config_id={find_motifs_run_config_id} channel={channel} window={window} total_slices={total_slices} loaded_resources={} device_idx={device_idx} descr={descr}", loaded_resources.len());
     /*
-       select_motifs_run_id should not be used if SelectMotifsRunConfig doesn't contain extend_config
-       let motif_id = select_motifs_run_id
-        .map(|run_ids| {
-            run_ids.iter().fold(mono_key!(motif_t.id().0, "motif").into(), |acc: SynKey, run_id| {
-                &acc + mono_key!(*run_id, "select_motifs_run_id")
+       select_motifs_run_config_id should not be used if SelectMotifsRunConfig doesn't contain extend_config
+       let motif_id = select_motifs_run_config_id
+        .map(|run_config_ids| {
+            run_config_ids.iter().fold(mono_key!(motif_t.id().0, "motif").into(), |acc: SynKey, run_config_id| {
+                &acc + mono_key!(*run_config_id, "select_motifs_run_config_id")
             })
         })
      */
@@ -889,7 +889,7 @@ fn build_motif_from_loaded_resources(
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_random_slices"))]
 pub(crate) async fn load_random_slices<L, C>(
-    find_motifs_run_id: u32,
+    find_motifs_run_config_id: u32,
     resources_map: HashMap<ResourceId, Resource>,
     slices: Vec<TensorIdSliceIdx>,
     store: Arc<Box<dyn Store>>,
@@ -903,9 +903,9 @@ where
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
 {
     let device_idx = ctx.device_idx();
-    debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} slices={slices:?} descr={descr}");
+    debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} slices={slices:?} descr={descr}");
 
-    let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&store, find_motifs_run_id).await?;
+    let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&store, find_motifs_run_config_id).await?;
 
     let resource_ids_slices = slices
         .iter()
@@ -950,7 +950,7 @@ where
             for slice in slices {
                 let in_range = MonoMetrics::<1,2>::from([channels, (slice + window) as i64]) <= *size;
                 if !in_range {
-                    warn!("load_random_slices:  slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_id={find_motifs_run_id} in {descr}");
+                    warn!("load_random_slices:  slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_config_id={find_motifs_run_config_id} in {descr}");
                 } else {
                     debug!("load_random_slices:  slice_i={slice_i} slice={slice:?} size={size:?}");
                     // TODO(perf): this copies one random slice at a time; build a batched index/gather path to reduce tensor indexing overhead during training.
@@ -977,8 +977,8 @@ where
             tmp_cache.insert(resource_slices);
         }
     }
-    debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} done_0");
-    debug!("load_random_slices: find_motifs_run_id={find_motifs_run_id} done_1");
+    debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} done_0");
+    debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} done_1");
 
     Ok((window, tmp_cache))
 }
@@ -1131,13 +1131,13 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
-        let find_motifs_run_id = 1;
-        let motif_source_run_id = 2;
+        let find_motifs_run_config_id = 1;
+        let motif_source_run_config_id = 2;
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, motif_source_run_id, vec![
+            .with_list_motif_slices(10u32, Some(vec![]), None, None, Ok((0i64, motif_source_run_config_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
@@ -1146,18 +1146,18 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                 (2, resource_b.clone())
             ]))))
             .with_run_config_descr([(
-                motif_source_run_id,
+                motif_source_run_config_id,
                 Ok(RunConfigRow {
-                    id: motif_source_run_id,
+                    id: motif_source_run_config_id,
                     r#type: "SelectMotifsRunConfig".to_string(),
                     descr: "test select".to_string(),
                     run_on: "2026-01-01 00:00:00".to_string(),
                 }),
             )])
-            .with_get_input_run_ids([(motif_source_run_id, Ok(vec![find_motifs_run_id]))])
+            .with_get_input_run_config_ids([(motif_source_run_config_id, Ok(vec![find_motifs_run_config_id]))])
             .with_list_run_config_values(
-                find_motifs_run_id,
-                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 100, 100, None, None).to_properties_iter(None).collect())
+                find_motifs_run_config_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 100, 100, None, None).to_properties_iter(None).collect())
             )
             .build();
 
@@ -1213,14 +1213,14 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 1, 100, 10000)));
-        let run_id = 1;
+        let run_config_id = 1;
         let motif_id = 10u32;
         let motif_width = 100;
 
         let resource_a = Resource::new(1, 1, "tensor_a", 1000);
         let resource_b = Resource::new(2, 1, "tensor_b", 1000);
         let mut store = MockStoreBuilder::new()
-            .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0i64, run_id, vec![
+            .with_list_random_slices_out_of_motif(motif_id, motif_width, None, Ok((0i64, run_config_id, vec![
                 TensorIdSliceIdx(1, 100),
                 TensorIdSliceIdx(1, 200),
                 TensorIdSliceIdx(2, 100)
@@ -1229,19 +1229,19 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                 (2, resource_b.clone())
             ]))))
             .with_run_config_descr([(
-                run_id,
+                run_config_id,
                 Ok(RunConfigRow {
-                    id: run_id,
+                    id: run_config_id,
                     r#type: "FindMotifsRunConfig".to_string(),
                     descr: "test find motifs".to_string(),
                     run_on: "2026-01-01 00:00:00".to_string(),
                 }),
             )])
             .with_list_run_config_values(
-                run_id,
-                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 100, motif_width, None, None).to_properties_iter(None).collect())
+                run_config_id,
+                Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 100, motif_width, None, None).to_properties_iter(None).collect())
             )
-            .with_get_motif_meta( [(motif_id, Ok((0usize, run_id)))])
+            .with_get_motif_meta( [(motif_id, Ok((0usize, run_config_id)))])
             .build();
 
         let random_slices_loader = Arc::new(RandomSlicesLoader::new(

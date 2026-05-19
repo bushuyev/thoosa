@@ -456,7 +456,7 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::{TrainLabelNetRunConfig, TrainMotifNetRunConfig};
     use thoosa_common::ws::{FsWorkspace, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
-    use thoosa_shared::run_configs::RunConfig;
+    use thoosa_shared::run_configs::{RunConfig, RUN_ID};
     use thoosa_shared::{cdt_for_dir, ThoError};
     use thoosa_store::{SqlStore, Store};
 
@@ -486,8 +486,8 @@ mod tests {
             create_dummy_model(ws_guard.final_nets_path(), &lost_final_path)?;
         }
 
-        let run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "kept", HashMap::new()).await?;
-        store.save_trained_net(run_id, kept_path.clone(), 0.01, None).await?;
+        let run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "kept", HashMap::new()).await?;
+        store.save_trained_net(run_config_id, kept_path.clone(), 0.01, None).await?;
 
         let output = run_stage(&ws, &store, PurgeMode::PurgeLost).await?;
         assert_eq!(output.purged().len(), 3);
@@ -496,7 +496,7 @@ mod tests {
         assert!(!ws.read().motifs_nets_path().join(&lost_motif_path).exists());
         assert!(!ws.read().labels_nets_path().join(&lost_label_path).exists());
         assert!(!ws.read().final_nets_path().join(&lost_final_path).exists());
-        assert_eq!(store.list_trained_nets(vec![run_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(vec![run_config_id], None, None).await?.len(), 1);
 
         Ok(())
     }
@@ -512,18 +512,18 @@ mod tests {
             create_dummy_model(ws_guard.labels_nets_path(), &new_path)?;
         }
 
-        let old_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "old", HashMap::new()).await?;
-        let new_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "new", HashMap::new()).await?;
-        set_run_on(&store, old_run_id, "2026-05-17 12:00:00").await?;
-        set_run_on(&store, new_run_id, "2026-05-18 12:00:00").await?;
-        store.save_trained_net(old_run_id, old_path.clone(), 0.01, None).await?;
-        store.save_trained_net(new_run_id, new_path.clone(), 0.01, None).await?;
+        let old_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "old", HashMap::new()).await?;
+        let new_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "new", HashMap::new()).await?;
+        set_run_on(&store, old_run_config_id, "2026-05-17 12:00:00").await?;
+        set_run_on(&store, new_run_config_id, "2026-05-18 12:00:00").await?;
+        store.save_trained_net(old_run_config_id, old_path.clone(), 0.01, None).await?;
+        store.save_trained_net(new_run_config_id, new_path.clone(), 0.01, None).await?;
 
         let output = run_stage(&ws, &store, PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Date(PurgeDate::new("2026-05-18").unwrap()))).await?;
         assert_eq!(output.purged().len(), 1);
         assert_eq!(output.purged()[0].net_path, old_path);
-        assert_eq!(store.list_trained_nets(vec![old_run_id], None, None).await?.len(), 0);
-        assert_eq!(store.list_trained_nets(vec![new_run_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(vec![old_run_config_id], None, None).await?.len(), 0);
+        assert_eq!(store.list_trained_nets(vec![new_run_config_id], None, None).await?.len(), 1);
         assert!(!ws.read().labels_nets_path().join("label").join("1").exists());
         assert!(ws.read().labels_nets_path().join("label").join("2").exists());
 
@@ -541,16 +541,16 @@ mod tests {
             create_dummy_model(ws_guard.labels_nets_path(), &low_loss_path)?;
         }
 
-        let high_loss_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "high_loss", HashMap::new()).await?;
-        let low_loss_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "low_loss", HashMap::new()).await?;
-        store.save_trained_net(high_loss_run_id, high_loss_path.clone(), 0.2, None).await?;
-        store.save_trained_net(low_loss_run_id, low_loss_path.clone(), 0.05, None).await?;
+        let high_loss_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "high_loss", HashMap::new()).await?;
+        let low_loss_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "low_loss", HashMap::new()).await?;
+        store.save_trained_net(high_loss_run_config_id, high_loss_path.clone(), 0.2, None).await?;
+        store.save_trained_net(low_loss_run_config_id, low_loss_path.clone(), 0.05, None).await?;
 
         let output = run_stage(&ws, &store, PurgeMode::PurgeLabelModels(PurgeLabelModelsBy::Loss(0.1))).await?;
         assert_eq!(output.purged().len(), 1);
         assert_eq!(output.purged()[0].net_path, high_loss_path);
-        assert_eq!(store.list_trained_nets(vec![high_loss_run_id], None, None).await?.len(), 0);
-        assert_eq!(store.list_trained_nets(vec![low_loss_run_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(vec![high_loss_run_config_id], None, None).await?.len(), 0);
+        assert_eq!(store.list_trained_nets(vec![low_loss_run_config_id], None, None).await?.len(), 1);
         assert!(!ws.read().labels_nets_path().join("label").join("1").exists());
         assert!(ws.read().labels_nets_path().join("label").join("2").exists());
 
@@ -570,20 +570,20 @@ mod tests {
             create_dummy_model(ws_guard.labels_nets_path(), &label_path)?;
         }
 
-        let used_motif_run_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "used", HashMap::new()).await?;
-        let unused_motif_run_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "unused", HashMap::new()).await?;
-        store.save_trained_net(used_motif_run_id, used_motif_path.clone(), 0.01, None).await?;
-        store.save_trained_net(unused_motif_run_id, unused_motif_path.clone(), 0.01, None).await?;
-        let used_motif_id = store.list_trained_nets(vec![used_motif_run_id], None, None).await?[0].0;
+        let used_motif_run_config_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "used", HashMap::new()).await?;
+        let unused_motif_run_config_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "unused", HashMap::new()).await?;
+        store.save_trained_net(used_motif_run_config_id, used_motif_path.clone(), 0.01, None).await?;
+        store.save_trained_net(unused_motif_run_config_id, unused_motif_path.clone(), 0.01, None).await?;
+        let used_motif_id = store.list_trained_nets(vec![used_motif_run_config_id], None, None).await?[0].0;
 
-        let label_run_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "label", HashMap::new()).await?;
-        store.save_trained_net(label_run_id, label_path, 0.01, Some(vec![used_motif_id])).await?;
+        let label_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "label", HashMap::new()).await?;
+        store.save_trained_net(label_run_config_id, label_path, 0.01, Some(vec![used_motif_id])).await?;
 
         let output = run_stage(&ws, &store, PurgeMode::PurgeUnusedMotifModels).await?;
         assert_eq!(output.purged().len(), 1);
         assert_eq!(output.purged()[0].net_path, unused_motif_path);
-        assert_eq!(store.list_trained_nets(vec![used_motif_run_id], None, None).await?.len(), 1);
-        assert_eq!(store.list_trained_nets(vec![unused_motif_run_id], None, None).await?.len(), 0);
+        assert_eq!(store.list_trained_nets(vec![used_motif_run_config_id], None, None).await?.len(), 1);
+        assert_eq!(store.list_trained_nets(vec![unused_motif_run_config_id], None, None).await?.len(), 0);
         assert!(ws.read().motifs_nets_path().join("0").join("10_1").exists());
         assert!(!ws.read().motifs_nets_path().join("0").join("11_2").exists());
 
@@ -594,6 +594,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(format!("{name}_{}", cdt_for_dir()));
         let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 100, 100)?));
         let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         Ok((ws, store))
     }
 
@@ -620,7 +621,7 @@ mod tests {
         Ok(())
     }
 
-    async fn set_run_on(store: &Arc<Box<dyn Store>>, run_id: u32, run_on: &str) -> Result<(), ThoError> {
-        store.update_run_config_run_on(run_id, run_on.to_string()).await
+    async fn set_run_on(store: &Arc<Box<dyn Store>>, run_config_id: u32, run_on: &str) -> Result<(), ThoError> {
+        store.update_run_config_run_on(run_config_id, run_on.to_string()).await
     }
 }

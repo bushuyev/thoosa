@@ -29,7 +29,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, panic_to_err, StreamBuffering, TensorIdSliceIdx, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
@@ -102,15 +102,15 @@ impl<RC> Input for BucketingInput<RC> where RC: ResourcesConfig + Debug + Send +
 
 #[derive(Debug, Clone)]
 pub struct BucketingOutput {
-    pub(crate) motif_ids: (RunId, Vec<u32>),
+    pub(crate) motif_ids: (RunConfigId, Vec<u32>),
 }
 
 impl BucketingOutput {
-    fn new(run_ids_motif_ids: (RunId, Vec<u32>)) -> Self {
-        Self { motif_ids: run_ids_motif_ids }
+    fn new(run_config_ids_motif_ids: (RunConfigId, Vec<u32>)) -> Self {
+        Self { motif_ids: run_config_ids_motif_ids }
     }
 
-    pub fn run_ids_motif_ids(&self) -> &(RunId, Vec<u32>) {
+    pub fn run_config_ids_motif_ids(&self) -> &(RunConfigId, Vec<u32>) {
         &self.motif_ids
     }
 }
@@ -150,9 +150,9 @@ pub struct MelPatchTempStore {//TODO it's similar to FileMotifTrackerStore  but 
 }
 
 impl MelPatchTempStore {
-    fn new(path: &Path, run_id: RunId, bucket: u16) -> Result<Self, ThoError> {
+    fn new(path: &Path, run_config_id: RunConfigId, bucket: u16) -> Result<Self, ThoError> {
         fs::create_dir_all(path)?;
-        let file_path = path.join(format!("{run_id}_bucket_{bucket}_bucketing.bin"));
+        let file_path = path.join(format!("{run_config_id}_bucket_{bucket}_bucketing.bin"));
         let file = OpenOptions::new().create(true).truncate(true).read(true).write(true).open(&file_path)?;
         let mut writer = BufWriter::new(file);
         writer.write_all(&MEL_PATCH_TEMP_MAGIC)?;
@@ -868,7 +868,7 @@ where
         .collect::<Vec<_>>();
 
 
-        let run_id = self.run_config.run_id()?;
+        let run_config_id = self.run_config.run_config_id()?;
         let mut motif_ids = Vec::new();
         let mut groups_by_channel = (0..self.channels).map(|_| HashMap::<u16, HashSet<IdSlice>>::new()).collect::<Vec<_>>();
 
@@ -891,16 +891,16 @@ where
 
         for (channel, groups) in groups_by_channel.into_iter().enumerate() {
             let groups = filter_mel_patch_groups(groups, self.run_config.min_slices_usize(), self.run_config.max_slices_usize());
-            let group_motif_ids = self.store.save_groups_as_motifs(run_id, channel as i64, groups).await?;
+            let group_motif_ids = self.store.save_groups_as_motifs(run_config_id, channel as i64, groups).await?;
             motif_ids.extend(group_motif_ids);
         }
 
-        debug!("BucketingStage::run: run_id={run_id} resources={} motif_ids={motif_ids:?}", resources.len());
+        debug!("BucketingStage::run: run_config_id={run_config_id} resources={} motif_ids={motif_ids:?}", resources.len());
 
 
-        info!("BucketingStage::run: run_id={run_id:?} done");
+        info!("BucketingStage::run: run_config_id={run_config_id:?} done");
 
-        Ok(Arc::new(DevicesWrap::wrap(BucketingOutput::new((run_id, motif_ids)))))
+        Ok(Arc::new(DevicesWrap::wrap(BucketingOutput::new((run_config_id, motif_ids)))))
     }
 }
 
@@ -1046,7 +1046,7 @@ impl Default for BucketingConfig {
 #[run_config_grid]
 pub struct BucketRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[run_config]
     #[in_map]
@@ -1067,8 +1067,8 @@ pub struct BucketRunConfig {
 
 impl BucketRunConfig {
 
-    pub fn run_id(&self) -> Result<RunId, ThoError> {
-        self.id.ok_or_else(|| ThoError::new("BucketRunConfig::run_id: missing run id"))
+    pub fn run_config_id(&self) -> Result<RunConfigId, ThoError> {
+        self.id.ok_or_else(|| ThoError::new("BucketRunConfig::run_config_id: missing run id"))
     }
 
     pub fn bucket_count_i64(&self) -> i64 {
@@ -1114,7 +1114,7 @@ impl BucketRunConfig {
         }
     }
 
-    pub fn new(id: Option<RunId>, bucket_count: u32, min_slices: u32, max_slices: u32, mel_config: BucketingConfig) -> Self {
+    pub fn new(id: Option<RunConfigId>, bucket_count: u32, min_slices: u32, max_slices: u32, mel_config: BucketingConfig) -> Self {
         Self { id, bucket_count, min_slices, max_slices, bucket_config: mel_config }
     }
 }
@@ -1170,7 +1170,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::resource::{Resource, ResourcesConfig};
-    use thoosa_shared::run_configs::{RunConfig, RunId};
+    use thoosa_shared::run_configs::{RunConfig, RunConfigId};
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_store::{IdSlice, SqlStore, Store};
     use thoosa_store::rusqlite::Transaction;
@@ -1354,7 +1354,7 @@ mod tests {
             })
         };
 
-        let find_motifs_run_id = store.save_run_config(
+        let find_motifs_run_config_id = store.save_run_config(
             None,
             &FindMotifsRunConfig::type_name(),
             "FindMotifsRunConfig",
@@ -1363,7 +1363,7 @@ mod tests {
 
 
         let id = store.save_run_config(
-            Some(&[find_motifs_run_id]),
+            Some(&[find_motifs_run_config_id]),
             &BucketRunConfig::type_name(),
             "BucketRunConfig",
             patch_run_config.to_properties_iter(None).collect(),
@@ -1608,7 +1608,7 @@ mod tests {
             })
         };
 
-        let find_motifs_run_id = store.save_run_config(
+        let find_motifs_run_config_id = store.save_run_config(
             None,
             &FindMotifsRunConfig::type_name(),
             "FindMotifsRunConfig",
@@ -1617,7 +1617,7 @@ mod tests {
 
 
         let id = store.save_run_config(
-            Some(&[find_motifs_run_id]),
+            Some(&[find_motifs_run_config_id]),
             &BucketRunConfig::type_name(),
             "BucketRunConfig",
             patch_run_config.to_properties_iter(None).collect(),

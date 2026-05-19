@@ -20,7 +20,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::resource::{Resource, ResourceId};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
@@ -49,7 +49,7 @@ pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load ra
 pub enum MotifStatsSource {
     Motif(MotifLoaderInput),
     MergedMotifs(Vec<MotifLoaderInput>),
-    Random { max_slices: u32, find_motifs_run_id: RunId },
+    Random { max_slices: u32, find_motifs_run_config_id: RunConfigId },
 }
 
 #[derive(Debug, Clone)]
@@ -73,11 +73,11 @@ impl MotifStatsInput {
         }
     }
 
-    pub fn from_random(max_slices: u32, find_motifs_run_id: RunId, metrics: Vec<Metrics>) -> Self {
+    pub fn from_random(max_slices: u32, find_motifs_run_config_id: RunConfigId, metrics: Vec<Metrics>) -> Self {
         let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
         let mut id = SynKey::new([
             mono_key!("MotifStatsInput", "stage"),
-            mono_key!(find_motifs_run_id, format!("find_motifs_run_id={find_motifs_run_id}")),
+            mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
             mono_key!(max_slices, format!("max_slices={max_slices}")),
             mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
         ]);
@@ -87,7 +87,7 @@ impl MotifStatsInput {
 
         Self {
             id,
-            source: MotifStatsSource::Random { max_slices, find_motifs_run_id },
+            source: MotifStatsSource::Random { max_slices, find_motifs_run_config_id },
             metrics,
         }
     }
@@ -166,7 +166,7 @@ impl CopyToDevice for MotifStatsInput {
         let source = match &self.source {
             MotifStatsSource::Motif(motif_loader_input) => MotifStatsSource::Motif(motif_loader_input.clone()),
             MotifStatsSource::MergedMotifs(motif_loader_inputs) => MotifStatsSource::MergedMotifs(motif_loader_inputs.clone()),
-            MotifStatsSource::Random { max_slices, find_motifs_run_id } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_id: *find_motifs_run_id },
+            MotifStatsSource::Random { max_slices, find_motifs_run_config_id } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_config_id: *find_motifs_run_config_id },
         };
 
         Ok(Self {
@@ -1042,8 +1042,8 @@ where
                 )
                 .await?
             }
-            MotifStatsSource::Random { max_slices, find_motifs_run_id } => {
-                debug!("MotifStats::run: MotifStatsSource::Random  max_slices={max_slices:?} find_motifs_run_id={find_motifs_run_id}");
+            MotifStatsSource::Random { max_slices, find_motifs_run_config_id } => {
+                debug!("MotifStats::run: MotifStatsSource::Random  max_slices={max_slices:?} find_motifs_run_config_id={find_motifs_run_config_id}");
 
                 if max_slices < 2 {
                     return Err(ThoError::new(format!("MotifStats::run: max_slices must be >= 2, got {max_slices}")));
@@ -1051,15 +1051,15 @@ where
 
 
                 let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
-                    find_motifs_run_id,
-                    &self.store.list_run_config_values(find_motifs_run_id).await?,
+                    find_motifs_run_config_id,
+                    &self.store.list_run_config_values(find_motifs_run_config_id).await?,
                 )?;
                 let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
                 let resources = self.store.list_random_resources(None).await?;
                 let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
 
                 let (_window, channels_slices) = load_random_slices(
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     resources_map,
                     slices,
                     Arc::clone(&self.store),
@@ -1240,23 +1240,23 @@ mod tests {
             Resource::new(4, 1, "resource_d", 10),
         ];
 
-        let run_id = 42;
+        let run_config_id = 42;
         let motif_width = 6;
         let store = Arc::new(
             MockStoreBuilder::new()
                 .with_list_random_resources([(None, Ok(resources.clone()))])
                 .with_run_config_descr([(
-                    run_id,
+                    run_config_id,
                     Ok(RunConfigRow {
-                        id: run_id,
+                        id: run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find motifs".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
                 .with_list_run_config_values(
-                    run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_id), 1, motif_width, None, None)
+                    run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 1, motif_width, None, None)
                         .to_properties_iter(None)
                         .collect()),
                 )
@@ -1285,7 +1285,7 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
         let metric = Metrics::default();
-        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_id, vec![metric.clone()])));
+        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_config_id, vec![metric.clone()])));
 
         let output = Arc::clone(&stage)
             .run(
@@ -1328,14 +1328,14 @@ mod tests {
                     (
                         motif_input_0.clone(),
                         (
-                            MotifMeta { channel: 0, find_motifs_run_id: 10, window: 3 },
+                            MotifMeta { channel: 0, find_motifs_run_config_id: 10, window: 3 },
                             Tensor::from_slice(&[0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0]).view((2, 3)),
                         ),
                     ),
                     (
                         motif_input_1.clone(),
                         (
-                            MotifMeta { channel: 0, find_motifs_run_id: 10, window: 3 },
+                            MotifMeta { channel: 0, find_motifs_run_config_id: 10, window: 3 },
                             Tensor::from_slice(&[0.0f32, 0.0, 0.0, 10.0, 0.0, 0.0]).view((2, 3)),
                         ),
                     ),

@@ -20,7 +20,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_shared::run_configs::RunId;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
@@ -60,7 +60,7 @@ where
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
-        train_label_nets_run_ids: Vec<RunId>,
+        train_label_nets_run_config_ids: Vec<RunConfigId>,
         mut stage_ctx: R,
         motif_slices_step: u32,
         batch_in_chunks: usize,
@@ -70,7 +70,7 @@ where
     {
         let tho_device_idx = stage_ctx.device_idx();
 
-        let all_label_nets = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
+        let all_label_nets = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
 
         let mut apply_nets = vec![];
 
@@ -80,12 +80,12 @@ where
 
             debug!("ApplyLabelNets::new: label={label:?} nets.len={}", nets.len());
 
-            for (train_label_net_run_id, label_net_params, net) in nets {
-                let label_nets = store.list_trained_nets(vec![train_label_net_run_id], None, None).await?;
+            for (train_label_net_run_config_id, label_net_params, net) in nets {
+                let label_nets = store.list_trained_nets(vec![train_label_net_run_config_id], None, None).await?;
 
-                debug!("ApplyLabelNets::new: train_label_net_run_id={train_label_net_run_id} label_nets={label_nets:?}");
+                debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
-                assert_eq!(label_nets.len(), 1); //for now there is always single net for run_id
+                assert_eq!(label_nets.len(), 1); //for now there is always single net for run_config_id
                 let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
 
                 let motif_net_ids = store.list_input_nets(*label_net_id).await?;
@@ -93,13 +93,13 @@ where
                 debug!("ApplyLabelNets::new: label_net_id={label_net_id}  motif_net_ids={motif_net_ids:?}");
 
                 if motif_net_ids.is_empty() {
-                    warn!("no motifs for train_label_net_run_id={train_label_net_run_id}");
+                    warn!("no motifs for train_label_net_run_config_id={train_label_net_run_config_id}");
                     continue//TODO, change to assert, just for tests
                 }
 
                 let motif_nets = store.list_trained_nets(motif_net_ids, None, None).await?;
 
-                debug!("ApplyLabelNets::new: train_label_net_run_id={train_label_net_run_id} motif_nets={motif_nets:?}");
+                debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
                 apply_nets.push(ApplyNets {
                     apply_motif_nets: Arc::new(ApplyMotifNets::from_trained_nets(
@@ -110,7 +110,7 @@ where
                         None,
                         motif_nets,
                     ).await?),
-                    apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_id, net, batch_in_chunks)),
+                    apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)),
                 });
             }
         }
@@ -184,7 +184,7 @@ where
                     }
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
-                    let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = Arc::clone(&apply_net.apply_label_net).run(motif_probs, ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_net.label, apply_net.apply_label_net.train_label_net_run_id)), false)).await?;
+                    let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = Arc::clone(&apply_net.apply_label_net).run(motif_probs, ctx.branch(Some(&format!("apply_label_net_ctx_{}_{}", apply_net.apply_label_net.label, apply_net.apply_label_net.train_label_net_run_config_id)), false)).await?;
 
                     #[cfg(test)]{
                         with_data!(ctx.branch(Some("debug"), false), result; |ctx, result:&ThoTensor<LabelProbability, SynKey>|{
@@ -258,7 +258,7 @@ where
 {
     id: SynKey,
     label: String,
-    train_label_net_run_id: RunId,
+    train_label_net_run_config_id: RunConfigId,
     net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>>>,
     pd: PhantomData<C>,
     batch_in_chunks: usize
@@ -270,14 +270,14 @@ where
 {
     fn new(
         label: String,
-        train_label_net_run_id: RunId,
+        train_label_net_run_config_id: RunConfigId,
         net: ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
         batch_in_chunks: usize,
     ) -> Self {
         Self {
             id: mono_key!(label.clone(), "ApplyLabelNet") + net.id(),
             label,
-            train_label_net_run_id,
+            train_label_net_run_config_id,
             net_wrapper: Arc::new(DevicesWrap::wrap(net)),
             batch_in_chunks,
             pd: PhantomData,
@@ -410,7 +410,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::run_configs::RunId;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::{logit, sigmoid, ApplyLabelNets};
@@ -547,7 +547,7 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct TestMotifNetSpec {
-        train_run_id: RunId,
+        train_run_config_id: RunConfigId,
         trained_net_id: u32,
         motif_id: u32,
         channel: u32,
@@ -557,15 +557,15 @@ mod tests {
     }
 
     impl TestMotifNetSpec {
-        fn new(train_run_id: RunId, trained_net_id: u32, motif_id: u32, channel: u32, value: f64, loss: f32) -> Self {
+        fn new(train_run_config_id: RunConfigId, trained_net_id: u32, motif_id: u32, channel: u32, value: f64, loss: f32) -> Self {
             Self {
-                train_run_id,
+                train_run_config_id,
                 trained_net_id,
                 motif_id,
                 channel,
                 value,
                 loss,
-                path: PathBuf::from(format!("{channel}/{motif_id}_{train_run_id}")),
+                path: PathBuf::from(format!("{channel}/{motif_id}_{train_run_config_id}")),
             }
         }
     }
@@ -573,32 +573,32 @@ mod tests {
     #[derive(Clone, Debug)]
     struct TestLabelNetSpec {
         label: String,
-        train_run_id: RunId,
+        train_run_config_id: RunConfigId,
         trained_net_id: u32,
-        motif_run_ids: Vec<RunId>,
+        motif_run_config_ids: Vec<RunConfigId>,
         weights: Vec<f64>,
         loss: f32,
         path: PathBuf,
     }
 
     impl TestLabelNetSpec {
-        fn new(label: &str, train_run_id: RunId, trained_net_id: u32, motif_run_ids: Vec<RunId>, weights: Vec<f64>, loss: f32) -> Self {
+        fn new(label: &str, train_run_config_id: RunConfigId, trained_net_id: u32, motif_run_config_ids: Vec<RunConfigId>, weights: Vec<f64>, loss: f32) -> Self {
             Self {
                 label: label.to_string(),
-                train_run_id,
+                train_run_config_id,
                 trained_net_id,
-                motif_run_ids,
+                motif_run_config_ids,
                 weights,
                 loss,
-                path: PathBuf::from(format!("{}/{train_run_id}", label.to_ascii_lowercase())),
+                path: PathBuf::from(format!("{}/{train_run_config_id}", label.to_ascii_lowercase())),
             }
         }
     }
 
-    fn motif_nets_for_run_ids<'a>(motifs: &'a [TestMotifNetSpec], run_ids: &[RunId]) -> Vec<&'a TestMotifNetSpec> {
+    fn motif_nets_for_run_config_ids<'a>(motifs: &'a [TestMotifNetSpec], run_config_ids: &[RunConfigId]) -> Vec<&'a TestMotifNetSpec> {
         let mut selected = motifs
             .iter()
-            .filter(|motif| run_ids.contains(&motif.train_run_id))
+            .filter(|motif| run_config_ids.contains(&motif.train_run_config_id))
             .collect::<Vec<_>>();
         selected.sort_by(|a, b| a.loss.partial_cmp(&b.loss).expect("test motif losses must be comparable").then(a.trained_net_id.cmp(&b.trained_net_id)));
         selected
@@ -610,7 +610,7 @@ mod tests {
 
 
     fn expected_label_value(label: &TestLabelNetSpec, motifs: &[TestMotifNetSpec], motif_width: u32, step: u32) -> f32 {
-        let motif_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids);
+        let motif_nets = motif_nets_for_run_config_ids(motifs, &label.motif_run_config_ids);
         assert_eq!(label.weights.len(), motif_nets.len(), "weights must match selected motif nets for {label:?}");
         let per_slice = motif_nets
             .iter()
@@ -656,7 +656,7 @@ mod tests {
     ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
         GlobalCtx::init_devices(1);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
-        let find_motifs_run_id = 30;
+        let find_motifs_run_config_id = 30;
         let device = Device::Cpu;
         let slices_len = slices_len(motif_width, step);
 
@@ -670,10 +670,10 @@ mod tests {
 
         let mut label_ws_entries: HashMap<String, Vec<_>> = HashMap::new();
         for label in labels {
-            let motif_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids);
+            let motif_nets = motif_nets_for_run_config_ids(motifs, &label.motif_run_config_ids);
             let (params, net) = weighted_label_net(motif_nets.len() as u32, slices_len, label.weights.clone(), device);
-                debug!("run_apply_label_case: label.label={:?} label.train_run_id={}", label.label, label.train_run_id);
-            label_ws_entries.entry(label.label.clone()).or_default().push((label.train_run_id, params, net));
+                debug!("run_apply_label_case: label.label={:?} label.train_run_config_id={}", label.label, label.train_run_config_id);
+            label_ws_entries.entry(label.label.clone()).or_default().push((label.train_run_config_id, params, net));
         }
 
 
@@ -688,32 +688,32 @@ mod tests {
             .iter()
             .map(|label| {
                 (
-                    vec![label.train_run_id],
+                    vec![label.train_run_config_id],
                     None,
                     None,
                     Ok(vec![(label.trained_net_id, label.path.clone(), label.loss)]),
                 )
             })
             .collect::<Vec<_>>();
-        let mut seen_motif_run_sets = Vec::<Vec<RunId>>::new();
+        let mut seen_motif_run_sets = Vec::<Vec<RunConfigId>>::new();
         for label in labels {
-            if seen_motif_run_sets.iter().any(|run_ids| *run_ids == label.motif_run_ids) {
+            if seen_motif_run_sets.iter().any(|run_config_ids| *run_config_ids == label.motif_run_config_ids) {
                 continue;
             }
-            let trained_nets = motif_nets_for_run_ids(motifs, &label.motif_run_ids)
+            let trained_nets = motif_nets_for_run_config_ids(motifs, &label.motif_run_config_ids)
                 .into_iter()
                 .map(|motif| (motif.trained_net_id, motif.path.clone(), motif.loss))
                 .collect::<Vec<_>>();
-            list_trained_nets.push((label.motif_run_ids.clone(), None, None, Ok(trained_nets)));
-            seen_motif_run_sets.push(label.motif_run_ids.clone());
+            list_trained_nets.push((label.motif_run_config_ids.clone(), None, None, Ok(trained_nets)));
+            seen_motif_run_sets.push(label.motif_run_config_ids.clone());
         }
 
         let store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([(
-                    find_motifs_run_id,
+                    find_motifs_run_config_id,
                     Ok(RunConfigRow {
-                        id: find_motifs_run_id,
+                        id: find_motifs_run_config_id,
                         r#type: "FindMotifsRunConfig".to_string(),
                         descr: "test find motifs".to_string(),
                         run_on: "2026-01-01 00:00:00".to_string(),
@@ -722,18 +722,18 @@ mod tests {
                 .with_get_motif_meta(
                     motifs
                         .iter()
-                        .map(|motif| (motif.motif_id, Ok((motif.channel as usize, find_motifs_run_id))))
+                        .map(|motif| (motif.motif_id, Ok((motif.channel as usize, find_motifs_run_config_id))))
                         .collect::<HashMap<_, _>>(),
                 )
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), step, 100, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
                 )
                 .with_list_trained_nets(list_trained_nets)
                 .with_list_input_nets(
                     labels
                         .iter()
-                        .map(|label| (label.trained_net_id, Ok(label.motif_run_ids.clone())))
+                        .map(|label| (label.trained_net_id, Ok(label.motif_run_config_ids.clone())))
                         .collect::<HashMap<_, _>>(),
                 )
                 .build(),
@@ -743,7 +743,7 @@ mod tests {
         let apply_label_nets = Arc::new(ApplyLabelNets::new(
             &ws,
             &store,
-            labels.iter().map(|label| label.train_run_id).collect(),
+            labels.iter().map(|label| label.train_run_config_id).collect(),
             mock_run_ctx::default(0),
             step,
             batch_chunks,

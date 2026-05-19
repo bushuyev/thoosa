@@ -28,7 +28,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::run_configs::{RunConfig, RunId};
+use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_store::Store;
@@ -39,7 +39,7 @@ const SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT: usize = 16;
 #[run_config_grid]
 pub struct SelectBucketsRunConfig {
     #[in_map]
-    pub id: Option<RunId>,
+    pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
@@ -47,7 +47,7 @@ pub struct SelectBucketsRunConfig {
 }
 
 impl SelectBucketsRunConfig {
-    pub fn new(id: Option<RunId>, energy_k: f64) -> Self {
+    pub fn new(id: Option<RunConfigId>, energy_k: f64) -> Self {
         Self { id, energy_k }
     }
 
@@ -186,8 +186,8 @@ where
     loader: Arc<L>,
     motif_loader: Arc<ML>,
     run_configs: Vec<SelectBucketsRunConfig>,
-    find_motifs_run_ids: Vec<RunId>,
-    find_motif_run_ids_motif_ids: HashMap<RunId, Vec<u32>>,
+    find_motifs_run_config_ids: Vec<RunConfigId>,
+    find_motif_run_config_ids_motif_ids: HashMap<RunConfigId, Vec<u32>>,
     pd: PhantomData<C>,
 }
 
@@ -201,7 +201,7 @@ where
         f.debug_struct("SelectBucketsStage")
             .field("id", &self.id)
             .field("run_configs", &self.run_configs)
-            .field("find_motifs_run_ids", &self.find_motifs_run_ids)
+            .field("find_motifs_run_config_ids", &self.find_motifs_run_config_ids)
             .finish()
     }
 }
@@ -231,11 +231,11 @@ where
         loader: Arc<L>,
         motif_loader: Arc<ML>,
         run_configs: Vec<SelectBucketsRunConfig>,
-        find_motifs_run_ids: Vec<RunId>,
+        find_motifs_run_config_ids: Vec<RunConfigId>,
     ) -> Result<Self, ThoError> {
-        let mut find_motif_run_ids_motif_ids = HashMap::new();
-        for find_motifs_run_id in &find_motifs_run_ids {
-            find_motif_run_ids_motif_ids.insert(*find_motifs_run_id, store.list_motifs(*find_motifs_run_id).await?);
+        let mut find_motif_run_config_ids_motif_ids = HashMap::new();
+        for find_motifs_run_config_id in &find_motifs_run_config_ids {
+            find_motif_run_config_ids_motif_ids.insert(*find_motifs_run_config_id, store.list_motifs(*find_motifs_run_config_id).await?);
         }
 
         Ok(Self {
@@ -245,8 +245,8 @@ where
             loader,
             motif_loader,
             run_configs,
-            find_motifs_run_ids,
-            find_motif_run_ids_motif_ids,
+            find_motifs_run_config_ids,
+            find_motif_run_config_ids_motif_ids,
             pd: PhantomData,
         })
     }
@@ -327,17 +327,17 @@ where
         let mut selected = Vec::new();
         let mut metrics = HashMap::new();
 
-        for find_motifs_run_id in &self.find_motifs_run_ids {
-            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, *find_motifs_run_id).await?;
-            // TODO(perf): cache ReferenceStats by (find_motifs_run_id, resources set); energy_k changes do not require recomputing the reference distribution.
+        for find_motifs_run_config_id in &self.find_motifs_run_config_ids {
+            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, *find_motifs_run_config_id).await?;
+            // TODO(perf): cache ReferenceStats by (find_motifs_run_config_id, resources set); energy_k changes do not require recomputing the reference distribution.
             let reference = self
                 .reference_stats_for_find_run(resources.as_ref(), &find_motifs_run_config, ctx.branch(Some("select_buckets_reference_stats_for_find_run"), false))
                 .await?;
-            debug!("SelectBucketsStage::select_for_run_config: find_motifs_run_id={find_motifs_run_id} reference={reference:?} select_config={select_config:?}");
+            debug!("SelectBucketsStage::select_for_run_config: find_motifs_run_config_id={find_motifs_run_config_id} reference={reference:?} select_config={select_config:?}");
 
             let motif_ids = self
-                .find_motif_run_ids_motif_ids
-                .get(find_motifs_run_id)
+                .find_motif_run_config_ids_motif_ids
+                .get(find_motifs_run_config_id)
                 .cloned()
                 .unwrap_or_default();
             let motif_ids_len = motif_ids.len();
@@ -377,12 +377,12 @@ where
             info!("SelectBucketsStage::select_for_run_config: selected={selected:?}");
 
             if output_mode == SelectMotifsOutputMode::WithConstraintMetrics {
-                metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_mean"), reference.mean as f32);
-                metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_std_population"), reference.std_population as f32);
-                metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_std_sample"), reference.std_sample as f32);
-                metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_energy"), reference.mean_energy as f32);
-                metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_rms"), reference.rms as f32);
-                metrics.insert(format!("find_motifs_run_{find_motifs_run_id}_ref_count"), reference.count as f32);
+                metrics.insert(format!("find_motifs_run_{find_motifs_run_config_id}_ref_mean"), reference.mean as f32);
+                metrics.insert(format!("find_motifs_run_{find_motifs_run_config_id}_ref_std_population"), reference.std_population as f32);
+                metrics.insert(format!("find_motifs_run_{find_motifs_run_config_id}_ref_std_sample"), reference.std_sample as f32);
+                metrics.insert(format!("find_motifs_run_{find_motifs_run_config_id}_ref_energy"), reference.mean_energy as f32);
+                metrics.insert(format!("find_motifs_run_{find_motifs_run_config_id}_ref_rms"), reference.rms as f32);
+                metrics.insert(format!("find_motifs_run_{find_motifs_run_config_id}_ref_count"), reference.count as f32);
             }
         }
 
@@ -472,7 +472,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{RunConfig, RunId};
+    use thoosa_shared::run_configs::{RunConfig, RunConfigId};
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
@@ -486,19 +486,19 @@ mod tests {
         let resource_a = Resource::new(1, 1, "resource_a", 4);
         let resource_b = Resource::new(2, 1, "resource_b", 4);
         let resources_group = "group";
-        let find_motifs_run_id = 11;
-        let select_buckets_run_id = 22;
+        let find_motifs_run_config_id = 11;
+        let select_buckets_run_config_id = 22;
         let low_motif_id = 101;
         let high_motif_id = 102;
 
         let store = Arc::new(
             MockStoreBuilder::new()
-                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_id)])
+                .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
                 .with_list_run_config_values(
-                    find_motifs_run_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_id), 1, 4, None, None).to_properties_iter(None).collect()),
+                    find_motifs_run_config_id,
+                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 4, None, None).to_properties_iter(None).collect()),
                 )
-                .with_list_motifs([(find_motifs_run_id, Ok(vec![low_motif_id, high_motif_id]))])
+                .with_list_motifs([(find_motifs_run_config_id, Ok(vec![low_motif_id, high_motif_id]))])
                 .with_list_resources_not_in_group([(resources_group, Ok(vec![resource_a.clone(), resource_b.clone()]))])
                 .build(),
         );
@@ -518,11 +518,11 @@ mod tests {
                 .with_run_cached([
                     (
                         MotifLoaderInput::find_motif_slices_only((low_motif_id, "motif_id").into()),
-                        (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::f_full([1, 4], 2.0, (Kind::Float, tch::Device::Cpu))?),
+                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::f_full([1, 4], 2.0, (Kind::Float, tch::Device::Cpu))?),
                     ),
                     (
                         MotifLoaderInput::find_motif_slices_only((high_motif_id, "motif_id").into()),
-                        (MotifMeta { channel: 0, find_motifs_run_id, window: 4 }, Tensor::f_full([1, 4], 3.0, (Kind::Float, tch::Device::Cpu))?),
+                        (MotifMeta { channel: 0, find_motifs_run_config_id, window: 4 }, Tensor::f_full([1, 4], 3.0, (Kind::Float, tch::Device::Cpu))?),
                     ),
                 ])
                 .finish(),
@@ -534,8 +534,8 @@ mod tests {
                 &store,
                 loader,
                 motif_loader,
-                vec![SelectBucketsRunConfig::new(Some(select_buckets_run_id), 2.0)],
-                vec![find_motifs_run_id],
+                vec![SelectBucketsRunConfig::new(Some(select_buckets_run_config_id), 2.0)],
+                vec![find_motifs_run_config_id],
             )
             .await?,
         );
@@ -549,11 +549,11 @@ mod tests {
         Ok(())
     }
 
-    fn find_motifs_run_config_descr(run_id: RunId) -> (RunId, Result<RunConfigRow, ThoError>) {
+    fn find_motifs_run_config_descr(run_config_id: RunConfigId) -> (RunConfigId, Result<RunConfigRow, ThoError>) {
         (
-            run_id,
+            run_config_id,
             Ok(RunConfigRow {
-                id: run_id,
+                id: run_config_id,
                 r#type: FindMotifsRunConfig::type_name().to_string(),
                 descr: "test find motifs".to_string(),
                 run_on: "2026-01-01 00:00:00".to_string(),
