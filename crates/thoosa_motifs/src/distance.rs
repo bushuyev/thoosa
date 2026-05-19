@@ -963,9 +963,8 @@ mod distance_tests {
             1,
         )?;
 
-        //TODO?
         assert!(
-            Tensor::from_slice(&[4., 4.,])
+            Tensor::from_slice(&[4.4721, 4.4721,]) //4.0 - with Bessel's correction, 4.4721 - without (unbiased=false)
                 .totype(Float)
                 .allclose(&d, 0.01, 0.01, false)
         );
