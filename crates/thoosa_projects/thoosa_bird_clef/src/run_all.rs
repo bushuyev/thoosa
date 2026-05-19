@@ -548,8 +548,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         // })
         net: LabelNetTypeArgsRangeOrValue::LinNet(LinNetArgsRangeOrValue {
             // num_layers: RangeOrValue::Value(4),
-            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 4 }, step: None },
-            features: RangeOrValue::Range { range: Range { start: 100, end: 10000 }, step: None },
+            num_layers: RangeOrValue::Range { range: Range { start: 1, end: 2 }, step: None },
+            features: RangeOrValue::Range { range: Range { start: 100, end: 1000 }, step: None },
         })
 
     };
@@ -578,7 +578,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((10000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((2000, 0)) },
             // window: RangeOrValue::Value(10000),
             freq_filter: None,
             // freq_filter: Some(vec![
@@ -618,11 +618,11 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             // }),
             finder_kind: FinderKindRangeOrValue::Bucket(BucketRunConfigRangeOrValue {
                 id: None,
-                bucket_count: RangeOrValue::Value(500),
+                bucket_count: RangeOrValue::Value(1000),
                 min_slices: RangeOrValue::Value(3),
                 max_slices: RangeOrValue::Value(100000),
                 bucket_config: BucketingConfigRangeOrValue::Plain(PlainConfigRangeOrValue {
-                    band_hz: RangeOrValue::Value(32.0),
+                    band_hz: RangeOrValue::Value(16.0),
                     aggregation: Mean(PlainBandAggregationMeanRangeOrValue{ _path_pd: Default::default() }),
                     apply_hann_window: RangeOrValue::Value(true),
                     remove_dc_offset: RangeOrValue::Value(true),
@@ -636,12 +636,12 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         select_motifs_run_config: SelectBucketsRunConfigRangeOrValue {
             id: None,
 
-            energy_k: RangeOrValue::Value(1.5),
+            energy_k: RangeOrValue::Value(1.8),
         },
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
         train_motifs_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
-        train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+        train_labels_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
     }
 }
 

@@ -307,6 +307,7 @@ where
             }
         };
         let motifs_rates_selected_motifs_run_ids_len = motifs_rates_selected_motifs_run_ids.len();
+        debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_ids={motifs_rates_selected_motifs_run_ids:?}");
         debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_ids_len={motifs_rates_selected_motifs_run_ids_len}");
 
         let reusable_completed_trials = completed_train_motif_trials(&self.store, &select_motifs_run_ids).await?;

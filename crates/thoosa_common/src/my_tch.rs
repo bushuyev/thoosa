@@ -449,12 +449,12 @@ impl MyCosineConv1d {
             }
             Some(motif_slices) => {
                 let l = motif_slices.size()[1];
-                let proto = motif_slices.as_ref().as_ref().f_mean_dim(0, false, Kind::Float)?; // [L]
+                let proto = motif_slices.as_ref().as_ref().f_mean_dim(0, false, Float)?; // [L]
 
                 debug!("MyCosineConv1d::new: proto={proto:?}");
 
                 // zero-mean prototype
-                let proto_mean = proto.f_mean(Kind::Float)?;
+                let proto_mean = proto.f_mean(Float)?;
                 let proto_zm = proto.f_sub(&proto_mean)?; // [L]
 
                 // Normalize to unit norm for cosine similarity init
