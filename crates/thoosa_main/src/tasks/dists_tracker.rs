@@ -13,7 +13,6 @@ use tch::Kind::{Bool, Uint8};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
-use thoosa_common::loader::rayon_pool;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -27,6 +26,7 @@ use thoosa_shared::run_configs::RunId;
 use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
 

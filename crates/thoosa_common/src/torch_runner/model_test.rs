@@ -820,7 +820,6 @@ mod tests {
             //     SplitsAdjuster::<ThoTensor2<ABData, SimpleId>, ABRange>::new(min_split_len),
             // ));
             //**********************
-            let parmits_key = Arc::new(ctx.id().clone());
             let result = OOMHandler::new(
                 vec![
                     Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(

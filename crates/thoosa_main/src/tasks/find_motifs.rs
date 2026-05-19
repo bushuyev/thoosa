@@ -30,7 +30,6 @@ use tokio::runtime::Handle;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::copy_ctx::CopyCtx;
 use crate::tasks::find_motifs_run_config::{Aggr as FilterAggr, FindMotifsRunConfig, FinderKind, MaxSlices, SlicesFilter};
-use thoosa_common::loader::LoadRunner;
 use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
@@ -578,7 +577,6 @@ mod tests {
     use thoosa_common::runner::common::cachable::Cached;
     use thoosa_common::tho_device::ThoDevice;
     use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfigRangeOrValue};
-    use thoosa_common::loader::{LoadRunner, SyncWrapper};
     use thoosa_common::runs::{Labeled, Simple};
     use thoosa_common::{debug_plot, tch_test_utils};
     use thoosa_common::utils::{debug_plot_impl, lin_t, plot_series, reset_print_options, three_sigs_tensor, to_vec_f32};

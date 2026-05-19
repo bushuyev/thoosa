@@ -97,7 +97,7 @@ impl RunCtx for RunCtxImpl {
     fn branch(
         &mut self,
         new_name: Option<&str>,
-        with_new_cache_area: bool
+        with_purge_root: bool
     ) -> Self {
 
         let branches = self.branches.fetch_add(1, Ordering::SeqCst);
@@ -112,7 +112,7 @@ impl RunCtx for RunCtxImpl {
         };
         debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
 
-        let mut branched_ctx= if with_new_cache_area {
+        let mut branched_ctx= if with_purge_root {
 
             let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id);
 
@@ -161,11 +161,7 @@ impl Drop for RunCtxImpl {
         if let Some(purge_gpu_closures) = self.purge_gpu_closures.take() {
             let count = Arc::strong_count(&purge_gpu_closures);
 
-            debug!(
-                "Drop for RunCtxWithPermits::drop: id={:?} count={count} purge_gpu_closures.len={}",
-                self.id,
-                perf_log!(sync_mutex_lock!(purge_gpu_closures).len())
-            );
+            debug!("Drop for RunCtxWithPermits::drop: id={:?} count={count} purge_gpu_closures.len={}",self.id,perf_log!(sync_mutex_lock!(purge_gpu_closures).len()));
 
             if count == 1 {// it's topmost ctx
                 match Arc::into_inner(purge_gpu_closures) {
