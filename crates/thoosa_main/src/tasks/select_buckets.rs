@@ -85,7 +85,7 @@ impl SelectBucketsRunConfig {
     }
 
     fn to_select_motifs_run_config(&self) -> SelectMotifsRunConfig {
-        SelectMotifsRunConfig::new_with_fields(self.id, None, vec![])
+        SelectMotifsRunConfig::new_with_fields(self.id, vec![])
     }
 
     fn constraint_metrics_run_config(&self) -> SelectMotifsRunConfig {
@@ -93,7 +93,7 @@ impl SelectBucketsRunConfig {
             SelectionMode::Filter(v) => vec![MotifCriterionConstraint { metric: energy_metric(), min: v.threshold }],
             SelectionMode::Best(_) => vec![],
         };
-        SelectMotifsRunConfig::new_with_fields(self.id, None, criteria)
+        SelectMotifsRunConfig::new_with_fields(self.id, criteria)
     }
 }
 

@@ -405,7 +405,7 @@ pub struct ExactStats {
 #[allow(unused_imports)]
 mod tests {
     use std::collections::HashMap;
-    use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FinderKind, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfig, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraint, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfig, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
+    use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfig, CrossLoaderRunConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FinderKind, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfig, InlierRatioRunConfigRangeOrValue, InputFilterRangeOrValue, MaxSlicesAbs, MeanAggr, MeanAggrRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraint, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfig, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStats, SelectMotifsRunConfig, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, StatsKey, StatsKeys};
     use thoosa_common::transforms::filters::InputFilter::{AverageFilter, BandPassFilter, MedianFilter, NotchBandFilter, SavGolFilter};
     use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParams, MedianFilterParamsRangeOrValue, NotchBandFilterParams, Padding, PaddingRangeOrValue, SavGolFilterParams, ZeroPaddingRangeOrValue};
     use log::debug;
@@ -537,10 +537,6 @@ mod tests {
     fn test_select_motifs_run_config_grid_with_criteria() {
         let rc = SelectMotifsRunConfigRangeOrValue {
             id: Some(7),
-            extend_config: Some(ExtendMotifsConfigRangeOrValue {
-                slices_selector_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
-                slices_selector_aggr: AggrRangeOrValue::Mean(MeanAggrRangeOrValue { k: RangeOrValue::Value(1.0) }),
-            }),
             motif_criteria: vec![
                 MotifCriterionConstraintRangeOrValue {
                     metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
@@ -551,7 +547,6 @@ mod tests {
                     min: RangeOrValue::Value(Metrics::DEFAULT_CRITERION_MIN),
                 },
             ],
-            extend_max_slices: None,
         };
 
         let run_configs: Vec<SelectMotifsRunConfig> = rc.grid_run_configs().expect("SelectMotifsRunConfigRangeOrValue::grid_run_configs should not fail").to_run_configs();
@@ -729,7 +724,7 @@ mod tests {
             min: Metrics::DEFAULT_CRITERION_MIN,
         }];
 
-        let config = SelectMotifsRunConfig::new_with_fields(Some(42), None, criteria.clone());
+        let config = SelectMotifsRunConfig::new_with_fields(Some(42), criteria.clone());
         let properties = config.to_properties_iter(None).collect::<std::collections::HashMap<_, _>>();
         let restored = SelectMotifsRunConfig::from_properties_map(None, &properties).unwrap();
 
@@ -1391,30 +1386,43 @@ impl MotifCriterionConstraint {
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
 #[run_config_grid]
+pub struct ExtendMotifsRunConfig {
+    #[in_map]
+    pub id: Option<RunConfigId>,
+
+    #[in_map]
+    #[run_config]
+    pub extend_config: ExtendMotifsConfig,
+
+    #[in_map]
+    #[run_config]
+    pub extend_max_slices: Option<MaxSlices>,
+}
+
+impl ExtendMotifsRunConfig {
+    pub fn new(id: Option<RunConfigId>) -> Self {
+        Self { id, extend_config: ExtendMotifsConfig::default(), extend_max_slices: None }
+    }
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[run_config_grid]
 pub struct SelectMotifsRunConfig {
     #[in_map]
     pub id: Option<RunConfigId>,
 
     #[in_map]
     #[run_config]
-    pub extend_config: Option<ExtendMotifsConfig>,
-
-    #[in_map]
-    #[run_config]
     pub motif_criteria: Vec<MotifCriterionConstraint>,
-
-    #[in_map]
-    #[run_config]
-    pub extend_max_slices: Option<MaxSlices>//TODO move into extend_config
 }
 
 impl SelectMotifsRunConfig {
-    pub fn new_with_fields(id: Option<RunConfigId>, extend_config: Option<ExtendMotifsConfig>, motif_criteria: Vec<MotifCriterionConstraint>) -> Self {
-        Self { id, extend_config, motif_criteria, extend_max_slices: None }
+    pub fn new_with_fields(id: Option<RunConfigId>, motif_criteria: Vec<MotifCriterionConstraint>) -> Self {
+        Self { id, motif_criteria }
     }
 
     pub fn new(id: Option<RunConfigId>) -> Self {
-        Self::new_with_fields(id, Some(ExtendMotifsConfig::default()), vec![])
+        Self::new_with_fields(id, vec![])
     }
 
 }

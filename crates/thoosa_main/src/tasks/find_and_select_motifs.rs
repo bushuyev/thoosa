@@ -266,7 +266,6 @@ impl FindAndSelectMotifsStage {
                 Arc::new(MotifLoader::new(Arc::clone(store), Arc::clone(&loader), ws)),
                 vec![run_config.select_motifs_run_config.clone()],
                 vec![find_run_config_id],
-                max_chunk_size,
                 // #[cfg(test)]
                 None,
             )

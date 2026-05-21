@@ -31,3 +31,4 @@ pub mod train_net;
 mod stage_ids;
 pub mod bucketing;
 pub mod find_motifs_run_config;
+pub mod extend_motifs;
