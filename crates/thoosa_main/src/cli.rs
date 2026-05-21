@@ -685,8 +685,7 @@ where
                         loader,
                         motif_loader,
                         run_configs,
-                        select_motifs_args.find_motifs_run_config_ids.clone(),
-                        100_000, //TODO config
+                        select_motifs_args.find_motifs_run_config_ids.clone(), //TODO config
                         // #[cfg(test)]
                         None
                     ).await.expect("SelectMotifsStage::new failed"))
