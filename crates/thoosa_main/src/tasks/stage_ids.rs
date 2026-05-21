@@ -14,3 +14,4 @@ pub const TRAIN_MOTIF_NETS: u32 = 13;
 pub const APPLY_MOTIF_NETS: u32 = 14;
 
 pub const SELECT_BUCKETS: u32 = 15;
+pub const EXTEND_MOTIFS: u32 = 16;
