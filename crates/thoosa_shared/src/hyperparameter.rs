@@ -88,6 +88,16 @@ impl<T: FieldName> From<(T, &Range<u32>)> for Hyperparameter<T> {
     }
 }
 
+impl<T: FieldName> From<(T, &Range<usize>)> for Hyperparameter<T> {
+    fn from(value: (T, &Range<usize>)) -> Self {
+        Hyperparameter::UniformInt {
+            name: value.0,
+            lower: value.1.start as i64,
+            upper: value.1.end as i64,
+        }
+    }
+}
+
 impl<T: FieldName> From<(T, &Range<i32>)> for Hyperparameter<T> {
     fn from(value: (T, &Range<i32>)) -> Self {
         Hyperparameter::UniformInt {

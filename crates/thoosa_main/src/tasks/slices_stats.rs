@@ -19,6 +19,7 @@ pub fn metric_scalar_for_motif<ID:Debug>(id:&ID, motif_slices: &Tensor, metric: 
         }
         Metrics::PearsonCorr(v) => return panic_to_err!(pearson_corr_distance_matrix_0_2_single(motif_slices, v.eps, v.aggr)),
         Metrics::DotProduct(v) => return panic_to_err!(dot_product_distance(motif_slices, v.aggr)),
+        Metrics::Energy(_) => return mean_energy_for_motif(motif_slices),
         //TODO move Common* into single Metric, call common_stats_for_motif once
         Metrics::CommonEucDist(v) => return Ok(common_stats_for_motif(motif_slices, v)?.euc_dist),
         Metrics::CommonPearson(v) => return Ok(common_stats_for_motif(motif_slices, v)?.pearson),
@@ -166,6 +167,17 @@ fn per_window_metrics(w: &Tensor, q_lo: f64, q_hi: f64, eps: f64) -> Result<(Ten
     let tvn = tv.f_div(&denom)?;
     let curvn = curv.f_div(&denom)?;
     Ok((amp, tvn, curvn))
+}
+
+pub fn mean_energy_for_motif(t: &Tensor) -> Result<f32, ThoError> {
+    let n = t.numel() as f64;
+    if n == 0.0 {
+        return Ok(0.0);
+    }
+
+    let td = t.f_to_kind(Kind::Double)?;
+    let energy = td.f_mul(&td)?.f_sum(Kind::Double)?.f_double_value(&[])? / n;
+    if energy.is_finite() { Ok(energy as f32) } else { Ok(0.0) }
 }
 
 pub fn euclidean_distance(t: &Tensor, aggr: Aggr) -> Result<f32, ThoError> {
