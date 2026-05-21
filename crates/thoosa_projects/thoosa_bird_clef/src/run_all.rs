@@ -161,41 +161,38 @@ pub(crate) async fn run_all(
                         info!("run_all: label={label} find_motifs_run_config_ids={find_motifs_run_config_ids:?}");
 
                         let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
+                        let init_ctx_select_buckets = label_ctx.branch(Some("init_ctx_select_buckets"), true);
+                        let ws_for_select_buckets = Arc::clone(&ws);
+                        let store_for_select_buckets = Arc::clone(&store);
+                        let loader_for_select_buckets = Arc::clone(&loader);
+                        let select_motifs_input_for_select_buckets = Arc::clone(&select_motifs_input);
+                        let find_motifs_run_config_ids_for_select_buckets = find_motifs_run_config_ids.clone();
 
-                        let mut select_motifs_run_config_ids = vec![];
-
-                        for find_motifs_run_config_id in &find_motifs_run_config_ids {
-
-                            let init_ctx_select_buckets = label_ctx.branch(Some("init_ctx_select_buckets"), true);
-                            let ws_for_select_buckets = Arc::clone(&ws);
-                            let store_for_select_buckets = Arc::clone(&store);
-                            let loader_for_select_buckets = Arc::clone(&loader);
-                            let find_motifs_run_config_id_for_select_buckets = *find_motifs_run_config_id;
-                            select_motifs_run_config_ids.extend(run_grid::</*Labeled,*/ _, _, _, _, _>(
-                                Some(vec![*find_motifs_run_config_id]),
-                                Arc::clone(&select_motifs_run_config),
-                                Arc::clone(&select_motifs_input),
-                                &ws,
-                                &store,
-                                async move |run_configs| {
-                                    Arc::new(SelectBucketsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
-                                        &ws_for_select_buckets,
-                                        &store_for_select_buckets,
+                        let select_motifs_run_config_ids = run_grid::</*Labeled,*/ _, _, _, _, _>(
+                            Some(find_motifs_run_config_ids.clone()),
+                            Arc::clone(&select_motifs_run_config),
+                            Arc::clone(&select_motifs_input),
+                            &ws,
+                            &store,
+                            async move |run_configs| {
+                                Arc::new(SelectBucketsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                                    &ws_for_select_buckets,
+                                    &store_for_select_buckets,
+                                    Arc::clone(&loader_for_select_buckets),
+                                    Arc::new(MotifLoader::new(
+                                        Arc::clone(&store_for_select_buckets),
                                         Arc::clone(&loader_for_select_buckets),
-                                        Arc::new(MotifLoader::new(
-                                            Arc::clone(&store_for_select_buckets),
-                                            Arc::clone(&loader_for_select_buckets),
-                                            &ws_for_select_buckets
-                                        )),
-                                        run_configs,
-                                        vec![find_motifs_run_config_id_for_select_buckets],
-                                        init_ctx_select_buckets,
-                                    ).await.expect("SelectBucketsStage::new failed"))
-                                },
-                                || label_ctx.branch(Some("select_motifs"), true),
-                                &format!("select motifs for {label}")
-                            ).await?);
-                        }
+                                        &ws_for_select_buckets
+                                    )),
+                                    run_configs,
+                                    find_motifs_run_config_ids_for_select_buckets,
+                                    select_motifs_input_for_select_buckets,
+                                    init_ctx_select_buckets,
+                                ).await.expect("SelectBucketsStage::new failed"))
+                            },
+                            || label_ctx.branch(Some("select_motifs"), true),
+                            &format!("select motifs for {label}")
+                        ).await?;
 
                         // select_all_motifs is a deliberate bypass: it creates selection runs that include every found motif without invoking SelectBucketsStage criteria.
                         // let select_motifs_run_config_ids = store.select_all_motifs(&find_motifs_run_config_ids).await?;
