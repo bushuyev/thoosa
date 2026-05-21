@@ -292,12 +292,12 @@ where
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
                                     let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
-                                let metric_val = t.channels_motifs_dists(&comparison_metric)?;
-                                let metric_val_id = metric_val.id().clone();
-                                debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
+                                        let metric_val = t.channels_motifs_dists(&comparison_metric)?;
+                                        let metric_val_id = metric_val.id().clone();
+                                        debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 
-                                ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.device_idx()).into())?)
-                            })?;
+                                        ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.device_idx()).into())?)
+                                    })?;
                                     MasksCtx::PrecalculatedDist { dists }
                                 }
                                 SlicesFilter::ExactS(v) => {

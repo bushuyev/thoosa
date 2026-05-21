@@ -252,12 +252,14 @@ where
         })
     }
 
-    async fn load_resources_for_selection(&self, input: &Arc<DevicesWrap<SelectMotifsInput>>, mut ctx: C) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
+    async fn list_resources_for_selection(&self, input: &Arc<DevicesWrap<SelectMotifsInput>>, mut ctx: C) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
+
         let (resources_config, output_mode) = input
             .with_data_ref(0, ctx.branch(Some("select_buckets_input"), false), None, |input: &SelectMotifsInput, _ctx| {
                 Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
             })
             .await?;
+
         Ok((Arc::new(resources_config.to_resources(&self.store).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
@@ -267,13 +269,14 @@ where
         let mut energy = RunningEnergy::default();
 
         for resource in resources {
-            // TODO(perf): load reference tensors with bounded concurrency and merge per-worker RunningStats/RunningEnergy; the current sequential pass repeats for every select config.
+
             let t = Arc::clone(&configured_loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(resource.clone())),
                     ctx.branch(Some("select_buckets_reference_resource_loader"), false),
                 )
                 .await?;
+
             t.with_data_ref(0, ctx.branch(Some("select_buckets_reference_stats"), false), None, |t: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
                 stats.update(t.t_ref())?;
                 energy.update(t.t_ref())?;
@@ -331,6 +334,7 @@ where
         for find_motifs_run_config_id in &self.find_motifs_run_config_ids {
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, *find_motifs_run_config_id).await?;
             // TODO(perf): cache ReferenceStats by (find_motifs_run_config_id, resources set); energy_k changes do not require recomputing the reference distribution.
+
             let reference = self
                 .reference_stats_for_find_run(resources.as_ref(), &find_motifs_run_config, ctx.branch(Some("select_buckets_reference_stats_for_find_run"), false))
                 .await?;
@@ -342,6 +346,7 @@ where
                 .cloned()
                 .unwrap_or_default();
             let motif_ids_len = motif_ids.len();
+
             let futures = motif_ids.into_iter().map(|motif_id| {
                 let self_for_fut = self;
                 let select_config = select_config.clone();
@@ -416,7 +421,7 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("SelectBucketsStage::run: input={input:?}");
 
-        let (resources, output_mode) = self.load_resources_for_selection(&input, ctx.branch(Some("select_buckets_load_resources_for_selection"), false)).await?;
+        let (resources, output_mode) = self.list_resources_for_selection(&input, ctx.branch(Some("select_buckets_load_resources_for_selection"), false)).await?;
         if resources.is_empty() {
             warn!("SelectBucketsStage::run: no resources");
             return Err(ThoError::new(format!("no resources found in {input:?}")));
