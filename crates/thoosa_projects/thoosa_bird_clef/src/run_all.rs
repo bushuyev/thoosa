@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::format;
 use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::Arc;
@@ -127,7 +128,6 @@ pub(crate) async fn run_all(
                 async move {
                     panic_to_err_async!(async move {
 
-
                         let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
                         let find_motifs_run_config_rov = Arc::clone(&find_motifs_run_config);
 
@@ -155,6 +155,7 @@ pub(crate) async fn run_all(
                                 )
                             },
                             || label_ctx.branch(Some("find_motifs"), false),
+                            &format!("find motifs for {label}")
                         ).await?;
 
                         info!("run_all: label={label} find_motifs_run_config_ids={find_motifs_run_config_ids:?}");
@@ -186,6 +187,7 @@ pub(crate) async fn run_all(
                                     ).await.expect("SelectBucketsStage::new failed"))
                                 },
                                 || label_ctx.branch(Some("select_motifs"), true),
+                                &format!("select motifs for {label}")
                             ).await?);
                         }
 

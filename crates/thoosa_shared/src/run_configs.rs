@@ -163,7 +163,7 @@ impl Named for RunConfigId {}
 pub trait RunConfig: Debug {
     fn set_id(&mut self, id: RunConfigId);
 
-    fn type_name() -> &'static str;
+    fn type_name() -> &'static str;//TODO rename
 }
 
 

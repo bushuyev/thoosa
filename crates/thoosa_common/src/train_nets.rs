@@ -399,7 +399,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
 
         //TODO config/arg to enable
-        // module.quantize();
+        module.quantize();
 
         Ok(Self::with_factory(id, module, vs, Some(builder)))
     }

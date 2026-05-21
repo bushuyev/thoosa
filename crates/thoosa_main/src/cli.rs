@@ -622,6 +622,7 @@ where
                     )
                 },
                 || root_ctx.branch(Some("find motifs"), true),
+                "find motifs",
             ).await?;
 
             info!("FindMotifs done, run_config_ids={run_config_ids:?}");
@@ -651,7 +652,7 @@ where
                         seq_scan_args.max_chunk_size
                     ).expect("SeqScanStage::new failed"))
                 },
-                || root_ctx.branch(Some("seq scan"), true),
+                || root_ctx.branch(Some("seq scan"), true), "find motifs",
             ).await?;
 
             info!("SeqScan done, run_config_ids={run_config_ids:?}");
@@ -690,7 +691,7 @@ where
                         None
                     ).await.expect("SelectMotifsStage::new failed"))
                 },
-                || root_ctx.branch(Some("select motifs"), true),
+                || root_ctx.branch(Some("select motifs"), true), "find motifs",
             ).await?;
 
             info!("SelectMotifs done, run_config_ids={run_config_ids:?}");
@@ -1860,6 +1861,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     store: &Arc<Box<dyn Store>>,
     f: F,
     ctx_f: CtxF,
+    descr: &str,
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
@@ -1887,7 +1889,7 @@ where
         input_run_config_ids.as_ref().map(|v| v.as_slice()),
         &store,
         &mut run_configs,
-        "find motifs",//TODO
+        descr,
     ).await?;
 
     let stage = f(run_configs).await;

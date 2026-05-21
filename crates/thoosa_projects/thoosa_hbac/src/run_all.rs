@@ -122,6 +122,7 @@ pub(crate) async fn run_all(
                     )
                 },
                 || root_ctx.branch(Some("find_motifs"), true),
+                "find motifs"
             ).await?;
 
             info!("find motifs done, find_motif_run_config_ids={find_motifs_run_config_ids:?}");
@@ -155,6 +156,7 @@ pub(crate) async fn run_all(
                         ).await.expect("SelectMotifsStage::new failed"))
                     },
                     || root_ctx.branch(Some("select_motifs"), true),
+                    "find_motifs"
                 ).await?);
 
             }

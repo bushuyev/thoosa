@@ -78,7 +78,7 @@ where
 
                 async move {
                     let Some(shared_fut) = Self::cache().await.get(&key_for_purger) else {
-                        warn!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
+                        debug!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
                         return Ok(());
                     };
 
