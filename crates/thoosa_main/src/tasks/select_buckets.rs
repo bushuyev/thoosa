@@ -6,7 +6,7 @@ use crate::tasks::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Me
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::select_motifs::{clc_constraint_metrics, SelectMotifsInput, SelectMotifsOutputMode};
-use log::{debug, info, warn};
+use log::{debug, info};
 use parking_lot::RwLock;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -128,12 +128,12 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
-    store: Arc<Box<dyn Store>>,
-    motif_stats: Arc<MotifStats<ML, L, C>>,
     run_configs: Vec<SelectBucketsRunConfig>,
     find_motifs_run_config_ids: Vec<RunConfigId>,
     bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
-    pd: PhantomData<C>,
+    reference_mean_energies: HashMap<RunConfigId, f64>,
+    output_mode: SelectMotifsOutputMode,
+    pd: PhantomData<(L, ML, C)>,
 }
 
 impl<L, ML, C> Debug for SelectBucketsStage<L, ML, C>
@@ -148,6 +148,8 @@ where
             .field("run_configs", &self.run_configs)
             .field("find_motifs_run_config_ids", &self.find_motifs_run_config_ids)
             .field("bucket_mean_energies", &self.bucket_mean_energies)
+            .field("reference_mean_energies", &self.reference_mean_energies)
+            .field("output_mode", &self.output_mode)
             .finish()
     }
 }
@@ -178,6 +180,7 @@ where
         motif_loader: Arc<ML>,
         run_configs: Vec<SelectBucketsRunConfig>,
         find_motifs_run_config_ids: Vec<RunConfigId>,
+        select_motifs_input: Arc<DevicesWrap<SelectMotifsInput>>,
         mut init_ctx: C,
     ) -> Result<Self, ThoError> {
         let motif_stats = Arc::new(MotifStats::new(
@@ -186,7 +189,18 @@ where
             Arc::clone(ws),
             Arc::clone(&motif_loader),
         ));
+        let (resources, output_mode) = Self::load_resources_for_selection(
+            &select_motifs_input,
+            store,
+            init_ctx.branch(Some("select_buckets_load_resources_for_selection"), false),
+        )
+        .await?;
+        if resources.is_empty() {
+            return Err(ThoError::new(format!("SelectBucketsStage::new: no resources found in {select_motifs_input:?}")));
+        }
+
         let mut bucket_mean_energies = HashMap::new();
+        let mut reference_mean_energies = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
             let motif_ids = store.list_motifs(*find_motifs_run_config_id).await?;
             let energies = Self::preload_bucket_mean_energies(
@@ -196,16 +210,28 @@ where
                 init_ctx.branch(Some("select_buckets_preload_bucket_mean_energies"), false),
             )
             .await?;
+            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, *find_motifs_run_config_id).await?;
+            let reference_energy = Self::reference_energy_for_find_run(
+                &motif_stats,
+                resources.as_ref(),
+                *find_motifs_run_config_id,
+                &find_motifs_run_config,
+                energies.len(),
+                init_ctx.branch(Some("select_buckets_reference_energy_for_find_run"), false),
+            )
+            .await?;
+            debug!("SelectBucketsStage::new: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} energies_len={}", energies.len());
             bucket_mean_energies.insert(*find_motifs_run_config_id, energies);
+            reference_mean_energies.insert(*find_motifs_run_config_id, reference_energy);
         }
 
         Ok(Self {
             id: SynKey::new([mono_key!(SELECT_BUCKETS, "SelectBucketsStage")]),
-            store: Arc::clone(store),
-            motif_stats,
             run_configs,
             find_motifs_run_config_ids,
             bucket_mean_energies,
+            reference_mean_energies,
+            output_mode,
             pd: PhantomData,
         })
     }
@@ -263,15 +289,18 @@ where
         Ok(energies.into_iter().collect())
     }
 
-    async fn list_resources_for_selection(&self, input: &Arc<DevicesWrap<SelectMotifsInput>>, mut ctx: C) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
-
+    async fn load_resources_for_selection(
+        input: &Arc<DevicesWrap<SelectMotifsInput>>,
+        store: &Arc<Box<dyn Store>>,
+        mut ctx: C,
+    ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = input
             .with_data_ref(0, ctx.branch(Some("select_buckets_input"), false), None, |input: &SelectMotifsInput, _ctx| {
                 Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
             })
             .await?;
 
-        Ok((Arc::new(resources_config.to_resources(&self.store).await?.into_iter().collect::<Vec<_>>()), output_mode))
+        Ok((Arc::new(resources_config.to_resources(store).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
     fn reference_random_slices(resources: &[Resource], find_motifs_run_config: &FindMotifsRunConfig, motif_count: usize) -> Result<u32, ThoError> {
@@ -293,7 +322,7 @@ where
     }
 
     async fn reference_energy_for_find_run(
-        &self,
+        motif_stats: &Arc<MotifStats<ML, L, C>>,
         resources: &[Resource],
         find_motifs_run_config_id: RunConfigId,
         find_motifs_run_config: &FindMotifsRunConfig,
@@ -302,7 +331,7 @@ where
     ) -> Result<f64, ThoError> {
         let max_slices = Self::reference_random_slices(resources, find_motifs_run_config, motif_count)?;
         let energy_metric = energy_metric();
-        let stats = Arc::clone(&self.motif_stats)
+        let stats = Arc::clone(motif_stats)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random_resources(
                     max_slices,
@@ -325,22 +354,15 @@ where
             .await
     }
 
-    async fn evaluations_for_find_run(&self, find_motifs_run_config_id: RunConfigId, resources: &[Resource], mut ctx: C) -> Result<Vec<BucketEvaluation>, ThoError> {
-        let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&self.store, find_motifs_run_config_id).await?;
+    fn evaluations_for_find_run(&self, find_motifs_run_config_id: RunConfigId) -> Result<Vec<BucketEvaluation>, ThoError> {
         let bucket_energies = self
             .bucket_mean_energies
             .get(&find_motifs_run_config_id)
             .ok_or_else(|| ThoError::new(format!("SelectBucketsStage::evaluations_for_find_run: missing bucket energies for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
-
-        let reference_energy = self
-            .reference_energy_for_find_run(
-                resources,
-                find_motifs_run_config_id,
-                &find_motifs_run_config,
-                bucket_energies.len(),
-                ctx.branch(Some("select_buckets_reference_energy_for_find_run"), false),
-            )
-            .await?;
+        let reference_energy = *self
+            .reference_mean_energies
+            .get(&find_motifs_run_config_id)
+            .ok_or_else(|| ThoError::new(format!("SelectBucketsStage::evaluations_for_find_run: missing reference energy for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
         debug!("SelectBucketsStage::evaluations_for_find_run: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} bucket_energies_len={}", bucket_energies.len());
 
         Ok(bucket_energies
@@ -360,31 +382,23 @@ where
     async fn select_for_run_config(
         &self,
         select_config: &SelectBucketsRunConfig,
-        resources: Arc<Vec<Resource>>,
-        output_mode: SelectMotifsOutputMode,
-        mut ctx: C,
+        ctx: C,
     ) -> Result<SelectMotifsRunResult, ThoError> {
         let mut evaluations = Vec::new();
 
         for find_motifs_run_config_id in &self.find_motifs_run_config_ids {
-            let mut find_evaluations = self
-                .evaluations_for_find_run(
-                    *find_motifs_run_config_id,
-                    resources.as_ref(),
-                    ctx.branch(Some("select_buckets_evaluations_for_find_run"), false),
-                )
-                .await?;
+            let mut find_evaluations = self.evaluations_for_find_run(*find_motifs_run_config_id)?;
             evaluations.append(&mut find_evaluations);
         }
 
         let selected_evaluations = select_config.selection_mode.selected_evaluations(evaluations);
         let selected = selected_evaluations.iter().map(BucketEvaluation::to_savable_score).collect::<Vec<_>>();
-        info!("SelectBucketsStage::select_for_run_config: select_config={select_config:?} selected={selected:?}");
+        info!("SelectBucketsStage::select_for_run_config: select_config={select_config:?} selected={selected:?} ctx_id={:?}", ctx.id());
         for evaluation in &selected_evaluations {
             debug!("SelectBucketsStage::select_for_run_config: selected motif_id={} energy={} score={}", evaluation.motif_id, evaluation.energy, evaluation.score);
         }
 
-        let constraint_metrics = match output_mode {
+        let constraint_metrics = match self.output_mode {
             SelectMotifsOutputMode::Standalone => None,
             SelectMotifsOutputMode::WithConstraintMetrics => {
                 let constraint_run_config = select_config.constraint_metrics_run_config();
@@ -422,20 +436,13 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("SelectBucketsStage::run: input={input:?}");
 
-        let (resources, output_mode) = self.list_resources_for_selection(&input, ctx.branch(Some("select_buckets_load_resources_for_selection"), false)).await?;
-        if resources.is_empty() {
-            warn!("SelectBucketsStage::run: no resources");
-            return Err(ThoError::new(format!("no resources found in {input:?}")));
-        }
-
         let run_configs_len = self.run_configs.len();
         let futures = self.run_configs.iter().map(|select_config| {
             let self_for_fut = Arc::clone(&self);
-            let resources = Arc::clone(&resources);
             let mut ctx = ctx.branch(Some("select_buckets_run_config"), false);
             async move {
                 self_for_fut
-                    .select_for_run_config(select_config, resources, output_mode, ctx.branch(Some("select_buckets_select_for_run_config"), false))
+                    .select_for_run_config(select_config, ctx.branch(Some("select_buckets_select_for_run_config"), false))
                     .await
             }
         });
@@ -544,6 +551,8 @@ mod tests {
                 .finish(),
         );
 
+        let input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))));
+
         let stage = Arc::new(
             SelectBucketsStage::new(
                 &ws,
@@ -552,12 +561,11 @@ mod tests {
                 motif_loader,
                 vec![SelectBucketsRunConfig::new(Some(select_buckets_run_config_id), 2.0)],
                 vec![find_motifs_run_config_id],
+                Arc::clone(&input),
                 mock_run_ctx::default(0),
             )
             .await?,
         );
-
-        let input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))));
         let result = stage.run(input, mock_run_ctx::default(0)).await?;
         let result = Arc::into_inner(result).expect("stage output should not be shared").take_data(0).await?;
 
