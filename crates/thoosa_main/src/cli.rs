@@ -1741,7 +1741,7 @@ where
 
     let (motif_net_params, motif_net) = {
         let ws_guard = ws.read();
-        ws_guard.load_motif_net(&net_path, &Cpu)?
+        ws_guard.load_motif_net(&net_path, &Cpu, false)?
     };
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
     let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));

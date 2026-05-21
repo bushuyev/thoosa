@@ -32,6 +32,7 @@ use thoosa_shared::run_configs::{RunConfig, RunConfigId};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_store::Store;
+use crate::tasks::stage_ids::SELECT_BUCKETS;
 
 const SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT: usize = 16;
 
@@ -239,7 +240,7 @@ where
         }
 
         Ok(Self {
-            id: SynKey::new([mono_key!("SelectBucketsStage", "stage")]),
+            id: SynKey::new([mono_key!(SELECT_BUCKETS, "SelectBucketsStage")]),
             store: Arc::clone(store),
             ws: Arc::clone(ws),
             loader,

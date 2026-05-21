@@ -113,7 +113,8 @@ where
         selected_motif_nets_limit,
         slices_step,
         // #[cfg(test)]
-        None
+        None,
+        false
     ).await?);
 
     let num_nets = apply_motif_nets.num_nets() as u32;
@@ -465,7 +466,7 @@ where
                                                          }) => {
                                     let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, num_layers)));
 
-                                    Ok((lin_label_node(&net_params, false)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
+                                    Ok((lin_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.root())?, net_params))
                                 }
                                 LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { head_size, n_heads, ff_mult, dropout }) => {
                                     let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(head_size, n_heads, ff_mult, dropout)));

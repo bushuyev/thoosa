@@ -18,25 +18,26 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{mono_key, simple_id, ThoError};
+use thoosa_shared::{mono_key, perf_log, simple_id, sync_read_lock, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::comp_id::SynKey;
 #[derive(Debug, Clone, DummyData)]
 pub struct LoadMotifNetInput {
     id: SynKey,
     net_id: PathBuf,
-    // train_motif_nets_run_config_id:RunId
+    quantize:bool
 }
 
 
 impl LoadMotifNetInput {
-    pub fn new(net_id: PathBuf/*train_motif_nets_run_config_id: RunId*/) -> Self {
-        let net_id_str = net_id.to_string_lossy().to_string();
+    pub fn new(net_id: PathBuf, quantize: bool) -> Self {
         Self {
             id: SynKey::new([
-                mono_key!(net_id_str.clone(), format!("net_id={net_id_str}")),
+                mono_key!(net_id.to_string_lossy().to_string(), format!("net_id={net_id:?}")),
+                mono_key!(quantize, format!("quantize={quantize:?}")),
             ]),
             net_id,
+            quantize
         }
     }
 }
@@ -61,6 +62,7 @@ where
 {
 
     ws: Arc<RwLock<Box<dyn Workspace>>>,
+    quantize: bool,
     pd:PhantomData<C>
 }
 
@@ -68,9 +70,10 @@ impl <C> LoadMotifNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
+    pub fn new(ws: &Arc<RwLock<Box<dyn Workspace>>>, quantize: bool) -> Self {
         Self {
             ws: Arc::clone(ws),
+            quantize,
             pd: PhantomData,
         }
     }
@@ -121,9 +124,9 @@ where
         let device_idx = ctx.device_idx();
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
-        let ws_guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws));
-        // TODO(perf): resolve the path under the workspace lock, then load the model outside it; also consider caching loaded net params by net_id/precision.
-        let (params, module) = ws_guard.load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into())?;
+
+
+        let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into(), input.quantize)?;
 
         let (channel, motif_id) = FsWorkspace::parse_motif_path(&input.net_id)?;
 

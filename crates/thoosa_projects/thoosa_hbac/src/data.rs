@@ -1280,7 +1280,8 @@ mod tests {
             None,
             None,
             1,
-            None
+            None,
+            false
         ).await?);
 
         let out = Arc::clone(&apply_motif_nets).run(

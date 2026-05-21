@@ -12,15 +12,20 @@ use thoosa_shared::traits::DataId;
 pub enum ElvVal {
     Str(String),
     Num(usize),
+    Bool(bool),
 }
 
 impl Display for ElvVal {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
+            //TODO use same ?
             ElvVal::Str(v) => {
                 write!(f, "{}", v)
             }
             ElvVal::Num(v) => {
+                write!(f, "{}", v)
+            }
+            ElvVal::Bool(v) => {
                 write!(f, "{}", v)
             }
         }
@@ -54,6 +59,12 @@ impl From<String> for ElvVal {
 impl From<&str> for ElvVal {
     fn from(value: &str) -> Self {
         ElvVal::Str(value.to_string())
+    }
+}
+
+impl From<bool> for ElvVal {
+    fn from(v: bool) -> Self {
+        ElvVal::Bool(v)
     }
 }
 
@@ -110,13 +121,15 @@ impl MonoKey {
         self.name.as_ref()
     }
 
+    //TODO add a safer way to get to data_id
     pub fn to_data_id(&self) -> DataId{
         match &self.val {
-            ElvVal::Str(val) => {
-                panic!("can't convert {val} to data_id")
-            }
+
             ElvVal::Num(val) => {
                 DataId(*val as u32)//TODO as
+            }
+            val => {
+                panic!("can't convert {val} to data_id")
             }
         }
     }
@@ -199,7 +212,8 @@ impl fmt::Debug for SynKey {
 fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match val {
         ElvVal::Num(value) => write!(f, "{value}"),
-        ElvVal::Str(value) => write!(f, "{value:?}"),
+        ElvVal::Str(value) => write!(f, "{value}"),
+        ElvVal::Bool(value) => write!(f, "{value}")
     }
 }
 
