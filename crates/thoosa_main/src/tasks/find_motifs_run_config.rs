@@ -1213,6 +1213,9 @@ impl Default for DotProductMetric {
     }
 }
 
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData, Default)]
+pub struct EnergyMetric {}
+
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
 pub struct CommonStatsMetric {
     #[in_map]
@@ -1243,6 +1246,7 @@ pub enum Metrics {
     EucDist(EucDistMetric),
     PearsonCorr(PearsonCorrMetric),
     DotProduct(DotProductMetric),
+    Energy(EnergyMetric),
     CommonEucDist(CommonStatsMetric),
     CommonPearson(CommonStatsMetric),
     CommonA0(CommonStatsMetric),
@@ -1280,6 +1284,7 @@ impl Metrics {
     pub const INTERESTING_ENTROPY_GAUSS_01_MIN_KEY: &str = "interesting_entropy_gauss_01_min";
     pub const INTERESTING_ENTROPY_BAND_01_MIN_KEY: &str = "interesting_entropy_band_01_min";
     pub const PERIODICITY_ACF_MIN_KEY: &str = "periodicity_acf_01_min";
+    pub const ENERGY_MIN_KEY: &str = "energy_min";
     pub const CONSTRAINT_KEYS: [&'static str; 8] = [
         Self::NORM_THICKNESS_MIN_KEY,
         Self::INLIER_RATIO_MIN_KEY,
@@ -1290,10 +1295,11 @@ impl Metrics {
         Self::INTERESTING_TURNING_POINTS_RATIO_MIN_KEY,
         Self::INTERESTING_BAND_ENERGY_RATIO_01_MIN_KEY,
     ];
-    pub const EXTRA_CONSTRAINT_KEYS: [&'static str; 3] = [
+    pub const EXTRA_CONSTRAINT_KEYS: [&'static str; 4] = [
         Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY,
         Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY,
         Self::PERIODICITY_ACF_MIN_KEY,
+        Self::ENERGY_MIN_KEY,
     ];
 
     pub fn all() -> Vec<Self> {
@@ -1301,6 +1307,7 @@ impl Metrics {
             Self::EucDist(EucDistMetric::default()),
             Self::PearsonCorr(PearsonCorrMetric::default()),
             Self::DotProduct(DotProductMetric::default()),
+            Self::Energy(EnergyMetric::default()),
             Self::CommonEucDist(CommonStatsMetric::default()),
             Self::CommonPearson(CommonStatsMetric::default()),
             Self::CommonA0(CommonStatsMetric::default()),
@@ -1341,6 +1348,7 @@ impl Metrics {
             Self::InterestingEntropyGauss01(_) => Some(Self::INTERESTING_ENTROPY_GAUSS_01_MIN_KEY),
             Self::InterestingEntropyBand01(_) => Some(Self::INTERESTING_ENTROPY_BAND_01_MIN_KEY),
             Self::PeriodicityAcf(_) => Some(Self::PERIODICITY_ACF_MIN_KEY),
+            Self::Energy(_) => Some(Self::ENERGY_MIN_KEY),
             _ => None,
         }
     }

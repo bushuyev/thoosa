@@ -689,6 +689,19 @@ impl TryFrom<&Val> for String {
     }
 }
 
+impl TryFrom<&Val> for usize {
+    type Error = ThoError;
+
+    fn try_from(value: &Val) -> Result<usize, ThoError> {
+        match value {
+            Val::Int(v) => Ok(*v as usize),
+            Val::UInt(v) => Ok(*v as usize),
+            Val::Str(v) => v.parse().map_err(ThoError::from),
+            _ => Err(ThoError::new(format!("can't convert {value:?}"))),
+        }
+    }
+}
+
 impl TryFrom<Val> for usize {
     type Error = ThoError;
 

@@ -27,7 +27,7 @@ use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
 use thoosa_main::tasks::motif_loader::MotifLoader;
 use thoosa_main::tasks::motif_stats::{MotifStats, MotifStatsInput};
-use thoosa_main::tasks::select_buckets::{SelectBucketsRunConfigRangeOrValue, SelectBucketsStage};
+use thoosa_main::tasks::select_buckets::{FilterSelectionModeRangeOrValue, SelectBucketsRunConfigRangeOrValue, SelectBucketsStage, SelectionModeRangeOrValue};
 use thoosa_main::tasks::select_motifs::{SelectMotifsInput};
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
@@ -166,24 +166,30 @@ pub(crate) async fn run_all(
 
                         for find_motifs_run_config_id in &find_motifs_run_config_ids {
 
+                            let init_ctx_select_buckets = label_ctx.branch(Some("init_ctx_select_buckets"), true);
+                            let ws_for_select_buckets = Arc::clone(&ws);
+                            let store_for_select_buckets = Arc::clone(&store);
+                            let loader_for_select_buckets = Arc::clone(&loader);
+                            let find_motifs_run_config_id_for_select_buckets = *find_motifs_run_config_id;
                             select_motifs_run_config_ids.extend(run_grid::</*Labeled,*/ _, _, _, _, _>(
                                 Some(vec![*find_motifs_run_config_id]),
                                 Arc::clone(&select_motifs_run_config),
                                 Arc::clone(&select_motifs_input),
                                 &ws,
                                 &store,
-                                async |run_configs| {
+                                async move |run_configs| {
                                     Arc::new(SelectBucketsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
-                                        &ws,
-                                        &store,
-                                        Arc::clone(&loader),
+                                        &ws_for_select_buckets,
+                                        &store_for_select_buckets,
+                                        Arc::clone(&loader_for_select_buckets),
                                         Arc::new(MotifLoader::new(
-                                            Arc::clone(&store),
-                                            Arc::clone(&loader),
-                                            &ws
+                                            Arc::clone(&store_for_select_buckets),
+                                            Arc::clone(&loader_for_select_buckets),
+                                            &ws_for_select_buckets
                                         )),
                                         run_configs,
-                                        vec![*find_motifs_run_config_id],
+                                        vec![find_motifs_run_config_id_for_select_buckets],
+                                        init_ctx_select_buckets,
                                     ).await.expect("SelectBucketsStage::new failed"))
                                 },
                                 || label_ctx.branch(Some("select_motifs"), true),
@@ -681,8 +687,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         fixed_find_motifs_config: FixedFindMotifsConfig::new(run_all_params.max_chunk_size, false),
         select_motifs_run_config: SelectBucketsRunConfigRangeOrValue {
             id: None,
-
-            energy_k: RangeOrValue::Value(1.8),
+            selection_mode: SelectionModeRangeOrValue::Filter(FilterSelectionModeRangeOrValue { threshold: RangeOrValue::Value(1.8) }),
         },
         train_motif_nets_run_config_range_or_value,
         train_label_nets_run_config_range_or_value,
