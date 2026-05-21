@@ -70,7 +70,7 @@ where
     {
         let tho_device_idx = stage_ctx.device_idx();
 
-        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
+        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false)?;
 
         let mut apply_nets = vec![];
 
@@ -109,6 +109,7 @@ where
                         motif_slices_step,
                         None,
                         motif_nets,
+                        false,
                     ).await?),
                     apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)),
                 });

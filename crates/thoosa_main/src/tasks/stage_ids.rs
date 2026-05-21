@@ -12,3 +12,5 @@ pub const MERGE_SELECTED_MOTIFS: u32 = 11;
 pub const SELECT_MOTIFS: u32 = 12;
 pub const TRAIN_MOTIF_NETS: u32 = 13;
 pub const APPLY_MOTIF_NETS: u32 = 14;
+
+pub const SELECT_BUCKETS: u32 = 15;

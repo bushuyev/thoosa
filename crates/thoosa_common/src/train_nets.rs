@@ -374,7 +374,7 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
     }
 
-    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device) -> Result<Self, ThoError>
+    pub fn load<F>(id: SynKey, builder: F, model: PathBuf, device: Device, quantize: bool) -> Result<Self, ThoError>
     where
         F: Fn(&nn::Path) -> Result<Box<dyn ThoModule<DI, DO>>, ThoError> + Send + Sync + 'static,
     {
@@ -399,7 +399,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         }
 
         //TODO config/arg to enable
-        module.quantize();
+        if quantize {
+            module.quantize();
+        }
 
         Ok(Self::with_factory(id, module, vs, Some(builder)))
     }
@@ -548,6 +550,7 @@ pub fn load_final_model(
         move |path: &nn::Path| final_net(&final_params_for_builder)?.build_tch_module(path),
         model_path,
         *device,
+        false,
     )?;
 
     Ok((final_node_params, node))
@@ -1352,10 +1355,10 @@ impl LabelNetParams {
             })
     }
 
-    pub fn label_net(&self, quantize: bool) -> Result<Node, ThoError> {
+    pub fn label_net(&self) -> Result<Node, ThoError> {
         match &self.net_type {
             LabelNetTypeParams::LinNetParams(_) => {
-                lin_label_node(&self, quantize)
+                lin_label_node(&self)
             }
             LabelNetTypeParams::ConvNetParams(_) => {
                 conv_label_node(&self)
@@ -1585,8 +1588,8 @@ pub fn self_attention_label_node(params: &LabelNetParams) -> Result<Node, ThoErr
     builder .end_seq()
 }
 
-pub fn lin_label_node(params: &LabelNetParams, quantize: bool) -> Result<Node, ThoError> {
-    debug!("lin_label_node: params={params:?} quantize={quantize}");
+pub fn lin_label_node(params: &LabelNetParams) -> Result<Node, ThoError> {
+    debug!("lin_label_node: params={params:?}");
 
     let LabelNetTypeParams::LinNetParams(lin_params) = &params.net_type else {
         // return Err(ThoError::new(format!("Unexpected params type: {cnn_params:?}")));
@@ -2503,7 +2506,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let net: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            lin_label_node(&params, false)?.build_tch_module(&vs_0.root())?;
+            lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
 
         let batch = 11i64;
@@ -2533,9 +2536,10 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
-           model_base_path.join(NET_WEIGHTS_FILE),
-           Cpu,
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
+                                                                                           Cpu,
+                                                                                           false,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -2907,9 +2911,10 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
                                                                                            model_base_path.join(NET_WEIGHTS_FILE),
                                                                                            Cpu,
+                                                                                           false,
         )?;
 
         assert!(vs_0.variables().len() > 0);
@@ -2987,9 +2992,10 @@ mod train_tests {
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
         let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder, true)?.build_tch_module(path),
+                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
                                                                                            model_base_path.join(NET_WEIGHTS_FILE),
                                                                                            Cpu,
+                                                                                           false,
         )?;
 
         assert!(module_with_store.var_store().variables().len() > 0);
@@ -3411,7 +3417,7 @@ mod train_tests {
 
         let mut vs_0 = VarStore::new(Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> =
-            LabelNetParams::label_net(&label_node_params, true)?.build_tch_module(&vs_0.root())?;
+            LabelNetParams::label_net(&label_node_params)?.build_tch_module(&vs_0.root())?;
         vs_0.freeze();
         debug!(
             "save_test_corr_model: channels={}, max_motif_nets={}, max_motif_batches={}, motif_batch_size={} vs_0.variables()={:?}",
