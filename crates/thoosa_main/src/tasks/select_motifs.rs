@@ -164,6 +164,48 @@ impl SelectedMotifEvaluation {
     }
 }
 
+pub fn clc_constraint_metrics<'a, I>(select_motifs_run_config: &SelectMotifsRunConfig, selected_motif_criterion_scores: I) -> HashMap<String, f32>
+where
+    I: IntoIterator<Item = &'a [(&'static str, f64)]>,
+{
+    let selected_motif_criterion_scores = selected_motif_criterion_scores.into_iter().collect::<Vec<_>>();
+    debug!("clc_constraint_metrics: selected_motif_criterion_scores={selected_motif_criterion_scores:?}");
+
+    let constraints = select_motifs_run_config.motif_criteria.as_slice();
+    let mut metrics = Metrics::optimizer_constraints(constraints);
+
+    if constraints.is_empty() {
+        return metrics;
+    }
+
+    if selected_motif_criterion_scores.is_empty() {
+        for constraint in constraints {
+            metrics.insert(constraint.key().expect("select_motifs constraint key").to_string(), constraint.min);
+        }
+        return metrics;
+    }
+
+    let mut min_scores = constraints
+        .iter()
+        .map(|constraint| (constraint.key().expect("select_motifs constraint key"), f64::INFINITY))
+        .collect::<HashMap<_, _>>();
+
+    for criterion_scores in selected_motif_criterion_scores {
+        for (constraint_key, score) in criterion_scores {
+            let min_score = min_scores.get_mut(constraint_key).expect("missing criterion score accumulator");
+            *min_score = (*min_score).min(*score);
+        }
+    }
+
+    for constraint in constraints {
+        let key = constraint.key().expect("select_motifs constraint key");
+        metrics.insert(key.to_string(), (constraint.min as f64 - min_scores[key]) as f32);
+    }
+
+    debug!("clc_constraint_metrics: metrics={metrics:?}");
+    metrics
+}
+
 // Searches for matches between motifs from previous FindMotifsStage runs in the input resources,
 // then selects motifs by motif-quality criteria.
 // Stacked motifs are loaded in StackedMotifsLoader, while motif statistics are calculated in SelectMotifsStage
@@ -1278,41 +1320,7 @@ where
 
 
     fn clc_constraint_metrics(select_motifs_run_config: &SelectMotifsRunConfig, selected_motifs: &[SelectedMotifEvaluation]) -> HashMap<String, f32> {
-        debug!("SelectMotifsStage::clc_constraint_metrics: selected_motifs={selected_motifs:?}");
-
-        let constraints = select_motifs_run_config.motif_criteria.as_slice();
-        let mut metrics = Metrics::optimizer_constraints(constraints);
-
-        if constraints.is_empty() {
-            return metrics;
-        }
-
-        if selected_motifs.is_empty() {
-            for constraint in constraints {
-                metrics.insert(constraint.key().expect("select_motifs constraint key").to_string(), constraint.min);
-            }
-            return metrics;
-        }
-
-        let mut min_scores = constraints
-            .iter()
-            .map(|constraint| (constraint.key().expect("select_motifs constraint key"), f64::INFINITY))
-            .collect::<HashMap<_, _>>();
-
-        for selected_motif in selected_motifs {
-            for (constraint_key, score) in &selected_motif.criterion_scores {
-                let min_score = min_scores.get_mut(constraint_key).expect("missing criterion score accumulator");
-                *min_score = (*min_score).min(*score);
-            }
-        }
-
-        for constraint in constraints {
-            let key = constraint.key().expect("select_motifs constraint key");
-            metrics.insert(key.to_string(), (constraint.min as f64 - min_scores[key]) as f32);
-        }
-
-        debug!("SelectMotifsStage::clc_constraint_metrics: metrics={metrics:?}");
-        metrics
+        clc_constraint_metrics(select_motifs_run_config, selected_motifs.iter().map(|selected_motif| selected_motif.criterion_scores.as_slice()))
     }
 
     async fn filter_motifs_by_criteria(

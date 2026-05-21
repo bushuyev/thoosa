@@ -49,7 +49,7 @@ pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load ra
 pub enum MotifStatsSource {
     Motif(MotifLoaderInput),
     MergedMotifs(Vec<MotifLoaderInput>),
-    Random { max_slices: u32, find_motifs_run_config_id: RunConfigId},
+    Random { max_slices: u32, find_motifs_run_config_id: RunConfigId, resources: Option<Vec<Resource>> },
 }
 
 #[derive(Debug, Clone)]
@@ -74,20 +74,32 @@ impl MotifStatsInput {
     }
 
     pub fn from_random(max_slices: u32, find_motifs_run_config_id: RunConfigId, metrics: Vec<Metrics>) -> Self {
+        Self::from_random_resources(max_slices, find_motifs_run_config_id, None, metrics)
+    }
+
+    pub fn from_random_resources(max_slices: u32, find_motifs_run_config_id: RunConfigId, resources: Option<Vec<Resource>>, metrics: Vec<Metrics>) -> Self {
         let metrics_sfx = metrics.iter().map(|m| format!("{m:?}")).collect::<Vec<_>>().join(",");
-        let mut id = SynKey::new([
+        let resources_sfx = resources
+            .as_ref()
+            .map(|resources| {
+                let mut ids = resources.iter().map(Resource::id).collect::<Vec<_>>();
+                ids.sort_unstable();
+                ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",")
+            })
+            .unwrap_or_else(|| "random".to_string());
+        let id = SynKey::new([
             mono_key!("MotifStatsInput", "stage"),
             mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
             mono_key!(max_slices, format!("max_slices={max_slices}")),
+            mono_key!(resources_sfx.clone(), format!("resources={resources_sfx}")),
             mono_key!(metrics_sfx.clone(), format!("metrics={metrics_sfx}")),
         ]);
 
-
-        debug!("MotifStatsInput::from_random: id={id:?}");
+        debug!("MotifStatsInput::from_random_resources: id={id:?}");
 
         Self {
             id,
-            source: MotifStatsSource::Random { max_slices, find_motifs_run_config_id },
+            source: MotifStatsSource::Random { max_slices, find_motifs_run_config_id, resources },
             metrics,
         }
     }
@@ -166,7 +178,7 @@ impl CopyToDevice for MotifStatsInput {
         let source = match &self.source {
             MotifStatsSource::Motif(motif_loader_input) => MotifStatsSource::Motif(motif_loader_input.clone()),
             MotifStatsSource::MergedMotifs(motif_loader_inputs) => MotifStatsSource::MergedMotifs(motif_loader_inputs.clone()),
-            MotifStatsSource::Random { max_slices, find_motifs_run_config_id } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_config_id: *find_motifs_run_config_id },
+            MotifStatsSource::Random { max_slices, find_motifs_run_config_id, resources } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_config_id: *find_motifs_run_config_id, resources: resources.clone() },
         };
 
         Ok(Self {
@@ -1042,8 +1054,8 @@ where
                 )
                 .await?
             }
-            MotifStatsSource::Random { max_slices, find_motifs_run_config_id } => {
-                debug!("MotifStats::run: MotifStatsSource::Random  max_slices={max_slices:?} find_motifs_run_config_id={find_motifs_run_config_id}");
+            MotifStatsSource::Random { max_slices, find_motifs_run_config_id, resources } => {
+                debug!("MotifStats::run: MotifStatsSource::Random  max_slices={max_slices:?} find_motifs_run_config_id={find_motifs_run_config_id} resources={resources:?}");
 
                 if max_slices < 2 {
                     return Err(ThoError::new(format!("MotifStats::run: max_slices must be >= 2, got {max_slices}")));
@@ -1055,7 +1067,10 @@ where
                     &self.store.list_run_config_values(find_motifs_run_config_id).await?,
                 )?;
                 let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
-                let resources = self.store.list_random_resources(None).await?;
+                let resources = match resources {
+                    Some(resources) => resources,
+                    None => self.store.list_random_resources(None).await?,
+                };
                 let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
 
                 let (_window, channels_slices) = load_random_slices(
