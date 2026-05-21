@@ -49,7 +49,7 @@ pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load ra
 pub enum MotifStatsSource {
     Motif(MotifLoaderInput),
     MergedMotifs(Vec<MotifLoaderInput>),
-    Random { max_slices: u32, find_motifs_run_config_id: RunConfigId },
+    Random { max_slices: u32, find_motifs_run_config_id: RunConfigId},
 }
 
 #[derive(Debug, Clone)]
