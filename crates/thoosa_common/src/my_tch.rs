@@ -1081,7 +1081,7 @@ where
             }
             Some(quantized) => {
 
-                match quantized.try_forward(&in_t.as_ref().to_kind(Float)) {
+                match quantized.try_forward(&in_t.as_ref().to_kind(in_t.as_ref().kind())) {
                     Ok(t) => Ok(t.into()),
                     Err(e) => {
                         error!("{:?}", e);

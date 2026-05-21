@@ -21,7 +21,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
 use thoosa_store::Store;
@@ -70,7 +70,7 @@ where
     {
         let tho_device_idx = stage_ctx.device_idx();
 
-        let all_label_nets = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
+        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into())?;
 
         let mut apply_nets = vec![];
 

@@ -51,10 +51,7 @@ where
         *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={find_motifs_id}")))?
     };
 
-    // FindMotifsRunConfig::from_properties_map_with_id(
-    //     real_find_motifs_run_config_id,
-    //     &store.list_run_config_values(real_find_motifs_run_config_id).await?,
-    // )
+
     let mut find_motifs_run_config = FH::from_properties_map(None, &store.list_run_config_values(real_find_motifs_run_config_id).await?)?;
 
     debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
