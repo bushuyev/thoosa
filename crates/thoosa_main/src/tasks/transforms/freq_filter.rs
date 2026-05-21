@@ -212,11 +212,27 @@ where
             }
         }
 
+        let filters_have_config = filters.iter().any(|f|{
+            match f {
+                PreparedFilter::ZNorm { .. } => false,
+                _=> true,
+            }
+        });
+        debug!("FreqFilter::new: filters_have_config={filters_have_config}");
+
         Ok(Self {
-            id: SynKey::new([
-                mono_key!(FREQ_FILTER, "FreqFilter"),
-                mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
-            ]),
+            //avoids caching each run_config separately when they have same filter
+            id: if filters_have_config {
+                SynKey::new([
+                    mono_key!(FREQ_FILTER, "FreqFilter"),
+                    //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
+                    mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
+                ])
+            } else {
+                SynKey::new([
+                    mono_key!(FREQ_FILTER, "FreqFilter"),
+                ])
+            },
             filters,
             _ctx: PhantomData,
             num_channels,
@@ -236,7 +252,10 @@ where
     }
 
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData2, SynKey>) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> {
-        let mut filtered_t = input_tensor.t_ref().f_totype(Float)?;
+        debug!("FreqFilter::apply_tho_tensor: self.filters={:?}", self.filters);
+
+        let mut filtered_t = input_tensor.as_ref().shallow_clone();//.f_totype(Float)?;
+
         for filter in self.filters.iter() {
             match filter {
                 PreparedFilter::NotchBand { low_hz, high_hz } => {
@@ -279,7 +298,9 @@ where
                     filtered_t = filtered_t_out;
                 }
                 PreparedFilter::ZNorm {..} => {
-                    filtered_t = z_norm(&filtered_t, 1)?.f_abs()?;
+                    debug!("FreqFilter::apply_tho_tensor, ZNorm: id={} filtered_t.size={:?}", input_tensor.id(), filtered_t.size(),);
+
+                    filtered_t = z_norm(&filtered_t, 1)?;
                 }
             }
         }

@@ -908,7 +908,7 @@ impl Store for SqlStore {
         self.with_writer_conn("save_run_config", move |conn| {
             let t = conn.transaction().map_err(|e| ThoError::from_error("start sqlite transaction", e))?;
 
-            t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params![run_config_type, descr, run_configs::run_id()])?;
+            t.execute("INSERT INTO run_configs (type, descr, run_id) VALUES (?, ?, ?)", params![run_config_type, descr, run_id()])?;
 
             let run_config_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
                 row.get::<usize, RunConfigId>(0)
@@ -1211,8 +1211,8 @@ impl Store for SqlStore {
                 LEFT JOIN run_configs rc ON tn.run_config_id=rc.id \
                 WHERE \
                     rc.run_id=? \
-                    rc.type='TrainLabelNetRunConfig' \
-                    AND net_path LIKE ?\
+                    AND rc.type='TrainLabelNetRunConfig' \
+                    AND net_path LIKE ? \
                  ORDER BY date(run_on) DESC, tn.loss LIMIT 1"//TODO takes last one
             )?.query_map(params![
                 run_id(),

@@ -440,7 +440,6 @@ where
 
         debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?} input={input:?}", self.apply_motif_nets.len());
 
-
         let apply_motif_nets = self.apply_motif_nets.clone();
         let apply_motif_nets_len = apply_motif_nets.len();
         let mut inputs_by_filter_group: HashMap<Option<RunConfigId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
@@ -453,9 +452,14 @@ where
             }
             let filtered_input = match &apply_motif_net.freq_filter {
                 Some(freq_filter) => {
+                    debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id, apply_motif_net.freq_filter_find_motifs_run_config_id);
+
                     freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(Some(&format!("apply_motif_nets_prefilter_{group_key:?}")), true)).await?
                 }
-                None => Arc::clone(&input),
+                None => {
+                    debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id);
+                    Arc::clone(&input)
+                },
             };
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
@@ -471,6 +475,7 @@ where
             .map(|(net_id, apply_motif_net)|{
                 let inputs_by_filter_group = Arc::clone(&inputs_by_filter_group);
                 let group_key = apply_motif_net.freq_filter_find_motifs_run_config_id;
+
                 let input = inputs_by_filter_group.get(&group_key).cloned().expect("filtered input for group must exist");
                 let motif_width = apply_motif_net.motif_width;
                 let motif_width_i64 = motif_width as i64;
