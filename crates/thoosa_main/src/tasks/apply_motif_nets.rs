@@ -276,7 +276,8 @@ where
         trained_nets_limit: Option<usize>,
         slice_step: u32,
         // #[cfg(test)]
-        fail_if_size_bigger_than:Option<usize>
+        fail_if_size_bigger_than:Option<usize>,
+        quantize: bool
     ) -> Result<Self, ThoError>
     where
         R:RunCtx + Adjustable + 'static
@@ -289,7 +290,7 @@ where
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}")));
         };
 
-        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets).await
+        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize).await
     }
 
     pub async fn from_trained_nets<R>(
@@ -298,15 +299,17 @@ where
         mut stage_ctx: R,
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
-        trained_nets: Vec<(u32, PathBuf, f32)>
+        trained_nets: Vec<(u32, PathBuf, f32)>,
+        quantize: bool
     ) -> Result<ApplyMotifNets<C>, ThoError>
     where
         R: RunCtx + Adjustable + 'static
     {
-        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws));//TODO move to new
+        let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws, quantize));//TODO move to new
         let trained_net_ids = trained_nets.iter().map(|v|v.0).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
+
         //this defines order in which motif nets should be applied to a resource before running label net
         let futures = trained_nets
             .into_iter()
@@ -315,7 +318,7 @@ where
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
                 async move {
-                    match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path))), load_ctx).await {
+                    match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).await {
                         Ok(net) => {
                             debug!("ApplyMotifNets::new: loaded net={net:?}");
                             Ok::<_, ThoError>(Some((id, net)))
@@ -354,7 +357,7 @@ where
             let motif_width = extra.motif_net_params.num_features();
             motif_widths.insert(motif_width);
 
-            let (_channel, find_motifs_run_config_id) = store.get_motif_meta(motif_id).await?; //TODO if BucketingStage was used to find motifs it's bucketing_run_config_id, not find_motifs_run_config_id
+            let (_channel, find_motifs_run_config_id) = store.get_motif_meta(motif_id).await?;
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_config_id).await?;
 
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
@@ -381,7 +384,7 @@ where
         let Some(motif_width) = motif_widths.iter().copied().max() else {
             return Err(ThoError::new("no motif_width"));
         };
-        // let slice_step = slice_step.into_iter().next().expect("no slice_step");//TODO shouldn't necessarily be what was used during motif training
+
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
         let batch_applied_motif_nets = Arc::new(BatchAppliedMotifNets::<C>::new(id.clone()));
@@ -1426,6 +1429,7 @@ pub(crate) mod tests {
             None,
             slice_step,
             trigger_oom_len,
+            false,
         ).await?);
 
         let channels_patterns = vec![
@@ -1570,6 +1574,7 @@ pub(crate) mod tests {
             None,
             step,
             None,
+            false,
         ).await?);
 
         let input = ThoTensor::new(
@@ -1668,7 +1673,8 @@ pub(crate) mod tests {
             ,
             None,
             step,
-            trigger_oom_len
+            trigger_oom_len,
+            false
         ).await?);
 
         debug_plot!(motif_0_0.t_ref(), "motif_test")?;

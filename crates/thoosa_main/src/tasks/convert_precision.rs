@@ -544,7 +544,7 @@ mod tests {
         let output = Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await?;
         assert_eq!(output.converted().len(), 1);
 
-        let (_, loaded_module) = ws.read().load_final_net(&net_id, &Device::Cpu)?;
+        let (_, loaded_module) = ws.read().load_final_net(&net_id, &Device::Cpu, false)?;
         let variables = loaded_module.var_store().variables();
         assert!(!variables.is_empty());
         for tensor in variables.values() {
@@ -559,7 +559,7 @@ mod tests {
 
         let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ motif_layers: 2, features: 10 }));
         let mut vs = VarStore::new(Device::Cpu);
-        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params, false)?.build_tch_module(&vs.root())?;
+        let _: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
         let net_id = ws_box.save_label_net(3, &"label_a", &vs, &params)?;
 
@@ -575,7 +575,7 @@ mod tests {
         let output = Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await?;
         assert_eq!(output.converted().len(), 1);
 
-        let (_, params, loaded_module) = ws.read().load_label_net(&net_id, &Device::Cpu)?;
+        let (_, params, loaded_module) = ws.read().load_label_net(&net_id, &Device::Cpu, false)?;
         let variables = loaded_module.var_store().variables();
         assert!(!variables.is_empty());
         for tensor in variables.values() {
