@@ -6,7 +6,7 @@ use crate::batches::BatchLengths;
 use crate::my_tch::{BinaryHeadPool, MotifInitMode, ThoModule};
 use crate::parzen::optimizer::{AsyncTPEOptimizer, CompletedTrial, ConfigurationSpace, StudyDirection};
 use crate::runs::{Empty, Labeled, Logits, NetResources, SavableResult};
-use crate::utils::{mask_from_lengths, masked_max, masked_mean, tensor_mem_size};
+use crate::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram, tensor_mem_size};
 use crate::utils::{plot_series, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
@@ -34,7 +34,7 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_store::Store;
 
-use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice};
+use crate::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, MotifSlices, Slice, Spectorgram};
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use thoosa_properties_map::ToHashmap;
@@ -1065,7 +1065,7 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
-            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(v, motif)}
+            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(v, motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).unwrap().t).unwrap())))}//TODO
         }
     }
 }
@@ -1198,14 +1198,14 @@ net.closure(
 
 }
 
-pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
-    debug!("cosine_2d_motif_node: params={params:?}");
+pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<Spectorgram, SynKey>>>) -> Result<Node, ThoError> {
+    debug!("cosine_2d_motif_node: params={params:?} motif={motif:?}");
 
     let mut builder = SeqBuilder::new(0, None)?;
 
     let params =  MotifCosine2dNetParams{
-        kw: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.kw),
-        kh: motif.as_ref().map(|v|v.size().dim_2() as u32).unwrap_or(params.kw),
+        kw: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw),//time
+        kh: motif.as_ref().map(|v|v.as_ref().as_ref().size()[1] as u32).unwrap_or(params.kh),//freq
         ..params.clone()
     };
 
@@ -2423,6 +2423,43 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         .build_tch_module(&vs.root())
 }
 
+pub fn motifs_to_specs(x_train: &Tensor, desc: &str/*, path_buf: &PathBuf*/) -> Tensor {
+    let motifs = x_train.unbind(0, );
+    let mut specs = vec![];
+    // let path = path_buf.join(desc);
+    // fs::create_dir_all(&path).unwrap();
+    for (i, motif) in motifs.iter().enumerate() {
+        let motif = motif.unsqueeze(0);
+        let spec_i = motif.stft(
+            16000,
+            4000,
+            16000,
+            None::<Tensor>,
+            false,
+            true,
+            true,
+            true
+        ).squeeze_dim(0).abs(); //.transpose(0, 1);
+
+        debug!("heavy_test_train_cosine_motif_node_2d: motif={motif:?} spec_i={spec_i:?}");
+        // fs::create_dir_all(format!("/tmp/plots/spectrogram_{}")
+
+
+        //
+        // plot_spectrogram(
+        //     &spec_i,
+        //     path.join(format!("{i}_.png")),
+        //     1200,
+        //     600,
+        // ).unwrap();
+
+        specs.push(spec_i);
+    }
+
+    let specs_x = Tensor::stack(&specs, 0);
+    specs_x
+}
+
 
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, unused_mut, dead_code)]
@@ -2433,14 +2470,14 @@ mod train_tests {
         AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
         ThoBatch,
     };
-    use crate::my_tch::{MotifInitMode, ThoModule};
+    use crate::my_tch::{InitDummy, MotifInitMode, ThoModule};
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, cosine_motif_node, MotifCosineNetParams};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, cosine_motif_node, MotifCosineNetParams, cosine_2d_motif_node, MotifCosine2dNetParams, motifs_to_specs};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
     use crate::transforms::filters::BandPassFilterParamsRangeOrValue;
-    use crate::utils::{debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
+    use crate::utils::{debug_plot_impl, from, mix_x_binary_with_labels, optimizer_mem_size, pad_stack_with_mask, plot_spectrogram, set_requires_grad_in_subpath, vs_mem_size, TrainListener};
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };
@@ -2478,7 +2515,7 @@ mod train_tests {
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
     use thoosa_shared::perf_logging::set_panic_hook;
     use thoosa_shared::val::Val;
-    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, slices_len, CopyToDevice, ThoError};
+    use thoosa_shared::{batch_windows, cdt_for_dir, clc_num_batches, mono_key, pulse_in_rand, sin_v, sin_v_f, slices_len, CopyToDevice, ThoError};
     use thoosa_store::{mock_store_with_find_motifs_run_config, MockStore, SqlStore};
     use torch_sys::at_autocast_clear_cache;
     use thoosa_shared::traits::SimpleId;
@@ -2749,15 +2786,19 @@ mod train_tests {
         debug_plot_impl(&x_eval, "x_eval", 0)?;
 
         for init_mode in &crate::my_tch::MotifInitMode::list(0.4) {
-            let result = run_cosine_motif_node(&mut vs_0, motifs.shallow_clone(), &x_train, &y_train, &x_eval, &y_eval, &MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode.clone()));
+            let net = cosine_motif_node(&MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), motifs.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+
+            let result = run_cosine_motif_node(
+                &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
+                &net
+            );
             debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
         }
 
         Ok(())
     }
 
-    fn run_cosine_motif_node(vs_0: &mut VarStore, motifs: Tensor, x_train: &Tensor, y_train: &Tensor, x_eval: &Tensor, y_eval: &Tensor, params: &MotifCosineNetParams) -> Result<u32, ThoError> {
-        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_motif_node(&params, Some(Arc::new(ThoTensor::new("motifs".into(), motifs)?)))?.build_tch_module(&vs_0.root())?;
+    fn run_cosine_motif_node(vs_0: &mut VarStore, x_train: &Tensor, y_train: &Tensor, x_eval: &Tensor, y_eval: &Tensor, net: &Box<dyn ThoModule<AnyDims, AnyDims>>) -> Result<u32, ThoError> {
         let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
 
         let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), None, false)?;
@@ -2781,13 +2822,58 @@ mod train_tests {
                 return Ok(i);
             }
 
-            debug!("heavy_test_train_cosine_motif_node: x_train={x_train:?} y_train={y_train:?} logits={logits:?} logits.isnan={} last_loss={last_loss}", logits.as_ref().isnan());
+            debug!("heavy_test_train_cosine_motif_node: x_train={x_train:?} y_train={y_train:?} logits={logits:?} logits.isnan={} last_loss={last_loss}", logits.as_ref().isnan().any());
             trace!("heavy_test_train_cosine_motif_node: x_train={x_train} y_train={y_train}");
 
             opt.backward_step(&loss);
         }
         Err(ThoError::new("failed"))
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_cosine_motif_node_2d() -> Result<(), ThoError> {
+        let test_dir = Path::new("/tmp/plots/").join(cdt_for_dir());
+        fs::create_dir_all(&test_dir)?;
+
+        let motif_width= 160_000usize;
+        let batch = 64usize;
+
+        let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
+
+
+
+        let mut vs_0 = VarStore::new(Cpu);
+        // let motifs = motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.0, 2.0);
+        let motifs = Tensor::stack((0..batch/2).map(|i| {
+            Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice())
+        }).collect::<Vec<_>>().as_slice(), 0);
+
+        let kernel = motifs_to_specs(&motifs, "kernel", &test_dir);
+
+        let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
+        debug_plot_impl(&x_train, "x_train", 0)?;
+
+        let specs_x = motifs_to_specs(&x_train, "specs_x", &test_dir);
+
+        debug!("heavy_test_train_cosine_motif_node_2d: all_spects_t={specs_x:?}");
+
+
+        // let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
+        // debug_plot_impl(&x_eval, "x_eval", 0)?;
+
+        for init_mode in [MotifInitMode::Mean(InitDummy{})] {// &crate::my_tch::MotifInitMode::list(0.4) {
+            let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(motif_width as u32, 10, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+
+            let result = run_cosine_motif_node(
+                // &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
+                &mut vs_0, &specs_x, &y_train, &specs_x, &y_train,
+                &net
+            );
+            debug!("heavy_test_train_cosine_motif_node: init_mode={init_mode:?} result={result:?}");
+        }
+        Ok(())
+    }
+
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_train_self_attention_label_node() -> Result<(), ThoError> {

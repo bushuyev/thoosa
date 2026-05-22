@@ -1198,8 +1198,6 @@ mod tests {
 
         debug!("buckets=\n{buckets}");
 
-
-
         Ok(())
 
     }
@@ -1225,7 +1223,7 @@ mod tests {
 
         debug!("spec = {spec:?}");
 
-        let spec_abs =spec.squeeze_dim(0).abs().transpose(0,1);
+        let spec_abs =spec.squeeze_dim(0).abs();
         debug!("spec_abs = {spec_abs:?}");
 
         plot_spectrogram(

@@ -810,11 +810,12 @@ pub fn draw_function_plot(
 }
 
 pub fn plot_spectrogram<P: AsRef<Path>>(
-    spectrogram: &Tensor, // shape [T, F]
+    spectrogram: &Tensor, // shape [F, T]
     path: P,
     width: u32,
     height: u32,
 ) -> Result<(), ThoError> {
+    let spectrogram = spectrogram.transpose(0,1);
     let size = spectrogram.size();
 
     if size.len() != 2 {
