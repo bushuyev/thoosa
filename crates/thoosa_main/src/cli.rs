@@ -52,7 +52,7 @@ use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, S
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue};
-use thoosa_common::utils::{from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, reset_print_options, DummyListener, TrainListener};
+use thoosa_common::utils::{from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_motifs::find;
@@ -1832,38 +1832,74 @@ where
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
     let r = motif.with_data_ref(ctx.device_idx(), ctx.branch(Some("plot_motif_data"), false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
-            let run_config_id = motif.extra().find_motifs_run_config_id;
-            let channel = motif.extra().channel;
+        let run_config_id = motif.extra().find_motifs_run_config_id;
+        let channel = motif.extra().channel;
 
-            trace!("plot_motif: motif.t={}", motif.data().t_ref());
-            let all_slices = motif.data().t_ref().unbind(0);
-            let slices_len = all_slices.len();
-            let mut color_iter = DistinctColorIter::new();
-            let plot_data = all_slices
-                .into_iter()
-                .enumerate()
-                .map(|(i, t)| {
-                    Ok::<_, ThoError>((
-                        format!("{i}"),
-                        color_iter.next().unwrap_or(BLACK),
-                        t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
-                    ))
-                })
-                .collect::<Result<Vec<_>, ThoError>>()?;
+        trace!("plot_motif: motif.t={}", motif.data().t_ref());
+        let all_slices = motif.data().t_ref().unbind(0);
+        let slices_len = all_slices.len();
+        let mut color_iter = DistinctColorIter::new();
 
-            emit_or_plot_series_with_sidebar_values(
-                print_to_stdout,
-                plot_data,
-                format!("Motif: {motif_id} run id: {run_config_id} channel: {channel} number of slices: {slices_len}").as_str(),
-                resolution.plot_size((2600, 1200)),
-                &ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
-                "Motif Metrics",
-                metrics_for_plot_ref.as_slice(),
+        let target_dit = ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}"));
+
+        fs::create_dir_all(&target_dit)?;
+        let mut specs = vec![];
+        for (i, slice) in all_slices.iter().enumerate() {
+            let spec = slice.stft(
+                16000,
+                4000,
+                16000,
+                None::<Tensor>,
+                false,
+                true,
+                true,
+                true
+            );
+            let spec_abs =spec.squeeze_dim(0).abs().transpose(0,1);
+
+
+            plot_spectrogram(
+                &spec_abs,
+                &target_dit.join(format!("spec_{i}_{}.png", motif_id)),
+                1200,
+                600,
             )?;
+            specs.push(spec_abs);
+        }
+        let all_spects_t = Tensor::stack(&specs, 0).sum_dim_intlist(0, false, None);
+
+        plot_spectrogram(
+            &all_spects_t,
+            &target_dit.join(format!("spec_all_{}.png", motif_id)),
+            1200,
+            600,
+        )?;
+
+        let plot_data = all_slices
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| {
+                Ok::<_, ThoError>((
+                    format!("{i}"),
+                    color_iter.next().unwrap_or(BLACK),
+                    t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
+                ))
+            })
+            .collect::<Result<Vec<_>, ThoError>>()?;
+
+        emit_or_plot_series_with_sidebar_values(
+            print_to_stdout,
+            plot_data,
+            format!("Motif: {motif_id} run id: {run_config_id} channel: {channel} number of slices: {slices_len}").as_str(),
+            resolution.plot_size((2600, 1200)),
+            &ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
+            "Motif Metrics",
+            metrics_for_plot_ref.as_slice(),
+        )?;
 
 
-            Ok(true)
-        }).await?;
+        Ok(true)
+    }).await?;
     Ok(())
 }
 

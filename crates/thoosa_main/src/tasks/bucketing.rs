@@ -463,8 +463,7 @@ where
         Self { run_config, window, step, temp_stores_by_bucket, sample_rate, pd: PhantomData }
     }
 
-    fn save_resource_patches(&self, input: &BucketingSyncInput<'_, D, Id>) -> Result<(), ThoError> {
-        let mel_config = self.run_config.log_mel_config()?;
+    fn save_resource_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
         let patches = audio_to_log_mel_patches(input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
         let patch_ranges = patch_sample_ranges_flat(&patches, mel_config, self.window, self.step)?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
@@ -592,7 +591,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncBucketingStage::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.run_config.mel_config() {
-            BucketingConfig::Mel(_) => self.save_resource_patches(input)?,
+            BucketingConfig::Mel(mel_config) => self.save_resource_patches(input, mel_config)?,
             BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(input, plain_config)?,
         }
 
@@ -1085,13 +1084,6 @@ impl BucketRunConfig {
 
     pub fn mel_config(&self) -> &BucketingConfig {
         &self.bucket_config
-    }
-
-    pub fn log_mel_config(&self) -> Result<&LogMelPatchConfig, ThoError> {
-        match &self.bucket_config {
-            BucketingConfig::Mel(mel_config) => Ok(mel_config),
-            BucketingConfig::Plain(_) => Err(ThoError::new("BucketRunConfig::log_mel_config: bucketing config is Plain")),
-        }
     }
 
 
