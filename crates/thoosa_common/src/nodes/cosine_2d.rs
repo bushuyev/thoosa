@@ -65,7 +65,7 @@ impl MyCosineConv2d {
 
                 let proto = z_norm_dims(&patches.f_sum_dim_intlist(0, false, patches.kind())?, &[1,2], 1e-8)?; // [1,KH,KW]
 
-                let proto = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
+                let proto = Self::finalize_prototype_2d(&proto, false, true)?; // [1,1,KH,KW]
 
                 let kh_freq = size[2];//frequencies
                 let kw_time = size[3];//time
