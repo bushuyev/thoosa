@@ -111,7 +111,7 @@ pub(crate) async fn run_all(
                 &ws,
                 &store,
                 async move |run_configs| {
-                    Arc::new(
+                    Ok(Arc::new(
                         tasks::find_motifs::FindMotifsStage::new(
                             &ws_in_find_motifs,
                             &store_in_find_motifs,
@@ -120,8 +120,8 @@ pub(crate) async fn run_all(
                             fixed_find_motifs_config,
                             ThoDevice::from(1),
                             init_ctx_find_motifs
-                        ).await.expect("FindMotifsStage::new failed"),
-                    )
+                        ).await?,
+                    ))
                 },
                 || root_ctx.branch(Some("find_motifs"), true),
                 "find motifs"
@@ -158,7 +158,7 @@ pub(crate) async fn run_all(
                     &ws,
                     &store,
                     async |run_configs| {
-                        Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                        Ok(Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                             &ws,
                             &store,
                             Arc::clone(&loader),
@@ -171,7 +171,7 @@ pub(crate) async fn run_all(
                             vec![*find_motifs_run_config_id],
                             // #[cfg(test)]
                             None
-                        ).await.expect("SelectMotifsStage::new failed"))
+                        ).await?))
                     },
                     || root_ctx.branch(Some("select_motifs"), true),
                     "find_motifs"

@@ -166,10 +166,10 @@ pub struct RunAllArgs {
     pub train_motifs_epoch_size: u32,
 
     #[arg(long, default_value = "0.3")]
-    pub max_motif_net_loss: f32, //filters motif nets for label training
+    pub max_motif_net_loss: f32, //filters motif nets for label training TODO move to train labels args
 
     #[arg(long)]
-    pub selected_motif_nets_limit: Option<usize>,//filters motif nets for label training
+    pub selected_motif_nets_limit: Option<usize>,//filters motif nets for label training TODO move to train labels args
 
     #[arg(long, default_value = "100")]
     pub motif_slices_step: u32,
@@ -608,7 +608,7 @@ where
                 &ws,
                 &store,
                 async move |run_configs| {
-                    Arc::new(
+                    Ok(Arc::new(
                         crate::tasks::find_motifs::FindMotifsStage::new(
                             &init_ws,
                             &init_store,
@@ -618,8 +618,8 @@ where
                             ThoDevice::from(1),
                             init_ctx
                         )
-                        .await.expect("FindMotifsStage::new failed"),
-                    )
+                        .await?,
+                    ))
                 },
                 || root_ctx.branch(Some("find motifs"), true),
                 "find motifs",
@@ -644,13 +644,13 @@ where
                 &ws,
                 &store,
                 |run_configs| async {
-                    Arc::new(SeqScanStage::<Simple, RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new_with_chunk_size(
+                    Ok(Arc::new(SeqScanStage::<Simple, RawTensorLoader<RunCtxImpl>, RunCtxImpl>::new_with_chunk_size(
                         &ws,
                         &store,
                         loader,
                         run_configs,
                         seq_scan_args.max_chunk_size
-                    ).expect("SeqScanStage::new failed"))
+                    )?))
                 },
                 || root_ctx.branch(Some("seq scan"), true), "find motifs",
             ).await?;
@@ -679,7 +679,7 @@ where
                 &store,
                 |run_configs| async {
 
-                    Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                    Ok(Arc::new(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                         &ws,
                         &store,
                         loader,
@@ -688,7 +688,7 @@ where
                         select_motifs_args.find_motifs_run_config_ids.clone(), //TODO config
                         // #[cfg(test)]
                         None
-                    ).await.expect("SelectMotifsStage::new failed"))
+                    ).await?))
                 },
                 || root_ctx.branch(Some("select motifs"), true), "find motifs",
             ).await?;
@@ -1863,7 +1863,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     descr: &str,
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
-    F: AsyncFnOnce(Vec<RC>) -> Arc<ST>,//TODO return Result
+    F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
     ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
@@ -1891,7 +1891,7 @@ where
         descr,
     ).await?;
 
-    let stage = f(run_configs).await;
+    let stage = f(run_configs).await?;
 
     debug!("run_grid: stage={stage:?}");
 
