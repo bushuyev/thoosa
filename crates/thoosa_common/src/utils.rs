@@ -809,44 +809,132 @@ pub fn draw_function_plot(
     Ok(())
 }
 
+pub fn plot_spectrogram<P: AsRef<Path>>(
+    spectrogram: &Tensor, // shape [T, F]
+    path: P,
+    width: u32,
+    height: u32,
+) -> Result<(), ThoError> {
+    let size = spectrogram.size();
 
-pub fn plot_3d() { //TODO
-    // let root = BitMapBackend::gif(crate::bfgs::opt_tests::OUT_FILE_NAME, (600, 400), 100)?.into_drawing_area();
-    //
-    // for pitch in 9..10 {
-    //     root.fill(&WHITE)?;
-    //
-    //     let mut chart = ChartBuilder::on(&root)
-    //         .caption("2D Gaussian PDF", ("sans-serif", 20))
-    //         .build_cartesian_3d(-100.0..100.0, -100.0..100.0, -100.0..100.0)?;
-    //     chart.with_projection(|mut p| {
-    //         p.pitch = 1.57 - (1.57 - pitch as f64 / 50.0).abs();
-    //         p.scale = 0.7;
-    //         p.into_matrix() // build the projection matrix
-    //     });
-    //
-    //     chart
-    //         .configure_axes()
-    //         .light_grid_style(BLACK.mix(0.15))
-    //         .max_light_lines(3)
-    //         .draw()?;
-    //
-    //     chart.draw_series(
-    //         SurfaceSeries::xoz(
-    //             (-100..=100).map(|x| x as f64 /5.),
-    //             (-100..=100).map(|x| x as f64 /5.),
-    //             crate::bfgs::opt_tests::pdf,
-    //         )
-    //             .style_func(&|&v| (VulcanoHSL::get_color(v / 5.0)).into()),
-    //     )?;
-    //
-    //     root.present()?;
-    // }
-    //
-    // // To avoid the IO failure being ignored silently, we manually call the present function
-    // root.present().expect("Unable to write result to file, please make sure 'plotters-doc-data' dir exists under current dir");
-    // debug!("Result has been saved to {}", crate::bfgs::opt_tests::OUT_FILE_NAME);
+    if size.len() != 2 {
+        return Err(ThoError::new(format!("expected tensor shape [T, F], got {:?}", size)));
+    }
+
+    let t_bins = size[0];
+    let f_bins = size[1];
+
+    if t_bins <= 0 || f_bins <= 0 {
+        return Err(ThoError::new(format!("empty spectrogram shape {:?}", size)));
+    }
+
+    // Move to CPU and convert to double for easy scalar reading.
+    // For large spectrograms this is not the fastest approach, but it is simple and robust.
+    let spec = spectrogram
+        .to_device(Device::Cpu)
+        .to_kind(Kind::Double);
+
+    let mut min_v = f64::INFINITY;
+    let mut max_v = f64::NEG_INFINITY;
+
+    for t in 0..t_bins {
+        for f in 0..f_bins {
+            let v = spec.double_value(&[t, f]);
+            if v.is_finite() {
+                min_v = min_v.min(v);
+                max_v = max_v.max(v);
+            }
+        }
+    }
+
+    if !min_v.is_finite() || !max_v.is_finite() {
+        return Err(ThoError::new("spectrogram contains no finite values"));
+    }
+
+    let range = (max_v - min_v).max(1e-12);
+
+    let root = BitMapBackend::new(path.as_ref(), (width, height)).into_drawing_area();
+    root.fill(&WHITE)?;
+
+    let mut chart = ChartBuilder::on(&root)
+        .caption("Spectrogram", ("sans-serif", 20))
+        .margin(10)
+        .x_label_area_size(35)
+        .y_label_area_size(45)
+        .build_cartesian_2d(0i64..t_bins, 0i64..f_bins)?;
+
+    chart
+        .configure_mesh()
+        .x_desc("time bin")
+        .y_desc("frequency bin")
+        .disable_mesh()
+        .draw()?;
+
+    chart.draw_series((0..t_bins).flat_map(|t| {
+        let spec = &spec;
+
+        (0..f_bins).map(move |f| {
+            let v = spec.double_value(&[t, f]);
+
+            let x = if v.is_finite() {
+                ((v - min_v) / range).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+
+            let color = turbo_colormap(x);
+
+            // Flip frequency axis visually: low frequencies at the bottom,
+            // high frequencies at the top.
+            let y0 = f_bins - f - 1;
+            let y1 = f_bins - f;
+
+            Rectangle::new(
+                [(t, y0), (t + 1, y1)],
+                color.filled(),
+            )
+        })
+    }))?;
+
+    root.present()?;
+
+    Ok(())
 }
+
+/// Simple Turbo-like colormap.
+/// Input x should be in [0, 1].
+fn turbo_colormap(x: f64) -> RGBColor {
+    let x = x.clamp(0.0, 1.0);
+
+    // Polynomial approximation of Google's Turbo colormap.
+    let r = 34.61
+        + x * (1172.33
+        + x * (-10793.56
+        + x * (33300.12
+        + x * (-38394.49
+        + x * 14825.05))));
+
+    let g = 23.31
+        + x * (557.33
+        + x * (1225.33
+        + x * (-3574.96
+        + x * (1073.77
+        + x * 707.56))));
+
+    let b = 27.2
+        + x * (3211.10
+        + x * (-15327.97
+        + x * (27814.00
+        + x * (-22569.18
+        + x * 6838.66))));
+
+    RGBColor(
+        r.clamp(0.0, 255.0) as u8,
+        g.clamp(0.0, 255.0) as u8,
+        b.clamp(0.0, 255.0) as u8,
+    )
+}
+
 
 //from tch-0.14.0/tests/test_utils.rs
 pub fn from<'a, T>(t: &'a Tensor) -> T

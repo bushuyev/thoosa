@@ -1590,6 +1590,15 @@ pub fn sin_v(n: u32, p: f32) -> Vec<f32> {
         .collect::<Vec<f32>>()
 }
 
+pub fn sin_v_f(n: u32, f: f32, sample_rate: f32) -> Vec<f32> {
+    (0..n)
+        .map(|x| {
+            let t = x as f32 / sample_rate;
+            4.0 * (2.0 * PI * f * t).sin()
+        })
+        .collect()
+}
+
 pub fn comp_sin(n: i64) -> impl Iterator<Item = f32> {
     (0..n).map(|x| x as f32).map(move |x| {
         30. * (PI / 100. * x).sin()
