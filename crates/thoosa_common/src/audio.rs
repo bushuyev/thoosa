@@ -1157,10 +1157,10 @@ mod tests {
     use tch::{Device, IndexOp, Kind, Tensor};
     use thoosa_shared::audio_utils::compose_freqs;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
-    use thoosa_shared::ThoError;
+    use thoosa_shared::{sin_v_f, ThoError};
     use crate::audio::{assign_lsh_buckets_per_channel, fft_band_amplitudes, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes, make_lsh_planes_for_buckets, strongest_freqs_per_channel_windowed, strongest_freqs_per_channel_windowed_nms, BandAggregation};
     use crate::debug_plot;
-    use crate::utils::{debug_plot_impl, debug_plot_impl_wh, reset_print_options};
+    use crate::utils::{debug_plot_impl, debug_plot_impl_wh, plot_spectrogram, reset_print_options};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_audio() -> Result<(), ThoError>{
@@ -1200,7 +1200,41 @@ mod tests {
 
 
 
-        return Ok(());
+        Ok(())
 
+    }
+
+    #[test]
+    fn test_spectrogram() -> Result<(), ThoError> {
+
+
+        // let sig_t = oog;
+        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1,-1));
+        debug!("sig_t = {sig_t:?}");
+
+        let spec = sig_t.stft(
+            16000,
+            4000,
+            16000,
+            None::<Tensor>,
+            false,
+            true,
+            true,
+            true
+        );
+
+        debug!("spec = {spec:?}");
+
+        let spec_abs =spec.squeeze_dim(0).abs().transpose(0,1);
+        debug!("spec_abs = {spec_abs:?}");
+
+        plot_spectrogram(
+            &spec_abs,
+            "/tmp/plots/spectrogram.png",
+            1200,
+            600,
+        )?;
+
+        Ok(())
     }
 }
