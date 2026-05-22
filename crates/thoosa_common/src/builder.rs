@@ -10,6 +10,7 @@ use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHead
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
+use crate::nodes::cosine_2d::MyCosineConv2d;
 use crate::tho_tensor::ThoTensor;
 
 //https://pytorch.org/docs/stable/generated/torch.nn.Conv1d.html
@@ -91,6 +92,15 @@ pub enum Node {
     CosineConv1d {
         path:String,
         kernel: u32,
+        a: f64,
+        b: f64,
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init_mode:MotifInitMode
+    },
+    CosineConv2d {
+        path:String,
+        kw:i64,
+        kh:i64,
         a: f64,
         b: f64,
         init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
@@ -287,6 +297,20 @@ impl Node {
                 init_mode,
                 a, b
             )?),
+            Node::CosineConv2d {
+                path,
+                kw,kh,
+                a, b,
+                init,
+                init_mode
+            } => Box::new(MyCosineConv2d::new(
+                &(vs / path),
+                kw, kh,
+                init,
+                init_mode,
+                a, b
+            )?),
+
 
             Node::SharpeningHead1d {
                 path,
@@ -507,6 +531,33 @@ impl SeqBuilder {
 
         Ok(self)
     }
+
+    pub fn cosine_conv_2d<P:ToString>(
+        &mut self,
+        path: P,
+        kw: u32,
+        kh: u32,
+        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        a: f64,
+        b: f64,
+        init_mode: MotifInitMode
+    ) -> Result<&mut Self, ThoError> {
+
+        self.elts.push(Node::CosineConv2d {
+            path:path.to_string(),
+            kw:kw as i64,
+            kh:kh as i64,
+            a, b,
+            init,
+            init_mode
+        });
+
+        self.num_features = clc_conv1d_out(self.num_features, kw, ConvConfig::default(), "")?;
+        self.kernel = Some(kw);
+
+        Ok(self)
+    }
+
 
     pub fn sharpening_head_1d<P:ToString>(&mut self, path: P, in_channels: u32, out_channels: u32, k_mu: u32, k_hat: u32, p: f32, temperature: f32) -> Result<&mut Self, ThoError> {
         self.elts.push(Node::SharpeningHead1d {

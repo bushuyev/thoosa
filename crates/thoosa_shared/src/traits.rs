@@ -383,6 +383,10 @@ impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
     pub fn dim_1(&self) -> i64 {
         self.dims[1]
     }
+    //FIXME
+    pub fn dim_2(&self) -> i64 {
+        self.dims[2]
+    }
 
     pub fn dim<const DIM: usize>(&self) -> i64
     where
