@@ -762,6 +762,7 @@ pub enum MotifNetTypeArgs {
     ConvNet(MotifConvNetArgs),
     LinNet(MotifLinNetArgs),
     CosineNet(MotifCosineNetArgs),
+    Cosine2DNet(MotifCosineNetArgs),
 }
 
 impl Default for MotifNetTypeArgs {
@@ -981,10 +982,27 @@ impl MotifCosineNetParams {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct MotifCosine2dNetParams {
+    pub kw: u32,
+    pub kh: u32,
+    pub a:f64,
+    pub b:f64,
+    pub init_mode:MotifInitMode
+}
+
+impl MotifCosine2dNetParams {
+    pub fn new(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
+        Self { kw, kh, a, b, init_mode }
+    }
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub enum MotifNetTypeParams {
     LinNetParams(MotifLinNetParams),
     ConvNetParams(MotifConvNetParams),
     CosineNetParams(MotifCosineNetParams),
+    CosineNet2DParams(MotifCosine2dNetParams),
 }
 
 impl Default for MotifNetTypeParams {
@@ -1020,6 +1038,11 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b, init_mode)))
     }
 
+    pub fn new_cosine_2d(num_features: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b, init_mode)))
+    }
+
+
     pub fn from_file(path: &PathBuf) -> Result<Self, ThoError> {
         serde_json5::from_str::<MotifNetParams>(fs::read_to_string(&path)?.as_str()).map_err(
             |serde_err| ThoError::from_error(format!("read motif net params from {path:?}"), serde_err),
@@ -1027,11 +1050,12 @@ impl MotifNetParams {
     }
 
     //TODO
-    pub fn num_features(&self) -> u32 {
+    pub fn num_features(&self) -> u32 {//this is used to group motif nets + calculate overlap for StepAlignedSplitsAdjuster::new_with_overlap at thoosa_main/src/tasks/apply_motif_nets.rs
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
             MotifNetTypeParams::CosineNetParams(v) => v.num_features,
+            MotifNetTypeParams::CosineNet2DParams(v) => {v.kw * v.kh}
         }
     }
 
@@ -1041,6 +1065,7 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
+            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(v, motif)}
         }
     }
 }
@@ -1173,6 +1198,37 @@ net.closure(
 
 }
 
+pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
+    debug!("cosine_2d_motif_node: params={params:?}");
+
+    let mut builder = SeqBuilder::new(0, None)?;
+
+    let params =  MotifCosine2dNetParams{
+        kw: motif.as_ref().map(|v|v.size().dim_1() as u32).unwrap_or(params.kw),
+        kh: motif.as_ref().map(|v|v.size().dim_2() as u32).unwrap_or(params.kw),
+        ..params.clone()
+    };
+
+
+    builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("cosine_2d_motif_node: 1. t.size={:?}", t.size());
+                Ok(t.unsqueeze(1))
+            })),
+            None,
+        )?
+        .cosine_conv_2d("cosine_bank", params.kw, params.kh, motif, params.a, params.b, params.init_mode)?
+        // .closure(
+        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+        //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+        //         Ok(t.shallow_clone())
+        //     })),
+        //     None,
+        // )?
+        .end_seq()
+}
+
 pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
     debug!("cosine_motif_node: params={params:?}");
 
@@ -1184,23 +1240,23 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     };
 
 
-    builder
-        .closure(
-            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                debug!("cosine_motif_node: 1. t.size={:?}", t.size());
-                Ok(t.unsqueeze(1))
-            })),
-            None,
-        )?
-        .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?
-        // .closure(
-        //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-        //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
-        //         Ok(t.shallow_clone())
-        //     })),
-        //     None,
-        // )?
-        .end_seq()
+builder
+    .closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            debug!("cosine_motif_node: 1. t.size={:?}", t.size());
+            Ok(t.unsqueeze(1))
+        })),
+        None,
+    )?
+    .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?
+    // .closure(
+    //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+    //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+    //         Ok(t.shallow_clone())
+    //     })),
+    //     None,
+    // )?
+    .end_seq()
 
 }
 
