@@ -134,6 +134,16 @@ impl From<Vec<i64>> for AnyMetrics {
 pub struct MotifSlices;
 
 impl Dims for MotifSlices {
-    type Metrics = MonoMetrics<0, 2>; //[i64;2]; // [i64; 2];//slices x window - used to split motif's slices when calculating distances
+    type Metrics = MonoMetrics<0, 2>; // [i64; 2];//slices x window - used to split motif's slices when calculating distances
+
+}
+
+
+
+#[derive(Clone, Debug)]
+pub struct Spectorgram;
+
+impl Dims for Spectorgram {
+    type Metrics = MonoMetrics<0, 2>; // [i64; 2];//time x frequencies -
 
 }
