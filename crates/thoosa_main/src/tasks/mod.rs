@@ -21,6 +21,7 @@ pub mod select_buckets;
 pub mod stacked_moitfs_loader;
 pub mod resources_motifs_clc_dist;
 pub mod seq_scan;
+pub mod stft;
 pub mod train_motif_nets;
 pub mod motifs_batch_builder;
 pub mod apply_motif_nets;

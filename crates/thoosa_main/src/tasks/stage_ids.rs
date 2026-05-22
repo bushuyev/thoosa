@@ -15,3 +15,5 @@ pub const APPLY_MOTIF_NETS: u32 = 14;
 
 pub const SELECT_BUCKETS: u32 = 15;
 pub const EXTEND_MOTIFS: u32 = 16;
+
+pub const STFT: u32 = 17;

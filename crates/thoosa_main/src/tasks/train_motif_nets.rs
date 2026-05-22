@@ -274,7 +274,9 @@ where
         debug!("TrainMotifNets::run: motifs_by={motifs_by:?} opt_config={opt_config:?}");
 
         let (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids) = match motifs_by {
+
             MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids } => {
+
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
                 for select_motifs_run_config_id in &select_motifs_run_config_ids {
                     let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).await?;
@@ -288,6 +290,7 @@ where
                 (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids)
             }
             MotifsBy::MotifId { motif_id, select_motifs_run_config_ids } => {
+
                 let (channel, find_motifs_run_config_id) = self.store.get_motif_meta(motif_id).await?;
                 let select_motifs_run_config_ids = match select_motifs_run_config_ids {
                     Some(select_motifs_run_config_ids) => select_motifs_run_config_ids,
