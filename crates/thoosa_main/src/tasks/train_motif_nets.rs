@@ -55,6 +55,7 @@ use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::stage_ids::TRAIN_MOTIF_NETS;
+use crate::tasks::stft::{Stft, StftRunConfig};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 
@@ -83,7 +84,8 @@ where
     store: Arc<Box<dyn Store>>,
     epoch_size: u32,
     descr: Option<String>,
-    pd:PhantomData<C>
+    pd:PhantomData<C>,
+    stft: Arc<Stft<C>>
 
 }
 
@@ -149,7 +151,7 @@ where
         >,
         epoch_size: u32,
         descr: Option<String>
-    ) -> Self {
+    ) -> Result<Self, ThoError> {
         let motif_loader = Arc::new(MotifLoader::new(
             Arc::clone(&store),
             Arc::clone(&loader),
@@ -162,7 +164,16 @@ where
             ws
         ));
 
-        Self {
+        let stft = Arc::new(Stft::new(StftRunConfig::new(
+            16000,
+            None,
+            None,
+            true,
+            true,
+            true
+        ))?);
+
+        Ok(Self {
             id: mono_key!(TRAIN_MOTIF_NETS, "ApplyMotifNets").into(),
             motif_loader,
             random_slices_loader,
@@ -171,8 +182,9 @@ where
             store: Arc::clone(&store),
             epoch_size,
             descr,
+            stft,
             pd: PhantomData
-        }
+        })
     }
 
 }
@@ -371,6 +383,7 @@ where
                             MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
                             MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
                             MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone()),
+                            MotifNetTypeArgs::Cosine2DNet(net) => {MotifNetParams::new_cosine_2d(motif_width, net.a, net.b, net.init_mode.clone())}
                         };
                         let motif = if matches!(&rc.net, MotifNetTypeArgs::CosineNet(_)) { cosine_motif.as_ref().map(Arc::clone) } else { None };
                         Ok((params.motif_net(motif)?.build_tch_module(&vs.root())?, params))
@@ -765,7 +778,7 @@ mod tests {
             run_configs,
             10,
             None
-        ));
+        )?);
 
         let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)))));
 

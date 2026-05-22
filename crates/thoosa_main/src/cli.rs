@@ -744,7 +744,7 @@ where
                         run_configs,
                         train_motif_nets_args.epoch_size,
                         None,
-                    )))
+                    )?))
                 },
                 || root_ctx.branch(Some("train motif nets"), true),
             ).await?;

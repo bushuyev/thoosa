@@ -224,7 +224,7 @@ pub(crate) async fn run_all(
                                     run_configs,
                                     run_all_args.train_motifs_epoch_size,
                                     Some(label.clone())
-                                )))
+                                )?))
                             },
                             || label_ctx.branch(Some("train motif nets"), false),
                         ).await?;
