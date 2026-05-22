@@ -201,6 +201,12 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
         &self,
         label: &str,
     ) -> Result<Vec<RunConfigId>, ThoError>;
+
+    async fn export_apply_label_nets_records(
+        &self,
+        target_db_path: PathBuf,
+        label_net_run_config_ids: Vec<RunConfigId>,
+    ) -> Result<(), ThoError>;
     async fn resources_by_label(
         &self,
         min_p: f32,
@@ -383,6 +389,12 @@ mock! {
             &self,
             label: &str,
         ) -> Result<Vec<RunConfigId>, ThoError>;
+
+        async fn export_apply_label_nets_records(
+            &self,
+            target_db_path: PathBuf,
+            label_net_run_config_ids: Vec<RunConfigId>,
+        ) -> Result<(), ThoError>;
 
         async fn resources_by_label(
             &self,
@@ -1225,6 +1237,16 @@ impl Store for SqlStore {
         })
             .await
     }
+    async fn export_apply_label_nets_records(
+        &self,
+        target_db_path: PathBuf,
+        label_net_run_config_ids: Vec<RunConfigId>,
+    ) -> Result<(), ThoError> {
+        self.with_writer_conn("export_apply_label_nets_records", move |conn| {
+            Self::export_apply_label_nets_records(conn, target_db_path, label_net_run_config_ids)
+        }).await
+    }
+
 
     async fn list_resources_by_ids(
         &self,
@@ -3031,6 +3053,168 @@ impl SqlStore {
             conn_flags,
             rr: AtomicUsize::new(0),
         }))
+    }
+
+    fn export_apply_label_nets_records(conn: &mut Connection, target_db_path: PathBuf, label_net_run_config_ids: Vec<RunConfigId>) -> Result<(), ThoError> {
+        if label_net_run_config_ids.is_empty() {
+            warn!("export_apply_label_nets_records: no label_net_run_config_ids");
+            return Ok(());
+        }
+
+        let target_db_path = target_db_path.to_string_lossy().to_string();
+        conn.execute("ATTACH DATABASE ?1 AS target", params![target_db_path])?;
+
+        let result = (|| {
+            let tx = conn.transaction()?;
+
+            tx.execute_batch(
+                r#"
+                DROP TABLE IF EXISTS temp.export_label_run_config_ids;
+                DROP TABLE IF EXISTS temp.export_trained_net_ids;
+                DROP TABLE IF EXISTS temp.export_run_config_ids;
+                DROP TABLE IF EXISTS temp.export_motif_ids;
+                DROP TABLE IF EXISTS temp.export_resource_ids;
+
+                CREATE TEMP TABLE export_label_run_config_ids (id INTEGER PRIMARY KEY);
+                CREATE TEMP TABLE export_trained_net_ids (id INTEGER PRIMARY KEY);
+                CREATE TEMP TABLE export_run_config_ids (id INTEGER PRIMARY KEY);
+                CREATE TEMP TABLE export_motif_ids (id INTEGER PRIMARY KEY);
+                CREATE TEMP TABLE export_resource_ids (id INTEGER PRIMARY KEY);
+                "#,
+            )?;
+
+            for run_config_id in label_net_run_config_ids {
+                tx.execute("INSERT OR IGNORE INTO export_label_run_config_ids (id) VALUES (?1)", params![run_config_id])?;
+            }
+
+            tx.execute_batch(
+                r#"
+                INSERT OR IGNORE INTO export_trained_net_ids (id)
+                SELECT tn.id
+                FROM main.trained_nets tn
+                JOIN export_label_run_config_ids lrc ON lrc.id = tn.run_config_id;
+
+                WITH RECURSIVE net_tree(id) AS (
+                    SELECT id FROM export_trained_net_ids
+                    UNION
+                    SELECT tni.input_id
+                    FROM main.trained_nets_input tni
+                    JOIN net_tree nt ON nt.id = tni.net_id
+                )
+                INSERT OR IGNORE INTO export_trained_net_ids (id)
+                SELECT id FROM net_tree;
+
+                INSERT OR IGNORE INTO export_run_config_ids (id)
+                SELECT tn.run_config_id
+                FROM main.trained_nets tn
+                JOIN export_trained_net_ids etn ON etn.id = tn.id;
+
+                WITH RECURSIVE run_config_tree(id) AS (
+                    SELECT id FROM export_run_config_ids
+                    UNION
+                    SELECT rci.input_run_config_id
+                    FROM main.run_configs_input rci
+                    JOIN run_config_tree rct ON rct.id = rci.run_config_id
+                )
+                INSERT OR IGNORE INTO export_run_config_ids (id)
+                SELECT id FROM run_config_tree;
+
+                INSERT OR IGNORE INTO export_motif_ids (id)
+                SELECT DISTINCT sm.motif_id
+                FROM main.selected_motifs sm
+                JOIN export_run_config_ids erc ON erc.id = sm.run_config_id;
+
+                INSERT OR IGNORE INTO export_motif_ids (id)
+                SELECT DISTINCT m.id
+                FROM main.motifs m
+                JOIN export_run_config_ids erc ON erc.id = m.run_config_id;
+
+                INSERT OR IGNORE INTO export_resource_ids (id)
+                SELECT DISTINCT s.resource_id
+                FROM main.slices s
+                JOIN export_motif_ids emi ON emi.id = s.motif_id
+                WHERE s.resource_id IS NOT NULL;
+
+                INSERT OR IGNORE INTO target.imports (id, descr)
+                SELECT DISTINCT i.id, i.descr
+                FROM main.imports i
+                JOIN main.resources r ON r.import_id = i.id
+                JOIN export_resource_ids eri ON eri.id = r.id;
+
+                INSERT OR IGNORE INTO target.resources (id, key, length, import_id)
+                SELECT r.id, r.key, r.length, r.import_id
+                FROM main.resources r
+                JOIN export_resource_ids eri ON eri.id = r.id;
+
+                INSERT OR IGNORE INTO target.labels (id, label)
+                SELECT DISTINCT l.id, l.label
+                FROM main.labels l
+                WHERE EXISTS (SELECT 1 FROM main.labeled_resources lr JOIN export_resource_ids eri ON eri.id = lr.resource_id WHERE lr.label_id = l.id)
+                   OR EXISTS (SELECT 1 FROM main.run_config_values rcv JOIN export_run_config_ids erc ON erc.id = rcv.run_config_id WHERE rcv.label_id = l.id);
+
+                INSERT OR IGNORE INTO target.labeled_resources (resource_id, label_id, p)
+                SELECT lr.resource_id, lr.label_id, lr.p
+                FROM main.labeled_resources lr
+                JOIN export_resource_ids eri ON eri.id = lr.resource_id;
+
+                INSERT OR IGNORE INTO target.runs (id, descr, run_on)
+                SELECT DISTINCT r.id, r.descr, r.run_on
+                FROM main.runs r
+                JOIN main.run_configs rc ON rc.run_id = r.id
+                JOIN export_run_config_ids erc ON erc.id = rc.id;
+
+                INSERT OR IGNORE INTO target.run_configs (id, type, descr, run_on, run_id)
+                SELECT rc.id, rc.type, rc.descr, rc.run_on, rc.run_id
+                FROM main.run_configs rc
+                JOIN export_run_config_ids erc ON erc.id = rc.id;
+
+                INSERT OR IGNORE INTO target.run_configs_input (input_run_config_id, run_config_id)
+                SELECT rci.input_run_config_id, rci.run_config_id
+                FROM main.run_configs_input rci
+                JOIN export_run_config_ids input_erc ON input_erc.id = rci.input_run_config_id
+                JOIN export_run_config_ids output_erc ON output_erc.id = rci.run_config_id;
+
+                INSERT OR IGNORE INTO target.run_config_values (id, run_config_id, name, real_value, int_value, str_value, bool_value, unsigned, label_id)
+                SELECT rcv.id, rcv.run_config_id, rcv.name, rcv.real_value, rcv.int_value, rcv.str_value, rcv.bool_value, rcv.unsigned, rcv.label_id
+                FROM main.run_config_values rcv
+                JOIN export_run_config_ids erc ON erc.id = rcv.run_config_id;
+
+                INSERT OR IGNORE INTO target.motifs (id, group_ord, run_config_id, channel_id)
+                SELECT m.id, m.group_ord, m.run_config_id, m.channel_id
+                FROM main.motifs m
+                JOIN export_motif_ids emi ON emi.id = m.id;
+
+                INSERT OR IGNORE INTO target.slices (id, motif_id, run_config_id, channel_id, resource_id, slice_idx)
+                SELECT s.id, s.motif_id, s.run_config_id, s.channel_id, s.resource_id, s.slice_idx
+                FROM main.slices s
+                JOIN export_motif_ids emi ON emi.id = s.motif_id
+                JOIN export_run_config_ids erc ON erc.id = s.run_config_id;
+
+                INSERT OR IGNORE INTO target.selected_motifs (motif_id, run_config_id, rate)
+                SELECT sm.motif_id, sm.run_config_id, sm.rate
+                FROM main.selected_motifs sm
+                JOIN export_motif_ids emi ON emi.id = sm.motif_id
+                JOIN export_run_config_ids erc ON erc.id = sm.run_config_id;
+
+                INSERT OR IGNORE INTO target.trained_nets (id, net_path, run_config_id, loss)
+                SELECT tn.id, tn.net_path, tn.run_config_id, tn.loss
+                FROM main.trained_nets tn
+                JOIN export_trained_net_ids etn ON etn.id = tn.id;
+
+                INSERT OR IGNORE INTO target.trained_nets_input (input_id, net_id)
+                SELECT tni.input_id, tni.net_id
+                FROM main.trained_nets_input tni
+                JOIN export_trained_net_ids input_etn ON input_etn.id = tni.input_id
+                JOIN export_trained_net_ids output_etn ON output_etn.id = tni.net_id;
+                "#,
+            )?;
+
+            tx.commit()?;
+            Ok::<_, ThoError>(())
+        })();
+
+        conn.execute_batch("DETACH DATABASE target;")?;
+        result
     }
 
     fn create_tables( conn: &mut Connection) -> Result<(), ThoError> {
