@@ -5,7 +5,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::batches::BatchLengths;
-use crate::dims::{Dims, MotifSlices};
+use crate::dims::{Dims, MotifSlices, Spectorgram};
 use crate::my_tch::{MotifInitMode, MyCosineConv1d, ThoModule};
 use crate::tho_tensor::ThoTensor;
 
@@ -28,7 +28,7 @@ impl MyCosineConv2d {
         vs: &Path,
         kw: i64,
         kh: i64,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
         init_mode: MotifInitMode,
         a: f64,
         b: f64,
@@ -45,7 +45,7 @@ impl MyCosineConv2d {
                     return Err(ThoError::new(format!("expected motif patches [N,1,{kh},{kw}], got {:?}", sz)));
                 }
 
-                let proto = patches.f_sum_dim_intlist(0, true, patches.kind())?; // [1,KH,KW]
+                let proto = patches.f_sum_dim_intlist(0, false, patches.kind())?; // [1,KH,KW]
 
                 let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
 

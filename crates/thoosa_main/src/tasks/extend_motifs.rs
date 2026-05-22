@@ -689,7 +689,7 @@ where
         debug!("ExtendMotifsStage::run: input={input:?}");
 
         let resources_config = with_data!(ctx.branch("extend_motifs_load_resources_for_selection".into(), false), input; |_ctx, input: &ExtendMotifsInput| {
-            Ok::<_, ThoError>((input.resources_input().resources_config().clone()))
+            Ok::<_, ThoError>(input.resources_input().resources_config().clone())
         })?;
         let resources = Arc::new(resources_config.to_resources(&self.store).await?);
         if resources.is_empty() {

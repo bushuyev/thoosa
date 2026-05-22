@@ -5,7 +5,7 @@ use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig};
 use tch::{Tensor, nn, no_grad};
 
 use crate::batches::BatchLengths;
-use crate::dims::{AnyDims, Dims, MotifSlices};
+use crate::dims::{AnyDims, Dims, MotifSlices, Spectorgram};
 use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear, MotifInitMode};
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::comp_id::SynKey;
@@ -103,7 +103,7 @@ pub enum Node {
         kh:i64,
         a: f64,
         b: f64,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
         init_mode:MotifInitMode
     },
     SharpeningHead1d {
@@ -537,7 +537,7 @@ impl SeqBuilder {
         path: P,
         kw: u32,
         kh: u32,
-        init: Option<Arc<ThoTensor<MotifSlices, SynKey>>>,
+        init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
         a: f64,
         b: f64,
         init_mode: MotifInitMode
