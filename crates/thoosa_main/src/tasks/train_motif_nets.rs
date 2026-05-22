@@ -28,12 +28,12 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
-use thoosa_common::dims::{Batch, Dims, MotifProbability, MotifSlices, Slice, ThoBatch};
+use thoosa_common::dims::{Batch, Dims, MotifProbability, MotifSlices, Slice, Spectorgram, ThoBatch};
 use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{Labels, ThoTensor};
-use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
+use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, motifs_to_specs};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -191,7 +191,7 @@ where
 
 fn train_motif_run_configs_may_use_cosine_net(run_configs: &OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields>) -> bool {
     fn is_cosine_net_field(field: &TrainMotifNetRunConfigFields) -> bool {
-        matches!(field, TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(_)))
+        matches!(field, TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::CosineNet(_)) | TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::Cosine2DNet(_)))
     }
 
     run_configs.grid_run_config_source().const_params().iter().any(|v| is_cosine_net_field(v.path()))
@@ -355,7 +355,7 @@ where
                 let cosine_motif = if needs_cosine_motif {
                     Some(with_data!(ctx.branch(Some("train_motif_nets_cosine_motif"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
 
-                        let src = motif.data().as_ref();
+                        let src = motifs_to_specs(motif.data().as_ref(), "kernel");
                         let mut dst = src.f_zeros_like()?;
                         dst.f_copy_(&src)?;
                         Ok::<_, ThoError>(Arc::new(ThoTensor::<MotifSlices, SynKey>::new(motif.id().clone(), dst)?))
@@ -363,6 +363,11 @@ where
                 } else {
                     None
                 };
+
+                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = with_data!(ctx.branch("zzz".into(), false), motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                    let specs = motifs_to_specs(motif.data().as_ref(), "kernel");
+                    Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(motif.id().clone(), specs)?, motif.extra().clone()))))
+                })?;
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
 

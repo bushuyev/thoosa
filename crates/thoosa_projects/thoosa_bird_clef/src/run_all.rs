@@ -505,7 +505,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 2000, end: 64000}, step: Some((8000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 32000, end: 64000}, step: Some((8000, 0)) },
             // window: RangeOrValue::Value(10000),
             // freq_filter: None,
             freq_filter: Some(vec![
@@ -606,7 +606,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             //     head_pool: None,
             // })
 
-            net: train_nets::MotifNetTypeArgsRangeOrValue::CosineNet(MotifCosineNetArgsRangeOrValue{
+            net: train_nets::MotifNetTypeArgsRangeOrValue::Cosine2DNet(MotifCosineNetArgsRangeOrValue{
                 // step: RangeOrValue::Value(1),
                 // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
                 // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
