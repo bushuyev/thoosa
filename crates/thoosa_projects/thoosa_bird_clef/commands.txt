@@ -37,4 +37,4 @@ cargo run --release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-
 
 
 OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE
-systemd-run --user --scope -p MemoryMax=20G  -p CPUQuota=400%   -E CUDA_VISIBLE_DEVICES= -E OMP_NUM_THREADS=1 -E OMP_DYNAMIC=FALSE -E THOOSA_NUM_INTEROP_THREADS=2 cargo run --profile final-release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/ --run-id=5  infer --limit=600 --input-dir=/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes  --motif-slices-step=30000
+systemd-run --user --scope -p MemoryMax=20G  -p CPUQuota=400%   -E CUDA_VISIBLE_DEVICES= -E OMP_NUM_THREADS=1 -E OMP_DYNAMIC=FALSE -E THOOSA_NUM_INTEROP_THREADS=2 cargo run --profile final-release --bin thoosa_bird_clef  -- --term-logger-level=INFO --write-logger-level=INFO --ws-path=/home/bu/tmp/ws_clef/  --run-id=13 infer --limit=600 --input-dir=/home/bu/dvl/data/kaggle/birdclef-2026/train_soundscapes  --motif-slices-step=32000
