@@ -1,18 +1,21 @@
 use std::sync::Arc;
+use log::debug;
 use tch::{nn, Kind, Tensor};
 use tch::nn::Path;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
 use crate::batches::BatchLengths;
+use crate::debug_plot;
 use crate::dims::{Dims, MotifSlices, Spectorgram};
 use crate::my_tch::{MotifInitMode, MyCosineConv1d, ThoModule};
 use crate::tho_tensor::ThoTensor;
+use crate::utils::z_norm_dims;
 
 #[derive(Debug)]
 pub struct  MyCosineConv2d {
-    kh:i64,
-    kw:i64,
+    kh:i64,//frequencies
+    kw:i64,//time
     kernel: Tensor,
     /// Learnable logit scale
     pub alpha: Tensor,
@@ -26,39 +29,41 @@ pub struct  MyCosineConv2d {
 impl MyCosineConv2d {
     pub fn new(
         vs: &Path,
-        kw: i64,
-        kh: i64,
         init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
         init_mode: MotifInitMode,
         a: f64,
         b: f64,
     ) -> Result<Self, ThoError> {
-        let kernel = match init {
-            None => {
-                vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
-            }
-            Some(motif_patches) => {
-                let patches = Self::ensure_motif_patches_4d(&motif_patches.as_ref().as_ref())?; // [N,1,KH,KW]
-                let sz = patches.size();
-
-                if sz[2] != kh || sz[3] != kw {
-                    return Err(ThoError::new(format!("expected motif patches [N,1,{kh},{kw}], got {:?}", sz)));
-                }
-
-                let proto = patches.f_sum_dim_intlist(0, false, patches.kind())?; // [1,KH,KW]
-
-                let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
-
-                let mut kernel = vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?;
-
-                tch::no_grad(|| -> Result<(), ThoError> {
-                    kernel.f_copy_(&kernel_init)?;
-                    Ok(())
-                })?;
-
-                kernel
-            }
+        let Some(proto) = init else {
+            panic!("no kernel")
         };
+
+        debug_plot!(proto.as_ref().as_ref(), "kernel_", plot_repeats=11)?;
+
+        debug!("MyCosineConv2d::new: 0. proto={proto:?}");
+        let patches = Self::ensure_motif_patches_4d(&proto.as_ref().as_ref())?; // [N,1,KH,KW]
+        let size = patches.size();
+
+        // if sz[2] != kh || sz[3] != kw {
+        //     return Err(ThoError::new(format!("expected motif patches [N,1,{kh},{kw}], got {:?}", sz)));
+        // }
+        let kh = size[2];//frequencies
+        let kw = size[3];//time
+
+        let proto = z_norm_dims(&patches.f_sum_dim_intlist(0, false, patches.kind())?, &[1,2], 1e-8)?; // [1,KH,KW]
+
+        // let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
+
+        let mut kernel = vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?;
+
+
+        debug!("MyCosineConv2d::new: 1. kernel={kernel:?}");
+
+        tch::no_grad(|| -> Result<(), ThoError> {
+            kernel.f_copy_(&proto)?;
+            Ok(())
+        })?;
+
 
         let alpha = vs.f_var("alpha", &[], nn::Init::Const(a))?;
         let beta = vs.f_var("beta", &[], nn::Init::Const(b))?;
@@ -124,7 +129,9 @@ impl MyCosineConv2d {
 
     /// x: [B,H,W] or [B,1,H,W]
     /// returns similarity map: [B,1,H_out,W_out]
-    pub fn forward_map(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn forward(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+        debug!("MyCosineConv2d::forward: x={x:?}");
+
         let x = Self::ensure_4d(x)?;
         let sz = x.size();
 
@@ -206,9 +213,13 @@ impl MyCosineConv2d {
 
         let score = num.f_div(&x_norm)?; // cosine-like score
 
-        Ok(score
+        let out = score
             .f_mul(&self.alpha)?
-            .f_add(&self.beta)?)
+            .f_add(&self.beta)?;
+
+        debug!("MyCosineConv2d::forward: out={out:?}");
+
+        Ok(out)
     }
 
 }
@@ -219,7 +230,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv2d {
     /// For full-size matching where input H/W equals kernel H/W.
     /// Returns [B,1].
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        let y = self.forward_map(x_in.as_ref())?; // [B,1,1,1] if full match
+        let y = self.forward(x_in.as_ref())?; // [B,1,1,1] if full match
         Ok(y.f_squeeze_dim(3)?.f_squeeze_dim(2)?.into())
     }
 }

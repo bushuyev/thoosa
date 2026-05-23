@@ -188,7 +188,7 @@ where
             .size()
             .try_into()
             .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
-            .unwrap() //TODO
+            .unwrap_or(Self::Metrics::default())
     }
 
     fn device(&self) -> usize {

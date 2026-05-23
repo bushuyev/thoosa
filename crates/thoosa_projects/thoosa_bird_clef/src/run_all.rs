@@ -14,7 +14,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
+use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosine2DNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZNormFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;
@@ -573,7 +573,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             id: None,
             common_training_args: CommonTrainingRunConfigRangeOrValue {
                 epochs: RangeOrValue::Value(20),
-                batch_size: RangeOrValue::Value(100),
+                batch_size: RangeOrValue::Value(20),
                 // lr: RangeOrValue::Value(0.0001),
                 lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
                 patience: RangeOrValue::Value(3),
@@ -606,7 +606,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             //     head_pool: None,
             // })
 
-            net: train_nets::MotifNetTypeArgsRangeOrValue::Cosine2DNet(MotifCosineNetArgsRangeOrValue{
+            net: train_nets::MotifNetTypeArgsRangeOrValue::Cosine2DNet(MotifCosine2DNetArgsRangeOrValue{
                 // step: RangeOrValue::Value(1),
                 // channels: RangeOrValue::Range { range: Range { start: 4, end: 32 }, step: None },
                 // kernel: RangeOrValue::Range { range: Range { start: 10, end: 100 }, step: None },
