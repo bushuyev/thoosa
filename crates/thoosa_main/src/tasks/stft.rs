@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tch::Tensor;
-use thoosa_common::dims::{MotifSlices, Spectorgram};
+use thoosa_common::dims::{Batch, MotifSlices, Spectorgram};
 use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
