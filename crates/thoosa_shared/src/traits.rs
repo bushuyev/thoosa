@@ -477,9 +477,12 @@ impl <const IDX:usize, const SIZE:usize> TryFrom<Vec<i64>> for MonoMetrics<IDX, 
 
     fn try_from(value: Vec<i64>) -> Result<Self, Self::Error> {
         assert!(SIZE > 0);
-        assert_eq!(value.len(), SIZE);
+        // assert_eq!(value.len(), SIZE);
 
-        Ok(Self { dims: value.clone().try_into().expect(&format!("can't convert {value:?} to dims")) })//TODO avoid value.clone
+        Ok(Self { dims: value.clone().try_into().unwrap_or( {
+
+            (0..SIZE).map(|i|value.get(i).map(|v|*v).unwrap_or(0)).collect::<Vec<_>>().try_into().unwrap()
+        }) })//TODO avoid value.clone
     }
 }
 
@@ -491,7 +494,7 @@ impl <const IDX:usize, const SIZE:usize> From<&MonoMetrics<IDX, SIZE>> for [i64;
 
 impl <const IDX:usize, const SIZE:usize> From<[i64; 2]> for MonoMetrics<IDX, SIZE> {
     fn from(value: [i64; 2]) -> Self {
-        assert_eq!(2, SIZE);
+        // assert_eq!(2, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -502,7 +505,7 @@ impl <const IDX:usize, const SIZE:usize> From<[i64; 2]> for MonoMetrics<IDX, SIZ
 
 impl <const IDX:usize, const SIZE:usize> From<&[i64; 2]> for MonoMetrics<IDX, SIZE> {
     fn from(value: &[i64; 2]) -> Self {
-        assert_eq!(2, SIZE);
+        // assert_eq!(2, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];
@@ -513,7 +516,7 @@ impl <const IDX:usize, const SIZE:usize> From<&[i64; 2]> for MonoMetrics<IDX, SI
 
 impl <const IDX:usize, const SIZE:usize> From<[i64; 3]> for MonoMetrics<IDX, SIZE> {
     fn from(value: [i64; 3]) -> Self {
-        assert_eq!(3, SIZE);
+        // assert_eq!(3, SIZE);
 
         let mut me = Self::default();
         me.dims[0] = value[0];

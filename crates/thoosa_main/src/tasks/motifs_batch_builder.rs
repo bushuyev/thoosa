@@ -34,7 +34,7 @@ pub fn make_batch_with(
 ) -> TchResult<Tensor> {
     debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}",in_tensor.size());
 
-    let (num_records, _seq_len) = in_tensor.size2()?; // ensures 2-D and returns (N, M)
+    let (num_records, ..) = in_tensor.size3()?; // ensures 2-D and returns (N, M)
     let device = in_tensor.device();
     let kind = in_tensor.kind();
 
@@ -44,11 +44,15 @@ pub fn make_batch_with(
     ));
 
     // Case 1: enough data — sample without replacement.
-    if num_records > 2 * batch_size {
-        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?
-            .f_narrow(0, 0, batch_size)?;
-        return Ok(in_tensor.f_index_select(0, &idx)?);
-    }
+    // if num_records > 2 * batch_size {
+        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size.min(num_records))?;
+
+    let selected = in_tensor.f_index_select(0, &idx)?;
+
+    debug!("make_batch_with: idx={idx} selected={selected:?}");
+
+    return Ok(selected);
+    // }
 
     // Case 2: data paucity — build a batch via sampling with replacement,
     // then mixup (optional) and jitter (optional).
@@ -128,7 +132,7 @@ mod tests {
     }
 
     #[test]
-    fn samples_without_replacement_when_enough_rows() {
+    fn test_samples_without_replacement_when_enough_rows() {
         tch::manual_seed(42);
         let n = 30;
         let b = 10;
@@ -149,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn small_n_mixup_only_stays_in_convex_hull() {
+    fn test_small_n_mixup_only_stays_in_convex_hull() {
         tch::manual_seed(123);
         let n = 3;
         let b = 8;
@@ -175,7 +179,7 @@ mod tests {
     }
 
     #[test]
-    fn small_n_jitter_only_adds_noise() {
+    fn test_small_n_jitter_only_adds_noise() {
         tch::manual_seed(7);
         let n = 2;
         let b = 12;
@@ -191,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn dtype_preserved_in_small_n_branch() {
+    fn test_dtype_preserved_in_small_n_branch() {
         tch::manual_seed(9);
         let n = 2;
         let b = 5;

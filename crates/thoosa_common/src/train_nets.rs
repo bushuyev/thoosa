@@ -713,6 +713,24 @@ pub struct MotifCosineNetArgs {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct MotifCosine2DNetArgs {
+
+    #[in_map]
+    #[run_config]
+    pub a:f64,
+
+    #[in_map]
+    #[run_config]
+    pub b: f64,
+
+    #[in_map]
+    #[run_config]
+    pub init_mode:MotifInitMode
+
+}
+
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct BinaryHeadMax{}
 
 
@@ -762,7 +780,7 @@ pub enum MotifNetTypeArgs {
     ConvNet(MotifConvNetArgs),
     LinNet(MotifLinNetArgs),
     CosineNet(MotifCosineNetArgs),
-    Cosine2DNet(MotifCosineNetArgs),
+    Cosine2DNet(MotifCosine2DNetArgs),
 }
 
 impl Default for MotifNetTypeArgs {
@@ -1038,8 +1056,8 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b, init_mode)))
     }
 
-    pub fn new_cosine_2d(num_features: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b, init_mode)))
+    pub fn new_cosine_2d(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNet2DParams(MotifCosine2dNetParams::new(kw, kh, a, b, init_mode)))
     }
 
 
@@ -1061,11 +1079,12 @@ impl MotifNetParams {
 
     //TODO
     pub fn motif_net(&self, motif: Option<Arc<ThoTensor<MotifSlices, SynKey>>>) -> Result<Node, ThoError> {
+        debug!("motif_net: motif {motif:?}");
         match &self.net_type {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
-            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(v, motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).unwrap().t).unwrap())))}//TODO
+            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(v, motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t).unwrap())))}//TODO
         }
     }
 }
@@ -2423,6 +2442,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
         .build_tch_module(&vs.root())
 }
 
+///returns [batch x frequencies x time]
 pub fn motifs_to_specs(x_train: &Tensor, desc: &str/*, path_buf: &PathBuf*/) -> Tensor {
     let motifs = x_train.unbind(0, );
     let mut specs = vec![];
@@ -2441,7 +2461,7 @@ pub fn motifs_to_specs(x_train: &Tensor, desc: &str/*, path_buf: &PathBuf*/) -> 
             true
         ).squeeze_dim(0).abs(); //.transpose(0, 1);
 
-        debug!("heavy_test_train_cosine_motif_node_2d: motif={motif:?} spec_i={spec_i:?}");
+        debug!("motifs_to_specs: motif={motif:?} spec_i={spec_i:?}");
         // fs::create_dir_all(format!("/tmp/plots/spectrogram_{}")
 
 
@@ -2848,12 +2868,12 @@ mod train_tests {
             Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice())
         }).collect::<Vec<_>>().as_slice(), 0);
 
-        let kernel = motifs_to_specs(&motifs, "kernel", &test_dir);
+        let kernel = motifs_to_specs(&motifs, "kernel"/*, &test_dir*/);
 
         let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
         debug_plot_impl(&x_train, "x_train", 0)?;
 
-        let specs_x = motifs_to_specs(&x_train, "specs_x", &test_dir);
+        let specs_x = motifs_to_specs(&x_train, "specs_x"/*, &test_dir*/);
 
         debug!("heavy_test_train_cosine_motif_node_2d: all_spects_t={specs_x:?}");
 
