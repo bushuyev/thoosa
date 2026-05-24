@@ -132,7 +132,7 @@ where
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    for<'a> NF:Fn(&'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
@@ -160,7 +160,7 @@ where
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    for<'a> NF:Fn(&'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
@@ -179,7 +179,7 @@ where
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    NF:Fn(&RC,Arc<Mutex<VarStore>>)->BoxFuture<Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
@@ -203,14 +203,6 @@ where
         validation_step: u32,
         descr:String
     ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
-        debug!("TrainNet::run_inner: descr={descr}");
-        let (node, params) = {
-            let vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs));
-            match (self.net)(&run_config, &vs_guard) {
-                Ok(v) => v,
-                Err(e) => return Box::pin(async { Err(e) }),
-            }
-        };
         let optimizer = {
             let vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs));
             match (self.optimizer)(&run_config, &vs_guard) {
@@ -219,25 +211,30 @@ where
             }
         };
 
-        let device = Device::from(ThoDevice::from(tho_device_idx));
-        let epochs = (self.epochs)(&run_config);
-
-        let self_x_f = Arc::clone(&self);
-        let train_step = Arc::new(TrainStep::new(
-            device,
-            node,
-            optimizer,
-            Arc::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)),
-            self.loss_fn,
-        ));
-        let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
-
-        let mut bad_epochs = 0u32;
-        let patience = run_config.as_ref().patience;
-        let min_delta = run_config.as_ref().min_delta;
 
         Box::pin(async move {
+            debug!("TrainNet::run_inner: descr={descr}");
+            let (node, params) =  (self.net)(&run_config, Arc::clone(&vs)).await?;
+
+            let device = Device::from(ThoDevice::from(tho_device_idx));
+            let epochs = (self.epochs)(&run_config);
+
+            let self_x_f = Arc::clone(&self);
+            let train_step = Arc::new(TrainStep::new(
+                device,
+                node,
+                optimizer,
+                Arc::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)),
+                self.loss_fn,
+            ));
+            let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+            let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
+
+            let mut bad_epochs = 0u32;
+            let patience = run_config.as_ref().patience;
+            let min_delta = run_config.as_ref().min_delta;
+
+
 
             let batch = (self.batch)(ctx.branch(Some("train_batch"), false), &run_config).await?;
             debug!("TrainNet::run_inner: descr={descr} device={:?} epochs={}", train_step.as_ref().device(), epochs);
@@ -375,7 +372,7 @@ where
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig>,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    for<'a> NF:Fn(&'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
@@ -395,7 +392,7 @@ where
     BF:Fn(C, &RC)->BoxFuture<Result<B, ThoError>> +  Send + Sync + 'static,
     P: FieldName + Send + Sync + 'static,
     RC: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + Send + Sync + 'static + AsRef<CommonTrainingRunConfig> + ToHashmap,
-    NF:Fn(&RC,&VarStore)->Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError> +  Send + Sync + 'static,
+    for<'a> NF:Fn(&'a RC,Arc<Mutex<VarStore>>)->BoxFuture<'a, Result<(Box<dyn ThoModule<Batch<DX>, Batch<DY>>>, NP), ThoError>> +  Send + Sync + 'static,
     FO:Fn(&RC,&VarStore)->Result<Optimizer, ThoError> +  Send + Sync + 'static,
     XF: Fn(ThoBatch<DX>) -> ThoBatch<DX>+  Send + Sync + 'static,
     NP: Default + Debug + Send + Sync + 'static,
@@ -751,10 +748,13 @@ mod tests {
     use crate::tasks::train_net::{TrainNet, TrainNetInput};
     use futures::FutureExt;
     use log::debug;
+    use mockall::PredicateBoxExt;
+    use parking_lot::Mutex;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::train_nets::AdamWRangeOrValue;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
+    use futures_util::future::BoxFuture;
 
     #[derive(Clone, Debug)]
     struct DummyX;
@@ -827,18 +827,6 @@ mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-        let net_fn = |_rc: &DummyRunConfig, vs: &VarStore| {
-            let net: Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>> =
-                Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(
-                    vs.root() / "linear",
-                    1,
-                    1,
-                    LinearConfig::default(),
-                    #[cfg(any(debug_assertions, tho_debug))]
-                    "test_train_net".to_string(),
-                )?);
-            Ok((net, ())) // Net params, dummy
-        };
         let opt_config = Arc::new(OptConfig::new(10, 3));
         let run_config = Arc::new(
             DummyRunConfigRangeOrValue {
@@ -883,7 +871,20 @@ mod tests {
         let train_net: Arc<TrainNet<MockRunCtx, _, _, _, _, _, _, _, (), _, _, _>> = Arc::new(
             TrainNet::new(
                 move |c:MockRunCtx, _rc: &DummyRunConfig| ready(Ok(Arc::clone(&mock_test_batch))).boxed(),
-                net_fn,
+                |_rc: &DummyRunConfig, vs:Arc<Mutex<VarStore>>| {
+                    async move {
+                        let net: Box<dyn ThoModule<Batch<DummyX>, Batch<DummyY>>> =
+                            Box::new(my_linear::<_, Batch<DummyX>, Batch<DummyY>>(
+                                vs.lock().root() / "linear",
+                                1,
+                                1,
+                                LinearConfig::default(),
+                                #[cfg(any(debug_assertions, tho_debug))]
+                                "test_train_net".to_string(),
+                            )?);
+                        Ok((net, ())) // Net params, dummy
+                    }.boxed()
+                },
                 Arc::clone(&opt_config),
                 Arc::clone(&run_config),
                 dummy_loss_fn,

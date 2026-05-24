@@ -59,6 +59,7 @@ use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
+use crate::tasks::stft::{StftRunConfig, SyncStft};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 
 
@@ -453,7 +454,7 @@ where
             if inputs_by_filter_group.contains_key(&group_key) {
                 continue;
             }
-            let filtered_input = match &apply_motif_net.freq_filter {
+            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = match &apply_motif_net.freq_filter {
                 Some(freq_filter) => {
                     debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id, apply_motif_net.freq_filter_find_motifs_run_config_id);
 
@@ -1015,6 +1016,7 @@ where
     #[cfg(test)]
     fail_if_size_bigger_than:Option<usize>,
     motif_id:MonoKey,
+    stft:SyncStft<C>
 }
 impl <C> ApplyMotifNet<C>
 where
@@ -1033,6 +1035,14 @@ where
 
         debug!("ApplyMotifNet::new: net_wrapper.id={:?}", net_wrapper.id());
 
+        let stft = SyncStft::new("".into(), StftRunConfig::new(
+            16000,
+            Some(4000),
+            Some(4000),
+            true,
+            true,
+            true
+        ));
 
         Self {
             id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + net_wrapper.id(),
@@ -1044,6 +1054,7 @@ where
             pd: PhantomData ,
             #[cfg(test)]
             fail_if_size_bigger_than,
+            stft,
             motif_id: mono_key!(motif_id, "motif_id")
         }
     }
@@ -1092,7 +1103,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let out_id = self.out_id(&input.id());
 
-        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
+        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id(), Some(&self.stft))?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
@@ -1101,13 +1112,17 @@ impl <C> SyncStage for ApplyMotifNet<C> where
     }
 }
 
-pub fn apply_motif_net_forward(
+pub fn apply_motif_net_forward<C>(
     out_id: SynKey,
     input: &ThoTensor<ChannelsData2, SynKey>,
     motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
     slice_step: u32,
     input_id: &SynKey,
-) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError> {
+    stft: Option<&SyncStft<C>>,
+) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError>
+where
+    C: RunCtx + Adjustable + 'static
+{
     let motif_id = motif_net.extra().motif_id();
     let c = motif_net.extra().channel() as i64;
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
@@ -1126,7 +1141,11 @@ pub fn apply_motif_net_forward(
     let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
     debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
-    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices); //.f_totype(Float)?
+    let stft_slices = stft.unwrap().build_spectrogram(&slices.totype(Float))?;
+
+    debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} stft_slices={stft_slices:?}");
+
+    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(stft_slices); //.f_totype(Float)?
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 

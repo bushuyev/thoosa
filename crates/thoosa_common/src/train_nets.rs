@@ -1001,8 +1001,8 @@ impl MotifCosineNetParams {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct MotifCosine2dNetParams {
-    pub kw: u32,
-    pub kh: u32,
+    pub kw_time: u32,
+    pub kh_freq: u32,
     pub a:f64,
     pub b:f64,
     pub init_mode:MotifInitMode
@@ -1010,7 +1010,7 @@ pub struct MotifCosine2dNetParams {
 
 impl MotifCosine2dNetParams {
     pub fn new(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
-        Self { kw, kh, a, b, init_mode }
+        Self { kw_time: kw, kh_freq: kh, a, b, init_mode }
     }
 }
 
@@ -1073,7 +1073,7 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
             MotifNetTypeParams::CosineNetParams(v) => v.num_features,
-            MotifNetTypeParams::CosineNet2DParams(v) => {v.kw * v.kh}
+            MotifNetTypeParams::CosineNet2DParams(v) => {v.kw_time * v.kh_freq }
         }
     }
 
@@ -1084,7 +1084,10 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => lin_motif_node(v),
             MotifNetTypeParams::ConvNetParams(v) => conv_motif_node(v),
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
-            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(v, motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t).unwrap())))}//TODO
+            MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(
+                v,
+                motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t).unwrap()))
+            )}//TODO
         }
     }
 }
@@ -1222,9 +1225,10 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
 
     let mut builder = SeqBuilder::new(0, None)?;
 
+
     let params =  MotifCosine2dNetParams{
-        kw: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw),//time
-        kh: motif.as_ref().map(|v|v.as_ref().as_ref().size()[1] as u32).unwrap_or(params.kh),//freq
+        kw_time: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
+        kh_freq: motif.as_ref().map(|v|v.as_ref().as_ref().size()[1] as u32).unwrap_or(params.kh_freq),//freq
         ..params.clone()
     };
 
@@ -1237,7 +1241,7 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
             })),
             None,
         )?
-        .cosine_conv_2d("cosine_bank", params.kw, params.kh, motif, params.a, params.b, params.init_mode)?
+        .cosine_conv_2d("cosine_bank", params.kw_time, params.kh_freq, motif, params.a, params.b, params.init_mode)?
         // .closure(
         //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
         //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
