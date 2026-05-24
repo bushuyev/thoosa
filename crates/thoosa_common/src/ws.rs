@@ -214,7 +214,7 @@ impl FsWorkspace {
         let params_for_builder = motif_node_params.clone();
 
         let module = ThoModuleWithStore::load(
-            mono_key!("MotifNet", "MotifNet") + &mono_key!(model_path.to_string_lossy().to_string(), "motif_model"),
+            mono_key!(model_path.to_string_lossy().to_string(), "motif_model").into(),
             move |path: &nn::Path| params_for_builder.motif_net(None)?.build_tch_module(path),
             model_path,
             *device,

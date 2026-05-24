@@ -158,7 +158,7 @@ impl Select<SyncStftSelector> for ThoTensor<Batch<MotifSlices>, SynKey> {
 }
 
 #[derive(Debug, Named)]
-struct SyncStft<C>
+pub struct SyncStft<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -171,11 +171,11 @@ impl<C> SyncStft<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn new(id: SynKey, run_config: StftRunConfig) -> Self {
+    pub fn new(id: SynKey, run_config: StftRunConfig) -> Self {
         Self { id, run_config, pd: PhantomData }
     }
 
-    fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
+    pub fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
         self.run_config.validate()?;
         let input_size = input.size();
         if input_size.len() != 2 && input_size.len() != 3 {

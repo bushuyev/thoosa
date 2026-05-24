@@ -8,12 +8,13 @@ use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use log::{debug, trace};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::future::ready;
 use std::marker::PhantomData;
 use std::sync::Arc;
+
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
@@ -221,9 +222,9 @@ where
 
                     ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len)).boxed()
                 },
-                move |rc: &TrainFinalNetRunConfig, vs: &VarStore| {
+                move |rc: &TrainFinalNetRunConfig, vs: Arc<Mutex<VarStore>>| {
                     let net_params = FinalNetParams::new(num_label_nets, labels_len as u32, rc.net.num_layers);
-                    Ok((final_net(&net_params)?.build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&vs.root())?, net_params))
+                    ready(Ok((final_net(&net_params).unwrap().build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&vs.lock().root()).unwrap(), net_params))).boxed()
                 },
                 opt_config,
                 train_final_run_configs,

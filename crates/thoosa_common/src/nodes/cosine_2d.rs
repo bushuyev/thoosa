@@ -34,50 +34,61 @@ impl MyCosineConv2d {
         init_mode: MotifInitMode,
         a: f64,
         b: f64,
+        //TODO needed when loading from file - should be enum - either init from kernel or get w/h from saved properties
+        kw_time: i64,
+        kh_freq: i64,
     ) -> Result<Self, ThoError> {
-        let Some(proto) = init else {
-            panic!("no kernel")
+        let kernel = match init {
+            None => {
+                debug!("MyCosineConv2d::new: 1. dims={:?}", [1, 1, kh_freq, kw_time]);
+                //for loading, will be overwritten
+                vs.f_var("kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?
+            }
+            Some(proto) => {
+                debug_plot!(proto.as_ref().as_ref(), format!("motifs_kernel_{}", proto.id()), plot_repeats=100)?;
+                #[cfg(tho_debug_plots)]
+                plot_spectrogram(
+                    &proto.as_ref().as_ref().i((0, .., ..)),
+                    format!("/tmp/plots/spectrogram_proto_{}.png", proto.id()),
+                    1200,
+                    600,
+                )?;
+
+                debug!("MyCosineConv2d::new: 0. proto={proto:?}");
+                let patches = Self::ensure_motif_patches_4d(&proto.as_ref().as_ref())?; // [N,1,KH,KW]
+                let size = patches.size();
+
+                // if sz[2] != kh || sz[3] != kw {
+                //     return Err(ThoError::new(format!("expected motif patches [N,1,{kh},{kw}], got {:?}", sz)));
+                // }
+
+
+                let proto = z_norm_dims(&patches.f_sum_dim_intlist(0, false, patches.kind())?, &[1,2], 1e-8)?; // [1,KH,KW]
+
+                let proto = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
+
+                let kh_freq = size[2];//frequencies
+                let kw_time = size[3];//time
+
+                let mut kernel = vs.f_var("kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?;
+
+
+                debug!("MyCosineConv2d::new: 1. kernel={kernel:?}");
+
+                tch::no_grad(|| -> Result<(), ThoError> {
+                    kernel.f_copy_(&proto)?;
+                    Ok(())
+                })?;
+
+                kernel
+            }
         };
-
-        debug_plot!(proto.as_ref().as_ref(), format!("motifs_kernel_{}", proto.id()), plot_repeats=100)?;
-        #[cfg(tho_debug_plots)]
-        plot_spectrogram(
-            &proto.as_ref().as_ref().i((0, .., ..)),
-            format!("/tmp/plots/spectrogram_proto_{}.png", proto.id()),
-            1200,
-            600,
-        )?;
-
-        debug!("MyCosineConv2d::new: 0. proto={proto:?}");
-        let patches = Self::ensure_motif_patches_4d(&proto.as_ref().as_ref())?; // [N,1,KH,KW]
-        let size = patches.size();
-
-        // if sz[2] != kh || sz[3] != kw {
-        //     return Err(ThoError::new(format!("expected motif patches [N,1,{kh},{kw}], got {:?}", sz)));
-        // }
-        let kh = size[2];//frequencies
-        let kw = size[3];//time
-
-        let proto = z_norm_dims(&patches.f_sum_dim_intlist(0, false, patches.kind())?, &[1,2], 1e-8)?; // [1,KH,KW]
-
-        let proto = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
-
-        let mut kernel = vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?;
-
-
-        debug!("MyCosineConv2d::new: 1. kernel={kernel:?}");
-
-        tch::no_grad(|| -> Result<(), ThoError> {
-            kernel.f_copy_(&proto)?;
-            Ok(())
-        })?;
-
 
         let alpha = vs.f_var("alpha", &[], nn::Init::Const(a))?;
         let beta = vs.f_var("beta", &[], nn::Init::Const(b))?;
         Ok(Self {
-            kh,
-            kw,
+            kh: kh_freq,
+            kw: kw_time,
             kernel,
             alpha,
             beta,
@@ -263,7 +274,7 @@ mod tests {
         let batch =  7;
 
         let vs = VarStore::new(Cpu);
-        let cosine_2d = MyCosineConv2d::new(&vs.root(), Some(Arc::new(ThoTensor::new("".into(), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)), MotifInitMode::Mean(InitDummy{}), 1.0, 0.1)?;
+        let cosine_2d = MyCosineConv2d::new(&vs.root(), Some(Arc::new(ThoTensor::new("".into(), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)), MotifInitMode::Mean(InitDummy{}), 1.0, 0.1, 0, 0)?;
 
 
         let _ = cosine_2d.forward(&Tensor::rand(&[batch, 1, frequencies, time], FLOAT_CPU))?;
