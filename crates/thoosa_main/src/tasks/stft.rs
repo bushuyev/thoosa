@@ -257,9 +257,9 @@ where
 fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
     SynKey::new([
         mono_key!(STFT, "Stft"),
-        mono_key!(run_config.n_fft.to_string(), "n_fft"),
-        mono_key!(format!("{:?}", run_config.hop_length), "hop_length"),
-        mono_key!(format!("{:?}", run_config.win_length), "win_length"),
+        mono_key!(run_config.n_fft as usize, "n_fft"),
+        mono_key!(run_config.hop_length.unwrap_or(0) as usize, "hop_length"),
+        mono_key!(run_config.win_length.unwrap_or(0) as usize, "win_length"),
         mono_key!(run_config.normalized, "normalized"),
         mono_key!(run_config.onesided, "onesided"),
         mono_key!(run_config.align_to_window, "align_to_window"),

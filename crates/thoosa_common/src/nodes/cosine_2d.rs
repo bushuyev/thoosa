@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use log::debug;
-use tch::{nn, Kind, Tensor};
+use tch::{nn, IndexOp, Kind, Tensor};
 use tch::nn::Path;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::ThoError;
@@ -11,6 +11,7 @@ use crate::dims::{Dims, MotifSlices, Spectorgram};
 use crate::my_tch::{MotifInitMode, MyCosineConv1d, ThoModule};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::z_norm_dims;
+use crate::utils::plot_spectrogram;
 
 #[derive(Debug)]
 pub struct  MyCosineConv2d {
@@ -38,7 +39,14 @@ impl MyCosineConv2d {
             panic!("no kernel")
         };
 
-        debug_plot!(proto.as_ref().as_ref(), "kernel_", plot_repeats=11)?;
+        debug_plot!(proto.as_ref().as_ref(), format!("motifs_kernel_{}", proto.id()), plot_repeats=100)?;
+        #[cfg(tho_debug_plots)]
+        plot_spectrogram(
+            &proto.as_ref().as_ref().i((0, .., ..)),
+            format!("/tmp/plots/spectrogram_proto_{}.png", proto.id()),
+            1200,
+            600,
+        )?;
 
         debug!("MyCosineConv2d::new: 0. proto={proto:?}");
         let patches = Self::ensure_motif_patches_4d(&proto.as_ref().as_ref())?; // [N,1,KH,KW]
@@ -52,7 +60,7 @@ impl MyCosineConv2d {
 
         let proto = z_norm_dims(&patches.f_sum_dim_intlist(0, false, patches.kind())?, &[1,2], 1e-8)?; // [1,KH,KW]
 
-        // let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
+        let proto = Self::finalize_prototype_2d(&proto, true, true)?; // [1,1,KH,KW]
 
         let mut kernel = vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?;
 
@@ -233,4 +241,35 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv2d {
         let y = self.forward(x_in.as_ref())?; // [B,1,1,1] if full match
         Ok(y.f_squeeze_dim(3)?.f_squeeze_dim(2)?.into())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use tch::Device::Cpu;
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::VarStore;
+    use tch::Tensor;
+    use thoosa_shared::ThoError;
+    use crate::my_tch::{InitDummy, MotifInitMode};
+    use crate::nodes::cosine_2d::MyCosineConv2d;
+    use crate::tho_tensor::ThoTensor;
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_check_dims() -> Result<(), ThoError> {
+        let slices = 3;
+        let frequencies = 8000;
+        let time = 4;
+        let batch =  7;
+
+        let vs = VarStore::new(Cpu);
+        let cosine_2d = MyCosineConv2d::new(&vs.root(), Some(Arc::new(ThoTensor::new("".into(), Tensor::rand(&[slices,frequencies,time], FLOAT_CPU))?)), MotifInitMode::Mean(InitDummy{}), 1.0, 0.1)?;
+
+
+        let _ = cosine_2d.forward(&Tensor::rand(&[batch, 1, frequencies, time], FLOAT_CPU))?;
+
+
+        Ok(())
+    }
+
 }
