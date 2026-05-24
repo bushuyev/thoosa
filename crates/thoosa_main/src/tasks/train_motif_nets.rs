@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use futures_util::{FutureExt, StreamExt};
 use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
+
 use parking_lot::{Mutex, RwLock};
 use plotters::prelude::BLACK;
 use plotters::style::RED;
@@ -198,8 +199,8 @@ where
 
         let stft = Arc::new(Stft::new(StftRunConfig::new(
             16000,
-            Some(2000),
-            Some(2000),
+            Some(4000),
+            Some(4000),
             true,
             true,
             true
@@ -436,29 +437,32 @@ where
                             MotifsBatch::new(motif_specs, Arc::clone(&random_slices_loader), Arc::clone(&stft), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
                         }.boxed()
                     },
-                    move |rc:&TrainMotifNetRunConfig, vs: &VarStore| {
-                        let params = match &rc.net {
-                            MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
-                            MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
-                            MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone()),
-                            MotifNetTypeArgs::Cosine2DNet(net) => {
+                    move |rc:&TrainMotifNetRunConfig, vs: Arc<Mutex<VarStore>>| {
+                        let size = size.clone();
+                        let cosine_motif = cosine_motif.clone();
+                        async move {
+                            let params = match &rc.net {
+                                MotifNetTypeArgs::ConvNet(net) => MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel),
+                                MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
+                                MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone()),
+                                MotifNetTypeArgs::Cosine2DNet(net) => {
+                                    MotifNetParams::new_cosine_2d(size[2] as u32, size[1] as u32, net.a, net.b, net.init_mode.clone())
+                                }
+                            };
+                            debug!("TrainMotifNets::run: rc.net={:?}", rc.net);
 
-                                MotifNetParams::new_cosine_2d(size[1] as u32, size[2] as u32, net.a, net.b, net.init_mode.clone())
-                            }
-                        };
-                        debug!("TrainMotifNets::run: rc.net={:?}", rc.net);
-
-                        let motif = if matches!(&rc.net, MotifNetTypeArgs::CosineNet(_) | MotifNetTypeArgs::Cosine2DNet(_)) {
-                            // motif.as_ref().map(Arc::clone)
-                            let cosine_motif= cosine_motif.as_ref().unwrap();
-                            let mut dst = cosine_motif.as_ref().as_ref().f_zeros_like()?;
-                            dst.f_copy_(&cosine_motif.as_ref().t)?;
-                            debug!("TrainMotifNets::run: dst={dst:?}");
-                            Some(Arc::new(ThoTensor::new(cosine_motif.id().clone(), dst)?))
-                        } else {
-                            None
-                        };
-                        Ok((params.motif_net(motif)?.build_tch_module(&vs.root())?, params))
+                            let motif = if matches!(&rc.net, MotifNetTypeArgs::CosineNet(_) | MotifNetTypeArgs::Cosine2DNet(_)) {
+                                // motif.as_ref().map(Arc::clone)
+                                let cosine_motif = cosine_motif.as_ref().unwrap();
+                                let mut dst = cosine_motif.as_ref().as_ref().f_zeros_like()?;
+                                dst.f_copy_(&cosine_motif.as_ref().t)?;
+                                debug!("TrainMotifNets::run: dst={dst:?}");
+                                Some(Arc::new(ThoTensor::new(cosine_motif.id().clone(), dst)?))
+                            } else {
+                                None
+                            };
+                            Ok((params.motif_net(motif)?.build_tch_module(&vs.lock().root())?, params))
+                        }.boxed()
                     },
                     opt_config.clone(), //TODO clone
                     train_motifs_nodes_run_configs.clone(), //TODO clone

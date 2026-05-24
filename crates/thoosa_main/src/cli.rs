@@ -1763,12 +1763,13 @@ where
     filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false), None, {
         let motif_net = Arc::clone(&motif_net);
         move |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
-            let out = apply_motif_net_forward(
+            let out = apply_motif_net_forward::<C>(
                 mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
                 tensor,
                 motif_net.as_ref(),
                 motif_slices_step,
                 tensor.id(),
+                None,
             )?;
 
             plot_single_line_tensor(

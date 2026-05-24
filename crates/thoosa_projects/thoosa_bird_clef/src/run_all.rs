@@ -572,8 +572,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue {
             id: None,
             common_training_args: CommonTrainingRunConfigRangeOrValue {
-                epochs: RangeOrValue::Value(20),
-                batch_size: RangeOrValue::Value(20),
+                epochs: RangeOrValue::Value(2),
+                batch_size: RangeOrValue::Value(10),
                 // lr: RangeOrValue::Value(0.0001),
                 lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
                 patience: RangeOrValue::Value(3),
@@ -624,7 +624,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
             })
 
         },
-        train_motifs_opt_config: Arc::new(OptConfig::new_with_early_stopping(30, 10, 5, 10e-5)),
+        train_motifs_opt_config: Arc::new(OptConfig::new_with_early_stopping(10, 3, 5, 10e-5)),
 
         train_label_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue {
             id: None,

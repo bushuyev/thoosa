@@ -99,8 +99,8 @@ pub enum Node {
     },
     CosineConv2d {
         path:String,
-        kw:i64,
-        kh:i64,
+        kw_time:i64,
+        kh_freq:i64,
         a: f64,
         b: f64,
         init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
@@ -299,7 +299,7 @@ impl Node {
             )?),
             Node::CosineConv2d {
                 path,
-                kw,kh,
+                kw_time, kh_freq,
                 a, b,
                 init,
                 init_mode
@@ -307,7 +307,9 @@ impl Node {
                 &(vs / path),
                 init,
                 init_mode,
-                a, b
+                a, b,
+                kw_time,
+                kh_freq
             )?),
 
 
@@ -534,8 +536,8 @@ impl SeqBuilder {
     pub fn cosine_conv_2d<P:ToString>(
         &mut self,
         path: P,
-        kw: u32,
-        kh: u32,
+        kw_time: u32,
+        kh_freq: u32,
         init: Option<Arc<ThoTensor<Spectorgram, SynKey>>>,
         a: f64,
         b: f64,
@@ -544,15 +546,15 @@ impl SeqBuilder {
 
         self.elts.push(Node::CosineConv2d {
             path:path.to_string(),
-            kw:kw as i64,
-            kh:kh as i64,
+            kw_time: kw_time as i64,
+            kh_freq: kh_freq as i64,
             a, b,
             init,
             init_mode
         });
 
-        self.num_features = clc_conv1d_out(self.num_features, kw, ConvConfig::default(), "")?;
-        self.kernel = Some(kw);
+        self.num_features = clc_conv1d_out(self.num_features, kw_time, ConvConfig::default(), "")?;
+        self.kernel = Some(kw_time);
 
         Ok(self)
     }
