@@ -46,13 +46,13 @@ impl MyCosineConv2d {
             }
             Some(proto) => {
                 debug_plot!(proto.as_ref().as_ref(), format!("motifs_kernel_{}", proto.id()), plot_repeats=100)?;
-                #[cfg(tho_debug_plots)]
-                plot_spectrogram(
-                    &proto.as_ref().as_ref().i((0, .., ..)),
-                    format!("/tmp/plots/spectrogram_proto_{}.png", proto.id()),
-                    1200,
-                    600,
-                )?;
+        #[cfg(tho_debug_plots)]
+        plot_spectrogram(
+            &proto.as_ref().as_ref().i((0, .., ..)),
+            format!("/tmp/plots/spectrogram_proto_{}.png", proto.id()),
+            1200,
+            600,
+        )?;
 
                 debug!("MyCosineConv2d::new: 0. proto={proto:?}");
                 let patches = Self::ensure_motif_patches_4d(&proto.as_ref().as_ref())?; // [N,1,KH,KW]
