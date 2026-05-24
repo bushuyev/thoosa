@@ -1,4 +1,5 @@
 cargo nextest run --release  --config 'build.rustflags=["--cfg","tho_debug_plots=\"rfft_input_\""]'
+cargo nextest run --release  --config 'build.rustflags=["--cfg","tho_debug_plots=\"motifs_\""]'
 
 
 cargo run --release --bin thoosa_bird_clef -- --term-logger-level=INFO --write-logger-level=INFO  --ws-path="/home/bu/tmp/ws_clef" import-resources --source-path=/home/bu/dvl/data/kaggle/birdclef-2026/

@@ -1151,7 +1151,7 @@ pub fn lsh_bucket_one_hot_3d_exact_buckets(
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
+    use std::sync::Arc;
     use log::debug;
     use tch::kind::FLOAT_CPU;
     use tch::{Device, IndexOp, Kind, Tensor};
