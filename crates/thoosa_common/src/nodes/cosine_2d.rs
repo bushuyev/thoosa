@@ -164,10 +164,10 @@ impl MyCosineConv2d {
         )?;
 
         // Denominator: local ||x_patch||.
-        let ones = Tensor::ones(
+        let ones = Tensor::f_ones(
             &[1, 1, self.kh, self.kw],
             (x.kind(), x.device()),
-        );
+        )?;
 
         let x_sq = x.f_mul(&x)?;
 
