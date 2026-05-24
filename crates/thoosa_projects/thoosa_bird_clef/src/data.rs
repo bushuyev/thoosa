@@ -217,21 +217,29 @@ mod tests {
     use tch::Kind::{BFloat16, Float};
     use tch::{Device, IndexOp, TchError, Tensor};
     use tempfile::NamedTempFile;
+    use thoosa_common::dims::Spectorgram;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::RunCtx;
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::runs::Simple;
-    use thoosa_common::utils::{
-        from, hist_1_dim, lin_t, plot_series, skewness_kurtosis_1_dim, to_vec_f32,
-    };
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, plot_spectrogram, skewness_kurtosis_1_dim, to_vec_f32, z_norm};
     use thoosa_common::ws::FsWorkspace;
     use thoosa_common::ws::Workspace;
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{Cli, import_resources};
+    use thoosa_main::tasks::stft::{Stft, StftRunConfig};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{SelectMotifsParams, plot_resource};
     use thoosa_shared::resource::{Resource, ResourceStore};
     use thoosa_shared::test_utils::{are_close, init_test_logging};
-    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files};
+    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir, recurse_files, sin_v_f};
+    use thoosa_shared::comp_id::SynKey;
     use thoosa_store::SqlStore;
+    use thoosa_with_data::with_data;
 
     #[ctor::ctor]
     fn init() {
@@ -469,6 +477,52 @@ mod tests {
         )
         .await?;
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn plot_spec() -> Result<(), ThoError>{
+        GlobalCtx::init_devices(2);
+        let audio_path = PathBuf::from("test_data/train_audio/");
+
+        let file = "555123/iNat336366.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let file = "555123/iNat859875.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let file = "555123/iNat1370876.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let file = "116570/iNat1460166.ogg";
+        resource_spec(file, ogg_to_tensor(audio_path.join(&file), Float)?.view((1, -1))).await?;
+
+        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice());
+        resource_spec("test", sig_t.view((1,-1))).await?;
+
+        Ok(())
+    }
+
+    async fn resource_spec(file: &str, tensor: Tensor) -> Result<(), ThoError> {
+
+        let t = z_norm(&tensor, 1)?;
+
+        let stft = Arc::new(Stft::new(StftRunConfig::new(16000, 4000.into(), 4000.into(), true, true, true))?);
+        let mut ctx = RunCtxImpl::new(1, "plot_spec");
+        let spec = stft.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), t)?)), ctx.branch("".into(), false)).await?;
+
+        with_data!(ctx.branch("".into(), false), spec; |_, spec:&ThoTensor<Spectorgram, SynKey>|{
+            let spec = spec.as_ref();
+            debug!("spec = {spec:?}");
+            plot_spectrogram(
+                &spec.squeeze_dim(0),
+                format!("/tmp/plots/spectrogram_znorm_{}.png", file.replace("/", "_")),
+                1200,
+                600,
+            )?;
+
+            Ok(())
+        })?;
         Ok(())
     }
 }
