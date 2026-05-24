@@ -384,7 +384,9 @@ where
                 let motif_meta = motif.extra().await?;
                 let motif_width = motif_meta.window;
                 let needs_cosine_motif = train_motif_run_configs_may_use_cosine_net(&train_motifs_nodes_run_configs);
+
                 let cosine_motif = if needs_cosine_motif {
+
                     let stft_input = with_data!(ctx.branch(Some("train_motif_nets_cosine_motif_input"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                         stft_input_from_motif_slices(motif.data())
                     })?;
@@ -394,21 +396,14 @@ where
                         ctx.branch(Some("train_motif_nets_cosine_motif"), false),
                         "train_motif_nets_cosine_motif_stft",
                     ).await?))
+
                 } else {
                     None
                 };
 
-                let stft_input = with_data!(ctx.branch(Some("train_motif_nets_motif_stft_input"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
-                    stft_input_from_motif_slices(motif.data())
-                })?;
-                let motif_specs = run_stft_as_motif_slices(
-                    Arc::clone(&stft),
-                    stft_input,
-                    ctx.branch(Some("train_motif_nets_motif_stft"), false),
-                    "train_motif_nets_motif_stft",
-                ).await?;
-                debug!("TrainMotifNets::run: specs={motif_specs:?}");
-                let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_specs, motif_meta.clone())));
+
+
+                // let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_specs, motif_meta.clone())));
 
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
 
@@ -416,14 +411,29 @@ where
                 let size = cosine_motif.as_ref().unwrap().as_ref().as_ref().size();
 
                 let train_net = Arc::new(TrainNet::new(
-                    move |ctx:C, rc:&TrainMotifNetRunConfig| {
-                        debug!("TrainMotifNets::run: batch, rc={rc:?}");
+                    move |mut ctx:C, rc:&TrainMotifNetRunConfig| {
+                        debug!("TrainMotifNets::run: batch, rc={rc:?} motif={motif:?}");
 
                         let motif = Arc::clone(&motif);
                         let random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
                         let stft = Arc::clone(&stft);
+                        let motif_meta =motif_meta.clone();
                         async move {
-                            MotifsBatch::new(motif, Arc::clone(&random_slices_loader), Arc::clone(&stft), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
+                            let stft_input = with_data!(ctx.branch(Some("train_motif_nets_motif_stft_input"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                stft_input_from_motif_slices(motif.data())
+                            })?;
+                            let motif_specs = run_stft_as_motif_slices(
+                                Arc::clone(&stft),
+                                stft_input,
+                                ctx.branch(Some("train_motif_nets_motif_stft"), false),
+                                "train_motif_nets_motif_stft",
+                            ).await?;
+
+                            let motif_specs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_specs, motif_meta)));
+
+                            debug!("TrainMotifNets::run: batch, rc.id={:?} motif_specs={motif_specs:?}", rc.id);
+
+                            MotifsBatch::new(motif_specs, Arc::clone(&random_slices_loader), Arc::clone(&stft), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
                         }.boxed()
                     },
                     move |rc:&TrainMotifNetRunConfig, vs: &VarStore| {
