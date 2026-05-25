@@ -468,40 +468,37 @@ mod tests {
                     .first()
                     .ok_or_else(|| Cause::SomethingElse("no tensors".into()))?;
 
-                // Use first tensor as the callable host; pass the rest as params
-                first.run_inner_with_params(
-                    ax_id.clone(),
-                    &|first_t: &Tensor, params: &[&Tensor]| {
-                        let batch_size = first_t.size()[0];
-                        let kind = first_t.kind();
-                        let dev = first_t.device();
+                let first_t: &Tensor = first.as_ref();
+                let params:&[&ThoTensor<ABData, SimpleId>] = &data[1..];
 
-                        // Build [x | y] per file and then stack along batch (dim=0)
-                        let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
+                    let batch_size = first_t.size()[0];
+                    let kind = first_t.kind();
+                    let dev = first_t.device();
 
-                        // First element
-                        let y0 = Tensor::full([batch_size, 1], label_vec[0], (kind, dev));
-                        rows.push(Tensor::cat(&[first_t.copy(), y0], 1));
+                    // Build [x | y] per file and then stack along batch (dim=0)
+                    let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
 
-                        // Remaining elements from params with corresponding labels
-                        for (i, b_t) in params.iter().enumerate() {
-                            let y = Tensor::full(
-                                [batch_size, 1],
-                                label_vec[i + 1],
-                                (b_t.kind(), b_t.device()),
-                            );
-                            rows.push(Tensor::cat(&[(*b_t).copy(), y], 1));
-                        }
+                    // First element
+                    let y0 = Tensor::full([batch_size, 1], label_vec[0], (kind, dev));
+                    rows.push(Tensor::cat(&[first_t.copy(), y0], 1));
 
-                        Ok(Tensor::cat(&rows, 0))
-                    },
-                    &data[1..],
-                )
+                    // Remaining elements from params with corresponding labels
+                    for (i, b_t) in params.iter().enumerate() {
+                        let y = Tensor::full(
+                            [batch_size, 1],
+                            label_vec[i + 1],
+                            (b_t.as_ref().kind(), b_t.as_ref().device()),
+                        );
+                        rows.push(Tensor::cat(&[(*b_t.as_ref()).copy(), y], 1));
+                    }
+
+                    Ok(Tensor::cat(&rows, 0))
+
             })?;
 
 
 
-            Ok(Arc::new(DevicesWrap::wrap(output)))
+            Ok(Arc::new(DevicesWrap::wrap(output.into())))
         }
     }
 

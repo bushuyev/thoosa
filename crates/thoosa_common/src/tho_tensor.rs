@@ -160,8 +160,6 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
     }
 }
 
-
-
 impl <D:Dims, Id:Named  + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
 impl<D, Id> Data for ThoTensor<D, Id>
@@ -254,43 +252,8 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         ThoTensor::new(self.id.clone(), &self.t + &rhs.t)
     }
 
-    pub fn mm<RD: Dims>(
-        &self,
-        rhs: &ThoTensor<RD, Id>,
-    ) -> Result<ThoTensor<D, Id>, ThoError> {
-        let mm_r = panic_to_err!(self.t.f_matmul(&rhs.t))?;
-        debug!(
-            "mm: self.t.size={:?}, rhs.t.size={:?} mm_r.size={:?}",
-            self.t.size(),
-            rhs.t.size(),
-            mm_r.size()
-        );
 
-        Ok(ThoTensor::new(self.id.clone(), mm_r)?)
-    }
 
-    pub fn sum(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.f_sum(k)?)
-    }
-
-    pub fn sum_dim_intlist(&self, dim: i64) -> Result<ThoTensor<D, Id>, ThoError> {
-        Ok(ThoTensor::new(
-            self.id.clone(),
-            panic_to_err!(self.t.f_sum_dim_intlist(dim, false, self.t.kind()))?,
-        )?)
-    }
-
-    pub fn hadamard<RD: Dims>(
-        &self,
-        rhs: &ThoTensor<RD, Id>,
-        to_id: Id,
-    ) -> Result<ThoTensor<D, Id>, ThoError> {
-        Ok(ThoTensor::new(to_id, self.t.f_multiply(&rhs.t)?)?)
-    }
-
-    pub fn mean(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.f_mean(k)?)
-    }
 
     pub fn id(&self) -> &Id {
         &self.id
@@ -306,31 +269,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
 
-    pub fn run_inner_with_params<
-        F,
-        OutDim: Dims,
-        P: Dims,
-    >(
-        &self,
-        id: Id,
-        func: &F,
-        params: &[&ThoTensor<P, Id>],
-    ) -> Result<ThoTensor<OutDim, Id>, ThoError>
-    where
-        F: Fn(&Tensor, &[&Tensor]) -> Result<Tensor, ThoError> + ?Sized,
-    {
-        Ok(ThoTensor::new(
-            id,
-            func(
-                &self.t,
-                params
-                    .into_iter()
-                    .map(|p| &p.t)
-                    .collect::<Vec<&Tensor>>()
-                    .as_slice(),
-            )?,
-        )?)
-    }
 
     // No-params variant: transform tensor with a function that only needs &Tensor
     pub fn run_inner<R, F>(&self, func: F) -> Result<R, ThoError>
@@ -431,7 +369,6 @@ pub struct ThoTensorMut2<'a, D: Dims, Id: Named + Debug + Clone> {
     pd: PhantomData<D>,
 }
 
-unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorMut2<'a, D, Id> {}
 
 impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut2<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
