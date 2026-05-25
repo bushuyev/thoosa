@@ -185,7 +185,7 @@ impl<RC, L, C> Stage for SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + AsyncStage<InWrap = DevicesWrap<Resource>, OutWrap = DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> + Cached + OutId + 'static,
+    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -199,7 +199,7 @@ impl<RC, L, C> AsyncStage for SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + AsyncStage<InWrap = DevicesWrap<Resource>, OutWrap = DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> + Cached + OutId + 'static,
+    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SeqScanStage::run"))]

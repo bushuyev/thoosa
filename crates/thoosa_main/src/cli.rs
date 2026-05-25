@@ -80,7 +80,7 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
 
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
+use thoosa_common::runner::common::cachable::{run_stage_with_devices_wrap, Cached, DevicesWrap, DevicesWrapCopyMode, StageInputFromDevicesWrap, StageOutputIntoDevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::AsyncStage;
@@ -1916,7 +1916,9 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage<InWrap = DevicesWrap<<ST as Stage>::In<'static>>, OutWrap = DevicesWrap<<ST as Stage>::Out>> + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    <ST as AsyncStage>::InWrap: StageInputFromDevicesWrap<<ST as Stage>::In<'static>>,
+    <ST as AsyncStage>::OutWrap: StageOutputIntoDevicesWrap<<ST as Stage>::Out>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
@@ -1947,7 +1949,7 @@ where
 
     debug!("run_grid: stage={stage:?}");
 
-    let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("top level stage should not have more than one reference").take_data(0).await?;
+    let mut savable = Arc::into_inner(run_stage_with_devices_wrap(stage, input, ctx_f()).await?).expect("top level stage should not have more than one reference").take_data(0).await?;
 
     debug!("run_grid: savable={savable:?}");
 
@@ -1972,7 +1974,9 @@ where
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
     >) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage<InWrap = DevicesWrap<<ST as Stage>::In<'static>>, OutWrap = DevicesWrap<<ST as Stage>::Out>> + Send + Sync,
+    ST: Stage + AsyncStage + Send + Sync,
+    <ST as AsyncStage>::InWrap: StageInputFromDevicesWrap<<ST as Stage>::In<'static>>,
+    <ST as AsyncStage>::OutWrap: StageOutputIntoDevicesWrap<<ST as Stage>::Out>,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
     + ToHashmap,
@@ -1988,7 +1992,7 @@ where
 
     let stage = init_stage(opt_run_configs).await?;
 
-    let mut savable = Arc::into_inner(stage.run(input, ctx_f()).await?).expect("").take_data(0).await?;
+    let mut savable = Arc::into_inner(run_stage_with_devices_wrap(stage, input, ctx_f()).await?).expect("").take_data(0).await?;
 
     let run_config_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
 

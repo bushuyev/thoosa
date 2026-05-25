@@ -34,10 +34,110 @@ use crate::cuda_utils::with_pooled_cuda_stream;
 
 
 
-#[async_trait]
-pub trait Cached: AsyncStage + Named
+pub trait StageInputFromDevicesWrap<I>: WithId + Send + Sync + 'static
 where
-    Self: AsyncStage<InWrap = DevicesWrap<<Self as Stage>::In<'static>>, OutWrap = DevicesWrap<<Self as Stage>::Out>>,
+    I: Data + WithId + Send + Sync + 'static,
+{
+    fn from_devices_wrap(input: Arc<DevicesWrap<I>>, tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<Self>, ThoError>>
+    where
+        Self: Sized;
+}
+
+impl<I> StageInputFromDevicesWrap<I> for DevicesWrap<I>
+where
+    I: Data + WithId + Send + Sync + 'static,
+{
+    fn from_devices_wrap(input: Arc<DevicesWrap<I>>, _tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<Self>, ThoError>>
+    where
+        Self: Sized,
+    {
+        Box::pin(async move { Ok(input) })
+    }
+}
+
+pub trait StageOutputIntoDevicesWrap<O>: WithId + Send + Sync + 'static
+where
+    O: Data + WithId + Send + Sync + 'static,
+{
+    fn into_devices_wrap(output: Arc<Self>, tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>
+    where
+        Self: Sized;
+}
+
+impl<O> StageOutputIntoDevicesWrap<O> for DevicesWrap<O>
+where
+    O: Data + WithId + Send + Sync + 'static,
+{
+    fn into_devices_wrap(output: Arc<Self>, _tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>
+    where
+        Self: Sized,
+    {
+        Box::pin(async move { Ok(output) })
+    }
+}
+
+pub trait DevicesWrapStage: AsyncStage
+where
+    for<'a> Self::In<'a>: Data + WithId + Send + Sync,
+    Self::In<'static>: 'static,
+    Self::Out: Data + WithId + Send + Sync + 'static,
+    <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
+{
+    fn input_from_devices_wrap(input: Arc<DevicesWrap<Self::In<'static>>>, tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<Self::InWrap>, ThoError>>
+    where
+        Self: Sized;
+
+    fn output_into_devices_wrap(output: Arc<Self::OutWrap>, tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>
+    where
+        Self: Sized;
+}
+
+impl<S> DevicesWrapStage for S
+where
+    S: AsyncStage,
+    for<'a> S::In<'a>: Data + WithId + Send + Sync,
+    S::In<'static>: 'static,
+    S::Out: Data + WithId + Send + Sync + 'static,
+    <S::Out as Data>::M: DevicesWrapCopyMode<S::Out>,
+    S::InWrap: StageInputFromDevicesWrap<S::In<'static>>,
+    S::OutWrap: StageOutputIntoDevicesWrap<S::Out>,
+{
+    fn input_from_devices_wrap(input: Arc<DevicesWrap<Self::In<'static>>>, tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<Self::InWrap>, ThoError>>
+    where
+        Self: Sized,
+    {
+        <Self::InWrap as StageInputFromDevicesWrap<Self::In<'static>>>::from_devices_wrap(input, tho_device_idx)
+    }
+
+    fn output_into_devices_wrap(output: Arc<Self::OutWrap>, tho_device_idx: usize) -> BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>
+    where
+        Self: Sized,
+    {
+        <Self::OutWrap as StageOutputIntoDevicesWrap<Self::Out>>::into_devices_wrap(output, tho_device_idx)
+    }
+}
+
+pub async fn run_stage_with_devices_wrap<S>(
+    stage: Arc<S>,
+    input: Arc<DevicesWrap<S::In<'static>>>,
+    ctx: S::Ctx,
+) -> Result<Arc<DevicesWrap<S::Out>>, ThoError>
+where
+    S: DevicesWrapStage + Sized,
+    for<'a> S::In<'a>: Data + WithId + Send + Sync,
+    S::In<'static>: 'static,
+    S::Out: Data + WithId + Send + Sync + 'static,
+    <S::Out as Data>::M: DevicesWrapCopyMode<S::Out>,
+{
+    let tho_device_idx = ctx.device_idx();
+    let input = S::input_from_devices_wrap(input, tho_device_idx).await?;
+    let output = stage.run(input, ctx).await?;
+    S::output_into_devices_wrap(output, tho_device_idx).await
+}
+
+#[async_trait]
+pub trait Cached: AsyncStage + Named + DevicesWrapStage
+where
     for <'i> Self::In<'i>: Data + WithId + Send + Sync,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
     <<Self as Stage>::Out as Data>::M: DevicesWrapCopyMode<<Self as Stage>::Out>
@@ -129,8 +229,7 @@ where
                     .await
             }
             Entry::Vacant(slot) => {
-                let fut = Arc::clone(&self)
-                    .run(input, ctx)
+                let fut = run_stage_with_devices_wrap(Arc::clone(&self), input, ctx)
                     .boxed()
                     .shared();
 
