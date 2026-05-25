@@ -454,7 +454,7 @@ where
             if inputs_by_filter_group.contains_key(&group_key) {
                 continue;
             }
-            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = match &apply_motif_net.freq_filter {
+            let filtered_input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = match &apply_motif_net.freq_filter {
                 Some(freq_filter) => {
                     debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id, apply_motif_net.freq_filter_find_motifs_run_config_id);
 
@@ -507,7 +507,7 @@ where
                 async move {
                     let set = HashSet::<&dyn CachableIdTr>::new();
 
-                    let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn CachableIdTr>> =HashMap::from([
+                    let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> =HashMap::from([
                         (tmp_cache_name, &set)
                     ]);
 
