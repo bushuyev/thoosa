@@ -55,7 +55,7 @@ mod tests {
     use tracing_subscriber::fmt::format::FmtSpan;
     use tracing_subscriber::{fmt, EnvFilter};
     use thoosa_shared::comp_id::{MonoKey, SynKey};
-    use thoosa_shared::copy_mode::CpuOnly;
+    // use thoosa_shared::copy_mode::CpuOnly;
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
@@ -119,7 +119,7 @@ mod tests {
     #[async_trait]
     impl Data for LoaderInput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+        // type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -198,14 +198,14 @@ mod tests {
 
     impl Stage for TestTensorLoader {
         type In<'a> = LoaderInput;
-        type Out = ThoTensor<LoadedTensor, SynKey>;
+        type Out = DevicesWrap<ThoTensor<LoadedTensor, SynKey>>;
         type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
     impl AsyncStage for TestTensorLoader {
 
-        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError>
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
         {
@@ -341,7 +341,7 @@ mod tests {
 
     impl Stage for ClcTask {
         type In<'a> = ThoTensor<LoadedTensor, SynKey>;
-        type Out = ThoTensor<ClcTaskOutput, SynKey>;
+        type Out = DevicesWrap<ThoTensor<ClcTaskOutput, SynKey>>;
         type Ctx = RunCtxImpl;
     }
 
@@ -411,7 +411,7 @@ mod tests {
     // #[async_trait]
     impl AsyncStage for ClcTask {
 
-        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError>
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
         {
@@ -426,7 +426,7 @@ mod tests {
                 })
                 .await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(output)))
+            Ok(Arc::new(output))
         }
     }
 
@@ -447,7 +447,7 @@ mod tests {
 
     impl Stage for LoadAndClcTask {
         type In<'a> = LoaderInput;
-        type Out = ThoTensor<ClcTaskOutput, SynKey>;
+        type Out = DevicesWrap<ThoTensor<ClcTaskOutput, SynKey>>;
         type Ctx = RunCtxImpl;
     }
 
@@ -455,7 +455,7 @@ mod tests {
     impl AsyncStage for LoadAndClcTask {
 
 
-        async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError>
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
         {

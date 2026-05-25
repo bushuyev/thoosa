@@ -12,7 +12,7 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, 
 use torch_sys::IntList;
 use log::{debug, info, trace};
 use mockall_double::double;
-use thoosa_shared::copy_mode::CpuOrGpu;
+// use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 
@@ -181,7 +181,7 @@ where
     Id: Named + Debug + Clone + Send + Sync
 {
     type Metrics = D::Metrics;
-    type M = CpuOrGpu<ThoTensor<D, Id>>;
+    // type M = CpuOrGpu<ThoTensor<D, Id>>;
 
     fn size(&self) -> Self::Metrics {
         self.t

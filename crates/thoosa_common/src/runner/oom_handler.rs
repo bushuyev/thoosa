@@ -845,7 +845,7 @@ pub mod test_types {
     // use crate::common::Data;
     use crate::runner::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::copy_mode::CpuOrGpu;
+    // use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::{Select, WithId};
     use thoosa_shared::CopyToDevice;
 
@@ -882,7 +882,7 @@ pub mod test_types {
     #[async_trait]
     impl Data for TestInput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+        // type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]
@@ -952,7 +952,7 @@ pub mod test_types {
     #[async_trait]
     impl Data for TestOutput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+        // type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             [1]

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use thoosa_shared::traits::Adjustable;
 use crate::applicables_runner::{Input, Output};
 use crate::{CopyToDevice, ThoError};
-use crate::copy_mode::CpuOrGpu;
+// use crate::copy_mode::CpuOrGpu;
 use crate::traits::{Data, Select, WithId};
 
 #[derive(Debug)]
@@ -55,7 +55,7 @@ where
     E:Debug + Send + Sync,
 {
     type Metrics = D::Metrics;
-    type M = CpuOrGpu<Self>;
+    // type M = CpuOrGpu<Self>;
 
     fn size(&self) -> Self::Metrics {
         self.data.size()

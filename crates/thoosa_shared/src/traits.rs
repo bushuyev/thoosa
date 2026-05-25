@@ -16,7 +16,7 @@ use uuid::Uuid;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use thoosa_dummy_data_derive::DummyData;
-use crate::copy_mode::{CopyMode, CpuOnly};
+// use crate::copy_mode::{CopyMode, CpuOnly};
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -541,7 +541,7 @@ impl From<usize> for MonoMetrics<0, 1> {
 pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
-    type M:CopyMode;
+    // type M:CopyMode;
 
     fn size(&self) -> Self::Metrics;
 
@@ -562,7 +562,7 @@ impl WithId for MockData {
 
 impl <D:Data + ?Sized> Data for &D {
     type Metrics = D::Metrics;
-    type M = D::M;
+    // type M = D::M;
 
     fn size(&self) -> Self::Metrics {
         <D as Data>::size(*self)
@@ -588,7 +588,7 @@ where
     D:Data
 {
     type Metrics = D::Metrics;
-    type M = D::M;
+    // type M = D::M;
 
     fn size(&self) -> Self::Metrics {
         self.as_ref().size()
@@ -605,7 +605,7 @@ where
 
 impl Data for (){
     type Metrics = ();
-    type M = CpuOnly<()>;
+    // type M = CpuOnly<()>;
 
     fn size(&self) -> Self::Metrics {
         ()

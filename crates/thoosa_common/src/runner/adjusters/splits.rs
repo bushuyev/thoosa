@@ -218,7 +218,7 @@ mod tests {
     use parking_lot::RwLock;
     use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::copy_mode::CpuOrGpu;
+    // use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::CopyToDevice;
     use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::runner::common::MockRunCtx;
@@ -240,7 +240,7 @@ mod tests {
         impl Data for TestInput {
             type Metrics = i64;
 
-            type M = CpuOrGpu<MockTestInput>;
+            // type M = CpuOrGpu<MockTestInput>;
 
             fn size(&self) -> i64;
             fn device(&self) -> usize;
@@ -263,7 +263,7 @@ mod tests {
         impl Data for TestOutput {
               type Metrics = i64;
 
-                type M = CpuOrGpu<MockTestOutput>;
+                // type M = CpuOrGpu<MockTestOutput>;
 
                 fn size(&self) -> i64;
                 fn device(&self) -> usize;

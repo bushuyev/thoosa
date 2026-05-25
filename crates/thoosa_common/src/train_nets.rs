@@ -43,7 +43,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::copy_mode::CpuOrGpu;
+// use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
@@ -504,7 +504,7 @@ where
     DI: Dims + Send + 'static,
     DO: Dims + Send + 'static{
     type Metrics = ();
-    type M = CpuOrGpu<ThoModuleWithStore<DI, DO>>;
+    // type M = CpuOrGpu<ThoModuleWithStore<DI, DO>>;
 
     fn size(&self) -> Self::Metrics {
         ()

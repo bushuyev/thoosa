@@ -14,7 +14,7 @@ use tokio::task::JoinSet;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -240,11 +240,11 @@ pub async fn run_mul_task_invocations<R, F, CF, I>(
 where
     R: Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Data + WithId<ID = I> + Send + Sync,
-    for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<R::In<'a>>,
+    // for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<R::In<'a>>,
     DevicesWrap<StageInStatic<R>>: WithId<ID = I>,
     for<'a> DevicesWrap<StageInStatic<R>>: WithDataRef<O<'a> = R::In<'a>>,
-    R::Out: Data + CopyToDevice + Send + Sync,
-    <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
+    R::Out:  Send + Sync, //Data + CopyToDevice +
+    // <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
     StageInStatic<R>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
@@ -281,21 +281,19 @@ where
                     )
                     .await?;
 
-                multed
-                    .with_data_ref(device_idx,
-                                   ctx_device.branch(Some("run_mul_task_data"), false), None, |guard: &<R as Stage>::Out, _ctx| {
-                           // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
+                multed.with_data_ref(device_idx, ctx_device.branch(Some("run_mul_task_data"), false), None, |guard: &<R as Stage>::Out, _ctx| {
+                       // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
-                           check_arc(res, &guard);
+                       check_arc(res, &guard);
 
-                           debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
-                           debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
+                       debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
+                       debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
 
-                           res_cnt_arc.fetch_add(1, Relaxed);
+                       res_cnt_arc.fetch_add(1, Relaxed);
 
-                           Ok(())
-                       })
-                    .await?;
+                       Ok(())
+                   })
+                .await?;
 
                 debug!("run_mul_task_invocations: task {idx}: all done");
 
@@ -334,7 +332,7 @@ pub mod fixtures {
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{Data, Select, SimpleId, WithId};
     use thoosa_shared::ThoError;
-    use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
+    // use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::runner::common::{OutId, RunCtx};
     use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage};
@@ -397,7 +395,7 @@ pub mod fixtures {
     #[async_trait]
     impl Data for DLoadedTensor {
         type Metrics = i64;
-        type M = CpuOrGpu<Self>;
+        // type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             self.data.0.len() as i64
@@ -478,7 +476,7 @@ pub mod fixtures {
     #[async_trait]
     impl Data for DLoaderInput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+        // type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -504,14 +502,14 @@ pub mod fixtures {
 
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
-        type Out = DLoadedTensor;
+        type Out = DevicesWrap<DLoadedTensor>;
         type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
     impl AsyncStage for DummyLoader {
 
-        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError>
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
         {
@@ -552,7 +550,7 @@ mod tests {
     use mockall_double::double;
     use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::copy_mode::CpuOrGpu;
+    // use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::{Data, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
@@ -643,14 +641,14 @@ mod tests {
 
     impl Stage for DummyLoader {
         type In<'a> = DLoaderInput;
-        type Out = DLoadedTensor;
+        type Out = DevicesWrap<DLoadedTensor>;
         type Ctx = RunCtxImpl;
     }
 
     impl AsyncStage for DummyLoader {
 
 
-        fn run_<W>(self: Arc<Self>, input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+        fn run_<W>(self: Arc<Self>, input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output=Result<Arc<Self::Out>, ThoError>> + Send
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>>  + WithId<ID= <Self::In<'static> as WithId>::ID> +'static
         {
@@ -769,7 +767,7 @@ mod tests {
     #[async_trait]
     impl Data for DMulTaskOutput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+        // type M = CpuOrGpu<Self>;
 
 
         fn size(&self) -> Self::Metrics {
@@ -883,14 +881,14 @@ mod tests {
 
     impl Stage for DLoadAndMulTask {
         type In<'a> = DLoaderInput;
-        type Out = DMulTaskOutput;
+        type Out = DevicesWrap<DMulTaskOutput>;
         type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
     impl AsyncStage for DLoadAndMulTask {
 
-        async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError>
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>>  + WithId<ID= <Self::In<'static> as WithId>::ID> +'static, // + WithSelectDataRef<S>,
             // S: Clone + Debug + Send + 'static

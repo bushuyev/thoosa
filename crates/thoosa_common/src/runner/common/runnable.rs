@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
 use crate::runner::common::RunCtx;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -21,7 +21,7 @@ pub trait AsyncStage:Stage + Debug + Send + Sync + 'static
 where
         for <'a> Self::In<'a>: Data + WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync,
-        <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>
+        // <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>
 {
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)
@@ -36,7 +36,7 @@ where
     }
 
 
-    fn run_<W>(self: Arc<Self>, _input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    fn run_<W>(self: Arc<Self>, _input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<Self::Out>, ThoError>> + Send
     where
         W:for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID= <Self::In<'static> as WithId>::ID> +'static, // + WithSelectDataRef<S>,
         // S: Clone + Debug + Send + 'static,

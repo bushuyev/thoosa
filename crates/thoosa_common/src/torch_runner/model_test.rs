@@ -35,7 +35,7 @@ mod tests {
     use thoosa_shared::applicables_runner::Input;
     use thoosa_shared::traits::{CachableIdTr, Metrics, SimpleId, WithId};
     use thoosa_shared::{Cause, ThoError};
-    use thoosa_shared::copy_mode::CpuOnly;
+    // use thoosa_shared::copy_mode::CpuOnly;
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MAX_PARALLEL};
     use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
     use crate::runner::test_utils::parse_numeric_part;
@@ -95,7 +95,7 @@ mod tests {
     #[async_trait]
     impl Data for FileInput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+        // type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -735,7 +735,7 @@ mod tests {
     #[async_trait]
     impl Data for FileListInput {
         type Metrics = ();
-        type M = CpuOnly<Self>;
+        // type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             ()
@@ -808,7 +808,7 @@ mod tests {
             let out_key = Arc::new(out_id.clone()) as Arc<dyn CachableIdTr>;
 
             // Acquire max_parallel as needed using OOMHandler with Permits and Splits adjusters
-            let size = *batched.size();
+            let size = batched.size();
             let min_split_len = ABMetrics {
                 dim_0: 32,
                 dim_1: 0,

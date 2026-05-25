@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
+use crate::runner::common::cachable::{DevicesWrap};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::StreamExt;
@@ -147,7 +147,7 @@ impl<K, O> FuturesRunnerMapPurger
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
     O: Data + CopyToDevice + Output + Send + Sync + 'static,
-    <O as Data>::M: DevicesWrapCopyMode<O>,
+    // <O as Data>::M: DevicesWrapCopyMode<O>,
 {
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         let mut purged_count = 0usize;
@@ -295,7 +295,7 @@ mod tests {
     use std::time::Duration;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::traits::{CachableIdTr, DummyCachableId, WithId};
-    use thoosa_shared::copy_mode::CpuOrGpu;
+    // use thoosa_shared::copy_mode::CpuOrGpu;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[derive(Debug, Clone)]
@@ -331,7 +331,7 @@ mod tests {
 
     impl Data for DummyOutput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+        // type M = CpuOrGpu<Self>;
 
         fn size(&self) -> Self::Metrics {
             [1]
