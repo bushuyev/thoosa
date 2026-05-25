@@ -374,7 +374,7 @@ impl <const IDX:usize, const SIZE:usize> Default for MonoMetrics<IDX, SIZE> {
 
 impl <const IDX:usize, const SIZE:usize> MonoMetrics<IDX, SIZE> {
 
-    //TODO remove - replace with 'effective dim Idx and 'others'
+    //TODO remove
     pub fn dim_0(&self) -> i64 {
         self.dims[0]
     }

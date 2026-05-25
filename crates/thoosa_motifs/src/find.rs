@@ -53,7 +53,7 @@ use tch::Kind::{Bool, Float};
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA, INT64_CPU};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::bool_iter::BoolTensorIterator;
-use thoosa_common::dims::{Dims, TCD, TCSD};
+use thoosa_common::dims::{Dims};
 use thoosa_common::parzen::optimizer::ConfigurationSpace;
 use thoosa_common::runs::{Labeled, SavableResult, Simple};
 use thoosa_common::tho_tensor::ThoTensor;

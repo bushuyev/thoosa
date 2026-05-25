@@ -35,7 +35,7 @@ use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
-use crate::ChannelsData2;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_dims::{ChannelsData2Selector, ChannelsMotifsDists};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
@@ -119,7 +119,7 @@ impl SavableResult for ExtendMotifsSavableResult {
 
 pub struct ExtendMotifsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -136,7 +136,7 @@ where
 
 impl<L, ML, C> Debug for ExtendMotifsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -147,7 +147,7 @@ where
 
 impl<L, ML, C> WithId for ExtendMotifsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -160,7 +160,7 @@ where
 
 impl<L, ML, C> ExtendMotifsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -669,7 +669,7 @@ where
 
 impl<L, ML, C> Stage for ExtendMotifsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -680,7 +680,7 @@ where
 
 impl<L, ML, C> AsyncStage for ExtendMotifsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -730,7 +730,7 @@ where
 #[derive(Debug)]
 struct SelectMotifsInputSelectorWrap {
     id: SynKey,
-    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resource_ids: Vec<ResourceId>,
     resource_offsets: Vec<u32>,
     stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
@@ -740,7 +740,7 @@ struct SelectMotifsInputSelectorWrap {
 impl SelectMotifsInputSelectorWrap {
     pub fn new(
         id: SynKey,
-        batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
         resource_ids: Vec<ResourceId>,
         stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
         motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
@@ -799,7 +799,7 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
             with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
                 |
                  ctx,
-                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
                  stacked_motifs:&StackedMotifsOutput,
                  motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
                 |{
@@ -856,7 +856,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
             with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
                 |
                  ctx,
-                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
                  stacked_motifs_output:&StackedMotifsOutput,
                  motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
                 |{
