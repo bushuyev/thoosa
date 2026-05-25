@@ -55,7 +55,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
 use thoosa_common::runner::tmp_cache::TmpCached;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
+use crate::tasks::cross_dims::{ChannelsData, ChannelsData2Selector};
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
@@ -425,7 +425,7 @@ where
     C: RunCtx + Adjustable + 'static
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SynKey>;
+    type In<'a> = ThoTensor<ChannelsData, SynKey>;
     type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;// extra carries pre-stretch original lengths per motif net; TODO it should be MotifsProbabilities - for many motifs
 }
 
@@ -445,7 +445,7 @@ where
 
         let apply_motif_nets = self.apply_motif_nets.clone();
         let apply_motif_nets_len = apply_motif_nets.len();
-        let mut inputs_by_filter_group: HashMap<Option<RunConfigId>, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>> = HashMap::new();
+        let mut inputs_by_filter_group: HashMap<Option<RunConfigId>, Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> = HashMap::new();
         inputs_by_filter_group.insert(None, Arc::clone(&input));
 
         for (net_id, apply_motif_net) in &apply_motif_nets {
@@ -863,7 +863,7 @@ where
 
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
-    batch: &'a ThoTensor<ChannelsData2, SynKey>,
+    batch: &'a ThoTensor<ChannelsData, SynKey>,
     motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
 }
 
@@ -886,7 +886,7 @@ impl Data for ApplyMotifNetInput<'_> {
 }
 
 impl <'a> ApplyMotifNetInput<'a> {
-    pub fn new(batch: &'a ThoTensor<ChannelsData2, SynKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
+    pub fn new(batch: &'a ThoTensor<ChannelsData, SynKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
         Self {  batch, motif_net }
     }
 }
@@ -902,13 +902,13 @@ impl <'a> WithId for ApplyMotifNetInput<'a> {
 
 #[derive(Debug)]
 struct ApplyMotifNetInputWrapper {
-    batch: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>,
+    batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
     motif_net: Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
 }
 
 impl ApplyMotifNetInputWrapper {
     fn new(
-        batch: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>,
+        batch: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
         motif_net: Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
     ) -> Self {
         Self { batch, motif_net }
@@ -941,7 +941,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
             debug!("ApplyMotifNetInputWrapper::with_data_ref: 00. ctx.id={:?}", permits_ctx.id());
             // let x_ctx = permits_ctx.branch(Some("xxx"), false);
 
-            with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData2, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 let input = ApplyMotifNetInput::new(batch, motif_net);
 
                 debug!("ApplyMotifNetInputWrapper::with_data_ref: 0. ctx.id={:?}", ctx.id());
@@ -984,7 +984,7 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     {
         async move {
 
-            with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData2, SynKey>|{
+            with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData, SynKey>|{
                 let b = batch.subview(selector)?;
                 let input = ApplyMotifNetInput::new(&b, motif_net);
                 debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
@@ -1103,7 +1103,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
 pub fn apply_motif_net_forward(
     out_id: SynKey,
-    input: &ThoTensor<ChannelsData2, SynKey>,
+    input: &ThoTensor<ChannelsData, SynKey>,
     motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
     slice_step: u32,
     input_id: &SynKey,

@@ -44,7 +44,7 @@ use tch::nn::VarStore;
 use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
+use thoosa_common::dims::{Batch, ThoBatch};
 use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
@@ -96,7 +96,7 @@ use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectE
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use thoosa_store::rusqlite::Transaction;
 use crate::tasks::slices_stats::{Aggr, Metrics};
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
+use crate::tasks::cross_dims::{ChannelsData, ChannelsMotifsDists};
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
@@ -1551,7 +1551,7 @@ async fn load_resource_tensor_for_plot<C>(
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     mut ctx: C,
-) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>, ThoError>
+) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, ThoError>
 where
     C: RunCtx + Adjustable,
 {
@@ -1587,7 +1587,7 @@ fn plot_resource_channels<C>(
     prefix: &str,
     suffix: &str,
     caption: &str,
-    tensor: &ThoTensor<ChannelsData2, SynKey>,
+    tensor: &ThoTensor<ChannelsData, SynKey>,
     channels: Option<&Vec<u32>>,
     resolution: Resolution,
     print_to_stdout: bool,
@@ -1676,7 +1676,7 @@ where
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+    raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
     }).await?;
 
@@ -1690,7 +1690,7 @@ where
             .await?;
 
         let filtered_channels = channels.clone();
-        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
         }).await?;
     }
@@ -1729,7 +1729,7 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+    raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
@@ -1744,7 +1744,7 @@ where
             .await?;
 
         let channel_only_filtered = vec![channel];
-        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         }).await?;
 
@@ -1762,7 +1762,7 @@ where
 
     filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false), None, {
         let motif_net = Arc::clone(&motif_net);
-        move |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+        move |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             let out = apply_motif_net_forward(
                 mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
                 tensor,
@@ -2126,7 +2126,7 @@ mod cli_tests {
     use thoosa_store::rusqlite::Transaction;
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, Metrics};
-    use crate::tasks::cross_dims::ChannelsData2;
+    use crate::tasks::cross_dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::tasks::find_motifs::FindMotifsStage;
@@ -2535,7 +2535,7 @@ mod cli_tests {
             let pulse_triangle_filtered_t = Arc::clone(&freq_filter).run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_triangle_t.shallow_clone())?)), ctx.branch(Some("filter"), false)).await?;
             let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(Some("filter"), false)).await?;
 
-            with_data!(ctx.branch(Some("filter"), false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData2, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData2, SynKey> |{
+            with_data!(ctx.branch(Some("filter"), false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData, SynKey> |{
 
                 debug_plot!(pulse_triangle_t.as_ref(), "pulse_triangle_{freq}_filtered_t")?;
                 debug_plot!(pulse_sin_t.as_ref(), "pulse_sin_{freq}_filtered_t")?;

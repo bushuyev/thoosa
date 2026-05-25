@@ -11,30 +11,10 @@ pub trait Dims: Send + Sync + Clone + Debug {
 }
 
 #[derive(Clone, Debug)]
-pub struct ChannelsData;
-impl Dims for ChannelsData {
-    type Metrics = AnyMetrics;
-}
-
-#[derive(Clone, Debug)]
-pub struct ChannelsDataFiltered;
-impl Dims for ChannelsDataFiltered {
-    type Metrics = AnyMetrics;
-}
-
-#[derive(Clone, Debug)]
-pub struct ChannelsSlicesData;
-impl Dims for ChannelsSlicesData {
-    type Metrics = AnyMetrics;
-}
-
-#[derive(Clone, Debug)]
 pub struct Slice; //sliced data [lice_width]
 impl Dims for Slice {
     type Metrics = MonoMetrics<0, 1>;
 }
-
-
 
 #[derive(Clone, Debug)]
 pub struct MotifProbability; //motif net applied to sliced data [slices, slice_width] - probabilities of a slice belonging to a motif
@@ -101,9 +81,7 @@ pub trait Dimensional {
     type Dimensions: Dims;
 }
 
-pub type TCD = ThoTensor<ChannelsData, SimpleId>;
-pub type TCDF = ThoTensor<ChannelsDataFiltered, SimpleId>;
-pub type TCSD = ThoTensor<ChannelsSlicesData, SimpleId>;
+
 pub type ThoBatch<D> = ThoTensor<Batch<D>, SimpleId>;
 
 #[derive(Clone, Debug, Named)]

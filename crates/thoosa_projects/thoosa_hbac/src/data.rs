@@ -12,8 +12,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tch::{Device, Kind, Tensor};
 
-use thoosa_common::dims::{Batch, ChannelsData};
+use thoosa_common::dims::{Batch};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_main::ChannelsData;
 use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
@@ -815,7 +816,7 @@ mod tests {
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{import_resources, Cli};
-    use thoosa_main::{ApplyMotifNets, ChannelsData2, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+    use thoosa_main::{ApplyMotifNets, ChannelsData, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;
@@ -1154,7 +1155,7 @@ mod tests {
         let channels = raw_loaded.size()[0] as u32;
         let ws = Arc::new(RwLock::new(FsWorkspace::new(Path::new("/tmp").join(cdt_for_dir()), channels, raw_loaded.size()[1] as u32, 200)?));
 
-        let raw_tensor = ThoTensor::<ChannelsData2, SynKey>::new(
+        let raw_tensor = ThoTensor::<ChannelsData, SynKey>::new(
             SynKey::new([mono_key!("test_train_motif_nets_cosine_with_filtered_real_eeg", "raw")]),
             raw_loaded,
         )?;
@@ -1323,7 +1324,7 @@ mod tests {
         Ok(())
     }
 
-    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> Result<Tensor, ThoError>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData2, SynKey>>) -> Result<Vec<Resource>, ThoError> {
+    fn random_resources(target_eeg_file: &str, load_eeg_tensor: fn(&Path) -> Result<Tensor, ThoError>, channels: u32, loader_tensors_map: &mut HashMap<Resource, ThoTensor<ChannelsData, SynKey>>) -> Result<Vec<Resource>, ThoError> {
         let eeg_dir = Path::new("test_data/eeg");
         let mut random_resources = Vec::new();
         let mut eeg_files = std::fs::read_dir(eeg_dir)
@@ -1362,7 +1363,7 @@ mod tests {
             random_resources.push(resource.clone());
             loader_tensors_map.insert(
                 resource.clone(),
-                ThoTensor::<ChannelsData2, SynKey>::new(
+                ThoTensor::<ChannelsData, SynKey>::new(
                     SynKey::new([mono_key!(resource.id(), format!("filtered_resource_{}", resource.id()))]),
                     tensor,
                 )?,

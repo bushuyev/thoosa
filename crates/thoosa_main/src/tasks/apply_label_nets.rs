@@ -28,7 +28,7 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::ChannelsData;
 
 #[derive(Debug)]
 struct ApplyNets<C>
@@ -135,7 +135,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SynKey>;
+    type In<'a> = ThoTensor<ChannelsData, SynKey>;
     type Out = ThoTensor<LabelProbability, SynKey>;
 }
 
@@ -160,12 +160,12 @@ where
         let futures = self.apply_nets
             .iter()
             .map(|apply_net| {
-                let input: Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>> = Arc::clone(&input);
+                let input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = Arc::clone(&input);
                 let mut ctx = ctx.branch(Some("apply_label_nets_motif_probs_0"), false);
                 async move {
 
                     #[cfg(test)]{
-                        with_data!(ctx.branch(Some("debug"), false), input; |ctx, input:&ThoTensor<ChannelsData2, SynKey>|{
+                        with_data!(ctx.branch(Some("debug"), false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
                             trace!("ApplyLabelNets::run: input=\n{}", input.as_ref());
                             Ok(())
                         })?;
@@ -415,7 +415,7 @@ mod tests {
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::{logit, sigmoid, ApplyLabelNets};
-    use crate::tasks::cross_dims::ChannelsData2;
+    use crate::tasks::cross_dims::ChannelsData;
 
     fn const_motif_net(
         motif_width: u32,
@@ -751,7 +751,7 @@ mod tests {
         ).await?);
         assert_eq!(labels.len(), apply_label_nets.num_nets());
 
-        let input = ThoTensor::<ChannelsData2, SynKey>::new(
+        let input = ThoTensor::<ChannelsData, SynKey>::new(
             SynKey::new([mono_key!("input", "input")]),
             Tensor::f_ones(&[channels as i64, (motif_width as i64) * 3], (Kind::Float, device))?,
         )?;

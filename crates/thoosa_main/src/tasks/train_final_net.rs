@@ -1,5 +1,5 @@
 use crate::tasks::apply_label_nets::ApplyLabelNets;
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
@@ -43,7 +43,7 @@ use thoosa_with_data::with_data;
 #[derive(Debug)]
 pub struct TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -70,7 +70,7 @@ pub async fn new_train_final_net<L, C, R>(
     selected_motif_nets_limit: Option<usize>,
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
     R: RunCtx + Adjustable + 'static,
 {
@@ -88,7 +88,7 @@ where
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -167,7 +167,7 @@ impl SavableResult for TrainFinalNetOutput {
 
 impl<L, LL, C> Stage for TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
@@ -178,7 +178,7 @@ where
 
 impl<L, LL, C> AsyncStage for TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {

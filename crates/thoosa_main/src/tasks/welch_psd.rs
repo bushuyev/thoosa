@@ -27,7 +27,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
-use crate::tasks::cross_dims::ChannelsData2;
+use crate::tasks::cross_dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_stats::RANDOM_STATS_GROUP;
 use crate::tasks::stage_ids::{WELCH_PSD, WELCH_PSD_PER_RESOURCE};
@@ -222,7 +222,7 @@ where
 pub struct WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -235,7 +235,7 @@ where
 impl<RC, L, C> WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
@@ -265,7 +265,7 @@ where
 impl<RC, L, C> OutId for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -276,7 +276,7 @@ where
 impl<RC, L, C> Stage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -287,7 +287,7 @@ where
 impl<RC, L, C> AsyncStage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPSD::run"))]
@@ -343,7 +343,7 @@ where
                 .await?;
 
             let welch_input = loaded
-                .with_data_ref(0, ctx.branch(Some("welch_psd_wrap_input"), false), None, |loaded: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+                .with_data_ref(0, ctx.branch(Some("welch_psd_wrap_input"), false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 })
                 .await?;

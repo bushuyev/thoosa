@@ -31,7 +31,7 @@ use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::math::sg_smoothing_coeffs;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
+use crate::tasks::cross_dims::{ChannelsData, ChannelsData2Selector};
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 
@@ -251,7 +251,7 @@ where
             .unwrap_or(Cpu)
     }
 
-    pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData2, SynKey>) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> {
+    pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData, SynKey>) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
         debug!("FreqFilter::apply_tho_tensor: self.filters={:?}", self.filters);
 
         let mut filtered_t = input_tensor.as_ref().shallow_clone();//.f_totype(Float)?;
@@ -391,7 +391,7 @@ where
 #[derive(Debug)]
 struct FreqFilterOutputBuilder {
     output_id: SynKey,
-    partials: Vec<ThoTensor<ChannelsData2, SynKey>>,
+    partials: Vec<ThoTensor<ChannelsData, SynKey>>,
     error: Option<ThoError>,
 }
 
@@ -406,7 +406,7 @@ impl FreqFilterOutputBuilder {
 }
 
 impl OutputBuilder for FreqFilterOutputBuilder {
-    type O = ThoTensor<ChannelsData2, SynKey>;
+    type O = ThoTensor<ChannelsData, SynKey>;
 
     async fn add_partial_output(&mut self, partial: Self::O) {
         if self.error.is_some() {
@@ -530,8 +530,8 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SynKey>;
-    type Out = ThoTensor<ChannelsData2, SynKey>;
+    type In<'a> = ThoTensor<ChannelsData, SynKey>;
+    type Out = ThoTensor<ChannelsData, SynKey>;
 }
 
 impl<C> SyncStage for SyncFreqFilter<C>
@@ -557,8 +557,8 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData2, SynKey>;
-    type Out = ThoTensor<ChannelsData2, SynKey>;
+    type In<'a> = ThoTensor<ChannelsData, SynKey>;
+    type Out = ThoTensor<ChannelsData, SynKey>;
 }
 
 // #[async_trait]
