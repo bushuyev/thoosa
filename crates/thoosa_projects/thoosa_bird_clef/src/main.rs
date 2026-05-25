@@ -18,7 +18,7 @@ use tch::{Cuda, Device, IndexOp, Kind, Tensor};
 use tch::Kind::{BFloat16, Float};
 use tch::kind::FLOAT_CPU;
 use tokio::task::JoinHandle;
-use thoosa_common::dims::LabelProbability;
+use thoosa_common::dims::{ChannelsData, LabelProbability};
 use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::runnable::AsyncStage;
@@ -29,7 +29,7 @@ use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
-use thoosa_main::{ChannelsData2, RawTensorLoader};
+use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::comp_id::SynKey;
@@ -202,7 +202,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     }
 
     debug!("loaded {:?} ", oggs_t);
-    let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t.view((1, -1)))?));//
+    let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t.view((1, -1)))?));//
     let label_models = Arc::new(ws.read().label_models()?);
 
 

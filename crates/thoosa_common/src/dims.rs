@@ -1,31 +1,41 @@
+use std::cmp::min;
 use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
 use std::fmt::Debug;
+use std::ops::Range;
+use tch::{IndexOp, Tensor};
+use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Metrics, MonoMetrics, SimpleId};
 use thoosa_named_derive::Named;
+use thoosa_shared::comp_id::SynKey;
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
-
 }
+
 
 #[derive(Clone, Debug)]
 pub struct ChannelsData;
+
 impl Dims for ChannelsData {
-    type Metrics = AnyMetrics;
-}
+    type Metrics = MonoMetrics<1, 2>;//channels x seq
 
-#[derive(Clone, Debug)]
-pub struct ChannelsDataFiltered;
-impl Dims for ChannelsDataFiltered {
-    type Metrics = AnyMetrics;
 }
+impl ChannelsData {
 
-#[derive(Clone, Debug)]
-pub struct ChannelsSlicesData;
-impl Dims for ChannelsSlicesData {
-    type Metrics = AnyMetrics;
+    pub fn sub_single(t: &ThoTensor<ChannelsData, SynKey>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Result<Tensor, ThoError> {
+        let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
+        let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
+
+        debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
+        trace!("ChannelsData2::subview: t=\n{}", t.t_ref());
+
+        let sub_t = t.t_ref().f_i((channel_range.clone(), data_range.clone()))?;
+
+        // assert_eq!(sub_t.size(), [])
+        Ok(sub_t)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -33,8 +43,6 @@ pub struct Slice; //sliced data [lice_width]
 impl Dims for Slice {
     type Metrics = MonoMetrics<0, 1>;
 }
-
-
 
 #[derive(Clone, Debug)]
 pub struct MotifProbability; //motif net applied to sliced data [slices, slice_width] - probabilities of a slice belonging to a motif
@@ -77,19 +85,18 @@ impl Dims for LabelsProbabilities {
 } //[num of labels, 1] probabilities of an input belonging to target labeled classes
 
 #[derive(Clone, Debug)]
+pub struct Labels;
+
+impl Dims for Labels {
+    type Metrics = MonoMetrics<0, 1>;
+
+}
+
+#[derive(Clone, Debug)]
 pub struct Final;
 impl Dims for Final {
     type Metrics = AnyMetrics;
 } //[num of labels, 1] probabilities of an input belonging to target labeled classes
-
-#[derive(Clone, Debug)]
-pub enum MotifsNetsSelectionDims {
-    ChannelsMotifsData(ChannelsMotifsData),
-    ChannelsMotifsFlattenData(ChannelsMotifsFlattenedData),
-}
-impl Dims for MotifsNetsSelectionDims {
-    type Metrics = AnyMetrics;
-}
 
 #[derive(Clone, Debug)]
 pub struct Batch<D: Dims>(D);
@@ -97,13 +104,7 @@ impl<D: Dims> Dims for Batch<D> {
     type Metrics = MonoMetrics<0, 3>;//O
 }
 
-pub trait Dimensional {
-    type Dimensions: Dims;
-}
 
-pub type TCD = ThoTensor<ChannelsData, SimpleId>;
-pub type TCDF = ThoTensor<ChannelsDataFiltered, SimpleId>;
-pub type TCSD = ThoTensor<ChannelsSlicesData, SimpleId>;
 pub type ThoBatch<D> = ThoTensor<Batch<D>, SimpleId>;
 
 #[derive(Clone, Debug, Named)]
@@ -112,10 +113,6 @@ pub struct AnyDims {}
 impl Dims for AnyDims {
     type Metrics = AnyMetrics;
 }
-
-
-
-
 
 #[derive(Clone, Debug, Default)]
 pub struct AnyMetrics;

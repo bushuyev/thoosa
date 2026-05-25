@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::tasks::bucketing::{BucketingStage, BucketingInput};
+use crate::tasks::bucketing::{BucketingInput, BucketingStage};
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
@@ -41,14 +41,14 @@ use tokio::task::{JoinError, JoinSet};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_pooled_cuda_stream};
-use thoosa_common::dims::MotifSlices;
+use thoosa_common::dims::{ChannelsData, MotifSlices};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
+use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::slices_stats::{Aggr as StatsAggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
@@ -70,7 +70,7 @@ type DistsTrackerStage<C> = DistsTracker<C>;
 enum FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     CrossLoader {
@@ -86,14 +86,14 @@ where
     },
     Bucketing {
         id: RunConfigId,
-        bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData2, SynKey, C>>,
+        bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData, SynKey, C>>,
     },
 }
 
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new_cross_loader(
@@ -115,7 +115,7 @@ where
 
     pub fn new_bucketing(
         id: RunConfigId,
-        bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData2, SynKey, C>>,
+        bucketing_stage: Arc<BucketingStage<RC, L, ChannelsData, SynKey, C>>,
     ) -> Result<Self, ThoError> {
         Ok(Self::Bucketing {
             id,
@@ -199,7 +199,7 @@ fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
 pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L, C>, C>>,
@@ -209,7 +209,7 @@ where
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync+ Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
@@ -463,8 +463,8 @@ where
 impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -479,8 +479,8 @@ where
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> +  'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> +  'static,
     C: RunCtx + Adjustable + 'static,
 {
 
@@ -528,7 +528,7 @@ where
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_deref() {
         None | Some([]) => {
@@ -556,7 +556,7 @@ mod tests {
     use crate::tasks::find_motifs::FindMotifsStage;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, MaxParallelCtx, RunCtx};
+    use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
     use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::runnable::{AsyncStage, Stage};

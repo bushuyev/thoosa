@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::ChannelsData2;
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 
@@ -27,7 +27,7 @@ use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
 
 type LoadFn =
-    dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError> + Sync + Send;
+    dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
 
 #[derive(cached_derive::Cached, Named)]
 #[cache_name = "RawTensors"]
@@ -58,7 +58,7 @@ where
     C: RunCtx + 'static,
 {
     type In<'a> = Resource;
-    type Out = ThoTensor<ChannelsData2, SynKey>;
+    type Out = ThoTensor<ChannelsData, SynKey>;
     type Ctx = C;
 }
 
@@ -102,7 +102,7 @@ where
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where
-        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData2, SynKey>, ThoError>
+        F: Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError>
             + Sync
             + Send
             + 'static,
@@ -134,7 +134,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
-    use crate::tasks::cross_dims::ChannelsData2;
+    use thoosa_common::dims::ChannelsData;
     use dashmap::DashMap;
     use parking_lot::RwLock;
     use tch::Tensor;
@@ -147,7 +147,7 @@ pub(crate) mod mock_tensor_loader {
 
             type In<'a>  = Resource;
 
-            type Out = ThoTensor<ChannelsData2, SynKey>;
+            type Out = ThoTensor<ChannelsData, SynKey>;
         }
 
         impl OutId for TensorLoader {
@@ -160,7 +160,7 @@ pub(crate) mod mock_tensor_loader {
         #[async_trait]
         impl Cached for TensorLoader {
 
-            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey >>>, ThoError >>>>;
+            async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey >>>, ThoError >>>>;
             async fn run_cached(
                     self: Arc<Self>,
                     input: Arc<DevicesWrap<<MockTensorLoader as Stage>::In<'static>>>,
@@ -190,7 +190,7 @@ pub(crate) mod mock_tensor_loader {
         where
             H: IntoIterator<Item=(Resource, Tensor)> ,
         {
-            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
+            let data_map: Arc<HashMap<Resource, Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>> = Arc::new(h.into_iter().map(|(k, v)| {
                 let id = SynKey::new([mono_key!(k.file_stem(), format!("file_stem={}", k.file_stem()))]);
                 let tensor = ThoTensor::new(id, v)
                     .expect("ThoTensor::new failed in MockTensorLoaderBuilder");
@@ -232,7 +232,7 @@ mod tests {
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::{Device, Tensor};
-    use crate::tasks::cross_dims::ChannelsData2;
+    use thoosa_common::dims::ChannelsData;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;

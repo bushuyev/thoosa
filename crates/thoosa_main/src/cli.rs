@@ -1,5 +1,5 @@
 use crate::cli::Commands::{
-     ConvertPrecision, Export, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, PurgeModels, RunAll,
+    ConvertPrecision, Export, FindMotifs, ImportResources, Infer, MotifsToTensor, PlotData, PurgeModels, RunAll,
     SayHello, SelectMotifs, SeqScan, TrainFinalNet, TrainMotifsNets,
 };
 use crate::data;
@@ -7,7 +7,7 @@ use crate::data::{clc_records, labeled_tensors_by_descr, load_to_logits_tensors}
 use crate::progress_socket::CollectEtaProgressSocketServer;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::convert_precision::{ConvertPrecisionArgs, ConvertPrecisionInput, ConvertPrecisionStage};
-use crate::tasks::export::{ExportArgs, ExportInput, Export as ExportStage};
+use crate::tasks::export::{Export as ExportStage, ExportArgs, ExportInput};
 use crate::tasks::purge_models::{PurgeModelsArgs, PurgeModelsInput, PurgeModelsStage};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -44,14 +44,14 @@ use tch::nn::VarStore;
 use tch::{Device, IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::dims::{Batch, ChannelsData, ThoBatch, TCD};
-use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
+use thoosa_common::dims::{Batch, ChannelsData, ThoBatch};
+use crate::tasks::find_motifs_run_config::{AccumulateStats, AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExactStatsRangeOrValue, ExtendMotifsConfig, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, InterestingAmp01RunConfig, InterestingAmp01RunConfigRangeOrValue, InterestingTurningPointsRatioRunConfig, InterestingTurningPointsRatioRunConfigRangeOrValue, MaxAggr, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MeanAggrRangeOrValue, MetricsRangeOrValue, MinAggrRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilter, SlicesFilterRangeOrValue};
 use thoosa_common::input_probs::InputProbs;
 use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, SavableResult, Simple};
 
 use thoosa_common::seq_scan_run_config::SeqScanRunConfigRangeOrValue;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetsArgs, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainMotifNetResult, TrainMotifsNetsArgs, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue};
+use thoosa_common::train_nets::{load_final_model, opt_train, AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNetsArgs, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsResult};
 use thoosa_common::utils::{from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options, DummyListener, TrainListener};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_common::my_tch::ThoModule;
@@ -96,15 +96,15 @@ use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectE
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
 use thoosa_store::rusqlite::Transaction;
 use crate::tasks::slices_stats::{Aggr, Metrics};
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
+use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
-use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingStage, BucketingInput};
+use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
 use crate::tasks::merge_selected_motifs::{MergeSelectedMotifs, MergeSelectedMotifsArgs, MergeSelectedMotifsInput};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
-use crate::tasks::select_buckets::{SelectBucketsRunConfigRangeOrValue};
+use crate::tasks::select_buckets::SelectBucketsRunConfigRangeOrValue;
 use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
 use crate::tasks::seq_scan::SeqScanStage;
 use crate::tasks::train_final_net::new_train_final_net;
@@ -1551,7 +1551,7 @@ async fn load_resource_tensor_for_plot<C>(
     loader: &Arc<RawTensorLoader<C>>,
     resource_id: ResourceId,
     mut ctx: C,
-) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>, ThoError>
+) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, ThoError>
 where
     C: RunCtx + Adjustable,
 {
@@ -1587,7 +1587,7 @@ fn plot_resource_channels<C>(
     prefix: &str,
     suffix: &str,
     caption: &str,
-    tensor: &ThoTensor<ChannelsData2, SynKey>,
+    tensor: &ThoTensor<ChannelsData, SynKey>,
     channels: Option<&Vec<u32>>,
     resolution: Resolution,
     print_to_stdout: bool,
@@ -1676,7 +1676,7 @@ where
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+    raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
     }).await?;
 
@@ -1690,7 +1690,7 @@ where
             .await?;
 
         let filtered_channels = channels.clone();
-        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
         }).await?;
     }
@@ -1729,7 +1729,7 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+    raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
@@ -1744,7 +1744,7 @@ where
             .await?;
 
         let channel_only_filtered = vec![channel];
-        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         }).await?;
 
@@ -1762,7 +1762,7 @@ where
 
     filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false), None, {
         let motif_net = Arc::clone(&motif_net);
-        move |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+        move |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             let out = apply_motif_net_forward::<C>(
                 mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
                 tensor,
@@ -2117,7 +2117,7 @@ mod cli_tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::{nn, Device, IndexOp, Tensor};
     use tch::Kind::Float;
-    use crate::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
+    use crate::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, FindMotifsRunConfig, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::input_probs::{compare_input_probs, InputProbs};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runs::{Empty, Labeled, Logits, NetResources, Simple};
@@ -2163,7 +2163,7 @@ mod cli_tests {
     use thoosa_store::rusqlite::Transaction;
     use thoosa_with_data::with_data;
     use crate::tasks::slices_stats::{Aggr, Metrics};
-    use crate::tasks::cross_dims::ChannelsData2;
+    use thoosa_common::dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
     use crate::tasks::find_motifs::FindMotifsStage;
@@ -2572,7 +2572,7 @@ mod cli_tests {
             let pulse_triangle_filtered_t = Arc::clone(&freq_filter).run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_triangle_t.shallow_clone())?)), ctx.branch(Some("filter"), false)).await?;
             let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(Some("filter"), false)).await?;
 
-            with_data!(ctx.branch(Some("filter"), false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData2, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData2, SynKey> |{
+            with_data!(ctx.branch(Some("filter"), false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData, SynKey> |{
 
                 debug_plot!(pulse_triangle_t.as_ref(), "pulse_triangle_{freq}_filtered_t")?;
                 debug_plot!(pulse_sin_t.as_ref(), "pulse_sin_{freq}_filtered_t")?;
