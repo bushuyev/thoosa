@@ -204,11 +204,11 @@ mod tests {
 
     // #[async_trait]
     impl AsyncStage for TestTensorLoader {
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        where
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
             let device_idx = ctx.device_idx();
@@ -227,7 +227,6 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(tensor)))
         }
-
     }
 
     // //////////////////////////////
@@ -411,11 +410,11 @@ mod tests {
 
     // #[async_trait]
     impl AsyncStage for ClcTask {
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        where
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let device_idx = ctx.device_idx();
             let num_devices = GlobalCtx::global().device_count();
 
@@ -429,7 +428,6 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(output)))
         }
-
     }
 
     //////////////////////////////
@@ -455,14 +453,15 @@ mod tests {
 
     // #[async_trait]
     impl AsyncStage for LoadAndClcTask {
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
-            mut ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+
+
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        where
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             let ctx_for_loader = ctx.branch(Some("load_and_clc_loader"), false);
             let loaded = Arc::clone(&self.loader)
-                .run_cached(Arc::clone(&input), ctx_for_loader)
+                .run_cached_(Arc::clone(&input), ctx_for_loader)
                 .await?;
 
             let loaded_id = loaded.id().clone();
@@ -497,6 +496,8 @@ mod tests {
 
             Ok(Arc::new(DevicesWrap::wrap(result)))
         }
+
+
     }
 
     #[async_trait]

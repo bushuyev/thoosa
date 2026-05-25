@@ -511,11 +511,10 @@ pub mod fixtures {
     // #[async_trait]
     impl AsyncStage for DummyLoader {
 
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        where
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID=<Self::In<'static> as WithId>::ID> + 'static
+        {
             self.run_count.fetch_add(1, Relaxed);
 
             let k = parse_numeric_part(WithId::id(input.as_ref()).0)
@@ -524,14 +523,13 @@ pub mod fixtures {
 
 
             Ok(Arc::new(DevicesWrap::wrap(DLoadedTensor {
-                                        id: out_id,
-                                        data: (0..self.len)
-                                            .map(|v| v as f32 * k)
-                                            .collect::<Vec<f32>>()
-                                            .into(),
-                                    })))
+                id: out_id,
+                data: (0..self.len)
+                    .map(|v| v as f32 * k)
+                    .collect::<Vec<f32>>()
+                    .into(),
+            })))
         }
-
     }
 }
 
@@ -892,33 +890,6 @@ mod tests {
     // #[async_trait]
     impl AsyncStage for DLoadAndMulTask {
 
-
-        async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let ctx_for_loader = ctx.branch(Some("load_and_mul_loader"), false);
-            let loaded = Arc::clone(&self.loader)
-                .run_cached_(input, ctx_for_loader)
-                .await?;
-
-            debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
-
-
-            async move {
-
-                Ok(Arc::new(DevicesWrap::wrap(self.mul_oom_runner
-                    .run(
-                        &self.mul,
-                        loaded,
-                        ctx.branch(Some("load_and_mul_mul"), false),
-                        &HashMap::from([("", &HashSet::new())]),
-                    )
-                    .await.map_err(|e|{
-                        error!("DLoadAndMulTask::run: e={e:?}");
-                        e
-                     })?)))
-            }
-            .await
-        }
-
         async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
         where
             W: for<'a> WithDataRef<O<'a>=Self::In<'a>>  + WithId<ID= <Self::In<'static> as WithId>::ID> +'static, // + WithSelectDataRef<S>,
@@ -945,8 +916,7 @@ mod tests {
                     error!("DLoadAndMulTask::run: e={e:?}");
                     e
                 })?)))
-            }
-                .await
+            }.await
         }
     }
 
