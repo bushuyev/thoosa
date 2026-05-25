@@ -38,7 +38,7 @@ where
 
     fn run_<W>(self: Arc<Self>, _input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
     where
-        W:for<'a> WithDataRef<O<'a>=Self::In<'a>>, // + WithSelectDataRef<S>,
+        W:for<'a> WithDataRef<O<'a>=Self::In<'a>> + WithId<ID= <Self::In<'static> as WithId>::ID> +'static, // + WithSelectDataRef<S>,
         // S: Clone + Debug + Send + 'static,
     {
         async {

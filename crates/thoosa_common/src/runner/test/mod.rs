@@ -648,27 +648,28 @@ mod tests {
     }
 
     impl AsyncStage for DummyLoader {
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            self.run_count.fetch_add(1, Relaxed);
-
-            let k = parse_numeric_part(WithId::id(input.as_ref()).0)
-                .unwrap_or(1.0) as f32;
-            let out_id = self.out_id(WithId::id(input.as_ref()));
 
 
-            Ok(Arc::new(DevicesWrap::wrap(DLoadedTensor {
-                id: out_id,
-                data: (0..self.len)
-                    .map(|v| v as f32 * k)
-                    .collect::<Vec<f32>>()
-                    .into(),
-            })))
+        fn run_<W>(self: Arc<Self>, input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+        where
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>>  + WithId<ID= <Self::In<'static> as WithId>::ID> +'static
+        {
+            async move {
+                self.run_count.fetch_add(1, Relaxed);
+
+                let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0) as f32;
+                let out_id = self.out_id(WithId::id(input.as_ref()));
+
+
+                Ok(Arc::new(DevicesWrap::wrap(DLoadedTensor {
+                    id: out_id,
+                    data: (0..self.len)
+                        .map(|v| v as f32 * k)
+                        .collect::<Vec<f32>>()
+                        .into(),
+                })))
+            }
         }
-
     }
 
     ////////////
@@ -893,7 +894,7 @@ mod tests {
         async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let ctx_for_loader = ctx.branch(Some("load_and_mul_loader"), false);
             let loaded = Arc::clone(&self.loader)
-                .run_cached(input, ctx_for_loader)
+                .run_cached_(input, ctx_for_loader)
                 .await?;
 
             debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
@@ -918,7 +919,7 @@ mod tests {
 
         async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
         where
-            W: for<'a> WithDataRef<O<'a>=Self::In<'a>>, // + WithSelectDataRef<S>,
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>>  + WithId<ID= <Self::In<'static> as WithId>::ID> +'static, // + WithSelectDataRef<S>,
             // S: Clone + Debug + Send + 'static
         {
             let ctx_for_loader = ctx.branch(Some("load_and_mul_loader"), false);

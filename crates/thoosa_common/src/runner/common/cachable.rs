@@ -156,7 +156,7 @@ where
         Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
         for<'a>  <Self as Stage>::In<'a>: WithId,
          W:'static,
-         W: for<'a>  WithId<ID= <<Self as Stage>::In<'a> as WithId>::ID>, // + WithSelectDataRef<S>,
+         W: for<'a>  WithId<ID= <<Self as Stage>::In<'static> as WithId>::ID>, // + WithSelectDataRef<S>,
          W: for<'a> WithDataRef<O<'a> =Self::In<'a>>,
     {
         let device_idx = ctx.device_idx();
