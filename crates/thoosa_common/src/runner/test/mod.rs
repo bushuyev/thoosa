@@ -961,10 +961,10 @@ mod tests {
         let ctx_device_0_1 = ctx_device_0.branch(Some("test_load_dummy_0_1"), false);
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
-            .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
-                                    id: DLoaderInputId("resource_1"),
-                                })),
+            .run_cached_(
+                Arc::new(DLoaderInput {
+                    id: DLoaderInputId("resource_1"),
+                }),
                 ctx_device_0_0,
             )
             .await;
@@ -972,10 +972,10 @@ mod tests {
         // debug!("{:?}", loaded_tensor_0_0);
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
-            .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
-                                    id: DLoaderInputId("resource_1"),
-                                })),
+            .run_cached_(
+                Arc::new(DLoaderInput {
+                    id: DLoaderInputId("resource_1"),
+                }),
                 ctx_device_0_1,
             )
             .await;
@@ -995,10 +995,10 @@ mod tests {
         let ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false);
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
-            .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
-                                                    id: DLoaderInputId("resource_1"),
-                                                })),
+            .run_cached_(
+                Arc::new(DLoaderInput {
+                    id: DLoaderInputId("resource_1"),
+                }),
                 ctx_device_1_0,
             )
             .await?;
@@ -1037,10 +1037,10 @@ mod tests {
         let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false);
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
-            .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
-                                    id: DLoaderInputId("resource_1"),
-                                })),
+            .run_cached_(
+                Arc::new(DLoaderInput {
+                    id: DLoaderInputId("resource_1"),
+                }),
                 ctx_device_0_0,
             )
             .await?;
