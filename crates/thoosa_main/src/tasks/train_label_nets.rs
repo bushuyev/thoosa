@@ -18,7 +18,7 @@ use cached_derive::Cached;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::tho_tensor::{Labels, ThoTensor};
+use thoosa_common::tho_tensor::{ThoTensor};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{build_resource_maps, Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, Data, WithId};

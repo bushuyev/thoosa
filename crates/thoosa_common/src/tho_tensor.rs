@@ -77,49 +77,7 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
     }
 }
 
-pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
-    _id: &'a Id,
-    t: &'a mut Tensor,
-    pd: PhantomData<D>,
-}
-unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorMut<'a, D, Id> {}
-// (no Sync)
 
-impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
-    pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
-        Self {
-            _id: id,
-            t,
-            pd: Default::default(),
-        }
-    }
-
-    pub fn zero_(&mut self) {
-        let _ = self.t.zero_();
-    }
-    pub fn add_(&mut self, rhs: &ThoTensor<D, Id>) -> Result<(), ThoError> {
-        let _ = self.t.f_add_(&rhs.t)?;
-
-        Ok(())
-    }
-    pub fn copy_from_(&mut self, rhs: &ThoTensor<D, Id>) {
-        self.t.copy_(&rhs.t);
-    }
-
-    pub fn copy_partial_from_(
-        &mut self,
-        _dim: i64,
-        start: i64,
-        length: i64,
-        rhs: &ThoTensor<D, Id>,
-    ) {
-        self.t.narrow(0, start, length).copy_(&rhs.t);
-    }
-
-    pub fn resize_(&mut self, new_shape: &[i64]) {
-        let _ = self.t.resize_(new_shape);
-    }
-}
 
 //D:Dims - is just a reminder of what dimensions a tensor has. 
 pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
@@ -282,9 +240,9 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.tracking.write().push(token);
     }
 
-    pub fn to_mut<'a>(&'a mut self) -> ThoTensorMut2<'a, D, Id> {
-        ThoTensorMut2 {
-            _id: &self.id,
+    pub fn to_mut<'a>(&'a mut self) -> ThoTensorMut<'a, D, Id> {
+        ThoTensorMut {
+            id: &self.id,
             t: &mut self.t,
             pd: Default::default(),
         }
@@ -363,17 +321,16 @@ where
 {}
 
 
-pub struct ThoTensorMut2<'a, D: Dims, Id: Named + Debug + Clone> {
-    _id: &'a Id,
+pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
+    id: &'a Id,
     t: &'a mut Tensor,
     pd: PhantomData<D>,
 }
 
-
-impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut2<'a, D, Id> {
+impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
         Self {
-            _id: id,
+            id: id,
             t,
             pd: Default::default(),
         }
@@ -404,14 +361,4 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut2<'a, D, Id> {
     pub fn resize_(&mut self, new_shape: &[i64]) {
         let _ = self.t.resize_(new_shape);
     }
-}
-
-
-
-#[derive(Clone, Debug)]
-pub struct Labels;
-
-impl Dims for Labels {
-    type Metrics = MonoMetrics<0, 1>;
-
 }

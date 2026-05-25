@@ -85,6 +85,14 @@ impl Dims for LabelsProbabilities {
 } //[num of labels, 1] probabilities of an input belonging to target labeled classes
 
 #[derive(Clone, Debug)]
+pub struct Labels;
+
+impl Dims for Labels {
+    type Metrics = MonoMetrics<0, 1>;
+
+}
+
+#[derive(Clone, Debug)]
 pub struct Final;
 impl Dims for Final {
     type Metrics = AnyMetrics;

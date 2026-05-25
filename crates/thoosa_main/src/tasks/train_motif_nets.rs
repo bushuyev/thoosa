@@ -32,7 +32,7 @@ use thoosa_common::dims::{Batch, Dims, MotifProbability, MotifSlices, Slice, Tho
 use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
-use thoosa_common::tho_tensor::{Labels, ThoTensor};
+use thoosa_common::tho_tensor::{ThoTensor};
 use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_series_with_lanes, to_vec_f32, DummyListener};
 use thoosa_common::ws::Workspace;
