@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
+use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::RunCtx;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -34,6 +34,18 @@ where
             unimplemented!()
         }
     }
+
+
+    fn run_<W>(self: Arc<Self>, _input: Arc<W>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    where
+        W:for<'a> WithDataRef<O<'a>=Self::In<'a>>, // + WithSelectDataRef<S>,
+        // S: Clone + Debug + Send + 'static,
+    {
+        async {
+            unimplemented!()
+        }
+    }
+
 }
 
 #[derive(Debug)]

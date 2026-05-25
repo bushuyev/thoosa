@@ -143,6 +143,109 @@ where
         }
     }
 
+    async fn run_cached_<W>(
+        self: Arc<Self>,
+        input: Arc<W>,
+        mut ctx: Self::Ctx,
+    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    where
+        Self: Sized + OutId,
+        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        <Self as Stage>::Out: Send + Sync + 'static,
+        <<Self as Stage>::Out as WithId>::ID: 'static,
+        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        for<'a>  <Self as Stage>::In<'a>: WithId,
+         W:'static,
+         W: for<'a>  WithId<ID= <<Self as Stage>::In<'a> as WithId>::ID>, // + WithSelectDataRef<S>,
+         W: for<'a> WithDataRef<O<'a> =Self::In<'a>>,
+    {
+        let device_idx = ctx.device_idx();
+
+
+        let key = self.out_id(WithId::id(&input));
+        let device_idx = ctx.device_idx();
+
+        debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
+        // #[cfg(any(test, feature = "mock_global_ctx"))]
+        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
+
+        let cache = Self::cache().await;
+        let key_for_purger = key.clone();
+
+        ctx.add_purge_gpu_closure(
+            Box::new( move || {
+
+                let key_for_purger = key_for_purger.clone();
+                trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
+
+                async move {
+                    let Some(shared_fut) = Self::cache().await.get(&key_for_purger) else {
+                        debug!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
+                        return Ok(());
+                    };
+
+                    trace!("Cachable::purge_gpu_cache_area: 2 key={key_for_purger:?} shared_fut={shared_fut:?} ");
+
+                    if let Some(data) = shared_fut
+                        .peek()  //to avoid locking on itself
+                        .and_then(|peeked| peeked.as_ref().ok())
+                        .map(Arc::clone) {
+                        debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} Arc::strong_count={:?}", Arc::strong_count(&data));
+                        if Arc::strong_count(&data) == 1 {
+                            data.dump_to_cpu(device_idx).await?;
+
+                            debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
+                        }
+                    }
+
+                    Ok(())
+                }.boxed()
+            })
+
+        );
+
+
+
+
+        GlobalCtx::global().do_age();
+
+        #[cfg(any(debug_assertions, tho_debug))]
+        let debug_key = key.clone();
+        match cache.entry(key) {
+            Entry::Occupied(slot) => {
+                let shared = slot.get().clone();
+                drop(slot);
+                shared
+                    .map(|res| {
+                        if let Ok(_data) = &res {
+                            #[cfg(any(debug_assertions, tho_debug))]
+                            debug!("Cachable::run_cached, Entry::Occupied: key={debug_key:?}");
+
+                            // data.add_cache_area(cache_area);
+                        }
+                        res
+                    })
+                    .await
+            }
+            Entry::Vacant(slot) => {
+                let fut = Arc::clone(&self)
+                    .run_(input, ctx)
+                    .boxed()
+                    .shared();
+
+                slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
+
+                fut.await.map(|v| {
+                    #[cfg(any(debug_assertions, tho_debug))]
+                    debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}");
+
+                    v
+                })
+            }
+        }
+    }
+
+
 }
 
 
@@ -1158,7 +1261,7 @@ where
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
 where
     S:Debug + Clone + Send + 'static,
-    O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
+    O: Select<S, Output=O> + Data + WithId + Send + Sync, // + CopyToDevice,
     O::M: DevicesWrapCopyMode<O>,
 {
     fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a

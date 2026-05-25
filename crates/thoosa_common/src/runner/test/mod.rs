@@ -239,7 +239,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    for<'a> <R as Stage>::In<'a>: Data + CopyToDevice + WithId+ Send + Sync,
+    for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
     for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<R::In<'a>>,
     R::Out: Data + CopyToDevice + Send + Sync,
     <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
@@ -334,7 +334,7 @@ pub mod fixtures {
     use thoosa_shared::ThoError;
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::runner::common::{OutId, RunCtx};
-    use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage};
     use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
@@ -458,10 +458,18 @@ pub mod fixtures {
         }
     }
 
-    #[async_trait]
-    impl CopyToDevice for DLoaderInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-           Ok(self.clone())
+
+    impl WithDataRef for DLoaderInput {
+        type O<'o> = Self;
+
+        fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
+        where
+                for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+                P: RunCtx + 'a
+        {
+            async move {
+                do_run(self, &permits_ctx)
+            }
         }
     }
 
@@ -528,6 +536,7 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::fmt::Debug;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock, OnceLock};
@@ -548,7 +557,7 @@ mod tests {
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
-    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;
@@ -893,20 +902,49 @@ mod tests {
             async move {
 
                 Ok(Arc::new(DevicesWrap::wrap(self.mul_oom_runner
-                                    .run(
-                                        &self.mul,
-                                        loaded,
-                                        ctx.branch(Some("load_and_mul_mul"), false),
-                                        &HashMap::from([("", &HashSet::new())]),
-                                    )
-                                    .await.map_err(|e|{
-                                        error!("DLoadAndMulTask::run: e={e:?}");
-                                        e
-                                     })?)))
+                    .run(
+                        &self.mul,
+                        loaded,
+                        ctx.branch(Some("load_and_mul_mul"), false),
+                        &HashMap::from([("", &HashSet::new())]),
+                    )
+                    .await.map_err(|e|{
+                        error!("DLoadAndMulTask::run: e={e:?}");
+                        e
+                     })?)))
             }
             .await
         }
 
+        async fn run_<W>(self: Arc<Self>, input: Arc<W>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+        where
+            W: for<'a> WithDataRef<O<'a>=Self::In<'a>>, // + WithSelectDataRef<S>,
+            // S: Clone + Debug + Send + 'static
+        {
+            let ctx_for_loader = ctx.branch(Some("load_and_mul_loader"), false);
+            let loaded = Arc::clone(&self.loader)
+                .run_(input, ctx_for_loader)
+                .await?;
+
+            debug!("LoadAndMulTask::run_2: loaded.id={:?}", loaded.id());
+
+
+            async move {
+
+                Ok(Arc::new(DevicesWrap::wrap(self.mul_oom_runner
+                    .run(
+                        &self.mul,
+                        loaded,
+                        ctx.branch(Some("load_and_mul_mul"), false),
+                        &HashMap::from([("", &HashSet::new())]),
+                    )
+                    .await.map_err(|e|{
+                    error!("DLoadAndMulTask::run: e={e:?}");
+                    e
+                })?)))
+            }
+                .await
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
@@ -1061,24 +1099,24 @@ mod tests {
         let ctx_device_0_run = ctx_device_0.branch(Some("test_load_and_mul_no_oom_run"), false);
         let ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false);
 
-        let multed = load_and_mut.run_cached(
-            Arc::new(DevicesWrap::wrap(DLoaderInput {
-                                                id: DLoaderInputId("resource_1"),
-                                            })),
+        let multed = load_and_mut.run_(//run_cached
+            Arc::new(DLoaderInput {
+                id: DLoaderInputId("resource_1"),
+            }),
             ctx_device_0_run,
-            )
-            .await?;
+        )
+        .await?;
 
         multed
-            .with_data_ref(1,
-                           ctx_device_0_data, None, |data: &DMulTaskOutput, _ctx| {
-                                           assert_eq!(
-                                               data.data.0,
-                                               (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
-                                           );
+        .with_data_ref(1,
+           ctx_device_0_data, None, |data: &DMulTaskOutput, _ctx| {
+               assert_eq!(
+                   data.data.0,
+                   (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
+               );
 
-                                           Ok(())
-                                       })
+               Ok(())
+           })
             .await?;
 
         debug!("multed={multed:?}");

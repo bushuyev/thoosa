@@ -778,7 +778,7 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + 'static,
-    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, Arc<W>, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
