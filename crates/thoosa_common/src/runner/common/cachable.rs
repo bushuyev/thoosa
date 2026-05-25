@@ -1,5 +1,7 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
+
+use std::borrow::Borrow;
 use crate as thoosa_common;
 
 use mockall_double::double;

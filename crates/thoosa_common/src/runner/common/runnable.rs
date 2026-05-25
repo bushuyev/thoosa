@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::RunCtx;
 use std::fmt::Debug;
@@ -16,18 +17,22 @@ pub trait Stage: Debug {
 
 }
 
+
 // #[async_trait] - it's anyway not obj safe, and it forces Output to be Send
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
         for <'a> Self::In<'a>: Data + WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync,
-        <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>
+        <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
 {
+
+    type InWrap: WithId + Send + Sync + 'static = DevicesWrap<Self::In<'static>>;
+    type OutWrap: WithId + Send + Sync + 'static = DevicesWrap<Self::Out>;
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)
     //it means 'plain' inputs like resource ID should have dummy Data impl, TODO look for the better way (enum based solution appear to be essentially same dummy wrapper)
     // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
-    fn run(self: Arc<Self>, _input: Arc<DevicesWrap<Self::In<'static>>>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    fn run(self: Arc<Self>, _input: Arc<Self::InWrap>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<Self::OutWrap>, ThoError>> + Send
 
     {
         async {
