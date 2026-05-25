@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::ChannelsData2;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
@@ -30,7 +30,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
     id: SynKey,
-    tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+    tensors: &'a [&'a ThoTensor<ChannelsData, SynKey>],
     resources_0: &'a [R],
     resources_1: &'a [R],
 }
@@ -38,7 +38,7 @@ pub struct CrossInput<'a, R: AsRef<Resource>> {
 impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
 
     pub fn new(
-        tensors: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+        tensors: &'a [&'a ThoTensor<ChannelsData, SynKey>],
         b_0: &'a [R],
         b_1: &'a [R],
         id: SynKey,
@@ -62,7 +62,7 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         }
     }
 
-    pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData2, SynKey>] {
+    pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData, SynKey>] {
         self.tensors
     }
 
@@ -485,7 +485,7 @@ where
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cross_batch_clc/unfold_and_cat"))]
-pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData2, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoError> {
+pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params: &UnfoldParams) -> Result<(Tensor, Vec<i64>), ThoError> {
     debug!("cross_batch_clc::unfold_and_cat: input={input:?} unfold_params={unfold_params:?}");
 
     assert!(!input.is_empty(), "cross_batch_clc/unfold_and_cat: input is empty");
@@ -553,7 +553,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use crate::ChannelsData2;
+    use thoosa_common::dims::ChannelsData;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {

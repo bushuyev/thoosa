@@ -10,6 +10,7 @@ use log::{debug, trace};
 use parking_lot::RwLock;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
@@ -27,7 +28,7 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
 use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsMotifsDists};
+use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_common::tho_tensor::ThoTensor;
@@ -222,7 +223,7 @@ where
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapper {
     id: SynKey,
-    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+    batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resource_ids: Vec<ResourceId>,
     stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
     motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
@@ -258,7 +259,7 @@ impl Data for ClcResourcesMotifsDistInputDeviceWrapper {
 impl ClcResourcesMotifsDistInputDeviceWrapper {
     pub fn new(
         id: SynKey,
-        batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
         resource_ids: Vec<ResourceId>,
         stacked_motifs: Arc<DevicesWrap<StackedMotifsOutput>>,
         motifs_stats: Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>,
@@ -290,7 +291,7 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
             with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
                 |
                  ctx,
-                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
                  stacked_motifs:&StackedMotifsOutput,
                  motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
                 |{
@@ -347,7 +348,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
             with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
                 |
                  ctx,
-                 batch_v:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
                  stacked_motifs_output:&StackedMotifsOutput,
                  motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
                 |{
@@ -368,7 +369,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInput<'a> {//TODO remove unused
     id: SynKey,
-    batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+    batch: &'a [&'a ThoTensor<ChannelsData, SynKey>],
     resource_ids: Vec<ResourceId>,
     resource_offsets: Vec<u32>,
     stacked_motifs_output: &'a StackedMotifsOutput,
@@ -378,7 +379,7 @@ pub struct ClcResourcesMotifsDistInput<'a> {//TODO remove unused
 
 impl<'a> ClcResourcesMotifsDistInput<'a> {
     pub fn new(
-        batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+        batch: &'a [&'a ThoTensor<ChannelsData, SynKey>],
         resource_ids: Vec<ResourceId>,
         batched_motifs_output: &'a StackedMotifsOutput,
         motifs_stats: &'a ThoTensor<ChannelsMotifsDists, SynKey>,
@@ -388,7 +389,7 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
     }
 
     pub fn new_with_offsets(
-        batch: &'a [&'a ThoTensor<ChannelsData2, SynKey>],
+        batch: &'a [&'a ThoTensor<ChannelsData, SynKey>],
         resource_ids: Vec<ResourceId>,
         resource_offsets: Vec<u32>,
         batched_motifs_output: &'a StackedMotifsOutput,

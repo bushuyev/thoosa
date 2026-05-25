@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use crate::tho_device::ThoDevice;
-use crate::dims::{AnyDims, Dimensional, Dims};
+use crate::dims::{AnyDims, Dims};
 use thoosa_shared::{panic_to_err, simple_id};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
@@ -16,9 +16,6 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 
-impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
-    type Dimensions = D;
-}
 
 //TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
@@ -34,7 +31,6 @@ impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
     }
 }
 
-//TODO remove?
 
 
 impl<D: Dims, Id: Named + Debug + Clone> AsRef<Tensor> for ThoTensor<D, Id> {
@@ -72,13 +68,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             pd: PhantomData,
         })
     }
-    // pub fn to_device(&self, d: Device) -> Result<ThoTensor<D, Id>, ThoError> {
-    //     ThoTensor::new(self.id.clone(), self.t.f_to_device(d)?)
-    // }
-    // pub fn contiguous(&self) -> Result<ThoTensor<D, Id>, ThoError> {
-    //     ThoTensor::new(self.id.clone(), self.t.f_contiguous()?)
-    // }
-
 
 }
 
@@ -88,49 +77,7 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
     }
 }
 
-pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
-    _id: &'a Id,
-    t: &'a mut Tensor,
-    pd: PhantomData<D>,
-}
-unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorMut<'a, D, Id> {}
-// (no Sync)
 
-impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
-    pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
-        Self {
-            _id: id,
-            t,
-            pd: Default::default(),
-        }
-    }
-
-    pub fn zero_(&mut self) {
-        let _ = self.t.zero_();
-    }
-    pub fn add_(&mut self, rhs: &ThoTensor<D, Id>) -> Result<(), ThoError> {
-        let _ = self.t.f_add_(&rhs.t)?;
-
-        Ok(())
-    }
-    pub fn copy_from_(&mut self, rhs: &ThoTensor<D, Id>) {
-        self.t.copy_(&rhs.t);
-    }
-
-    pub fn copy_partial_from_(
-        &mut self,
-        _dim: i64,
-        start: i64,
-        length: i64,
-        rhs: &ThoTensor<D, Id>,
-    ) {
-        self.t.narrow(0, start, length).copy_(&rhs.t);
-    }
-
-    pub fn resize_(&mut self, new_shape: &[i64]) {
-        let _ = self.t.resize_(new_shape);
-    }
-}
 
 //D:Dims - is just a reminder of what dimensions a tensor has. 
 pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
@@ -170,8 +117,6 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
         }
     }
 }
-
-
 
 impl <D:Dims, Id:Named  + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
@@ -265,43 +210,8 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         ThoTensor::new(self.id.clone(), &self.t + &rhs.t)
     }
 
-    pub fn mm<RD: Dims>(
-        &self,
-        rhs: &ThoTensor<RD, Id>,
-    ) -> Result<ThoTensor<D, Id>, ThoError> {
-        let mm_r = panic_to_err!(self.t.f_matmul(&rhs.t))?;
-        debug!(
-            "mm: self.t.size={:?}, rhs.t.size={:?} mm_r.size={:?}",
-            self.t.size(),
-            rhs.t.size(),
-            mm_r.size()
-        );
 
-        Ok(ThoTensor::new(self.id.clone(), mm_r)?)
-    }
 
-    pub fn sum(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.f_sum(k)?)
-    }
-
-    pub fn sum_dim_intlist(&self, dim: i64) -> Result<ThoTensor<D, Id>, ThoError> {
-        Ok(ThoTensor::new(
-            self.id.clone(),
-            panic_to_err!(self.t.f_sum_dim_intlist(dim, false, self.t.kind()))?,
-        )?)
-    }
-
-    pub fn hadamard<RD: Dims>(
-        &self,
-        rhs: &ThoTensor<RD, Id>,
-        to_id: Id,
-    ) -> Result<ThoTensor<D, Id>, ThoError> {
-        Ok(ThoTensor::new(to_id, self.t.f_multiply(&rhs.t)?)?)
-    }
-
-    pub fn mean(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
-        ThoTensor::new(self.id.clone(), self.t.f_mean(k)?)
-    }
 
     pub fn id(&self) -> &Id {
         &self.id
@@ -317,31 +227,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
 
-    pub fn run_inner_with_params<
-        F,
-        OutDim: Dims,
-        P: Dims,
-    >(
-        &self,
-        id: Id,
-        func: &F,
-        params: &[&ThoTensor<P, Id>],
-    ) -> Result<ThoTensor<OutDim, Id>, ThoError>
-    where
-        F: Fn(&Tensor, &[&Tensor]) -> Result<Tensor, ThoError> + ?Sized,
-    {
-        Ok(ThoTensor::new(
-            id,
-            func(
-                &self.t,
-                params
-                    .into_iter()
-                    .map(|p| &p.t)
-                    .collect::<Vec<&Tensor>>()
-                    .as_slice(),
-            )?,
-        )?)
-    }
 
     // No-params variant: transform tensor with a function that only needs &Tensor
     pub fn run_inner<R, F>(&self, func: F) -> Result<R, ThoError>
@@ -355,9 +240,9 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.tracking.write().push(token);
     }
 
-    pub fn to_mut<'a>(&'a mut self) -> ThoTensorMut2<'a, D, Id> {
-        ThoTensorMut2 {
-            _id: &self.id,
+    pub fn to_mut<'a>(&'a mut self) -> ThoTensorMut<'a, D, Id> {
+        ThoTensorMut {
+            id: &self.id,
             t: &mut self.t,
             pd: Default::default(),
         }
@@ -436,18 +321,16 @@ where
 {}
 
 
-pub struct ThoTensorMut2<'a, D: Dims, Id: Named + Debug + Clone> {
-    _id: &'a Id,
+pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
+    id: &'a Id,
     t: &'a mut Tensor,
     pd: PhantomData<D>,
 }
 
-unsafe impl<'a, D: Dims, Id: Named + Debug + Clone> Send for ThoTensorMut2<'a, D, Id> {}
-
-impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut2<'a, D, Id> {
+impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
         Self {
-            _id: id,
+            id: id,
             t,
             pd: Default::default(),
         }
@@ -478,14 +361,4 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut2<'a, D, Id> {
     pub fn resize_(&mut self, new_shape: &[i64]) {
         let _ = self.t.resize_(new_shape);
     }
-}
-
-
-
-#[derive(Clone, Debug)]
-pub struct Labels;
-
-impl Dims for Labels {
-    type Metrics = MonoMetrics<0, 1>;
-
 }
