@@ -143,20 +143,19 @@ where
         }
     }
 
-    async fn run_cached_<W>(
+    async fn run_cached_<W, I>(
         self: Arc<Self>,
         input: Arc<W>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        for<'a> <Self as Stage>::In<'a>: Send + Sync + WithId<ID = I>,
         <Self as Stage>::Out: Send + Sync + 'static,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
-        for<'a>  <Self as Stage>::In<'a>: WithId,
          W:'static,
-         W: for<'a>  WithId<ID= <<Self as Stage>::In<'static> as WithId>::ID>, // + WithSelectDataRef<S>,
+         W: WithId<ID = I>,
          W: for<'a> WithDataRef<O<'a> =Self::In<'a>>,
     {
         let device_idx = ctx.device_idx();

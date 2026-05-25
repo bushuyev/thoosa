@@ -230,7 +230,7 @@ pub enum OOMRunnerConfig {
     MaxParallelAndSplits { max: MaxParallel, step: MaxParallel },
 }
 
-pub async fn run_mul_task_invocations<R, F, CF>(
+pub async fn run_mul_task_invocations<R, F, CF, I>(
     load_and_mul: Arc<R>,
     resources: &[&'static str],
     device_idx: usize,
@@ -239,8 +239,10 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    for<'a> <R as Stage>::In<'a>: Data + WithId+ Send + Sync,
+    for<'a> <R as Stage>::In<'a>: Data + WithId<ID = I> + Send + Sync,
     for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<R::In<'a>>,
+    DevicesWrap<StageInStatic<R>>: WithId<ID = I>,
+    for<'a> DevicesWrap<StageInStatic<R>>: WithDataRef<O<'a> = R::In<'a>>,
     R::Out: Data + CopyToDevice + Send + Sync,
     <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
     StageInStatic<R>: From<&'static str>,
@@ -273,7 +275,7 @@ where
                 let mut ctx_device = ctx_fac_arc(device_idx, 0, name);
 
                 let multed = load_and_mul
-                    .run_cached(
+                    .run_cached_(
                         Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res))),
                         ctx_device.branch(Some(&format!("run_mul_task_run_{idx}")), false),
                     )
