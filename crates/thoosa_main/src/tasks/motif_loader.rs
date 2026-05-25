@@ -20,7 +20,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, 
 use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
-use thoosa_common::dims::{AnyDims, Dims, MotifSlices};
+use thoosa_common::dims::{AnyDims, ChannelsData, Dims, MotifSlices};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
@@ -30,7 +30,7 @@ use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
-use crate::tasks::cross_dims::{ChannelsData, ChannelsDataVec, ChannelsMotifsSlices};
+use crate::tasks::cross_dims::{ChannelsDataVec, ChannelsMotifsSlices};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
@@ -51,7 +51,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::utils::load_run_config;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
@@ -985,20 +985,15 @@ where
 
 #[cfg(test)]
 pub mod mock_motif_loader {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use async_trait::async_trait;
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::sync::Arc;
     use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
-    use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::{MockRunCtx, OutId, RunCtx};
-    use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+    use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::DataId;
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
     use dashmap::DashMap;

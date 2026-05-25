@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::tasks::bucketing::{BucketingStage, BucketingInput};
+use crate::tasks::bucketing::{BucketingInput, BucketingStage};
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
@@ -41,14 +41,14 @@ use tokio::task::{JoinError, JoinSet};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::{pack_bits_bool, with_pooled_cuda_stream};
-use thoosa_common::dims::MotifSlices;
+use thoosa_common::dims::{ChannelsData, MotifSlices};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use crate::tasks::motif_loader::{MotifLoader, MotifMeta};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_named_derive::Named;
-use crate::tasks::cross_dims::{ChannelsData, ChannelsMotifsDists};
+use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::slices_stats::{Aggr as StatsAggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use crate::tasks::stages_seq::{ABStage, StageChainOption};
@@ -556,7 +556,7 @@ mod tests {
     use crate::tasks::find_motifs::FindMotifsStage;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, MaxParallelCtx, RunCtx};
+    use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
     use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::runnable::{AsyncStage, Stage};

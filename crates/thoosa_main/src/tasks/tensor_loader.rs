@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 
@@ -134,7 +134,7 @@ pub(crate) mod mock_tensor_loader {
     use thoosa_shared::mono_key;
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
-    use crate::tasks::cross_dims::ChannelsData;
+    use thoosa_common::dims::ChannelsData;
     use dashmap::DashMap;
     use parking_lot::RwLock;
     use tch::Tensor;
@@ -232,7 +232,7 @@ mod tests {
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::{Device, Tensor};
-    use crate::tasks::cross_dims::ChannelsData;
+    use thoosa_common::dims::ChannelsData;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_shared::ThoError;
     use thoosa_shared::resource::Resource;

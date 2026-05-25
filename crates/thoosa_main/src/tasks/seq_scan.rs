@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
 use crate::tasks::stages_seq::{ABStage, StageChainOption};

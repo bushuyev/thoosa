@@ -19,7 +19,7 @@ pub mod tasks;
 pub mod version;
 
 //TODO use directly?
-pub use tasks::cross_dims::ChannelsData;
+pub use thoosa_common::dims::ChannelsData;
 pub use tasks::apply_motif_nets::ApplyMotifNets;
 pub use tasks::motif_stats::random_non_overlapping_slices;
 pub use tasks::tensor_loader::RawTensorLoader;

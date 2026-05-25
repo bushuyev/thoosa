@@ -22,7 +22,7 @@ use thoosa_common::tho_tensor::{Labels, ThoTensor};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{build_resource_maps, Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::common::{OutId, RunCtx};
 
 use mockall_double::double;
@@ -787,7 +787,7 @@ mod tests {
     use thoosa_store::MockStoreBuilder;
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::motif_test_net_;
-    use crate::tasks::cross_dims::ChannelsData;
+    use thoosa_common::dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use thoosa_common::tch_test_utils::motifs_tensor;
     use crate::tasks::tensor_loader::mock_tensor_loader;

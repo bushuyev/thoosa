@@ -1,7 +1,7 @@
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
-use crate::tasks::cross_dims::{ChannelsData, ChannelsData2Selector};
+use crate::tasks::cross_dims::ChannelsData2Selector;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
@@ -22,13 +22,13 @@ use futures_util::FutureExt;
 use mockall_double::double;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
-use thoosa_common::dims::{AnyDims, AnyMetrics, Dims};
+use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::{simple_id, CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
@@ -908,8 +908,8 @@ impl RangeOrSlice {
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
                 vec![
                     Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(Some("cross_loader_range_or_slice_select"), false), selector, |data, run_ctx|{
-                                            Ok(data)
-                                        }).await?))
+                        Ok(data)
+                    }).await?))
                 ]
             }
             RangeOrSlice::Full => {

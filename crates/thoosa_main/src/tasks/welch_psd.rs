@@ -27,7 +27,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_stats::RANDOM_STATS_GROUP;
 use crate::tasks::stage_ids::{WELCH_PSD, WELCH_PSD_PER_RESOURCE};

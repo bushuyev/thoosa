@@ -10,7 +10,7 @@ use tch::{IndexOp, Tensor};
 use tch::Kind::Float;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::cuda_utils::split_padded_motif_scores;
-use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims};
+use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, MotifProbability};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -28,7 +28,7 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 
 #[derive(Debug)]
 struct ApplyNets<C>
@@ -260,7 +260,7 @@ where
     id: SynKey,
     label: String,
     train_label_net_run_config_id: RunConfigId,
-    net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>>>,
+    net_wrapper: Arc<DevicesWrap<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>>,
     pd: PhantomData<C>,
     batch_in_chunks: usize
 }
@@ -272,7 +272,7 @@ where
     fn new(
         label: String,
         train_label_net_run_config_id: RunConfigId,
-        net: ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+        net: ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
         batch_in_chunks: usize,
     ) -> Self {
         Self {
@@ -321,7 +321,7 @@ where
 
             debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
 
-            with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, input:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
+            with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>, input:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
 
                 debug!("ApplyLabelNet::run: input={input:?}");//[motif_nets x probabilities = input/
 
@@ -331,14 +331,14 @@ where
                 let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 1)?.f_transpose(0,1)?;
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?} batch_input_.1={:?}", batch_input_.1);
 
-                let batch_input: ThoTensor<MotifsNetsSelectionDims, thoosa_shared::traits::SimpleId> = batch_input.into();
+                let batch_input: ThoTensor<ChannelsMotifsData, thoosa_shared::traits::SimpleId> = batch_input.into();
                 let mut lengths = BatchLengths::new(batch_input_.1.iter().map(|v|v[0]).collect());//TODO take lengths
 
                 debug!("ApplyLabelNet::run: batch_input={batch_input:?}");
                 trace!("ApplyLabelNet::run: batch_input=\n{batch_input}");
 
                 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::run/tho_forward"))]
-                fn _tho_forward(net:&ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>, i: &ThoTensor<MotifsNetsSelectionDims, SimpleId>, l: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<Batch<LabelProbability>, SimpleId>, ThoError> {
+                fn _tho_forward(net:&ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>, i: &ThoTensor<ChannelsMotifsData, SimpleId>, l: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<Batch<LabelProbability>, SimpleId>, ThoError> {
                     net.tho_forward(&i, l, false)
                 }
 
@@ -397,7 +397,7 @@ mod tests {
     use tch::nn::{self, VarStore};
     use thoosa_properties_map::ToHashmap;
     use thoosa_common::batches::BatchLengths;
-    use thoosa_common::dims::{Batch, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice};
+    use thoosa_common::dims::{Batch, ChannelsMotifsData, LabelProbability, MotifProbability, Slice};
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
@@ -415,7 +415,7 @@ mod tests {
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::{logit, sigmoid, ApplyLabelNets};
-    use crate::tasks::cross_dims::ChannelsData;
+    use thoosa_common::dims::ChannelsData;
 
     fn const_motif_net(
         motif_width: u32,
@@ -460,7 +460,7 @@ mod tests {
         device: Device,
     ) -> (
         Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
-        Box<dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>> + Sync + Send + 'static>,
+        Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>,
     ) {
         (
             Box::new(move || {
@@ -476,7 +476,7 @@ mod tests {
                         let out = sum_label_t(k, t)?;
                         Ok(out)
                     })));
-                    Ok(Box::new(module) as Box<dyn ThoModule<MotifsNetsSelectionDims, Batch<LabelProbability>>>)
+                    Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
                 let mut vs = VarStore::new(device);
                 let module = builder(&vs.root()).expect("sum_label_net builder");
@@ -504,7 +504,7 @@ mod tests {
         device: Device,
     ) -> (
         Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
-        Box<dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>> + Sync + Send + 'static>,
+        Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>,
     ) {
         (
             Box::new(move || {
@@ -521,7 +521,7 @@ mod tests {
                     let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
                         weighted_label_t(&weights, t)
                     })));
-                    Ok(Box::new(module) as Box<dyn ThoModule<MotifsNetsSelectionDims, Batch<LabelProbability>>>)
+                    Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
                 });
                 let mut vs = VarStore::new(device);
                 let module = builder(&vs.root()).expect("weighted_label_net builder");

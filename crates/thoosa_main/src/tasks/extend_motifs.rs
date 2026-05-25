@@ -35,7 +35,7 @@ use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
-use crate::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_dims::{ChannelsData2Selector, ChannelsMotifsDists};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};

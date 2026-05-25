@@ -1,6 +1,4 @@
-use crate::dims::{
-    Batch, LabelProbability, LabelsProbabilities, MotifProbability, MotifsNetsSelectionDims, Slice,
-};
+use crate::dims::{Batch, ChannelsMotifsData, LabelProbability, LabelsProbabilities, MotifProbability, Slice};
 use crate::train_nets::{
     FinalNetParams, LabelNetParams, MotifNetParams, ThoModuleWithStore, final_net,
 };
@@ -233,7 +231,7 @@ impl FsWorkspace {
         (
             RunConfigId,
             LabelNetParams,
-            ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+            ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
         ),
         ThoError,
     > {
@@ -477,7 +475,7 @@ impl Workspace for FsWorkspace {
         (
             RunConfigId,
             LabelNetParams,
-            ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+            ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
         ),
         ThoError,
     > {
@@ -541,7 +539,7 @@ impl Workspace for FsWorkspace {
             Vec<(
                 RunConfigId,
                 LabelNetParams,
-                ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+                ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
             )>,
         >,
         ThoError,
@@ -829,7 +827,7 @@ pub trait Workspace: Sync + Send + Debug {
         (
             RunConfigId,
             LabelNetParams,
-            ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+            ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
         ),
         ThoError,
     >;
@@ -866,7 +864,7 @@ pub trait Workspace: Sync + Send + Debug {
             Vec<(
                 RunConfigId,
                 LabelNetParams,
-                ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>,
+                ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>,
             )>,
         >,
         ThoError,
@@ -999,7 +997,7 @@ impl WsMockBuilder {
                 RunConfigId,
                 Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>,
                 Box<
-                    dyn Fn() -> ThoModuleWithStore<MotifsNetsSelectionDims, Batch<LabelProbability>>
+                    dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>
                         + Sync
                         + Send
                         + 'static,

@@ -50,7 +50,7 @@ use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_shared::comp_id::SynKey;
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};

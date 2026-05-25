@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use crate::tho_device::ThoDevice;
-use crate::dims::{AnyDims, Dimensional, Dims};
+use crate::dims::{AnyDims, Dims};
 use thoosa_shared::{panic_to_err, simple_id};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
@@ -16,9 +16,6 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 
-impl<D: Dims, Id: Named + Debug + Clone> Dimensional for ThoTensor<D, Id> {
-    type Dimensions = D;
-}
 
 //TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
@@ -34,7 +31,6 @@ impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
     }
 }
 
-//TODO remove?
 
 
 impl<D: Dims, Id: Named + Debug + Clone> AsRef<Tensor> for ThoTensor<D, Id> {
@@ -72,13 +68,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             pd: PhantomData,
         })
     }
-    // pub fn to_device(&self, d: Device) -> Result<ThoTensor<D, Id>, ThoError> {
-    //     ThoTensor::new(self.id.clone(), self.t.f_to_device(d)?)
-    // }
-    // pub fn contiguous(&self) -> Result<ThoTensor<D, Id>, ThoError> {
-    //     ThoTensor::new(self.id.clone(), self.t.f_contiguous()?)
-    // }
-
 
 }
 

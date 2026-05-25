@@ -12,9 +12,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tch::{Device, Kind, Tensor};
 
-use thoosa_common::dims::{Batch};
+use thoosa_common::dims::Batch;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_main::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use thoosa_main::data::{parquet_to_tensor_by_path, AllTrainSplitter, Set, Splitter};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::SimpleId;
@@ -806,6 +806,7 @@ mod tests {
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::Float;
     use tch::{Device, IndexOp, TchError, Tensor};
+    use thoosa_common::dims::ChannelsData;
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -816,7 +817,7 @@ mod tests {
     use thoosa_common::ws::{mock_ws_simp, FsWorkspace};
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{import_resources, Cli};
-    use thoosa_main::{ApplyMotifNets, ChannelsData, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+    use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::SelectMotifsParams;

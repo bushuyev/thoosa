@@ -1,7 +1,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS;
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};

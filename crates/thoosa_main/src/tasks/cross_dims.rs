@@ -3,21 +3,13 @@ use std::ops::Range;
 use log::{debug, trace};
 use tch::{IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
-use thoosa_common::dims::{AnyMetrics, Batch, Dims};
+use thoosa_common::dims::{AnyMetrics, Batch, ChannelsData, Dims};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Adjustable, DataId, Select};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::comp_id::SynKey;
 
-#[derive(Clone, Debug)]
-pub struct ChannelsData;
-
-
-impl Dims for ChannelsData {
-    type Metrics = MonoMetrics<1, 2>;//channels x seq
-
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct ChannelsDataVec {
@@ -83,22 +75,6 @@ impl Adjustable for ChannelsData2Selector {}
 impl From<Range<MonoMetrics<1, 2>>> for ChannelsData2Selector {
     fn from(value: Range<MonoMetrics<1, 2>>) -> Self {
         ChannelsData2Selector(value)
-    }
-}
-
-
-impl ChannelsData {
-    fn sub_single(t: &ThoTensor<ChannelsData, SynKey>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Result<Tensor, ThoError> {
-        let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
-        let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
-
-        debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
-        trace!("ChannelsData2::subview: t=\n{}", t.t_ref());
-
-        let sub_t = t.t_ref().f_i((channel_range.clone(), data_range.clone()))?;
-
-        // assert_eq!(sub_t.size(), [])
-        Ok(sub_t)
     }
 }
 

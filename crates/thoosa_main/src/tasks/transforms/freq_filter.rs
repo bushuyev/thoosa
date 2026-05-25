@@ -19,7 +19,7 @@ use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
-use thoosa_common::dims::{AnyDims, AnyMetrics, Dims};
+use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::InputFilter;
 
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
@@ -31,7 +31,7 @@ use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::math::sg_smoothing_coeffs;
-use crate::tasks::cross_dims::{ChannelsData, ChannelsData2Selector};
+use crate::tasks::cross_dims::ChannelsData2Selector;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 

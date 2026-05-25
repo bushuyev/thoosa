@@ -1,4 +1,4 @@
-use crate::tasks::cross_dims::ChannelsData;
+use thoosa_common::dims::ChannelsData;
 use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
@@ -553,7 +553,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use crate::ChannelsData;
+    use thoosa_common::dims::ChannelsData;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {
