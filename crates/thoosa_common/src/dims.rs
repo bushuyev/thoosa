@@ -81,7 +81,6 @@ pub trait Dimensional {
     type Dimensions: Dims;
 }
 
-
 pub type ThoBatch<D> = ThoTensor<Batch<D>, SimpleId>;
 
 #[derive(Clone, Debug, Named)]
@@ -90,10 +89,6 @@ pub struct AnyDims {}
 impl Dims for AnyDims {
     type Metrics = AnyMetrics;
 }
-
-
-
-
 
 #[derive(Clone, Debug, Default)]
 pub struct AnyMetrics;

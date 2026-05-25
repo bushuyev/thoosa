@@ -78,7 +78,6 @@ tracing-subscriber.workspace = true
 with-id = "1.0.2"
 tub = "0.3"
 sha2.workspace = true
-tensor_types = {git ="https://github.com/bushuyev/tensor_types.git"}
 
 [build-dependencies]
 chrono.workspace = true
