@@ -253,6 +253,9 @@ where
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
 {
+    type InWrap = DevicesWrap<Self::In<'static>>;
+    type OutWrap = DevicesWrap<Self::Out>;
+
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,

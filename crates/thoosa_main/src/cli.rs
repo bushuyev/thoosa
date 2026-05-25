@@ -1916,7 +1916,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage<InWrap = DevicesWrap<<ST as Stage>::In<'static>>, OutWrap = DevicesWrap<<ST as Stage>::Out>> + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
@@ -1972,7 +1972,7 @@ where
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
     >) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync,
+    ST: Stage + AsyncStage<InWrap = DevicesWrap<<ST as Stage>::In<'static>>, OutWrap = DevicesWrap<<ST as Stage>::Out>> + Send + Sync,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
     + ToHashmap,

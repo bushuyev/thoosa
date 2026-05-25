@@ -37,6 +37,7 @@ use crate::cuda_utils::with_pooled_cuda_stream;
 #[async_trait]
 pub trait Cached: AsyncStage + Named
 where
+    Self: AsyncStage<InWrap = DevicesWrap<<Self as Stage>::In<'static>>, OutWrap = DevicesWrap<<Self as Stage>::Out>>,
     for <'i> Self::In<'i>: Data + WithId + Send + Sync,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
     <<Self as Stage>::Out as Data>::M: DevicesWrapCopyMode<<Self as Stage>::Out>
