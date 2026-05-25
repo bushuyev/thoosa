@@ -20,7 +20,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, 
 use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
-use thoosa_common::dims::{AnyDims, ChannelsSlicesData, Dims, MotifSlices};
+use thoosa_common::dims::{AnyDims, ChannelsData, Dims, MotifSlices};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
@@ -30,7 +30,7 @@ use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_with_data::with_data;
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsDataVec, ChannelsMotifsSlices};
+use crate::tasks::cross_dims::{ChannelsDataVec, ChannelsMotifsSlices};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
@@ -51,7 +51,7 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::utils::load_run_config;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
@@ -113,7 +113,7 @@ impl WithId for MotifLoaderInput {
 #[derive(Debug, Cached, Named)]
 pub struct MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: MonoKey,
@@ -126,7 +126,7 @@ where
 
 impl<L, C> MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(
@@ -147,7 +147,7 @@ where
 
 impl<L, C> OutId for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -507,7 +507,7 @@ where
 
 impl<L, C> Stage for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type In<'a> = MotifLoaderInput;
@@ -518,7 +518,7 @@ where
 
 impl<L, C> AsyncStage for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
 
@@ -610,7 +610,7 @@ where
 #[derive(cached_derive::Cached, Named, Debug)]
 pub struct RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -623,7 +623,7 @@ where
 
 impl <L,C> RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
@@ -661,7 +661,7 @@ impl WithId for SlicesLoaderInput {
 impl Input for SlicesLoaderInput {}
 impl<L, C> Stage for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type In<'a> = SlicesLoaderInput;
@@ -673,7 +673,7 @@ where
 
 impl<L, C> OutId for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 
 {
@@ -686,7 +686,7 @@ where
 
 impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx = C> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
 
@@ -796,7 +796,7 @@ async fn load_motif_resource_tensors<L, C>(
 ) -> Result<TmpCached<LoadedMotifResource>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>,
 {
     let loaded_resources = TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}")).await;
     let mut loaded_resources_count = 0usize;
@@ -809,7 +809,7 @@ where
         let raw_tensor = Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
             .await?;
-        let channel_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
+        let channel_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
             let size = raw_tt.size();
             let mut valid_slices = Vec::with_capacity(slices.len());
 
@@ -900,7 +900,7 @@ pub(crate) async fn load_random_slices<L, C>(
 ) -> Result<(u32, TmpCached<ThoTensor<ChannelsMotifsSlices, SynKey>>), ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C>,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>,
 {
     let device_idx = ctx.device_idx();
     debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} slices={slices:?} descr={descr}");
@@ -938,7 +938,7 @@ where
         let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        let resource_slices = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData2, SynKey>| {
+        let resource_slices = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
             let resource_id = resource_id;
             let resource_slice_count = slices.len() as i64;
             let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
@@ -985,20 +985,15 @@ where
 
 #[cfg(test)]
 pub mod mock_motif_loader {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     use async_trait::async_trait;
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
     use std::sync::Arc;
     use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
-    use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
     use thoosa_common::runner::common::{MockRunCtx, OutId, RunCtx};
-    use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+    use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use thoosa_shared::ThoError;
-    use thoosa_shared::traits::DataId;
     use thoosa_shared::traits::WithId;
     use thoosa_common::tho_tensor::ThoTensor;
     use dashmap::DashMap;

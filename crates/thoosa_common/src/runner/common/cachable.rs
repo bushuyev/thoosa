@@ -193,7 +193,6 @@ where
     fn drop_device(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
     where Self:Sized;
 
-
     fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
         where Self:Sized;
     fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool

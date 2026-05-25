@@ -1,7 +1,7 @@
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector};
+use crate::tasks::cross_dims::ChannelsData2Selector;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
@@ -22,13 +22,13 @@ use futures_util::FutureExt;
 use mockall_double::double;
 use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
-use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, ChannelsSlicesData, Dims};
+use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::runs::Simple;
 use thoosa_motifs::find::FindMotifsSavableResult;
 use thoosa_shared::{simple_id, CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
@@ -151,7 +151,7 @@ where
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<
         In<'i> = Resource,
-        Out = ThoTensor<ChannelsData2, SynKey>,
+        Out = ThoTensor<ChannelsData, SynKey>,
         Ctx=C
     > + OutId + 'static,
 
@@ -186,7 +186,7 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -200,7 +200,7 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -239,9 +239,9 @@ where
 
     async fn run_loaded_batch(
         &self,
-        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
         t_0_batch_resources: Vec<Arc<Resource>>,
-        t_1_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        t_1_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
         t_1_batch_resources: Vec<Arc<Resource>>,
         mut ctx: C,
         receiver: Arc<RSV>,
@@ -305,7 +305,7 @@ where
     async fn run_inner_batches(
         &self,
         resources: &[Arc<Resource>],
-        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        t_0_batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
         t_0_batch_resources: Vec<Arc<Resource>>,
         outer_batch_last_i: usize,
         skip_0_i: usize,
@@ -417,7 +417,7 @@ impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
@@ -440,7 +440,7 @@ where
     Self::Out: Data + WithId + Send + Sync,
     <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData2, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
@@ -557,8 +557,8 @@ where
 #[derive(Debug)]
 struct CrossInputSelectorWrap {
     id: SynKey,
-    batch_0:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
-    batch_1:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+    batch_0:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+    batch_1:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
     resources_0: Vec<Arc<Resource>>,
     resources_1: Vec<Arc<Resource>>,
     cache_area: CacheArea,
@@ -595,8 +595,8 @@ impl WithId for CrossInputSelectorWrap {
 impl CrossInputSelectorWrap {
     pub fn new(
         id:SynKey,
-        batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
-        batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>,
+        batch_0: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+        batch_1: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
         resources_0: Vec<Arc<Resource>>,
         resources_1: Vec<Arc<Resource>>,
         cache_area: CacheArea,
@@ -893,7 +893,7 @@ impl Default for RangeOrSlice {
 }
 
 impl RangeOrSlice {
-    pub async fn select<R>(&self, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, mut run_ctx: R) -> Result<Vec<Arc<DevicesWrap<ThoTensor<ChannelsData2, SynKey>>>>, ThoError>
+    pub async fn select<R>(&self, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut run_ctx: R) -> Result<Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ThoError>
     where
         R:RunCtx
     {
@@ -908,8 +908,8 @@ impl RangeOrSlice {
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
                 vec![
                     Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(Some("cross_loader_range_or_slice_select"), false), selector, |data, run_ctx|{
-                                            Ok(data)
-                                        }).await?))
+                        Ok(data)
+                    }).await?))
                 ]
             }
             RangeOrSlice::Full => {
@@ -951,8 +951,8 @@ impl WithDataRef for CrossInputSelectorWrap
             with_data!(permits_ctx, [t_0_batch], [t_1_batch];
                 |
                  ctx,
-                 batch_0:&[&ThoTensor<ChannelsData2, SynKey>],
-                 batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_0:&[&ThoTensor<ChannelsData, SynKey>],
+                 batch_1:&[&ThoTensor<ChannelsData, SynKey>],
                 |{
 
                     do_run(&CrossInput::new(
@@ -1015,8 +1015,8 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
             with_data!(run_ctx, [t_0_batch], [t_1_batch];
                 |
                  ctx,
-                 batch_0:&[&ThoTensor<ChannelsData2, SynKey>],
-                 batch_1:&[&ThoTensor<ChannelsData2, SynKey>],
+                 batch_0:&[&ThoTensor<ChannelsData, SynKey>],
+                 batch_1:&[&ThoTensor<ChannelsData, SynKey>],
                 |{
 
                     debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: batch_0={batch_0:?} batch_1={batch_1:?}");
@@ -1437,7 +1437,7 @@ mod tests {
             let i = i as i64;
             Tensor::arange_start(i*1000, (i+1)*1000, FLOAT_CPU).view((1, -1))
         }).collect::<Vec<_>>();
-        let batch_0 = (0..batch_0_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[i as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
+        let batch_0 = (0..batch_0_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[i as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
 
         let resources_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Arc::new(Resource::new(i, 1, format!("aaa_{}", i), 100))).collect::<Vec<_>>();
         let batch_1_tensors = (batch_0_len..batch_0_len +batch_1_len).map(|i| {
@@ -1445,7 +1445,7 @@ mod tests {
             Tensor::arange_start(i*1000, (i+1)*1000, FLOAT_CPU).view((1, -1))
         }).collect::<Vec<_>>();
 
-        let batch_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[(i -batch_0_len)as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
+        let batch_1 = (batch_0_len..batch_0_len +batch_1_len).map(|i| Ok(Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[(i -batch_0_len)as usize].shallow_clone())?)))).collect::<Result<Vec<_>, ThoError>>()?;
 
 
         let input = CrossInputSelectorWrap::new(
@@ -1492,10 +1492,10 @@ mod tests {
         let batch_1_tensors = vec![Tensor::arange_start(0, 8, FLOAT_CPU).view((1, -1))];
 
         let batch_0 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
         ];
         let batch_1 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
         ];
 
         let input = CrossInputSelectorWrap::new(
@@ -1568,11 +1568,11 @@ mod tests {
         ];
 
         let batch_0 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_0_tensors[0].shallow_clone())?)),
         ];
         let batch_1 = vec![
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
-            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData2, SynKey>::new("".into(), batch_1_tensors[1].shallow_clone())?)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[0].shallow_clone())?)),
+            Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new("".into(), batch_1_tensors[1].shallow_clone())?)),
         ];
 
         let input = CrossInputSelectorWrap::new(
