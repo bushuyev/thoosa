@@ -242,7 +242,7 @@ pub(crate) async fn run_all(
                         )/*.check(&store).await?*/));
 
                          let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(3));
-                        let limit = combo_sets.len().min(100);//TODO ..100
+                        let limit = combo_sets.len().min(20);//TODO ..100
 
                         let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
                         let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 1);
@@ -290,7 +290,7 @@ pub(crate) async fn run_all(
                                     if min_loss < *best_min_loss.read() {
                                         *best_min_loss.write() = min_loss;
                                     }
-                                    if min_loss < 0.1 {
+                                    if min_loss < 0.3 {
                                         info!("stopping training label {label} got loss={min_loss}");
 
                                         break
@@ -572,7 +572,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue {
             id: None,
             common_training_args: CommonTrainingRunConfigRangeOrValue {
-                epochs: RangeOrValue::Value(2),
+                epochs: RangeOrValue::Value(3),
                 batch_size: RangeOrValue::Value(10),
                 // lr: RangeOrValue::Value(0.0001),
                 lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -632,7 +632,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
                 epochs: RangeOrValue::Value(100),
                 batch_size: RangeOrValue::Value(2),
                 lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
-                patience: RangeOrValue::Value(10),
+                patience: RangeOrValue::Value(5),
                 min_delta: RangeOrValue::Value(1e-4_f32),
                 optimizer: Some(OptimizersRangeOrValue::AdamW(AdamWRangeOrValue{
                     beta1: RangeOrValue::Value(0.9),
