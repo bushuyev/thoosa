@@ -32,7 +32,7 @@ use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Con
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::pack_bits_bool;
-use thoosa_common::dims::MotifSlices;
+use thoosa_common::dims::{ChannelsData, MotifSlices};
 use thoosa_common::tho_device::ThoDevice;
 use crate::tasks::find_motifs_run_config::{Aggr as RunConfigAggr, ExtendMotifsRunConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use thoosa_common::runs::{Labeled, SavableResult, Simple};
@@ -56,7 +56,7 @@ use crate::cli::Commands::SelectMotifs;
 use crate::tasks::slices_stats::Aggr;
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
-use crate::tasks::cross_dims::{ChannelsData2, ChannelsData2Selector, ChannelsMotifsDists, ChannelsMotifsSlices};
+use crate::tasks::cross_dims::{ChannelsData2Selector, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
@@ -215,7 +215,7 @@ where
 // satisfies its own minimum threshold.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
@@ -235,7 +235,7 @@ where
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -249,7 +249,7 @@ where
 
 impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
@@ -263,7 +263,7 @@ where
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
@@ -410,7 +410,7 @@ where
 
 impl <L,ML, C> Stage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
@@ -423,7 +423,7 @@ where
 
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData2, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
@@ -535,7 +535,7 @@ pub mod tests {
     use thoosa_store::{IdSlice, MockStore, MockStoreBuilder, RunConfigRow, Store};
     use thoosa_common::tho_tensor::ThoTensor;
     use crate::tasks::find_motifs_run_config::SelectMotifsSavableResult;
-    use crate::tasks::cross_dims::ChannelsData2;
+    use thoosa_common::dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::motif_stats::MotifStats;

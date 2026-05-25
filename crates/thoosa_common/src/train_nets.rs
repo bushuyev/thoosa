@@ -2374,7 +2374,7 @@ mod train_tests {
     use crate::batches::BatchLengths;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{
-        AnyDims, Batch, Dims, LabelProbability, MotifProbability, MotifsNetsSelectionDims, Slice,
+        AnyDims, Batch, Dims, LabelProbability, MotifProbability, ChannelsMotifsData, Slice,
         ThoBatch,
     };
     use crate::my_tch::{MotifInitMode, ThoModule};
