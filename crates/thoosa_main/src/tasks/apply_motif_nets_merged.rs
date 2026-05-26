@@ -4,9 +4,10 @@ use std::sync::Arc;
 use log::error;
 use parking_lot::RwLock;
 use tch::{Kind, Tensor};
+use tokio::io::AsyncWriteExt;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, MotifProbability, Slice};
-use thoosa_common::my_tch::{MySequential, ThoModule};
+use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::RunCtx;
@@ -99,9 +100,9 @@ where
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
 
-        let mut kernels = Vec::with_capacity(trained_nets.len());
-        let mut alphas = Vec::with_capacity(trained_nets.len());
-        let mut betas = Vec::with_capacity(trained_nets.len());
+        let mut kernels = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+        let mut alphas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+        let mut betas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
 
         //this defines order in which motif nets should be applied to a resource before running label net
         let futures = trained_nets
@@ -111,6 +112,9 @@ where
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
                 let load_ctx_2 = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
+                let kernels = Arc::clone(&kernels);
+                let alphas = Arc::clone(&alphas);
+                let betas = Arc::clone(&betas);
                 async move {
                     match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).await {
                         Ok(net) => {
@@ -118,7 +122,7 @@ where
 
                             let tensors = net.with_data_ref(0, load_ctx_2,None, |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, ctx|{
 
-                                extract_cosine_conv_2d_once(&mut kernels, &mut alphas, &mut betas, v.data().module());
+                                extract_cosine_conv_2d_once(&mut kernels.write(), &mut alphas.write(), &mut betas.write(), v.data().module());
 
                                 Ok(())
                             }).await?;
@@ -210,7 +214,7 @@ struct MyCosineConv2dTensors {
     b: Tensor,
 }
 
-fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>) -> MyCosineConv2dTensors {
+fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifProbability>>>) -> MyCosineConv2dTensors {
 
     let mut kernels = Vec::with_capacity(nets.len());
     let mut alphas = Vec::with_capacity(nets.len());
@@ -228,12 +232,12 @@ fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>) -
     }
 }
 
-fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tensor>, betas: &mut Vec<Tensor>, net: &mut Box<dyn ThoModule<AnyDims, AnyDims>>) {
-    let net_1_ref: &mut dyn ThoModule<AnyDims, AnyDims> = net.as_mut();
-    let net_1_cosine_2_d = net_1_ref.as_any_mut().downcast_mut::<MySequential<AnyDims, AnyDims>>().expect("downcast_mut fails");
+fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tensor>, betas: &mut Vec<Tensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
+    let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
+    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<AnyDims, AnyDims>>().expect("downcast_mut fails");
 
-    let mut layer = net_1_cosine_2_d.layers.get_mut(1).expect("no MyCosineConv2d layer"); //TODO
-    let mut net_1: &mut MyCosineConv2d = layer.as_mut().as_any_mut().downcast_mut::<MyCosineConv2d>().expect("net_1_cosine_2_d");
+    let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
+    let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
 
     kernels.push(net_1.kernel.shallow_clone());
     alphas.push(net_1.alpha.unsqueeze(0).shallow_clone());
@@ -251,7 +255,7 @@ mod tests {
     use tch::nn::VarStore;
     use tch::Tensor;
     use tracing::debug;
-    use thoosa_common::dims::{AnyDims, Spectorgram};
+    use thoosa_common::dims::{AnyDims, Batch, MotifProbability, Slice, Spectorgram};
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{cosine_2d_motif_node, MotifCosine2dNetParams};
     use thoosa_common::my_tch::{InitDummy, MotifInitMode, MySequential, ThoModule};
@@ -277,14 +281,14 @@ mod tests {
         let kernel_1 = rand_kernel()?;
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_1={kernel_1:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_1=\n{kernel_1}");
-        let mut net_1:Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_1.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_1:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_1.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
 
         let kernel_2 = rand_kernel()?;
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2={kernel_2:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2=\n{kernel_2}");
 
-        let mut net_2:Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_2:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
         // let raw_tensor = Tensor::arange(1000.0, FLOAT_CPU);
         // debug!("raw_tensor=\n{raw_tensor}");
