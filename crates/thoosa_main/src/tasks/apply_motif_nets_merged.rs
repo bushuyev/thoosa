@@ -2,7 +2,7 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use log::error;
-use parking_lot::RwLock;
+use parking_lot::{RawRwLock, RwLock};
 use tch::{Kind, Tensor};
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
@@ -32,7 +32,8 @@ where
     C: RunCtx + Adjustable + 'static
 {
     id: SynKey,
-    pd:PhantomData<C>
+    pd:PhantomData<C>,
+    conv2d_tensors:MyCosineConv2dTensors
 }
 
 impl<C> Stage for ApplyMotifNetsMerged<C>
@@ -49,8 +50,17 @@ impl<C> AsyncStage for ApplyMotifNetsMerged<C>
 where
     C: RunCtx + Adjustable + 'static
 {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, _ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+        let input_id = input.id().clone();
 
-
+        // async move {
+        //
+        //     Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), res_t), vec![]))))
+        // }
+        async {
+            todo!()
+        }
+    }
 }
 
 impl<C> ApplyMotifNetsMerged<C>
@@ -100,7 +110,7 @@ where
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
 
-        let mut kernels = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+        let mut kernels: Arc<parking_lot::lock_api::RwLock<RawRwLock, Vec<ThoTensor>>> = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
         let mut alphas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
         let mut betas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
 
@@ -120,9 +130,9 @@ where
                         Ok(net) => {
                             log::debug!("ApplyMotifNets::new: loaded net={net:?}");
 
-                            let tensors = net.with_data_ref(0, load_ctx_2,None, |v:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, ctx|{
+                            let tensors = net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, ctx|{
 
-                                extract_cosine_conv_2d_once(&mut kernels.write(), &mut alphas.write(), &mut betas.write(), v.data().module());
+                                extract_cosine_conv_2d_once_(&mut kernels.write(), &mut alphas.write(), &mut betas.write(), module_with_store.data().module());
 
                                 Ok(())
                             }).await?;
@@ -137,7 +147,7 @@ where
                 }
             });
 
-        let loaded_motif_nets = collect_futures_with_progress(
+        let loaded_motif_nets: Vec<(u32, Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>)> = collect_futures_with_progress(
             futures,
             trained_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
@@ -149,6 +159,14 @@ where
             .flatten()
             .collect::<Vec<_>>();
 
+
+
+        let conv2d_tensors= MyCosineConv2dTensors {
+            kernels: Tensor::cat(kernels.write().iter().map(|v|v.as_ref().shallow_clone()).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+            a: Tensor::cat(alphas.write().iter().map(|v|v.as_ref().shallow_clone()).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+            b: Tensor::cat(betas.write().iter().map(|v|v.as_ref().shallow_clone()).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+        };
+
         if loaded_motif_nets.is_empty() {
             return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
         };
@@ -156,6 +174,7 @@ where
         Ok(Self {
             id,
             pd: Default::default(),
+            conv2d_tensors,
         })
     }
 }
@@ -208,10 +227,11 @@ pub fn apply_cosine_kernel_bank_to_batched_spectrogram(
     Ok(logits.f_squeeze_dim(2)?) // [B,M,W_out]
 }
 
+#[derive(Debug)]
 struct MyCosineConv2dTensors {
-    kernels: Tensor,
-    a: Tensor,
-    b: Tensor,
+    kernels: ThoTensor,
+    a: ThoTensor,
+    b: ThoTensor,
 }
 
 fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifProbability>>>) -> MyCosineConv2dTensors {
@@ -226,15 +246,15 @@ fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifPro
 
 
     MyCosineConv2dTensors {
-        kernels: Tensor::cat(kernels.as_slice(), 0).copy(),
-        a: Tensor::cat(alphas.as_slice(), 0).copy(),
-        b: Tensor::cat(betas.as_slice(), 0).copy(),
+        kernels: Tensor::cat(kernels.as_slice(), 0).copy().into(),
+        a: Tensor::cat(alphas.as_slice(), 0).copy().into(),
+        b: Tensor::cat(betas.as_slice(), 0).copy().into(),
     }
 }
 
 fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tensor>, betas: &mut Vec<Tensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
     let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
-    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<AnyDims, AnyDims>>().expect("downcast_mut fails");
+    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
 
     let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
     let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
@@ -243,6 +263,19 @@ fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tenso
     alphas.push(net_1.alpha.unsqueeze(0).shallow_clone());
     betas.push(net_1.beta.unsqueeze(0).shallow_clone());
 }
+
+fn extract_cosine_conv_2d_once_(kernels: &mut Vec<ThoTensor>, alphas: &mut Vec<ThoTensor>, betas: &mut Vec<ThoTensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
+    let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
+    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
+
+    let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
+    let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
+
+    kernels.push(ThoTensor::new((), net_1.kernel.shallow_clone()).unwrap());//TODO
+    alphas.push(ThoTensor::new((),net_1.alpha.unsqueeze(0)).unwrap());
+    betas.push(ThoTensor::new((),net_1.beta.unsqueeze(0)).unwrap());
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -309,9 +342,9 @@ mod tests {
 
         let r = apply_cosine_kernel_bank_to_batched_spectrogram(
             &stft_t.as_ref().unsqueeze(1),
-            &tensors.kernels,
-            &tensors.a,
-            &tensors.b,
+            tensors.kernels.as_ref(),
+            tensors.a.as_ref(),
+            tensors.b.as_ref(),
             CosineConv2dBankConfig::default()
         )?;
 
