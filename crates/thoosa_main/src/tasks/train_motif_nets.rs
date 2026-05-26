@@ -812,8 +812,8 @@ mod tests {
 
         let (resources_map, motif_intervals) = resources.iter().try_fold((HashMap::new(), vec![]), |mut a, r| {
 
-            let (t, intervals) = resource_tensor
-                (r.length() as usize,
+            let (t, intervals) = resource_tensor(
+                r.length() as usize,
                  &[
                     vec![(3, motif_width, MotifKind::Pulse)],
                     vec![(1, motif_width, MotifKind::Sin)],

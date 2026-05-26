@@ -2496,7 +2496,7 @@ mod train_tests {
     };
     use crate::my_tch::{InitDummy, MotifInitMode, ThoModule};
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, LinLenNetParams, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, cosine_motif_node, MotifCosineNetParams, cosine_2d_motif_node, MotifCosine2dNetParams, motifs_to_specs};
+    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, cosine_motif_node, MotifCosineNetParams, cosine_2d_motif_node, MotifCosine2dNetParams, motifs_to_specs, LinLenNetParams};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
@@ -2551,6 +2551,7 @@ mod train_tests {
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shims::inference_mode::InferenceModeGuard;
     use crate::tch_test_utils::motifs_tensor;
+    use crate::train_nets::LabelNetTypeParams::LinNetParams;
 
     #[ctor::ctor]
     fn test_init() {
@@ -2781,6 +2782,72 @@ mod train_tests {
         Ok(())
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn heavy_test_train_lin_label_node_on_kernels() -> Result<(), ThoError> {
+        let motif_nets= 100;
+        let conv_net_params = LinLenNetParams::new(256, 4);
+        let params = LabelNetParams::new(
+            motif_nets,
+            LabelNetTypeParams::LinNetParams(conv_net_params),
+        );
+
+        let mut vs_0 = VarStore::new(Cpu);
+        let net: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs_0.root())?;
+        let mut opt = AdamW::default().amsgrad(true).build(&vs_0, 1e-3)?;
+
+        let batch = 64usize;
+        let (x_train, y_train, lengths_train) = gen_motifs_output(
+            batch,
+            motif_nets as usize,
+            1200..=1400,
+            LabelSignal::ByMotifs,
+            0.01,
+            Some(11),
+        )?;
+        let target_train = y_train.unsqueeze(1);
+        let lengths_train = lengths_train.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
+        let (x_eval, y_eval, lengths_eval) = gen_motifs_output(
+            batch,
+            motif_nets as usize,
+            1200..=1400,
+            LabelSignal::ByMotifs,
+            0.15,
+            Some(12),
+        )?;
+        let target_eval = y_eval.unsqueeze(1);
+        let lengths_eval = lengths_eval.iter().map(|v| *v as i64).collect::<Vec<_>>();
+
+        let mut eval_lengths_before = BatchLengths::new(lengths_eval.clone());
+        let logits_eval_before = net.tho_forward(&x_eval.as_ref().into(), Some(&mut eval_lengths_before), false)?;
+        let eval_loss_before = logits_eval_before.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        let mut first_loss = None;
+        let mut last_loss = 0.0;
+        for _ in 0..50 {
+            let mut batch_lengths = BatchLengths::new(lengths_train.clone());
+            let logits = net.tho_forward(&x_train.as_ref().into(), Some(&mut batch_lengths), true)?;
+            let loss = logits.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_train, None, None, Reduction::Mean);
+            if first_loss.is_none() {
+                first_loss = Some(loss.double_value(&[]));
+            }
+            last_loss = loss.double_value(&[]);
+            opt.backward_step(&loss);
+        }
+
+        let mut lengths_eval = BatchLengths::new(lengths_eval.clone());
+        let logits_eval = net.tho_forward(&x_eval.as_ref().into(), Some(&mut lengths_eval), false)?;
+        let eval_loss = logits_eval.as_ref().binary_cross_entropy_with_logits::<Tensor>(&target_eval, None, None, Reduction::Mean).double_value(&[]);
+
+        debug!("heavy_test_train_conv_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",first_loss);
+
+        assert!(first_loss.unwrap_or(last_loss) > last_loss, "expected train loss to decrease, first_loss={first_loss:?}, last_loss={last_loss}");
+        assert!(eval_loss < eval_loss_before, "expected eval loss to improve, before={eval_loss_before}, after={eval_loss}");
+
+        Ok(())
+    }
+
+
     fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError>{
         assert_eq!(batch%2, 0);
 
@@ -2862,9 +2929,6 @@ mod train_tests {
         let motif_width= 160_000usize;
         let batch = 64usize;
 
-        let conv_net_params = ConvNetParams::new(8, 8, 10, 8, 8, ConvNetJoint::AttnPool1d);
-
-
 
         let mut vs_0 = VarStore::new(Cpu);
         // let motifs = motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.0, 2.0);
@@ -2932,7 +2996,7 @@ mod train_tests {
                     0.1,
                     None,
                 )?;
-                debug!("y {}", v.1);
+                // debug!("y {}", v.1);
                 // crate::utils::debug_plot_impl(&v.0.i((.., 0, ..)), &format!("{step}_random_motif_net_0_output_label_{:?}",  v.1), 0)?;
                 // crate::utils::debug_plot_impl(&v.0.i((.., 1, ..)), &format!("{step}_random_motif_net_1_output_label_{:?}",  v.1), 0)?;
                 Ok(v)
@@ -2940,11 +3004,9 @@ mod train_tests {
             100,
         )?;
 
-        debug!(
-            "heavy_test_train_self_attention_label_node: first_loss={:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}",
-            first_loss,
-        );
+        debug!("test_train_self_attention_label_node: first_loss={first_loss:?} last_loss={last_loss:.5} eval_loss_before={eval_loss_before:.5} eval_loss_after={eval_loss:.5}");
 
+        assert!(last_loss < first_loss.expect("no first_loss"));
 
 
         Ok(())
