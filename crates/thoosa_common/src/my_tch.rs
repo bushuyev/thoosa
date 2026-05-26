@@ -31,7 +31,7 @@ use crate::utils::*;
 
 #[derive(Debug)]
 pub struct MySequential<DI: Dims, DO: Dims> {
-    layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
+    pub layers: Vec<Box<dyn ThoModule<AnyDims, AnyDims>>>,
     split_input: Option<(i64, i64)>, //dim features
     _pd_do: PhantomData<DO>,
     _pd_di: PhantomData<DI>,
@@ -430,10 +430,10 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyConv<[i64; 2]> {
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub(crate) struct InitDummy {}
+pub struct InitDummy {}
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub(crate) struct TrimmedMean {
+pub struct TrimmedMean {
     #[in_map]
     #[run_config]
     trim_frac: f64

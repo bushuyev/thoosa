@@ -2447,7 +2447,7 @@ pub fn dummy_label_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static>(
 }
 
 ///returns [batch x frequencies x time]
-pub fn motifs_to_specs(x_train: &Tensor, desc: &str/*, path_buf: &PathBuf*/) -> Tensor {
+pub fn motifs_to_specs(x_train: &Tensor, desc: &str, hop_length: i64/*, path_buf: &PathBuf*/) -> Tensor {
     let motifs = x_train.unbind(0, );
     let mut specs = vec![];
     // let path = path_buf.join(desc);
@@ -2456,7 +2456,7 @@ pub fn motifs_to_specs(x_train: &Tensor, desc: &str/*, path_buf: &PathBuf*/) -> 
         let motif = motif.unsqueeze(0);
         let spec_i = motif.stft(
             16000,
-            4000,
+            hop_length,
             16000,
             None::<Tensor>,
             false,
@@ -2851,9 +2851,9 @@ mod train_tests {
     fn gen_motifs_batch(batch: usize, motif_len: usize, motifs: &Tensor) -> Result<(Tensor, Option<BatchLengths>, Tensor), ThoError>{
         assert_eq!(batch%2, 0);
 
-        debug_plot_impl(motifs, "motifs", 0)?;
+        // debug_plot_impl(motifs, "motifs", 0)?;
         let random = motifs_tensor(motif_len, batch/2, MotifKind::Triangle, 1.0, 2.0);
-        debug_plot_impl(&random, "random", 0)?;
+        // debug_plot_impl(&random, "random", 0)?;
 
         mix_x_binary_with_labels(motifs, None, &random, None)
     }
@@ -2871,10 +2871,10 @@ mod train_tests {
         let motifs = motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.0, 2.0);
 
         let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
-        debug_plot_impl(&x_train, "x_train", 0)?;
+        // debug_plot_impl(&x_train, "x_train", 0)?;
 
         let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
-        debug_plot_impl(&x_eval, "x_eval", 0)?;
+        // debug_plot_impl(&x_eval, "x_eval", 0)?;
 
         for init_mode in &crate::my_tch::MotifInitMode::list(0.4) {
             let net = cosine_motif_node(&MotifCosineNetParams::new(motif_width as u32, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), motifs.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
@@ -2936,21 +2936,21 @@ mod train_tests {
             Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice())
         }).collect::<Vec<_>>().as_slice(), 0);
 
-        let kernel = motifs_to_specs(&motifs, "kernel"/*, &test_dir*/);
+        let kernel = motifs_to_specs(&motifs, "kernel"/*, &test_dir*/,   4000);
 
         let (x_train, lengths_train,  y_train) = gen_motifs_batch(batch, motif_width, &motifs)?;
-        debug_plot_impl(&x_train, "x_train", 0)?;
+        // debug_plot_impl(&x_train, "x_train", 0)?;
 
-        let specs_x = motifs_to_specs(&x_train, "specs_x"/*, &test_dir*/);
+        let specs_x = motifs_to_specs(&x_train, "specs_x"/*, &test_dir*/,   4000);
 
-        debug!("heavy_test_train_cosine_motif_node_2d: all_spects_t={specs_x:?}");
+        debug!("heavy_test_train_cosine_motif_node_2d: all_spects_t={specs_x:?} kernel={kernel:?}");
 
 
         // let (x_eval,lengths_eval, y_eval, ) = gen_motifs_batch(batch, motif_width, &motifs_tensor(motif_width, batch / 2, MotifKind::ChirpUp, 1.5, 3.0))?;
         // debug_plot_impl(&x_eval, "x_eval", 0)?;
 
         for init_mode in [MotifInitMode::Mean(InitDummy{})] {// &crate::my_tch::MotifInitMode::list(0.4) {
-            let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(motif_width as u32, 10, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+            let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
             let result = run_cosine_motif_node(
                 // &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,

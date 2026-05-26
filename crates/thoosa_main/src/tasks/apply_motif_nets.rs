@@ -71,7 +71,6 @@ where
     id: SynKey,
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
     store:Arc<Box<dyn Store>>,
-    pd:PhantomData<C>,
     apply_motif_nets: Vec<(u32/*net_id*/, Arc<ApplyMotifNet<C>>)>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
@@ -393,7 +392,6 @@ where
             id,
             ws: Arc::clone(&ws),
             store: Arc::clone(&store),
-            pd: PhantomData,
             apply_motif_nets: loaded_motif_nets_with_filters
                 .into_iter()
                 .map(|(motif_id, net_id, net, motif_width, freq_filter_find_motifs_run_config_id, freq_filter)| (net_id, Arc::new(ApplyMotifNet::new(
@@ -1321,6 +1319,11 @@ pub(crate) mod tests {
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, valid_partial_output_len, ApplyMotifNets};
     use crate::tasks::tensor_loader::mock_tensor_loader;
+
+    #[ctor::ctor]
+    fn init() {
+        thoosa_shared::test_utils::init_test_logging();
+    }
 
     #[test]
     fn test_valid_partial_output_len_trims_last_chunk_and_short_input() {
