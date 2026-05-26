@@ -428,8 +428,9 @@ impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModuleWithStore<DI
         &self.var_store
     }
 
-
-
+    pub fn module(&self) -> &Box<dyn ThoModule<DI, DO>> {
+        &self.module
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
