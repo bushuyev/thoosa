@@ -79,7 +79,7 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 
 
 
-//D:Dims - is just a reminder of what dimensions a tensor has. 
+//D:Dims - is just a reminder of what dimensions a tensor has.
 pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
     id: Id,
     pub t: Tensor,
@@ -106,6 +106,18 @@ impl<D: Dims> From<Tensor> for ThoTensor<D, SimpleId> {
         }
     }
 }
+
+impl From<Tensor> for ThoTensor {
+    fn from(tensor: Tensor) -> Self {
+        Self {
+            id: (),
+            t: tensor,
+            pd: PhantomData,
+            tracking: Default::default(),
+        }
+    }
+}
+
 
 impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
     fn from(tensor: &Tensor) -> Self {

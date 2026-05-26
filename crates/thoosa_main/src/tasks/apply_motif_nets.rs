@@ -786,13 +786,13 @@ where
         let input_id = input.id().clone();
         let mut motif_nets_applied = std::mem::take(&mut input.motif_nets_applied);
 
-        // assert!(motif_nets_applied.is_empty(), "motif_nets_applied are empty in input={input:?}"); TODO it should not be called if there is no nets
 
         debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?}", motif_nets_applied.len(), input_id);
 
         motif_nets_applied.sort_by(|a,b|a.id().partial_cmp(&b.id()).unwrap_or(Ordering::Equal));
 
         let motif_nets_applied_lens = motif_nets_applied.iter().map(|v| v.t_ref().size()[0]).collect::<Vec<_>>();
+
         let unique_motif_nets_applied_lens = motif_nets_applied_lens.iter().copied().collect::<HashSet<_>>();
         let max_match_len = motif_nets_applied_lens.iter().copied().max().unwrap_or(0);
         let output_options = motif_nets_applied
