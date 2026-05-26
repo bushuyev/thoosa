@@ -305,11 +305,11 @@ impl Node {
                 init_mode
             } => Box::new(MyCosineConv2d::new(
                 &(vs / path),
-                init,
-                init_mode,
-                a, b,
                 kw_time,
-                kh_freq
+                kh_freq,
+                init,
+                // init_mode,
+                a, b,
             )?),
 
 
