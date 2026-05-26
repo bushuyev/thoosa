@@ -129,7 +129,7 @@ mod tests {
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2={kernel_2:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2=\n{kernel_2}");
 
-        let net_2:Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_2:Box<dyn ThoModule<AnyDims, AnyDims>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
         // let raw_tensor = Tensor::arange(1000.0, FLOAT_CPU);
         // debug!("raw_tensor=\n{raw_tensor}");
@@ -139,31 +139,45 @@ mod tests {
         let stft_t = Tensor::ones([3, 26, 9], FLOAT_CPU).into();
 
         let r_1 = net_1.tho_forward(&stft_t, None, false)?;
-        // let r_2 = net_2.tho_forward(&stft_t, None, false)?;
+        let r_2 = net_2.tho_forward(&stft_t, None, false)?;
 
 
         // debug!("r_2=\n{r_2}");
 
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: net_1={net_1:?} type_name={:?}", net_1.as_ref().type_name());
+
+        let kernel_1 = take_kernel(&mut net_1);
+        let kernel_2 = take_kernel(&mut net_2);
+
+        let r = apply_cosine_kernel_bank_to_batched_spectrogram(
+            &stft_t.as_ref().unsqueeze(1),
+            &Tensor::cat(&[kernel_1, kernel_2], 0),
+            &Tensor::ones(&[2], FLOAT_CPU),
+            &Tensor::zeros(&[2], FLOAT_CPU),
+            CosineConv2dBankConfig::default()
+        )?;
+
+        trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: r_1=\n{r_1} r_d=\n{r_2}");
+        let r_12 = Tensor::stack(&[r_1, r_2], 1);
+        trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: r_12=\n{r_12}");
+
+        trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: r=\n{r}");
+
+        assert!(r_12.allclose(&r, 0.001, 0.001, false));
+
+
+        Ok(())
+    }
+
+    fn take_kernel(net_1: &mut Box<dyn ThoModule<AnyDims, AnyDims>>) -> Tensor {
         let net_1_ref: &mut dyn ThoModule<AnyDims, AnyDims> = net_1.as_mut();
         let net_1_cosine_2_d = net_1_ref.as_any_mut().downcast_mut::<MySequential<AnyDims, AnyDims>>().expect("downcast_mut fails");
 
         let layer = net_1_cosine_2_d.layers.remove(1);
         let net_1_ = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");;
 
-        let r = apply_cosine_kernel_bank_to_batched_spectrogram(
-            &stft_t.as_ref().unsqueeze(1),
-            &Tensor::cat(&[net_1_.kernel.shallow_clone()/*, kernel_2*/], 0),
-            &Tensor::ones(&[1], FLOAT_CPU),
-            &Tensor::zeros(&[1], FLOAT_CPU),
-            CosineConv2dBankConfig::default()
-        )?;
-
-        debug!("r_1=\n{r_1}");
-        debug!("r=\n{r}");
-
-        panic!("");
-        Ok(())
+        let kernel = net_1_.kernel.shallow_clone();
+        kernel
     }
 
     fn rand_kernel() -> Result<Tensor, ThoError> {
