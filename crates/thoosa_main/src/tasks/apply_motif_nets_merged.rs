@@ -91,7 +91,6 @@ mod tests {
     use std::sync::Arc;
     use log::LevelFilter::Trace;
     use log::{set_max_level, trace};
-    use mockall::Any;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
@@ -145,16 +144,16 @@ mod tests {
 
         // debug!("r_2=\n{r_2}");
 
-        debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: net_1={net_1:?} type_name={:?}", net_1.type_name());
-        let mut leak1 = Box::leak(net_1);
-        let net_1_cosine_2_d = leak1.as_any_mut().downcast_mut::<MySequential<AnyDims, AnyDims>>().expect("net_1");
+        debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: net_1={net_1:?} type_name={:?}", net_1.as_ref().type_name());
+        let net_1_ref: &mut dyn ThoModule<AnyDims, AnyDims> = net_1.as_mut();
+        let net_1_cosine_2_d = net_1_ref.as_any_mut().downcast_mut::<MySequential<AnyDims, AnyDims>>().expect("downcast_mut fails");
 
-        let leak2 = Box::leak(net_1_cosine_2_d.layers.remove(1));
-        let net_1_ = leak2.as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");;
+        let layer = net_1_cosine_2_d.layers.remove(1);
+        let net_1_ = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");;
 
         let r = apply_cosine_kernel_bank_to_batched_spectrogram(
             &stft_t.as_ref().unsqueeze(1),
-            &Tensor::stack(&[net_1_.kernel.shallow_clone()/*, kernel_2*/], 0),
+            &Tensor::cat(&[net_1_.kernel.shallow_clone()/*, kernel_2*/], 0),
             &Tensor::ones(&[1], FLOAT_CPU),
             &Tensor::zeros(&[1], FLOAT_CPU),
             CosineConv2dBankConfig::default()
@@ -163,6 +162,7 @@ mod tests {
         debug!("r_1=\n{r_1}");
         debug!("r=\n{r}");
 
+        panic!("");
         Ok(())
     }
 
