@@ -1,4 +1,5 @@
 use core::fmt;
+use std::any::Any;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -69,7 +70,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
     }
 }
 
-impl<DI: Dims + Send + Sync, DO: Dims + Send + Sync> ThoModule<DI, DO> for MySequential<DI, DO> {
+impl<DI: Dims + Send + Sync + 'static, DO: Dims + Send + Sync + 'static> ThoModule<DI, DO> for MySequential<DI, DO> {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
@@ -166,7 +167,7 @@ impl<DI: Dims, DO: Dims> MyParallel<DI, DO> {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyParallel<DI, DO> {
+impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for MyParallel<DI, DO> {
     fn debug(&self) {
         for l in &self.layers {
             l.debug();
@@ -229,7 +230,7 @@ impl<DI: Dims, DO: Dims> Split1<DI, DO> {
     }
 }
 
-impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for Split1<DI, DO> {
+impl<DI: Dims + 'static, DO: Dims + 'static> ThoModule<DI, DO> for Split1<DI, DO> {
     fn debug(&self) {
        self.layer.debug()
     }
@@ -945,7 +946,29 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyDropout {
 
 
 
-pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send {
+pub trait ThoModuleDowncast {
+    fn as_any(&self) -> &dyn Any;
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+
+    fn type_name(&self) -> &'static str;
+}
+
+impl<T: Any> ThoModuleDowncast for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<T>()
+    }
+}
+
+pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send + ThoModuleDowncast {
     fn debug(&self) {}
 
     //TODO should consume t: &ThoTensor<DI, SimpleId>?
@@ -1029,8 +1052,8 @@ unsafe impl<DI: Dims, DO: Dims> Sync for MyLinear<DI, DO> {}
 
 impl<DI, DO> MyLinear<DI, DO>
 where
-    DI: Dims + Send + Sync,
-    DO: Dims + Send + Sync
+    DI: Dims + Send + Sync + 'static,
+    DO: Dims + Send + Sync + 'static
 {
     pub fn new(
         ws: Tensor, bs: Option<Tensor>, _pd_di: PhantomData<DI>, _pd_do: PhantomData<DO>,
@@ -1051,8 +1074,8 @@ where
 
 impl<DI, DO> ThoModule<DI, DO> for MyLinear<DI, DO>
 where
-    DI: Dims + Send + Sync,
-    DO: Dims + Send + Sync
+    DI: Dims + Send + Sync + 'static,
+    DO: Dims + Send + Sync + 'static
 {
     fn debug(&self) {
         debug!("ThoModule for MyLinear::debug: ws.device={:?} bs.device={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()));
@@ -1112,7 +1135,7 @@ where
     }
 }
 
-pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims, DO: Dims>(
+pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static>(
     path: T,
     in_dim: i64,
     out_dim: i64,
