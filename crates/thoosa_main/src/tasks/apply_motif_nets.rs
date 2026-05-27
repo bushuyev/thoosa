@@ -1,5 +1,10 @@
 #![allow(unexpected_cfgs)]
 
+use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+use async_trait::async_trait;
+use log::{debug, error, info, trace};
+use mockall_double::double;
+use parking_lot::{Mutex, RwLock};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{format, Debug};
@@ -8,59 +13,54 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use async_trait::async_trait;
-use log::{debug, error, info, trace};
-use mockall_double::double;
-use parking_lot::{Mutex, RwLock};
-use tch::{nn, Device, IndexOp, Kind, Tensor};
-use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
-use tracing::warn;
-use thoosa_named_derive::Named;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_common::debug_plot;
+use tch::Kind::Float;
+use tch::{nn, Device, IndexOp, Kind, Tensor};
 use thoosa_common::batches::BatchLengths;
-use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::builder::SeqBuilder;
+use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
-use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::my_tch::ThoModule;
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
-use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
+use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
-use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
-use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef, WithSelectDataRef};
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+use tracing::warn;
 
-#[double]
-use thoosa_common::runner::global_ctx::GlobalCtx;
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
 
-use thoosa_common::runner::tmp_cache::TmpCached;
 use crate::tasks::cross_dims::ChannelsData2Selector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::tasks::stft::{StftRunConfig, SyncStft};
 use crate::tasks::transforms::freq_filter::FreqFilter;
+use thoosa_common::runner::tmp_cache::TmpCached;
 
 
 #[derive(Debug, cached_derive::Cached, Named)]
@@ -1276,49 +1276,49 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-    use log::{debug, trace};
+    use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, valid_partial_output_len, ApplyMotifNets};
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::tensor_loader::mock_tensor_loader;
     use log::LevelFilter::{Debug, Trace};
-    use parking_lot::RwLock;
+    use log::{debug, trace};
+    use parking_lot::{RawRwLock, RwLock};
     use plotters::prelude::{BLACK, RED};
     use plotters::style::{BLUE, GREEN};
-    use tch::Device::Cpu;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use tch::kind::FLOAT_CPU;
-    use tch::{nn, Device, IndexOp, Kind, Tensor};
     use tch::nn::{LinearConfig, VarStore};
-    use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
-    use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use tch::Device::Cpu;
+    use tch::{nn, Device, IndexOp, Kind, Tensor};
     use thoosa_common::builder::SeqBuilder;
-    use thoosa_common::dims::{AnyDims, Batch, Dims, MotifProbability, Slice};
-    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use thoosa_common::debug_plot;
+    use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
     use thoosa_common::my_tch::ThoModule;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
+    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::tch_test_utils;
+    use thoosa_common::tch_test_utils::Interval;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
-    use thoosa_common::debug_plot;
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
-    use thoosa_common::ws::WsMockBuilder;
-    use thoosa_common::tch_test_utils::Interval;
+    use thoosa_common::ws::{Workspace, WsMockBuilder};
     use thoosa_properties_map::ToHashmap;
+    use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
+    use thoosa_shared::mono_key;
+    use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_shared::perf_logging::PERF;
-    use thoosa_shared::traits::{Named, SimpleId};
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::mono_key;
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow};
+    use thoosa_shared::traits::{Adjustable, Named, SimpleId};
+    use thoosa_shared::{TensorIdSliceIdx, ThoError};
+    use thoosa_store::{MockStoreBuilder, RunConfigRow, Store};
     use thoosa_with_data::with_data;
-    use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, valid_partial_output_len, ApplyMotifNets};
-    use crate::tasks::tensor_loader::mock_tensor_loader;
 
     #[ctor::ctor]
     fn init() {
@@ -1337,32 +1337,37 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 10, 10).await?;
+        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 10, 10, new_apply_motif_nets, motif_test_net_).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 10, 10).await
+        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 10, 10, new_apply_motif_nets, motif_test_net_).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10, new_apply_motif_nets, motif_test_net_).await
     }
 
-    async fn test_apply_motif_nets_3_channels_2_motifs(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32, slice_step: u32) -> Result<(), ThoError> {
+    pub async fn test_apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32, slice_step: u32, motif_net_fn: F, motif_net_fn_: MF) -> Result<(), ThoError>
+    where
+        for <'a> A:AsyncStage<In<'a>=ThoTensor<ChannelsData, SynKey>, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=MockRunCtx>,
+        F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn Store>>) -> Result<Arc<A>, ThoError>,
+        MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>, u32, u32) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
+    {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
         reset_print_options();
@@ -1384,9 +1389,9 @@ pub(crate) mod tests {
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
         let net_id_1_0 = PathBuf::from(format!("1/{}_{}", motif_1_0_id, train_motifs_run_config_id));
-        let (params_0_0, module_0_0) = motif_test_net_(Cpu, Arc::clone(&motif_0_0), step, 100);
-        let (params_0_1, module_0_1) = motif_test_net_(Cpu, Arc::clone(&motif_0_1), step, 100);
-        let (params_1_0, module_1_0) = motif_test_net_(Cpu, Arc::clone(&motif_1_0), step, 100);
+        let (params_0_0, module_0_0) = motif_net_fn_(Cpu, Arc::clone(&motif_0_0), step, 100);
+        let (params_0_1, module_0_1) = motif_net_fn_(Cpu, Arc::clone(&motif_0_1), step, 100);
+        let (params_1_0, module_1_0) = motif_net_fn_(Cpu, Arc::clone(&motif_1_0), step, 100);
 
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
@@ -1442,17 +1447,7 @@ pub(crate) mod tests {
                 .build()
         );
 
-        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-            &ws,
-            &store,
-            vec![select_motifs_run_config_id],
-            mock_run_ctx::default(1),
-            Some(0.3),
-            None,
-            slice_step,
-            trigger_oom_len,
-            false,
-        ).await?);
+        let apply_motif_nets = motif_net_fn(trigger_oom_len, slice_step, select_motifs_run_config_id, &ws, &mut store).await?;
 
         let channels_patterns = vec![
             vec![motif_0_0.t_ref().i((0, ..)), motif_0_1.t_ref().i((0, ..))],
@@ -1502,6 +1497,21 @@ pub(crate) mod tests {
         })?;
 
         Ok(())
+    }
+
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNets<MockRunCtx>>, ThoError> {
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+            &ws,
+            &store,
+            vec![select_motifs_run_config_id],
+            mock_run_ctx::default(1),
+            Some(0.3),
+            None,
+            slice_step,
+            trigger_oom_len,
+            false,
+        ).await?);
+        Ok(apply_motif_nets)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

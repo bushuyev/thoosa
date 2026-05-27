@@ -4,13 +4,14 @@ use std::sync::Arc;
 use log::error;
 use parking_lot::{RawRwLock, RwLock};
 use tch::{Kind, Tensor};
+use tch::kind::FLOAT_CPU;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, MotifProbability, Slice};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use thoosa_common::runner::common::RunCtx;
+use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::ThoModuleWithStore;
@@ -20,11 +21,13 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
-use thoosa_shared::traits::Adjustable;
+use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::Store;
+use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
+use crate::tasks::stft::{StftRunConfig, SyncStft};
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNetsMerged<C>
@@ -33,7 +36,8 @@ where
 {
     id: SynKey,
     pd:PhantomData<C>,
-    conv2d_tensors:MyCosineConv2dTensors
+    conv2d_tensors:MyCosineConv2dTensors,
+    stft:SyncStft<C>
 }
 
 impl<C> Stage for ApplyMotifNetsMerged<C>
@@ -46,19 +50,32 @@ where
     type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;// same as in ApplyMotifNets
 }
 
+impl <C>OutId for ApplyMotifNetsMerged<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
 impl<C> AsyncStage for ApplyMotifNetsMerged<C>
 where
     C: RunCtx + Adjustable + 'static
 {
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, _ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let input_id = input.id().clone();
 
-        // async move {
-        //
-        //     Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), res_t), vec![]))))
-        // }
-        async {
-            todo!()
+        async move {
+            let res_t = Tensor::rand(&[1], FLOAT_CPU);
+
+            with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input|{
+                debug!("ApplyMotifNetsMerged::run: input={input:?}");
+
+                Ok(())
+            });
+
+            Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), res_t)?, vec![]))))
         }
     }
 }
@@ -82,6 +99,8 @@ where
     where
         R:RunCtx + Adjustable + 'static
     {
+
+
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
         let motif_nets = store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit).await?;
@@ -171,10 +190,20 @@ where
             return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
         };
 
+        let stft = SyncStft::new("".into(), StftRunConfig::new(
+            16000,
+            Some(4000),
+            Some(4000),
+            true,
+            true,
+            true
+        ));
+
         Ok(Self {
             id,
             pd: Default::default(),
             conv2d_tensors,
+            stft
         })
     }
 }
@@ -254,9 +283,13 @@ fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifPro
 
 fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tensor>, betas: &mut Vec<Tensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
     let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
+    debug!("extract_cosine_conv_2d_once: net_1_ref={net_1_ref:?}");
+
     let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
 
     let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
+    debug!("extract_cosine_conv_2d_once: layer={layer:?}");
+
     let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
 
     kernels.push(net_1.kernel.shallow_clone());
@@ -266,9 +299,13 @@ fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tenso
 
 fn extract_cosine_conv_2d_once_(kernels: &mut Vec<ThoTensor>, alphas: &mut Vec<ThoTensor>, betas: &mut Vec<ThoTensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
     let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
+    debug!("extract_cosine_conv_2d_once_: net_1_ref={net_1_ref:?}");
+
     let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
 
     let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
+    debug!("extract_cosine_conv_2d_once_: layer={layer:?}");
+
     let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
 
     kernels.push(ThoTensor::new((), net_1.kernel.shallow_clone()).unwrap());//TODO
@@ -283,19 +320,27 @@ mod tests {
     use std::sync::Arc;
     use log::LevelFilter::Trace;
     use log::{set_max_level, trace};
+    use parking_lot::RwLock;
     use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::nn::VarStore;
-    use tch::Tensor;
+    use tch::{Device, IndexOp, Tensor};
     use tracing::debug;
     use thoosa_common::dims::{AnyDims, Batch, MotifProbability, Slice, Spectorgram};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{cosine_2d_motif_node, MotifCosine2dNetParams};
+    use thoosa_common::train_nets::{cosine_2d_motif_node, MotifCosine2dNetParams, MotifNetParams, MotifNetTypeParams, ThoModuleWithStore};
     use thoosa_common::my_tch::{InitDummy, MotifInitMode, MySequential, ThoModule};
     use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d};
+    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
+    use thoosa_common::ws::Workspace;
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::ThoError;
-    use crate::tasks::apply_motif_nets_merged::{apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d};
+    use thoosa_store::Store;
+    use crate::ApplyMotifNets;
+    use crate::tasks::apply_motif_nets::dummy_motif_net;
+    use crate::tasks::apply_motif_nets::tests::test_apply_motif_nets_3_channels_2_motifs;
+    use crate::tasks::apply_motif_nets_merged::{apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d, ApplyMotifNetsMerged};
 
     #[ctor::ctor]
     fn init() {
@@ -365,4 +410,72 @@ mod tests {
         // Ok(Some(Arc::new(ThoTensor::new("motifs".into(), Tensor::stack((0..26 /* freqs (Kh) - 50/2+1 */).map(|i| Tensor::arange(9, FLOAT_CPU).sin).collect::<Vec<_>>().as_slice(), 0).unsqueeze(0).shallow_clone())?)))
         Ok(Tensor::rand(&[1, 26, 9], FLOAT_CPU))
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
+        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10, new_apply_motif_nets, cosine_2d_motif_node_).await
+    }
+
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNetsMerged<MockRunCtx>>, ThoError> {
+        let apply_motif_nets = Arc::new(ApplyMotifNetsMerged::new(
+            &ws,
+            &store,
+            vec![select_motifs_run_config_id],
+            mock_run_ctx::default(1),
+            Some(0.3),
+            None,
+            slice_step,
+            trigger_oom_len,
+            false,
+        ).await?);
+        Ok(apply_motif_nets)
+    }
+
+    pub fn cosine_2d_motif_node_(
+        device: Device,
+        motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>,
+        step: u32, kernel: u32,
+    ) -> (
+        Box<dyn Fn() -> MotifNetParams + Sync + Send>,
+        Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
+    ) {
+        let id = motif_t.id().clone();
+        let motif_width = motif_t.as_ref().t_ref().size()[1] as u32;
+        let cosine2d_net_params = MotifCosine2dNetParams {
+            kw_time: 0,
+            kh_freq: 0,
+            a: 10.0,
+            b: 0.0,
+            init_mode: Default::default(),
+        };
+        let net_type = MotifNetTypeParams::CosineNet2DParams(cosine2d_net_params.clone());
+        let motif_init = Arc::new(ThoTensor::new("".into(), motif_t.as_ref().as_ref().stft(
+            50,
+            10,
+            20,
+            None::<Tensor>,
+            true,
+            true,
+            true,
+            true
+        ).abs()
+        ).unwrap());
+
+        (
+            Box::new( move || {
+
+                MotifNetParams {
+                    net_type: net_type.clone()
+                }
+            }),
+            Box::new( move || {
+                let vs = VarStore::new(Cpu);
+                // *dummy_motif_net::<Batch<Slice>, MotifProbability, SynKey>(id.clone(), motif_width, 1., device, "test", &motif_t.as_ref().t_ref().i((0, ..)), step as i64).unwrap()//first slice
+                // cosine_2d_motif_node()
+                ThoModuleWithStore::new("".into(), cosine_2d_motif_node(&cosine2d_net_params, Some(Arc::clone(&motif_init))).expect("cosine_2d_motif_node").build_tch_module(&vs.root()).expect("build_tch_module"))
+            }),
+        )
+    }
+
+
 }
