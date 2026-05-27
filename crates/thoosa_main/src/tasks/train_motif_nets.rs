@@ -409,6 +409,8 @@ where
                 let random_slices_loader_for_batch = Arc::clone(&random_slices_loader);
 
                 debug!("TrainMotifNets::run: motif={motif:?}");
+                debug!("TrainMotifNets::run: cosine_motif={cosine_motif:?}");
+
                 let size = cosine_motif.as_ref().unwrap().as_ref().as_ref().size();
 
                 let train_net = Arc::new(TrainNet::new(
@@ -446,7 +448,9 @@ where
                                 MotifNetTypeArgs::LinNet(net) => MotifNetParams::new_lin(motif_width, net.num_layers, net.step),
                                 MotifNetTypeArgs::CosineNet(net) => MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone()),
                                 MotifNetTypeArgs::Cosine2DNet(net) => {
-                                    MotifNetParams::new_cosine_2d(size[2] as u32, size[1] as u32, net.a, net.b, net.init_mode.clone())
+
+                                    debug!("TrainMotifNets::run: motif_id={} motif_width={motif_width}", motif_id_rate.0);
+                                    MotifNetParams::new_cosine_2d(size[2] as u32, size[1] as u32, net.a, net.b, net.init_mode.clone(), motif_width)
                                 }
                             };
                             debug!("TrainMotifNets::run: rc.net={:?}", rc.net);

@@ -359,14 +359,14 @@ mod tests {
         let kernel_1 = rand_kernel()?;
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_1={kernel_1:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_1=\n{kernel_1}");
-        let mut net_1:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_1.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_1:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{}), motif_width), Some(Arc::new(ThoTensor::new("motifs".into(), kernel_1.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
 
         let kernel_2 = rand_kernel()?;
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2={kernel_2:?}");
         trace!("test_apply_cosine_kernel_bank_to_batched_spectrogram: kernel_2=\n{kernel_2}");
 
-        let mut net_2:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{})), Some(Arc::new(ThoTensor::new("motifs".into(),kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+        let mut net_2:Box<dyn ThoModule<Batch<Slice>, MotifProbability>> = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 1.0, 0.0, MotifInitMode::Mean(InitDummy{}), motif_width), Some(Arc::new(ThoTensor::new("motifs".into(), kernel_2.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
         // let raw_tensor = Tensor::arange(1000.0, FLOAT_CPU);
         // debug!("raw_tensor=\n{raw_tensor}");
@@ -447,6 +447,7 @@ mod tests {
             a: 10.0,
             b: 0.0,
             init_mode: Default::default(),
+            motif_width,
         };
         let net_type = MotifNetTypeParams::CosineNet2DParams(cosine2d_net_params.clone());
         let motif_init = Arc::new(ThoTensor::new("".into(), motif_t.as_ref().as_ref().stft(
