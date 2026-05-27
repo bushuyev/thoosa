@@ -72,6 +72,7 @@ pub fn cosine_conv2d_bank_logits(
     cfg: CosineConv2dBankConfig,
 ) -> Result<Tensor, ThoError> {
     debug!("cosine_conv2d_bank_logits: x={x:?} kernels={kernels:?} alpha={alpha:?} beta={beta:?} cfg={cfg:?}");
+    debug!("cosine_conv2d_bank_logits: devices x={:?} kernels={:?} alpha={:?} beta={:?} ",  x.device(), kernels.device(), alpha.device(), beta.device());
     trace!("cosine_conv2d_bank_logits: x=\n{x} kernels=\n{kernels} alpha=\n{alpha} beta=\n{beta}");
 
     let x_sz = x.size();
