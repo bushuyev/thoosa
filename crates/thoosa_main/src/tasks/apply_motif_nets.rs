@@ -32,7 +32,7 @@ use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore, TrainMotifsNetsResult};
+use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore, TrainMotifsNetsResult};
 use thoosa_common::utils::{load_run_config, pad_to, stretch};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -58,7 +58,7 @@ use crate::tasks::cross_dims::ChannelsData2Selector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
-use crate::tasks::stft::{StftRunConfig, SyncStft};
+use crate::tasks::stft::SyncStft;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::tmp_cache::TmpCached;
 
