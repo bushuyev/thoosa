@@ -48,7 +48,6 @@ use thoosa_with_data::with_data;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use rand::rng;
-use tch::kind::FLOAT_CPU;
 use tokio::{join, try_join};
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_dummy_data_derive::DummyData;
@@ -414,9 +413,7 @@ where
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        let label = label.clone();
                                        async move {
-                                           let (x, lengths, y) = with_data!(
-                                               ctx.branch(Some("train_label_nets_batch_data"), false),[x_1_wrapped], [x_0_wrapped];
-                                               |_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
+                                           let (x, lengths, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false),[x_1_wrapped], [x_0_wrapped];|_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
 
                                                if x_1.is_empty() || x_1.is_empty(){
                                                  error!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
@@ -424,7 +421,10 @@ where
                                                  debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
                                                }
 
-                                               let max_input = x_1.iter().chain(x_0.iter()).map(|x|x.data().t_ref().size()[1]).max().ok_or_else(||ThoError::new(format!("batch resources are empty for {label}")))?;
+                                               let max_input = x_1.iter()
+                                                   .chain(x_0.iter())
+                                                   .map(|x|x.data().t_ref().size()[1])
+                                                   .max().ok_or_else(||ThoError::new(format!("batch resources are empty for {label}")))?;
 
                                                debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} max_input={max_input}");
 
