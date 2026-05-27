@@ -838,7 +838,7 @@ mod tests {
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_shared::TensorIdSliceIdx;
     use thoosa_shared::{cdt_for_dir, ThoError};
-    use thoosa_store::{MockStoreBuilder, SqlStore};
+    use thoosa_store::{MockStoreBuilder, SqlStore, TrainedNet};
     use thoosa_shared::mono_key;
     use thoosa_store::rusqlite::Transaction;
 
@@ -1228,7 +1228,7 @@ mod tests {
                     Ok((0i64, find_motifs_run_config_id, random_slices, random_resources_by_id)),
                 )
                 .with_list_trained_nets([
-                    (vec![train_motif_nets_run_config_id], None, None, Ok(vec![(0, trained_net_path.clone(), 0.01)])),
+                    (vec![train_motif_nets_run_config_id], None, None, Ok(vec![TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: trained_net_path.clone(), loss: 0.01 }])),
                 ])
                 .build(),
         );

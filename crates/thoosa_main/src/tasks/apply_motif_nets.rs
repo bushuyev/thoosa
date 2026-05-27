@@ -45,7 +45,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
-use thoosa_store::Store;
+use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 use tracing::warn;
 
@@ -299,21 +299,23 @@ where
         mut stage_ctx: R,
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
-        trained_nets: Vec<(u32, PathBuf, f32)>,
+        trained_nets: Vec<TrainedNet>,
         quantize: bool
     ) -> Result<ApplyMotifNets<C>, ThoError>
     where
         R: RunCtx + Adjustable + 'static
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws, quantize));//TODO move to new
-        let trained_net_ids = trained_nets.iter().map(|v|v.0).collect::<Vec<_>>();
+        let trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
-        let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
+        let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 
         //this defines order in which motif nets should be applied to a resource before running label net
         let futures = trained_nets
             .into_iter()
-            .map(|(id, path, _loss)| {
+            .map(|trained_net| {
+                let id = trained_net.id;
+                let path = trained_net.net_path;
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
@@ -1317,7 +1319,7 @@ pub(crate) mod tests {
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_shared::traits::{Adjustable, Named, SimpleId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow, Store};
+    use thoosa_store::{MockStoreBuilder, RunConfigRow, Store, TrainedNet};
     use thoosa_with_data::with_data;
 
     #[ctor::ctor]
@@ -1439,9 +1441,9 @@ pub(crate) mod tests {
                 ])
                 .with_list_trained_nets([
                     (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                        (0, net_id_0_0.clone(), 0.1f32),
-                        (0, net_id_0_1.clone(), 0.2f32),
-                        (0, net_id_1_0.clone(), 0.25f32),
+                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
+                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
+                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_1_0.clone(), loss: 0.25f32 },
                     ]))
                 ])
                 .build()
@@ -1590,8 +1592,8 @@ pub(crate) mod tests {
                 ])
                 .with_list_trained_nets([
                     (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                        (0, net_id_0_0.clone(), 0.1f32),
-                        (0, net_id_0_1.clone(), 0.2f32),
+                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
+                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
                     ])),
                 ])
                 .build(),
@@ -1690,7 +1692,7 @@ pub(crate) mod tests {
             ])
             .with_list_trained_nets([
                 (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                    (0, net_id_0_0.clone(), 0.1f32),
+                    TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
                 ]))
             ])
             .build()

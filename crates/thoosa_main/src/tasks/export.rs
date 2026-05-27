@@ -215,8 +215,8 @@ where
     async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<dyn Workspace>>>, label_net_run_config_ids: &[RunConfigId]) -> Result<(Vec<RunConfigId>, Vec<PathBuf>), ThoError> {
         let label_nets = self.store.list_trained_nets(label_net_run_config_ids.to_vec(), None, None).await?;
         let mut motif_net_run_config_ids = Vec::new();
-        for (label_net_id, _, _) in &label_nets {
-            motif_net_run_config_ids.extend(self.store.list_input_nets(*label_net_id).await?);
+        for label_net in &label_nets {
+            motif_net_run_config_ids.extend(self.store.list_input_nets(label_net.id).await?);
         }
         motif_net_run_config_ids.sort_unstable();
         motif_net_run_config_ids.dedup();
@@ -227,14 +227,14 @@ where
         {
             let source_ws = self.ws.read();
             let target_ws = target_ws.read();
-            for (_, net_path, _) in &label_nets {
-                let target_path = copy_net_path(source_ws.labels_nets_path(), target_ws.labels_nets_path(), net_path)?;
+            for label_net in &label_nets {
+                let target_path = copy_net_path(source_ws.labels_nets_path(), target_ws.labels_nets_path(), &label_net.net_path)?;
                 if copied_targets.insert(target_path.clone()) {
                     copied.push(target_path);
                 }
             }
-            for (_, net_path, _) in &motif_nets {
-                let target_path = copy_net_path(source_ws.motifs_nets_path(), target_ws.motifs_nets_path(), net_path)?;
+            for motif_net in &motif_nets {
+                let target_path = copy_net_path(source_ws.motifs_nets_path(), target_ws.motifs_nets_path(), &motif_net.net_path)?;
                 if copied_targets.insert(target_path.clone()) {
                     copied.push(target_path);
                 }

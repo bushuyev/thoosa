@@ -431,7 +431,7 @@ mod tests {
     use thoosa_shared::val::NamedVal;
     use thoosa_shared::val::Val;
     use thoosa_shared::{mono_key, ThoError};
-    use thoosa_store::{MockStoreBuilder, RunConfigRow};
+    use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
     use thoosa_with_data::with_data;
 
     fn const_label_net(motif_nets: u32, slices_len: u32, k: f64, device: Device) -> (Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>) {
@@ -516,8 +516,8 @@ mod tests {
                         Some(0.3),
                         Some(2),
                         Ok(vec![
-                            (0, net_id_0, 0.1f32),
-                            (0, net_id_1, 0.2f32),
+                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_0, loss: 0.1f32 },
+                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_1, loss: 0.2f32 },
                         ]),
                     ),
                 ])

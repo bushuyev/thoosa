@@ -285,7 +285,7 @@ pub(crate) async fn run_all(
                                 Ok(train_label_nets_run_config_ids) => {
                                     info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
                                     let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).await?
-                                        .into_iter().map(|(.., loss)|loss).reduce(f32::min).unwrap_or(f32::MAX);
+                                        .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                     if min_loss < *best_min_loss.read() {
                                         *best_min_loss.write() = min_loss;
@@ -396,7 +396,7 @@ pub(crate) async fn run_all(
                             Ok(train_label_nets_run_config_ids) => {
                                 info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
                                 let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).await?
-                                    .into_iter().map(|(.., loss)|loss).reduce(f32::min).unwrap_or(f32::MAX);
+                                    .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                 if min_loss < 0.1 {
                                     info!("stopping training label {label} got loss={min_loss}");
