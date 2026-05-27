@@ -147,47 +147,61 @@ where
     pub fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
         self.run_config.validate()?;
         let input_size = input.size();
-        if input_size.len() != 2 && input_size.len() != 3 {
-            return Err(ThoError::new(format!("SyncStft::build_spectrogram: expected [batch, window] or [batch, slices, window], got {:?}", input_size)));
-        }
-
-        let motifs = input.unbind(0);
-        let mut specs = Vec::with_capacity(motifs.len());
-        for (i, motif) in motifs.iter().enumerate() {
-            let spec = match motif.size().len() {
-                1 => motif
-                    .f_unsqueeze(0)?
-                    .f_stft(
-                        self.run_config.n_fft,
-                        self.run_config.hop_length,
-                        self.run_config.win_length,
-                        None::<Tensor>,
-                        self.run_config.normalized,
-                        self.run_config.onesided,
-                        true,
-                        self.run_config.align_to_window,
-                    )?
-                    .f_squeeze_dim(0)?
-                    .f_abs()?,
-                2 => motif
-                    .f_stft(
-                        self.run_config.n_fft,
-                        self.run_config.hop_length,
-                        self.run_config.win_length,
-                        None::<Tensor>,
-                        self.run_config.normalized,
-                        self.run_config.onesided,
-                        true,
-                        self.run_config.align_to_window,
-                    )?
-                    .f_abs()?,
-                _ => return Err(ThoError::new(format!("SyncStft::build_spectrogram: unexpected motif size {:?}", motif.size()))),
-            };
-            debug!("SyncStft::build_spectrogram: motif_idx={i} motif_size={:?} spec_size={:?}", motif.size(), spec.size());
-            specs.push(spec);
-        }
-
-        Ok(Tensor::f_stack(&specs, 0)?)
+        // if input_size.len() != 2 && input_size.len() != 3 {
+        //     return Err(ThoError::new(format!("SyncStft::build_spectrogram: expected [batch, window] or [batch, slices, window], got {:?}", input_size)));
+        // }
+        //
+        // let motifs = input.unbind(0);
+        // let mut specs = Vec::with_capacity(motifs.len());
+        // for (i, motif) in motifs.iter().enumerate() {
+        //     let spec = match motif.size().len() {
+        //         1 => motif
+        //             .f_unsqueeze(0)?
+        //             .f_stft(
+        //                 self.run_config.n_fft,
+        //                 self.run_config.hop_length,
+        //                 self.run_config.win_length,
+        //                 None::<Tensor>,
+        //                 self.run_config.normalized,
+        //                 self.run_config.onesided,
+        //                 true,
+        //                 self.run_config.align_to_window,
+        //             )?
+        //             .f_squeeze_dim(0)?
+        //             .f_abs()?,
+        //         2 => motif
+        //             .f_stft(
+        //                 self.run_config.n_fft,
+        //                 self.run_config.hop_length,
+        //                 self.run_config.win_length,
+        //                 None::<Tensor>,
+        //                 self.run_config.normalized,
+        //                 self.run_config.onesided,
+        //                 true,
+        //                 self.run_config.align_to_window,
+        //             )?
+        //             .f_abs()?,
+        //         _ => return Err(ThoError::new(format!("SyncStft::build_spectrogram: unexpected motif size {:?}", motif.size()))),
+        //     };
+        //     debug!("SyncStft::build_spectrogram: motif_idx={i} motif_size={:?} spec_size={:?}", motif.size(), spec.size());
+        //     specs.push(spec);
+        // }
+        //
+        // Ok(Tensor::f_stack(&specs, 0)?)
+        Ok(
+            input
+            .f_stft(
+                self.run_config.n_fft,
+                self.run_config.hop_length,
+                self.run_config.win_length,
+                None::<Tensor>,
+                self.run_config.normalized,
+                self.run_config.onesided,
+                true,
+                self.run_config.align_to_window,
+            )?
+            .f_abs()?
+        )
     }
 }
 

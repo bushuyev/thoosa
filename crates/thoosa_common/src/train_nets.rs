@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::{fmt, fs};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
 use tch::nn::{init, ConvConfig, LinearConfig, Optimizer, OptimizerConfig, VarStore};
@@ -4053,7 +4054,7 @@ mod train_tests {
 
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Clone, PartialEq, Debug, Hash)]
 pub struct StftRunConfig {
     #[in_map]
     #[run_config]
@@ -4096,6 +4097,12 @@ impl StftRunConfig {
             return Err(ThoError::new(format!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length)));
         }
         Ok(())
+    }
+
+    pub fn hash_value(&self) ->u64{
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
     }
 }
 

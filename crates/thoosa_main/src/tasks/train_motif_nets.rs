@@ -86,7 +86,6 @@ where
     epoch_size: u32,
     descr: Option<String>,
     pd:PhantomData<C>,
-    stft: Arc<Stft<C>>
 
 }
 
@@ -197,17 +196,8 @@ where
             ws
         ));
 
-        let stft = Arc::new(Stft::new(StftRunConfig::new(
-            16000,
-            Some(4000),
-            Some(4000),
-            true,
-            true,
-            true
-        ))?);
-
         Ok(Self {
-            id: mono_key!(TRAIN_MOTIF_NETS, "ApplyMotifNets").into(),
+            id: mono_key!(TRAIN_MOTIF_NETS, "TrainMotifNets").into(),
             motif_loader,
             random_slices_loader,
             run_configs: Arc::new(run_configs),
@@ -215,11 +205,9 @@ where
             store: Arc::clone(&store),
             epoch_size,
             descr,
-            stft,
             pd: PhantomData
         })
     }
-
 }
 
 
@@ -356,7 +344,7 @@ where
         .map(|(motif_id_rate, select_motifs_run_config_id)|{
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
-            let stft = Arc::clone(&self.stft);
+
 
             let mut ctx = ctx.branch(Some(&format!("train_motif_nets_task_{}", motif_id_rate.0)), false);
             let mut ctx_run = ctx.branch(Some(&format!("train_motif_nets_task_{}", motif_id_rate.0)), false);
@@ -386,7 +374,7 @@ where
 
                 let mut ctx_net = ctx.branch(Some(&format!("train_motif_nets_task_{}_2", motif_id_rate.0)), false);
                 let motif_batch = Arc::clone(&motif);
-                let stft_batch = Arc::clone(&stft);
+
                 let  ctx_net_0 = ctx_net.branch(Some(&format!("train_motif_nets_task_{}_20", motif_id_rate.0)), false);
                 let  ctx_net_1 = ctx_net.branch(Some(&format!("train_motif_nets_task_{}_21", motif_id_rate.0)), false);
 
@@ -394,12 +382,12 @@ where
                 let train_net = Arc::new(TrainNet::new(
                     move |mut ctx:C, rc:&TrainMotifNetRunConfig| {
                         match &rc.net {
-                            MotifNetTypeArgs::Cosine2DNet(_) => {
+                            MotifNetTypeArgs::Cosine2DNet(args) => {
                                 debug!("TrainMotifNets::run: batch, rc={rc:?} motif={motif_batch:?}");
 
                                 let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader = Arc::clone(&random_slices_loader_for_batch);
-                                let stft = Arc::clone(&stft_batch);
+                                let stft = Arc::new(Stft::new(args.stft_config.clone()).unwrap());//TODO
                                 let motif_meta = motif_meta.clone();
                                 async move {
                                     let stft_input = with_data!(ctx.branch(Some("train_motif_nets_motif_stft_input"), false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
@@ -435,7 +423,7 @@ where
                     move |mut ctx:C, rc:&TrainMotifNetRunConfig, vs: Arc<Mutex<VarStore>>| {
                         // let mut ctx = ctx_net.branch(Some(&format!("train_motif_nets_task_{}_3", motif_id_rate.0)), false);
                         let motif = Arc::clone(&motif);
-                        let stft = Arc::clone(&stft);
+
 
                         async move {
                             let motif = Arc::clone(&motif);
@@ -455,8 +443,8 @@ where
                                     let params = MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone());
                                     Ok((params.motif_net(None)?.build_tch_module(&vs.lock().root())?, params))
                                 },
-                                MotifNetTypeArgs::Cosine2DNet(net) => {
-
+                                MotifNetTypeArgs::Cosine2DNet(args) => {
+                                    let stft = Arc::new(Stft::new(args.stft_config.clone())?);
                                     debug!("TrainMotifNets::run: motif_id={} motif_width={motif_width}", motif_id_rate.0);
 
 
@@ -471,7 +459,7 @@ where
                                         "train_motif_nets_motif_stft",
                                     ).await?;
                                     let size = motif_specs.size();
-                                    let params = MotifNetParams::new_cosine_2d(size[2] as u32, size[1] as u32, net.a, net.b, net.init_mode.clone(), motif_width);
+                                    let params = MotifNetParams::new_cosine_2d(size[2] as u32, size[1] as u32, args.a, args.b, args.init_mode.clone(), motif_width);
 
                                     let cosine_motif = motif_specs.as_ref();
                                     let mut dst = cosine_motif.as_ref().as_ref().f_zeros_like()?;
