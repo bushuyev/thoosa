@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::{error, warn};
 use parking_lot::{RawRwLock, RwLock};
 use tch::{IndexOp, Kind, Tensor};
-use tch::kind::FLOAT_CPU;
+use tch::Device::Cuda;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, MotifProbability, Slice};
@@ -17,9 +17,10 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifCosine2DNetArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
 use thoosa_common::train_nets::MotifNetTypeArgs::Cosine2DNet;
-use thoosa_common::utils::load_run_config;
+use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
+use thoosa_properties_map::FromHashmap;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
@@ -123,6 +124,8 @@ where
         let futures = trained_nets
             .into_iter()
             .map(|trained_net| {
+                debug!("ApplyMotifNets::new: trained_net={trained_net:?}");
+
                 let trained_net_id = trained_net.id;
                 let train_motif_net_run_config_id = trained_net.run_config_id;
                 let path = trained_net.net_path;
@@ -134,7 +137,11 @@ where
                 let channels_widths_net_tensors = Arc::clone(&channels_widths_net_tensors);
 
                 async move {
-                    let train_motif_net_run_config: TrainMotifNetRunConfig = load_run_config(&store, train_motif_net_run_config_id).await?;
+                    // let train_motif_net_run_config: TrainMotifNetRunConfig = load_run_config(&store, train_motif_net_run_config_id).await?;
+                    let train_motif_net_run_config: TrainMotifNetRunConfig = TrainMotifNetRunConfig::from_properties_map(None, &store.list_run_config_values(train_motif_net_run_config_id).await?)?;
+
+                    debug!("ApplyMotifNets::new: train_motif_net_run_config={train_motif_net_run_config:?}");
+
                     let Cosine2DNet(MotifCosine2DNetArgs{stft_config, ..}) = train_motif_net_run_config.net else {
                         warn!("ApplyMotifNets::new: unexpected={train_motif_net_run_config:?}");
 
@@ -189,9 +196,9 @@ where
                 channel,
                 motif_width,
                 stft_hash_value,
-                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).copy().into(),
-                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).copy().into(),
-                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(Cuda(0)).into(),//TODO to_device(Cuda(0))
+                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(Cuda(0)).into(),
+                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(Cuda(0)).into(),
             }
         }).collect();
 
@@ -199,7 +206,7 @@ where
         if stft_run_configs.is_empty() {
             return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
         };
-
+        debug!("ApplyMotifNets::new: stft_run_configs={stft_run_configs:?} conv2d_tensors={conv2d_tensors:?} trained_net_ids={trained_net_ids:?}");
 
         Ok(Self {
             id,
@@ -231,36 +238,44 @@ where
         let self_clone = Arc::clone(&self);
         async move {
 
-            let res_t = Tensor::rand(&[1], FLOAT_CPU);
 
 
 
-            with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
+
+            let res = with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
                 debug!("ApplyMotifNetsMerged::run: input={input:?}");
                 let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
 
+                    debug!("ApplyMotifNetsMerged::run: tensors={tensors:?}");
+
                     let stft = SyncStft::<C>::new("".into(), self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap().clone());
 
+                    let t = input.t.f_i((tensors.channel as i64, ..))?;
+                    let t = if t.size()[0] >= tensors.motif_width as i64 {
+                        t
+                    } else {
+                        pad_to(&t, &[tensors.motif_width as i64], 0.0)?
+                    };
 
                     let stft_t = stft.build_spectrogram(
-                        &input.as_ref().i((tensors.channel as i64, ..)).unfold(0, tensors.motif_width as i64, self_clone.slice_step as i64)
+                        &t.unfold(0, tensors.motif_width as i64, self_clone.slice_step as i64)
                     )?;
 
                     apply_cosine_kernel_bank_to_batched_spectrogram(
-                       &stft_t,
+                       &stft_t.unsqueeze(1),
                        tensors.kernels.as_ref(),
                        tensors.a.as_ref(),
                        tensors.b.as_ref(),
                        CosineConv2dBankConfig::default()
                     )
-                }).collect::<Vec<_>>();
+                }).collect::<Result<Vec<_>, ThoError>>()?;
 
                 debug!("ApplyMotifNetsMerged::run: motifs_applied={motifs_applied:?}");
 
-                Ok(())
-            });
+                Ok(motifs_applied)
+            })?;
 
-            Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), res_t)?, vec![]))))
+            Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), Tensor::concat(res.as_slice(), 1).squeeze_dim(2))?, vec![]))))
         }
     }
 }
@@ -392,15 +407,16 @@ mod tests {
     use tracing::debug;
     use thoosa_common::dims::{AnyDims, Batch, MotifProbability, Slice, Spectorgram};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{cosine_2d_motif_node, MotifCosine2dNetParams, MotifNetParams, MotifNetTypeParams, ThoModuleWithStore};
+    use thoosa_common::train_nets::{cosine_2d_motif_node, MotifCosine2dNetParams, MotifNetParams, MotifNetTypeParams, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::my_tch::{InitDummy, MotifInitMode, MySequential, ThoModule};
     use thoosa_common::nodes::cosine_2d::{CosineConv2dBankConfig, MyCosineConv2d};
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
     use thoosa_common::ws::Workspace;
+    use thoosa_properties_map::FromHashmap;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::ThoError;
-    use thoosa_store::Store;
+    use thoosa_store::{SqlStore, Store};
     use crate::ApplyMotifNets;
     use crate::tasks::apply_motif_nets::dummy_motif_net;
     use crate::tasks::apply_motif_nets::tests::test_apply_motif_nets_3_channels_2_motifs;
@@ -586,4 +602,15 @@ mod tests {
         )
     }
 
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_0() -> Result<(), ThoError> {
+        let store = SqlStore::from_path(&"/home/bu/tmp/ws_clef/main_db.db3").await?;
+
+        let train_motif_net_run_config: TrainMotifNetRunConfig = TrainMotifNetRunConfig::from_properties_map(None, &store.list_run_config_values(39713).await?)?;
+
+        debug!("train_motif_net_run_config={train_motif_net_run_config:?}");
+
+        Ok(())
+    }
 }

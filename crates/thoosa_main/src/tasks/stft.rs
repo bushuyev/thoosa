@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::dims::{Batch, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
@@ -189,7 +190,7 @@ where
         //
         // Ok(Tensor::f_stack(&specs, 0)?)
         Ok(
-            input
+            input.totype(Float)
             .f_stft(
                 self.run_config.n_fft,
                 self.run_config.hop_length,
