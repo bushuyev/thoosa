@@ -266,7 +266,7 @@ pub(crate) async fn run_all(
                                     &store,
                                     async move |run_configs| {
                                         new_train_label_nets(
-                                            train_motif_net_run_config_ids,
+                                            train_motif_net_run_config_ids_combo,
                                             Arc::clone(&loader),
                                             run_configs,
                                             &ws_in_train_labels,
