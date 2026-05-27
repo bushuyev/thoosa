@@ -3,6 +3,7 @@ use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 use tch::Tensor;
 use thoosa_common::dims::{Batch, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
@@ -12,48 +13,16 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::train_nets::StftRunConfig;
 use thoosa_named_derive::Named;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{mono_key, ThoError};
 
 use crate::tasks::stage_ids::STFT;
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct StftRunConfig {
-    pub n_fft: i64,
-    pub hop_length: Option<i64>,
-    pub win_length: Option<i64>,
-    pub normalized: bool,
-    pub onesided: bool,
-    pub align_to_window: bool,
-}
-
-impl StftRunConfig {
-    pub fn new(n_fft: i64, hop_length: Option<i64>, win_length: Option<i64>, normalized: bool, onesided: bool, align_to_window: bool) -> Self {
-        Self { n_fft, hop_length, win_length, normalized, onesided, align_to_window }
-    }
-
-    fn validate(&self) -> Result<(), ThoError> {
-        if self.n_fft <= 0 {
-            return Err(ThoError::new(format!("StftRunConfig::validate: n_fft must be positive, got {}", self.n_fft)));
-        }
-        if matches!(self.hop_length, Some(v) if v <= 0) {
-            return Err(ThoError::new(format!("StftRunConfig::validate: hop_length must be positive, got {:?}", self.hop_length)));
-        }
-        if matches!(self.win_length, Some(v) if v <= 0) {
-            return Err(ThoError::new(format!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length)));
-        }
-        Ok(())
-    }
-}
-
-impl Default for StftRunConfig {
-    fn default() -> Self {
-        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(16000), normalized: false, onesided: true, align_to_window: true }
-    }
-}
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "Stft"]
@@ -178,47 +147,61 @@ where
     pub fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
         self.run_config.validate()?;
         let input_size = input.size();
-        if input_size.len() != 2 && input_size.len() != 3 {
-            return Err(ThoError::new(format!("SyncStft::build_spectrogram: expected [batch, window] or [batch, slices, window], got {:?}", input_size)));
-        }
-
-        let motifs = input.unbind(0);
-        let mut specs = Vec::with_capacity(motifs.len());
-        for (i, motif) in motifs.iter().enumerate() {
-            let spec = match motif.size().len() {
-                1 => motif
-                    .f_unsqueeze(0)?
-                    .f_stft(
-                        self.run_config.n_fft,
-                        self.run_config.hop_length,
-                        self.run_config.win_length,
-                        None::<Tensor>,
-                        self.run_config.normalized,
-                        self.run_config.onesided,
-                        true,
-                        self.run_config.align_to_window,
-                    )?
-                    .f_squeeze_dim(0)?
-                    .f_abs()?,
-                2 => motif
-                    .f_stft(
-                        self.run_config.n_fft,
-                        self.run_config.hop_length,
-                        self.run_config.win_length,
-                        None::<Tensor>,
-                        self.run_config.normalized,
-                        self.run_config.onesided,
-                        true,
-                        self.run_config.align_to_window,
-                    )?
-                    .f_abs()?,
-                _ => return Err(ThoError::new(format!("SyncStft::build_spectrogram: unexpected motif size {:?}", motif.size()))),
-            };
-            debug!("SyncStft::build_spectrogram: motif_idx={i} motif_size={:?} spec_size={:?}", motif.size(), spec.size());
-            specs.push(spec);
-        }
-
-        Ok(Tensor::f_stack(&specs, 0)?)
+        // if input_size.len() != 2 && input_size.len() != 3 {
+        //     return Err(ThoError::new(format!("SyncStft::build_spectrogram: expected [batch, window] or [batch, slices, window], got {:?}", input_size)));
+        // }
+        //
+        // let motifs = input.unbind(0);
+        // let mut specs = Vec::with_capacity(motifs.len());
+        // for (i, motif) in motifs.iter().enumerate() {
+        //     let spec = match motif.size().len() {
+        //         1 => motif
+        //             .f_unsqueeze(0)?
+        //             .f_stft(
+        //                 self.run_config.n_fft,
+        //                 self.run_config.hop_length,
+        //                 self.run_config.win_length,
+        //                 None::<Tensor>,
+        //                 self.run_config.normalized,
+        //                 self.run_config.onesided,
+        //                 true,
+        //                 self.run_config.align_to_window,
+        //             )?
+        //             .f_squeeze_dim(0)?
+        //             .f_abs()?,
+        //         2 => motif
+        //             .f_stft(
+        //                 self.run_config.n_fft,
+        //                 self.run_config.hop_length,
+        //                 self.run_config.win_length,
+        //                 None::<Tensor>,
+        //                 self.run_config.normalized,
+        //                 self.run_config.onesided,
+        //                 true,
+        //                 self.run_config.align_to_window,
+        //             )?
+        //             .f_abs()?,
+        //         _ => return Err(ThoError::new(format!("SyncStft::build_spectrogram: unexpected motif size {:?}", motif.size()))),
+        //     };
+        //     debug!("SyncStft::build_spectrogram: motif_idx={i} motif_size={:?} spec_size={:?}", motif.size(), spec.size());
+        //     specs.push(spec);
+        // }
+        //
+        // Ok(Tensor::f_stack(&specs, 0)?)
+        Ok(
+            input
+            .f_stft(
+                self.run_config.n_fft,
+                self.run_config.hop_length,
+                self.run_config.win_length,
+                None::<Tensor>,
+                self.run_config.normalized,
+                self.run_config.onesided,
+                true,
+                self.run_config.align_to_window,
+            )?
+            .f_abs()?
+        )
     }
 }
 
@@ -270,9 +253,10 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 mod tests {
     use tch::{Device, Kind, Tensor};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::train_nets::StftRunConfig;
     use thoosa_shared::ThoError;
 
-    use crate::tasks::stft::{stft_stage_id, StftRunConfig, SyncStft};
+    use crate::tasks::stft::{stft_stage_id, SyncStft};
 
     #[test]
     fn test_sync_stft_build_spectrogram_stacks_batched_motifs() -> Result<(), ThoError> {
