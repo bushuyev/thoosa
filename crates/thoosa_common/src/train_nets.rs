@@ -1006,12 +1006,13 @@ pub struct MotifCosine2dNetParams {
     pub kh_freq: u32,
     pub a:f64,
     pub b:f64,
-    pub init_mode:MotifInitMode
+    pub init_mode:MotifInitMode,
+    pub motif_width:u32
 }
 
 impl MotifCosine2dNetParams {
-    pub fn new(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
-        Self { kw_time: kw, kh_freq: kh, a, b, init_mode }
+    pub fn new(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode, motif_width: u32) -> Self {
+        Self { kw_time: kw, kh_freq: kh, a, b, init_mode,motif_width }
     }
 }
 
@@ -1057,8 +1058,8 @@ impl MotifNetParams {
         Self::new_with_net_type(MotifNetTypeParams::CosineNetParams(MotifCosineNetParams::new(num_features, a, b, init_mode)))
     }
 
-    pub fn new_cosine_2d(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode) -> Self {
-        Self::new_with_net_type(MotifNetTypeParams::CosineNet2DParams(MotifCosine2dNetParams::new(kw, kh, a, b, init_mode)))
+    pub fn new_cosine_2d(kw: u32, kh: u32, a: f64, b: f64, init_mode: MotifInitMode, motif_width: u32) -> Self {
+        Self::new_with_net_type(MotifNetTypeParams::CosineNet2DParams(MotifCosine2dNetParams::new(kw, kh, a, b, init_mode, motif_width)))
     }
 
 
@@ -1074,7 +1075,7 @@ impl MotifNetParams {
             MotifNetTypeParams::LinNetParams(v) => v.num_features,
             MotifNetTypeParams::ConvNetParams(v) => v.num_features,
             MotifNetTypeParams::CosineNetParams(v) => v.num_features,
-            MotifNetTypeParams::CosineNet2DParams(v) => {v.kw_time * v.kh_freq }
+            MotifNetTypeParams::CosineNet2DParams(v) => {v.motif_width }
         }
     }
 
@@ -2952,7 +2953,7 @@ mod train_tests {
         // debug_plot_impl(&x_eval, "x_eval", 0)?;
 
         for init_mode in [MotifInitMode::Mean(InitDummy{})] {// &crate::my_tch::MotifInitMode::list(0.4) {
-            let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 10.0, 1.0, init_mode.clone()), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
+            let net = cosine_2d_motif_node(&MotifCosine2dNetParams::new(0, 0, 10.0, 1.0, init_mode.clone(), motif_width as u32), Some(Arc::new(ThoTensor::new("motifs".into(), kernel.shallow_clone())?)))?.build_tch_module(&vs_0.root())?;
 
             let result = run_cosine_motif_node(
                 // &mut vs_0, &x_train, &y_train, &x_eval, &y_eval,
