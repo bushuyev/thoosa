@@ -450,7 +450,7 @@ where
 
 
                        },
-                        move |rc:&TrainLabelNetRunConfig, vs: Arc<Mutex<VarStore>>| {
+                        move |_:C, rc:&TrainLabelNetRunConfig, vs: Arc<Mutex<VarStore>>| {
                             ready(
                                 match rc.net {
                                     LabelNetTypeArgs::ConvNet(ConvNetArgs {

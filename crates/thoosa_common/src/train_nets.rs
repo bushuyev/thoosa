@@ -726,8 +726,11 @@ pub struct MotifCosine2DNetArgs {
 
     #[in_map]
     #[run_config]
-    pub init_mode:MotifInitMode
+    pub init_mode:MotifInitMode,
 
+    #[in_map]
+    #[run_config]
+    pub stft_config:StftRunConfig
 }
 
 
@@ -2494,12 +2497,12 @@ mod train_tests {
     use crate::batches::BatchLengths;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{
-        AnyDims, Batch, Dims, LabelProbability, MotifProbability, ChannelsMotifsData, Slice,
+        AnyDims, Batch, ChannelsMotifsData, Dims, LabelProbability, MotifProbability, Slice,
         ThoBatch,
     };
     use crate::my_tch::{InitDummy, MotifInitMode, ThoModule};
     use crate::tho_tensor::ThoTensor;
-    use crate::train_nets::{lin_label_node, dummy_label_net, lin_motif_node, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, FinalNetArgs, FinalNetParams, LinNetArgs, ConvNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LoadMotifNetOutput, ConvNetArgs, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, conv_label_node, self_attention_label_node, ConvNetJoint, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig, cosine_motif_node, MotifCosineNetParams, cosine_2d_motif_node, MotifCosine2dNetParams, motifs_to_specs, LinLenNetParams};
+    use crate::train_nets::{conv_label_node, cosine_2d_motif_node, cosine_motif_node, dummy_label_net, lin_label_node, lin_motif_node, motifs_to_specs, self_attention_label_node, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgs, ConvNetJoint, ConvNetParams, FinalNetArgs, FinalNetParams, LabelNetTypeArgs, LabelNetTypeArgsRangeOrValue, LabelNetTypeParams, LinLenNetParams, LinNetArgs, LoadMotifNetOutput, MotifCosine2dNetParams, MotifCosineNetParams, NetsPadding, OptConfig, PlotVecf32, SelfAttentionNetParams, TrainFinalNetRunConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResultParams, TrainMotifNetRunConfig};
     use crate::train_nets::{
         InferArgs, LabelNetParams, MotifLinNetParams, MotifNetParams, ThoModuleWithStore,
     };
@@ -4048,4 +4051,56 @@ mod train_tests {
         Ok(())
     }
 
+}
+
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct StftRunConfig {
+    #[in_map]
+    #[run_config]
+    pub n_fft: i64,
+
+    #[in_map]
+    #[run_config]
+    pub hop_length: Option<i64>,
+
+    #[in_map]
+    #[run_config]
+    pub win_length: Option<i64>,
+
+    #[in_map]
+    #[run_config]
+    pub normalized: bool,
+
+    #[in_map]
+    #[run_config]
+    pub onesided: bool,
+
+    #[in_map]
+    #[run_config]
+    pub align_to_window: bool,
+}
+
+impl StftRunConfig {
+    pub fn new(n_fft: i64, hop_length: Option<i64>, win_length: Option<i64>, normalized: bool, onesided: bool, align_to_window: bool) -> Self {
+        Self { n_fft, hop_length, win_length, normalized, onesided, align_to_window }
+    }
+
+    pub fn validate(&self) -> Result<(), ThoError> {
+        if self.n_fft <= 0 {
+            return Err(ThoError::new(format!("StftRunConfig::validate: n_fft must be positive, got {}", self.n_fft)));
+        }
+        if matches!(self.hop_length, Some(v) if v <= 0) {
+            return Err(ThoError::new(format!("StftRunConfig::validate: hop_length must be positive, got {:?}", self.hop_length)));
+        }
+        if matches!(self.win_length, Some(v) if v <= 0) {
+            return Err(ThoError::new(format!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length)));
+        }
+        Ok(())
+    }
+}
+
+impl Default for StftRunConfig {
+    fn default() -> Self {
+        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(16000), normalized: false, onesided: true, align_to_window: true }
+    }
 }

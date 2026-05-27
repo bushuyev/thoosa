@@ -3,6 +3,7 @@ use log::debug;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use serde::{Deserialize, Serialize};
 use tch::Tensor;
 use thoosa_common::dims::{Batch, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
@@ -12,48 +13,16 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::train_nets::StftRunConfig;
 use thoosa_named_derive::Named;
+use thoosa_properties_map_derive::ThoosaPropertiesMap;
+use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{mono_key, ThoError};
 
 use crate::tasks::stage_ids::STFT;
-
-#[derive(Clone, PartialEq, Debug)]
-pub struct StftRunConfig {
-    pub n_fft: i64,
-    pub hop_length: Option<i64>,
-    pub win_length: Option<i64>,
-    pub normalized: bool,
-    pub onesided: bool,
-    pub align_to_window: bool,
-}
-
-impl StftRunConfig {
-    pub fn new(n_fft: i64, hop_length: Option<i64>, win_length: Option<i64>, normalized: bool, onesided: bool, align_to_window: bool) -> Self {
-        Self { n_fft, hop_length, win_length, normalized, onesided, align_to_window }
-    }
-
-    fn validate(&self) -> Result<(), ThoError> {
-        if self.n_fft <= 0 {
-            return Err(ThoError::new(format!("StftRunConfig::validate: n_fft must be positive, got {}", self.n_fft)));
-        }
-        if matches!(self.hop_length, Some(v) if v <= 0) {
-            return Err(ThoError::new(format!("StftRunConfig::validate: hop_length must be positive, got {:?}", self.hop_length)));
-        }
-        if matches!(self.win_length, Some(v) if v <= 0) {
-            return Err(ThoError::new(format!("StftRunConfig::validate: win_length must be positive, got {:?}", self.win_length)));
-        }
-        Ok(())
-    }
-}
-
-impl Default for StftRunConfig {
-    fn default() -> Self {
-        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(16000), normalized: false, onesided: true, align_to_window: true }
-    }
-}
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "Stft"]
@@ -270,9 +239,10 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 mod tests {
     use tch::{Device, Kind, Tensor};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::train_nets::StftRunConfig;
     use thoosa_shared::ThoError;
 
-    use crate::tasks::stft::{stft_stage_id, StftRunConfig, SyncStft};
+    use crate::tasks::stft::{stft_stage_id, SyncStft};
 
     #[test]
     fn test_sync_stft_build_spectrogram_stacks_batched_motifs() -> Result<(), ThoError> {

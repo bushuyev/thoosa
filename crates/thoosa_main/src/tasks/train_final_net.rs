@@ -222,7 +222,7 @@ where
 
                     ready(LogitsResourcesBatch::new(label_loader, rc.common_training_args.batch_size, train_resources, valid_resources, labels_len)).boxed()
                 },
-                move |rc: &TrainFinalNetRunConfig, vs: Arc<Mutex<VarStore>>| {
+                move |_:C, rc: &TrainFinalNetRunConfig, vs: Arc<Mutex<VarStore>>| {
                     let net_params = FinalNetParams::new(num_label_nets, labels_len as u32, rc.net.num_layers);
                     ready(Ok((final_net(&net_params).unwrap().build_tch_module::<Batch<LabelProbability>, Batch<LabelsProbabilities>>(&vs.lock().root()).unwrap(), net_params))).boxed()
                 },

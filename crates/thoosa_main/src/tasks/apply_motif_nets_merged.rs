@@ -15,7 +15,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::ThoModuleWithStore;
+use thoosa_common::train_nets::{StftRunConfig, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
@@ -28,7 +28,7 @@ use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
-use crate::tasks::stft::{StftRunConfig, SyncStft};
+use crate::tasks::stft::SyncStft;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNetsMerged<C>
