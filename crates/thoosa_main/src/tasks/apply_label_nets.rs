@@ -88,16 +88,16 @@ where
                 assert_eq!(label_nets.len(), 1); //for now there is always single net for run_config_id
                 let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
 
-                let motif_net_ids = store.list_input_nets(*label_net_id).await?;
+                let motif_net_run_config_ids = store.list_input_nets(*label_net_id).await?;
 
-                debug!("ApplyLabelNets::new: label_net_id={label_net_id}  motif_net_ids={motif_net_ids:?}");
+                debug!("ApplyLabelNets::new: label_net_id={label_net_id}  motif_net_ids={motif_net_run_config_ids:?}");
 
-                if motif_net_ids.is_empty() {
+                if motif_net_run_config_ids.is_empty() {
                     warn!("no motifs for train_label_net_run_config_id={train_label_net_run_config_id}");
                     continue//TODO, change to assert, just for tests
                 }
 
-                let motif_nets = store.list_trained_nets(motif_net_ids, None, None).await?;
+                let motif_nets = store.list_trained_nets(motif_net_run_config_ids, None, None).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 

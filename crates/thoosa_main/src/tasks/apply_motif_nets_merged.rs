@@ -1,9 +1,10 @@
+use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use log::error;
 use parking_lot::{RawRwLock, RwLock};
-use tch::{Kind, Tensor};
+use tch::{IndexOp, Kind, Tensor};
 use tch::kind::FLOAT_CPU;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
@@ -36,7 +37,8 @@ where
 {
     id: SynKey,
     pd:PhantomData<C>,
-    conv2d_tensors:MyCosineConv2dTensors,
+    conv2d_tensors:Vec<MyCosineConv2dTensors>,
+    slice_step: u32,
     stft:SyncStft<C>
 }
 
@@ -59,26 +61,6 @@ where
     }
 }
 
-impl<C> AsyncStage for ApplyMotifNetsMerged<C>
-where
-    C: RunCtx + Adjustable + 'static
-{
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
-        let input_id = input.id().clone();
-
-        async move {
-            let res_t = Tensor::rand(&[1], FLOAT_CPU);
-
-            with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input|{
-                debug!("ApplyMotifNetsMerged::run: input={input:?}");
-
-                Ok(())
-            });
-
-            Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), res_t)?, vec![]))))
-        }
-    }
-}
 
 impl<C> ApplyMotifNetsMerged<C>
 where
@@ -129,34 +111,42 @@ where
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
 
-        let mut kernels: Arc<parking_lot::lock_api::RwLock<RawRwLock, Vec<ThoTensor>>> = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
-        let mut alphas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
-        let mut betas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+        // let mut kernels: Arc<parking_lot::lock_api::RwLock<RawRwLock, Vec<ThoTensor>>> = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+        // let mut alphas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+        // let mut betas = Arc::new(RwLock::new(Vec::with_capacity(trained_nets.len())));
+
+        let channels_widths_net_tensors:Arc<RwLock<HashMap<(u32, u32), (Vec<ThoTensor>, Vec<ThoTensor>, Vec<ThoTensor>)>>> = Arc::new(RwLock::new(HashMap::new()));
 
         //this defines order in which motif nets should be applied to a resource before running label net
         let futures = trained_nets
             .into_iter()
-            .map(|(id, path, _loss)| {
+            .map(|(motif_net_run_config_id, path, _loss)| {
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
                 let load_ctx_2 = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
-                let kernels = Arc::clone(&kernels);
-                let alphas = Arc::clone(&alphas);
-                let betas = Arc::clone(&betas);
+                // let kernels = Arc::clone(&kernels);
+                // let alphas = Arc::clone(&alphas);
+                // let betas = Arc::clone(&betas);
+                let channels_widths_net_tensors = Arc::clone(&channels_widths_net_tensors);
                 async move {
                     match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).await {
                         Ok(net) => {
                             log::debug!("ApplyMotifNets::new: loaded net={net:?}");
 
                             let tensors = net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, ctx|{
+                                let channel = module_with_store.extra().channel();
+                                let motif_width = module_with_store.extra().motif_net_params.num_features();
 
-                                extract_cosine_conv_2d_once_(&mut kernels.write(), &mut alphas.write(), &mut betas.write(), module_with_store.data().module());
+                                let mut write_guard = channels_widths_net_tensors.write();
+                                let vecs = write_guard.entry((channel, motif_width)).or_insert((vec![], vec![], vec![]));
+
+                                extract_cosine_conv_2d_once_(&mut vecs.0, &mut vecs.1, &mut vecs.2, module_with_store.data().module());
 
                                 Ok(())
                             }).await?;
 
-                            Ok::<_, ThoError>(Some((id, net)))
+                            Ok::<_, ThoError>(Some((motif_net_run_config_id, net)))
                         }
                         Err(e) => {
                             error!("ApplyMotifNets::new: can't load net for motif; there must have been an error while training the net: e={e:?}");
@@ -178,13 +168,20 @@ where
             .flatten()
             .collect::<Vec<_>>();
 
+        let conv2d_tensors = Arc::into_inner(channels_widths_net_tensors)
+            .expect("Arc::into_inner(channels_widths_net_tensors) failed")
+            .into_inner()
+            .into_iter()
+            .map(|((channel, motif_width),(kernels, alphas, betas))|{
+            MyCosineConv2dTensors {
+                channel,
+                motif_width,
+                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).copy().into(),
+            }
+        }).collect();
 
-
-        let conv2d_tensors= MyCosineConv2dTensors {
-            kernels: Tensor::cat(kernels.write().iter().map(|v|v.as_ref().shallow_clone()).collect::<Vec<_>>().as_slice(), 0).copy().into(),
-            a: Tensor::cat(alphas.write().iter().map(|v|v.as_ref().shallow_clone()).collect::<Vec<_>>().as_slice(), 0).copy().into(),
-            b: Tensor::cat(betas.write().iter().map(|v|v.as_ref().shallow_clone()).collect::<Vec<_>>().as_slice(), 0).copy().into(),
-        };
 
         if loaded_motif_nets.is_empty() {
             return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
@@ -203,10 +200,50 @@ where
             id,
             pd: Default::default(),
             conv2d_tensors,
-            stft
+            stft,
+            slice_step
         })
     }
 }
+
+impl<C> AsyncStage for ApplyMotifNetsMerged<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
+    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+        let input_id = input.id().clone();
+
+        let self_clone = Arc::clone(&self);
+        async move {
+
+            let res_t = Tensor::rand(&[1], FLOAT_CPU);
+
+            with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
+                debug!("ApplyMotifNetsMerged::run: input={input:?}");
+                let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
+                    let stft_t = self_clone.stft.build_spectrogram(
+                        &input.as_ref().i((tensors.channel as i64, ..)).unfold(0, tensors.motif_width as i64, self_clone.slice_step as i64)
+                    )?;
+
+                    apply_cosine_kernel_bank_to_batched_spectrogram(
+                       &stft_t,
+                       tensors.kernels.as_ref(),
+                       tensors.a.as_ref(),
+                       tensors.b.as_ref(),
+                       CosineConv2dBankConfig::default()
+                    )
+                }).collect::<Vec<_>>();
+
+                debug!("ApplyMotifNetsMerged::run: motifs_applied={motifs_applied:?}");
+
+                Ok(())
+            });
+
+            Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), res_t)?, vec![]))))
+        }
+    }
+}
+
 
 
 pub fn apply_cosine_kernel_bank_to_batched_spectrogram(
@@ -258,6 +295,8 @@ pub fn apply_cosine_kernel_bank_to_batched_spectrogram(
 
 #[derive(Debug)]
 struct MyCosineConv2dTensors {
+    channel:u32,
+    motif_width:u32,
     kernels: ThoTensor,
     a: ThoTensor,
     b: ThoTensor,
@@ -275,6 +314,8 @@ fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifPro
 
 
     MyCosineConv2dTensors {
+        channel: 0,
+        motif_width: 0,
         kernels: Tensor::cat(kernels.as_slice(), 0).copy().into(),
         a: Tensor::cat(alphas.as_slice(), 0).copy().into(),
         b: Tensor::cat(betas.as_slice(), 0).copy().into(),
@@ -413,7 +454,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10, new_apply_motif_nets, cosine_2d_motif_node_).await
+        test_apply_motif_nets_3_channels_2_motifs(None, 5*32000, 10, 10, new_apply_motif_nets, cosine_2d_motif_node_).await
     }
 
     async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNetsMerged<MockRunCtx>>, ThoError> {
@@ -478,5 +519,48 @@ mod tests {
         )
     }
 
+    #[test]
+    fn test_stft_unfold(){
+        let t = Tensor::rand(&[10000], FLOAT_CPU);
+        let t_stft = t.stft(
+            100,
+            10,
+            10,
+            None::<Tensor>,
+            true,
+            true,
+            true,
+            true,
+        );
+        debug!("test_stft_unfold: t_stft={t_stft:?}");
+
+        let t_stft_unfold = t_stft.unfold(1, 200, 200);
+
+        debug!("test_stft_unfold: t_stft_unfold={t_stft_unfold:?}");
+
+        let t_unfold = t.unfold(0, 200, 200);
+
+        debug!("test_stft_unfold: t_unfold={t_unfold:?}");
+
+        let t_unfold_stft = t_unfold.stft(
+            100,
+            10,
+            10,
+            None::<Tensor>,
+            true,
+            true,
+            true,
+            true,
+        );
+
+        debug!("test_stft_unfold: t_unfold_stft={t_unfold_stft:?}");
+
+        assert!(
+            t_stft_unfold.flatten(1,2).allclose(
+                &t_unfold_stft.transpose(0,1).flatten(1,2),
+                0.01,0.01, false
+            )
+        )
+    }
 
 }
