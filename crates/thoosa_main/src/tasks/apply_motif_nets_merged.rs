@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::path::PathBuf;
 use std::sync::Arc;
 use log::{error, warn};
 use parking_lot::{RawRwLock, RwLock};
@@ -26,7 +25,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_store::Store;
+use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
@@ -105,16 +104,16 @@ where
         mut stage_ctx: R,
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
-        trained_nets: Vec<(u32, PathBuf, f32)>,
+        trained_nets: Vec<TrainedNet>,
         quantize: bool
     ) -> Result<ApplyMotifNetsMerged<C>, ThoError>
     where
         R: RunCtx + Adjustable + 'static
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws, quantize));//TODO move to new
-        let trained_net_ids = trained_nets.iter().map(|v|v.0).collect::<Vec<_>>();
+        let trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
-        let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.0, format!("trained_net_id_{}", net.0))).collect::<Vec<_>>());
+        let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 
 
         let channels_widths_net_tensors:Arc<RwLock<HashMap<(u32, u32, u64), (Vec<ThoTensor>, Vec<ThoTensor>, Vec<ThoTensor>)>>> = Arc::new(RwLock::new(HashMap::new()));
@@ -123,7 +122,10 @@ where
 
         let futures = trained_nets
             .into_iter()
-            .map(|(trained_net_id, path, _loss)| {
+            .map(|trained_net| {
+                let trained_net_id = trained_net.id;
+                let train_motif_net_run_config_id = trained_net.run_config_id;
+                let path = trained_net.net_path;
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
@@ -132,7 +134,7 @@ where
                 let channels_widths_net_tensors = Arc::clone(&channels_widths_net_tensors);
 
                 async move {
-                    let train_motif_net_run_config: TrainMotifNetRunConfig = load_run_config(&store, trained_net_id).await?;
+                    let train_motif_net_run_config: TrainMotifNetRunConfig = load_run_config(&store, train_motif_net_run_config_id).await?;
                     let Cosine2DNet(MotifCosine2DNetArgs{stft_config, ..}) = train_motif_net_run_config.net else {
                         warn!("ApplyMotifNets::new: unexpected={train_motif_net_run_config:?}");
 

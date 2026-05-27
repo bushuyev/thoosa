@@ -574,7 +574,7 @@ mod tests {
         let unused_motif_run_config_id = store.save_run_config(None, &TrainMotifNetRunConfig::type_name(), "unused", HashMap::new()).await?;
         store.save_trained_net(used_motif_run_config_id, used_motif_path.clone(), 0.01, None).await?;
         store.save_trained_net(unused_motif_run_config_id, unused_motif_path.clone(), 0.01, None).await?;
-        let used_motif_id = store.list_trained_nets(vec![used_motif_run_config_id], None, None).await?[0].0;
+        let used_motif_id = store.list_trained_nets(vec![used_motif_run_config_id], None, None).await?[0].id;
 
         let label_run_config_id = store.save_run_config(None, &TrainLabelNetRunConfig::type_name(), "label", HashMap::new()).await?;
         store.save_trained_net(label_run_config_id, label_path, 0.01, Some(vec![used_motif_id])).await?;

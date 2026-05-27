@@ -787,7 +787,7 @@ mod tests {
     use thoosa_shared::mono_key;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_store::MockStoreBuilder;
+    use thoosa_store::{MockStoreBuilder, TrainedNet};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_motif_nets::motif_test_net_;
     use thoosa_common::dims::ChannelsData;
@@ -960,8 +960,8 @@ mod tests {
             ])
             .with_list_trained_nets([
                 (vec![select_motifs_run_config_id], Some(0.3), Some(3), Ok(vec![
-                    (0, PathBuf::new(), 0.1f32),
-                    (0, PathBuf::new(), 0.2f32),
+                    TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: PathBuf::new(), loss: 0.1f32 },
+                    TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: PathBuf::new(), loss: 0.2f32 },
                 ])),
             ])
             .build());

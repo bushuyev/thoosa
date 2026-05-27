@@ -87,11 +87,11 @@ where
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
                 assert_eq!(label_nets.len(), 1); //for now there is always single net for run_config_id
-                let (label_net_id, label_net_path, label_net_loss) = &label_nets[0];
+                let label_net = &label_nets[0];
 
-                let motif_net_run_config_ids = store.list_input_nets(*label_net_id).await?;
+                let motif_net_run_config_ids = store.list_input_nets(label_net.id).await?;
 
-                debug!("ApplyLabelNets::new: label_net_id={label_net_id}  motif_net_ids={motif_net_run_config_ids:?}");
+                debug!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
 
                 if motif_net_run_config_ids.is_empty() {
                     warn!("no motifs for train_label_net_run_config_id={train_label_net_run_config_id}");
@@ -413,7 +413,7 @@ mod tests {
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_store::{MockStoreBuilder, RunConfigRow};
+    use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::{logit, sigmoid, ApplyLabelNets};
     use thoosa_common::dims::ChannelsData;
@@ -693,7 +693,7 @@ mod tests {
                     vec![label.train_run_config_id],
                     None,
                     None,
-                    Ok(vec![(label.trained_net_id, label.path.clone(), label.loss)]),
+                    Ok(vec![TrainedNet { id: label.trained_net_id, run_config_id: label.train_run_config_id, net_path: label.path.clone(), loss: label.loss }]),
                 )
             })
             .collect::<Vec<_>>();
@@ -704,7 +704,7 @@ mod tests {
             }
             let trained_nets = motif_nets_for_run_config_ids(motifs, &label.motif_run_config_ids)
                 .into_iter()
-                .map(|motif| (motif.trained_net_id, motif.path.clone(), motif.loss))
+                .map(|motif| TrainedNet { id: motif.trained_net_id, run_config_id: motif.train_run_config_id, net_path: motif.path.clone(), loss: motif.loss })
                 .collect::<Vec<_>>();
             list_trained_nets.push((label.motif_run_config_ids.clone(), None, None, Ok(trained_nets)));
             seen_motif_run_sets.push(label.motif_run_config_ids.clone());
