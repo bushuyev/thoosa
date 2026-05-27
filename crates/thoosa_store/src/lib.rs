@@ -117,6 +117,14 @@ pub struct TrainedNetEntry {
     pub net_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrainedNet {
+    pub id: u32,
+    pub run_config_id: RunConfigId,
+    pub net_path: PathBuf,
+    pub loss: f32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RunConfigFilter {
     pub id: Option<RunConfigId>,
@@ -311,7 +319,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
 
-    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
     async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
     async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
@@ -531,7 +539,7 @@ mock! {
             run_config_ids: Vec<RunConfigId>,
             loss: Option<f32>,
             limit: Option<usize>,
-        ) -> Result<Vec<(u32, PathBuf, f32)>, ThoError>;
+        ) -> Result<Vec<TrainedNet>, ThoError>;
         async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_label_trained_nets_before(&self, run_on_before: String) -> Result<Vec<TrainedNetEntry>, ThoError>;
         async fn list_label_trained_nets_loss_gt(&self, loss: f32) -> Result<Vec<TrainedNetEntry>, ThoError>;
@@ -2313,7 +2321,7 @@ impl Store for SqlStore {
         .await
     }
 
-    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<(u32, PathBuf, f32)>, ThoError> {
+    async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError> {
         self.with_reader_conn("list_trained_nets", move |conn| {
             if run_config_ids.is_empty() {
                 return Ok(Vec::new());
@@ -2322,7 +2330,7 @@ impl Store for SqlStore {
             let trained_nets = {
                 let run_config_ids_clause = run_config_ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
                 let query = [
-                    "SELECT id, net_path, loss FROM trained_nets WHERE run_config_id IN (",
+                    "SELECT id, run_config_id, net_path, loss FROM trained_nets WHERE run_config_id IN (",
                     &run_config_ids_clause,
                     ")",
                     if loss.is_some() { " AND loss < ?" } else { "" },
@@ -2343,11 +2351,12 @@ impl Store for SqlStore {
 
                 let mut stmt = conn.prepare(&query)?;
                 stmt.query_map(rusqlite::params_from_iter(params.into_iter()), |row| {
-                    Ok((
-                        row.get::<usize, u32>(0)?,
-                        PathBuf::from(row.get::<usize, String>(1)?),
-                        row.get::<usize, f32>(2)?
-                    ))
+                    Ok(TrainedNet {
+                        id: row.get::<usize, u32>(0)?,
+                        run_config_id: row.get::<usize, RunConfigId>(1)?,
+                        net_path: PathBuf::from(row.get::<usize, String>(2)?),
+                        loss: row.get::<usize, f32>(3)?,
+                    })
                 })?
                 .map(|v| v.unwrap())
                 .collect::<Vec<_>>()
@@ -5130,26 +5139,28 @@ mod store_tests {
 
         let selected = store.list_trained_nets(vec![run_config_id], None, None).await?;
         assert_eq!(105, selected.len());
-        assert_eq!(PathBuf::from("nets/000"), selected[0].1);
-        assert_eq!(0.0, selected[0].2);
-        assert_eq!(PathBuf::from("nets/104"), selected[104].1);
-        assert_eq!(104.0, selected[104].2);
+        assert_eq!(run_config_id, selected[0].run_config_id);
+        assert_eq!(PathBuf::from("nets/000"), selected[0].net_path);
+        assert_eq!(0.0, selected[0].loss);
+        assert_eq!(run_config_id, selected[104].run_config_id);
+        assert_eq!(PathBuf::from("nets/104"), selected[104].net_path);
+        assert_eq!(104.0, selected[104].loss);
 
         let limited = store.list_trained_nets(vec![run_config_id], None, Some(3)).await?;
         assert_eq!(3, limited.len());
-        assert_eq!(PathBuf::from("nets/000"), limited[0].1);
-        assert_eq!(PathBuf::from("nets/001"), limited[1].1);
-        assert_eq!(PathBuf::from("nets/002"), limited[2].1);
+        assert_eq!(PathBuf::from("nets/000"), limited[0].net_path);
+        assert_eq!(PathBuf::from("nets/001"), limited[1].net_path);
+        assert_eq!(PathBuf::from("nets/002"), limited[2].net_path);
 
         let filtered = store.list_trained_nets(vec![run_config_id], Some(15.0), None).await?;
         assert_eq!(15, filtered.len());
-        assert_eq!(PathBuf::from("nets/000"), filtered[0].1);
-        assert_eq!(PathBuf::from("nets/014"), filtered[14].1);
+        assert_eq!(PathBuf::from("nets/000"), filtered[0].net_path);
+        assert_eq!(PathBuf::from("nets/014"), filtered[14].net_path);
 
         let filtered_limited = store.list_trained_nets(vec![run_config_id], Some(15.0), Some(5)).await?;
         assert_eq!(5, filtered_limited.len());
-        assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].1);
-        assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].1);
+        assert_eq!(PathBuf::from("nets/000"), filtered_limited[0].net_path);
+        assert_eq!(PathBuf::from("nets/004"), filtered_limited[4].net_path);
 
         let second_run_config_id = store.save_run_config(
             None,
@@ -5160,8 +5171,10 @@ mod store_tests {
         store.save_trained_net(second_run_config_id, PathBuf::from("nets/second"), 0.5, None).await?;
         let multi_run = store.list_trained_nets(vec![run_config_id, second_run_config_id], Some(1.0), None).await?;
         assert_eq!(2, multi_run.len());
-        assert_eq!(PathBuf::from("nets/000"), multi_run[0].1);
-        assert_eq!(PathBuf::from("nets/second"), multi_run[1].1);
+        assert_eq!(run_config_id, multi_run[0].run_config_id);
+        assert_eq!(PathBuf::from("nets/000"), multi_run[0].net_path);
+        assert_eq!(second_run_config_id, multi_run[1].run_config_id);
+        assert_eq!(PathBuf::from("nets/second"), multi_run[1].net_path);
 
         let empty_run_config_ids = store.list_trained_nets(vec![], None, None).await?;
         assert!(empty_run_config_ids.is_empty());
@@ -6157,7 +6170,7 @@ impl MockStoreBuilder {
         inputs: I,
     ) -> Self
     where
-        I: IntoIterator<Item = (Vec<RunConfigId>, Option<f32>, Option<usize>, Result<Vec<(u32, PathBuf, f32)>, ThoError>)> + Debug,
+        I: IntoIterator<Item = (Vec<RunConfigId>, Option<f32>, Option<usize>, Result<Vec<TrainedNet>, ThoError>)> + Debug,
     {
         let data = inputs.into_iter().collect::<Vec<_>>();
         debug!("with_list_trained_nets: inputs={data:?}");
