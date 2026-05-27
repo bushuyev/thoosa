@@ -222,6 +222,7 @@ impl MyCosineConv2d {
         a: f64,
         b: f64,
     ) -> Result<Self, ThoError> {
+        debug!("MyCosineConv2d::new: init_patches={init_patches:?} kh={kh} kw={kw} a={a} b={b}");
         let kernel = match init_patches {
             None => {
                 vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
@@ -237,6 +238,7 @@ impl MyCosineConv2d {
                 // }
                 let kh_freq = psz[2];//frequencies
                 let kw_time = psz[3];//time
+                debug!("MyCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
 
                 // Simple mean prototype. You can replace this with your
                 // existing Mean / Median / TrimmedMean / CenteredL2NormalizedMean logic.
@@ -368,14 +370,18 @@ impl MyCosineConv2d {
     /// Returns:
     ///     [B,1]
     pub fn forward(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+        debug!("MyCosineConv2d::forward: x={x:?}");
         let y = self.forward_map(x)?; // [B,1,H_out,W_out]
+        debug!("MyCosineConv2d::forward: y={y:?}");
+
         let sz = y.size();
 
         if sz[2] != 1 || sz[3] != 1 {
             return Err(ThoError::new(format!("MyCosineConv2d::forward expects full-size match with output [B,1,1,1], got {sz:?}. Use forward_map or forward_anywhere instead.")));
         }
 
-        Ok(y.f_squeeze_dim(3)?.f_squeeze_dim(2)?) // [B,1]
+        Ok(y.view((x.size()[0], -1))) // [B,1]
+        // Ok(y.f_squeeze_dim(3)?.f_squeeze_dim(2)?) // [B,1]
     }
 
     /// Position-independent detection.
@@ -402,7 +408,7 @@ impl<DI: Dims, DO: Dims> ThoModule<DI, DO> for MyCosineConv2d {
     fn tho_forward(&self, x_in: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, _train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
         debug!("MyCosineConv2d::tho_forward: x_in={x_in:?}");
 
-        let y = self.forward(x_in.as_ref())?; // [B,1,1,1] if full match
+        let y = self.forward_anywhere(x_in.as_ref())?; // [B,1,1,1] if full match
         debug!("MyCosineConv2d::tho_forward: y={y:?}");
 
         Ok(y.into()) //.f_squeeze_dim(3)?.f_squeeze_dim(2)?.into())

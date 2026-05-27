@@ -1228,8 +1228,9 @@ pub fn cosine_2d_motif_node(params: &MotifCosine2dNetParams, motif: Option<Arc<T
 
 
     let params =  MotifCosine2dNetParams{
-        kw_time: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
         kh_freq: motif.as_ref().map(|v|v.as_ref().as_ref().size()[1] as u32).unwrap_or(params.kh_freq),//freq
+        kw_time: motif.as_ref().map(|v|v.as_ref().as_ref().size()[2] as u32).unwrap_or(params.kw_time),//time
+
         ..params.clone()
     };
 

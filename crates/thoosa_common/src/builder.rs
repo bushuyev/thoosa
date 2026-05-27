@@ -305,8 +305,8 @@ impl Node {
                 init_mode
             } => Box::new(MyCosineConv2d::new(
                 &(vs / path),
-                kw_time,
                 kh_freq,
+                kw_time,
                 init,
                 // init_mode,
                 a, b,
