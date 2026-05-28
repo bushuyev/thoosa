@@ -402,7 +402,7 @@ mod tests {
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::my_tch::{MyClosureModule, ThoModule};
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{LinLenNetParams, LabelNetParams, LabelNetTypeParams, MotifNetParams, ThoModuleWithStore};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, LinLenNetParams, LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -709,6 +709,25 @@ mod tests {
             list_trained_nets.push((label.motif_run_config_ids.clone(), None, None, Ok(trained_nets)));
             seen_motif_run_sets.push(label.motif_run_config_ids.clone());
         }
+        let mut run_config_values = HashMap::from([(
+            find_motifs_run_config_id,
+            Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
+        )]);
+        for motif in motifs {
+            run_config_values.insert(
+                motif.train_run_config_id,
+                Ok(TrainMotifNetRunConfig::new(
+                    Some(motif.train_run_config_id),
+                    CommonTrainingRunConfig::default(),
+                    MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs{
+                        a: 10.0,
+                        b: 0.0,
+                        init_mode: Default::default(),
+                        stft_config: Default::default(),
+                    }),
+                ).to_properties_iter(None).collect()),
+            );
+        }
 
         let store = Arc::new(
             MockStoreBuilder::new()
@@ -727,10 +746,7 @@ mod tests {
                         .map(|motif| (motif.motif_id, Ok((motif.channel as usize, find_motifs_run_config_id))))
                         .collect::<HashMap<_, _>>(),
                 )
-                .with_list_run_config_values(
-                    find_motifs_run_config_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
-                )
+                .with_list_run_config_values(run_config_values)
                 .with_list_trained_nets(list_trained_nets)
                 .with_list_input_nets(
                     labels

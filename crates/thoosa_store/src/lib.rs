@@ -6207,14 +6207,16 @@ impl MockStoreBuilder {
         self
     }
 
-    pub fn with_list_run_config_values(mut self, run_config_id: RunConfigId, r:Result<HashMap<String, Val>, ThoError>) -> Self {
+    pub fn with_list_run_config_values<R: Into<HashMap<RunConfigId, Result<HashMap<String, Val>, ThoError>>>>(
+        mut self,
+        results: R,
+    ) -> Self {
+        let map = results.into();
         self.store.expect_list_run_config_values()
             .returning(move |p_run_config_id| {
-                if p_run_config_id == run_config_id {
-                    r.clone()
-                } else {
-                    Err(ThoError::new("Not found"))
-                }
+                map.get(&p_run_config_id)
+                    .cloned()
+                    .expect(&format!("mock is not configured to return run config values for run id {p_run_config_id}"))
             });
 
         self

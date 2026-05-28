@@ -611,10 +611,10 @@ pub mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_motifs([
                     (find_motifs_run_config_id as RunConfigId, Ok(channel_0_motifs_ids.clone()))
                 ])
@@ -688,10 +688,10 @@ pub mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_motifs([
                     (find_motifs_run_config_id as RunConfigId, Ok(channel_0_motifs_ids.clone()))
                 ])
@@ -766,10 +766,10 @@ pub mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_motifs([
                     (find_motifs_run_config_id as RunConfigId, Ok(motifs_ids.clone()))
                 ])
@@ -906,10 +906,10 @@ pub mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(find_motifs_run_config_id)])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_motifs([
                     (find_motifs_run_config_id as RunConfigId, Ok(vec![
                         channel_0_motif_0,
@@ -1642,10 +1642,10 @@ pub mod tests {
         let mut store = Arc::new(
             MockStoreBuilder::new()
                 .with_run_config_descr([find_motifs_run_config_descr(run_config_id)])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 10, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_motifs([
                     (find_motifs_run_config_id as RunConfigId, Ok(motif_ids.clone()))
                 ])

@@ -534,10 +534,10 @@ mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     0,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(0), 10, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_output_run_config_ids([(train_label_nets_run_config_id, Ok(vec![100, 200]))])
                 .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
                 .build(),

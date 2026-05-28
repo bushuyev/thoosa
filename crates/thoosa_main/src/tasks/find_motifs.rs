@@ -659,10 +659,10 @@ mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 1, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_group_labeled_resources_sets([
                     (resources_group, Ok(vec![
                         ("X".to_string(), "set".to_string()),
