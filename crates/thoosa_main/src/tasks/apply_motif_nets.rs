@@ -610,17 +610,15 @@ where
 #[derive(Debug)]
 pub struct BatchAppliedMotifNetsInput {
     id: SynKey,
-    len: usize,
     device_idx: usize,
     motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>,
 
 }
 
 impl BatchAppliedMotifNetsInput {
-    fn new(id: SynKey, motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>, len: usize, device_idx: usize) -> Self {
+    pub fn new(id: SynKey, motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>, device_idx: usize) -> Self {
         Self {
             id,
-            len,
             device_idx,
             motif_nets_applied,
         }
@@ -706,11 +704,11 @@ impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
             match tmp_cache.take_all_recovering(device_idx).await {
                 Ok(motif_nets_applied) => {
                     let len = motif_nets_applied.len();
-                    do_run(BatchAppliedMotifNetsInput::new(id, motif_nets_applied, len, device_idx), ctx)
+                    do_run(BatchAppliedMotifNetsInput::new(id, motif_nets_applied, device_idx), ctx)
                 }
                 Err(err) => {
                     let len = err.data.len();
-                    let input = BatchAppliedMotifNetsInput::new(id, err.data, len, device_idx);
+                    let input = BatchAppliedMotifNetsInput::new(id, err.data, device_idx);
                     ConsumeResult::Failed {
                         input,
                         error: err.error,
@@ -1362,7 +1360,7 @@ pub(crate) mod tests {
         apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
-    pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
+    pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig/*shouldn't be here, needed only for cosine 2d*/, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
     where
         for <'a> A:AsyncStage<In<'a>=ThoTensor<ChannelsData, SynKey>, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=MockRunCtx>,
         F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn Store>>) -> Result<Arc<A>, ThoError>,
@@ -1420,7 +1418,7 @@ pub(crate) mod tests {
                         a: 10.0,
                         b: 0.0,
                         init_mode: Default::default(),
-                        stft_config: stft_config,
+                        stft_config,
                     })).to_properties_iter(None).collect())),
                 ])
                 .with_get_input_run_config_ids([
