@@ -565,7 +565,7 @@ where
 
 
 
-        let batch_input = TmpCacheWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
+        let batch_input = BatchAppliedMotifNetsInputWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
         let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
@@ -608,7 +608,7 @@ where
 }
 
 #[derive(Debug)]
-struct BatchAppliedMotifNetsInput {
+pub struct BatchAppliedMotifNetsInput {
     id: SynKey,
     len: usize,
     device_idx: usize,
@@ -666,18 +666,18 @@ impl Adjustable for BatchAppliedMotifNetsInput {}
 
 //to avoid Only traits defined in the current crate can be implemented for arbitrary types [E0117]
 #[derive(Debug)]
-struct TmpCacheWrapper {
+struct BatchAppliedMotifNetsInputWrapper {
     id:SynKey,
     tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>
 }
 
-impl TmpCacheWrapper {
+impl BatchAppliedMotifNetsInputWrapper {
     pub fn new(tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>) -> Self {
         Self { id: SynKey::new(vec![/*todo*/]), tmp_cache }
     }
 }
 
-impl WithId for TmpCacheWrapper {
+impl WithId for BatchAppliedMotifNetsInputWrapper {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -685,7 +685,7 @@ impl WithId for TmpCacheWrapper {
     }
 }
 
-impl ConsumeData for TmpCacheWrapper {
+impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
     type O = BatchAppliedMotifNetsInput;
 
     fn consume<R: Send, F, P>(
@@ -700,7 +700,7 @@ impl ConsumeData for TmpCacheWrapper {
         P: RunCtx,
     {
         async move {
-            let TmpCacheWrapper { id, tmp_cache } = self;
+            let BatchAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
             let device_idx = ctx.device_idx();
 
             match tmp_cache.take_all_recovering(device_idx).await {
@@ -728,14 +728,14 @@ impl ConsumeData for TmpCacheWrapper {
             for x in o.motif_nets_applied {
                 cache.insert(x);
             }
-            TmpCacheWrapper::new(cache)
+            BatchAppliedMotifNetsInputWrapper::new(cache)
         }
     }
 }
 
 
 #[derive(Debug, Named)]
-struct BatchAppliedMotifNets<C>
+pub struct BatchAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -747,7 +747,7 @@ impl<C> BatchAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn new(id: SynKey) -> Self {
+    pub fn new(id: SynKey) -> Self {
         Self {
             id,
             pd: PhantomData,
@@ -788,8 +788,7 @@ where
         let input_id = input.id().clone();
         let mut motif_nets_applied = std::mem::take(&mut input.motif_nets_applied);
 
-
-        debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?}", motif_nets_applied.len(), input_id);
+        debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len(), input_id);
 
         motif_nets_applied.sort_by(|a,b|a.id().partial_cmp(&b.id()).unwrap_or(Ordering::Equal));
 
@@ -806,8 +805,6 @@ where
         if unique_motif_nets_applied_lens.len() > 1 {
             debug!("BatchAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
         }
-
-        trace!("BatchAppliedMotifNets::consume: motif_nets_applied={motif_nets_applied:?}");
 
         // TODO(perf): this pads and copies each motif-net output row by row; batch padding/stretching into a stack/cat operation would reduce tensor indexing overhead for large net counts.
         let res_t = match Tensor::f_zeros([motif_nets_applied.len() as i64, max_match_len], output_options) {
@@ -1141,11 +1138,12 @@ where
     let slices = t.f_unfold(0, motif_width, slice_step as i64)?;
     debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} slices={slices:?}");
 
-    let stft_slices = stft.unwrap().build_spectrogram(&slices.totype(Float))?;
-
-    debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} stft_slices={stft_slices:?}");
-
-    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(stft_slices); //.f_totype(Float)?
+    // let stft_slices = stft.unwrap().build_spectrogram(&slices.totype(Float))?;
+    //
+    // debug!("ApplyMotifNet::do_run: 2_1 motif_id={motif_id} stft_slices={stft_slices:?}");
+    //
+    // let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(stft_slices); //.f_totype(Float)?
+    let slices_tensor = ThoTensor::<Batch<Slice>, SimpleId>::from(slices);
     let out = motif_net.data().tho_forward(&slices_tensor, None, false)?;
     debug!("ApplyMotifNet::do_run: 2_2 motif_id={motif_id} out.size={:?}", out.size());
 
@@ -1306,7 +1304,7 @@ pub(crate) mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::{Workspace, WsMockBuilder};
     use thoosa_properties_map::ToHashmap;
@@ -1420,7 +1418,15 @@ pub(crate) mod tests {
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
                 )
-
+                .with_list_run_config_values(
+                    train_motifs_run_config_id,
+                    Ok(TrainMotifNetRunConfig::new(Some(train_motifs_run_config_id), CommonTrainingRunConfig::new(10, 2, 0.1), MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs{
+                        a: 10.0,
+                        b: 0.0,
+                        init_mode: Default::default(),
+                        stft_config: Default::default(),
+                    })).to_properties_iter(None).collect()),
+                )
                 .with_get_input_run_config_ids([
                     (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
                     (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))
@@ -1441,9 +1447,9 @@ pub(crate) mod tests {
                 ])
                 .with_list_trained_nets([
                     (vec![select_motifs_run_config_id], Some(0.3), None, Ok(vec![
-                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
-                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
-                        TrainedNet { id: 0, run_config_id: select_motifs_run_config_id, net_path: net_id_1_0.clone(), loss: 0.25f32 },
+                        TrainedNet { id: 0, run_config_id: train_motifs_run_config_id, net_path: net_id_0_0.clone(), loss: 0.1f32 },
+                        TrainedNet { id: 1, run_config_id: train_motifs_run_config_id, net_path: net_id_0_1.clone(), loss: 0.2f32 },
+                        TrainedNet { id: 2, run_config_id: train_motifs_run_config_id, net_path: net_id_1_0.clone(), loss: 0.25f32 },
                     ]))
                 ])
                 .build()

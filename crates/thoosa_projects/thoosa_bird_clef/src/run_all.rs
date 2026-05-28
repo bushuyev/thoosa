@@ -242,12 +242,14 @@ pub(crate) async fn run_all(
                         )/*.check(&store).await?*/));
 
                          let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(3));
-                        let limit = combo_sets.len().min(20);//TODO ..100
+                        let limit = combo_sets.len().min(1);//TODO ..100
 
                         let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
                         let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 1);
                         let best_min_loss = Arc::new(RwLock::new(f32::MAX));
                         for train_motif_net_run_config_ids_combo in train_motif_net_run_config_ids_combos {
+                            debug!("run_all: train_motif_net_run_config_ids_combo={train_motif_net_run_config_ids_combo:?}");
+
                             let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
                             let train_labels_input = Arc::clone(&train_labels_input);
                             let train_motif_net_run_config_ids = train_motif_net_run_config_ids.clone();
