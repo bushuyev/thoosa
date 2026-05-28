@@ -29,6 +29,7 @@ use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
+use crate::tasks::apply_motif_nets::BatchAppliedMotifNets;
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
@@ -86,7 +87,7 @@ where
     where
         R:RunCtx + Adjustable + 'static
     {
-
+        debug!("ApplyMotifNets::new: train_motif_net_run_config_ids={train_motif_net_run_config_ids:?} trained_nets_limit={trained_nets_limit:?} quantize={quantize} slice_step={slice_step}");
 
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
@@ -150,7 +151,7 @@ where
 
                     match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).await {
                         Ok(net) => {
-                            debug!("ApplyMotifNets::new: loaded net={net:?}");
+
 
                             let (hash_value, config) = net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, ctx|{
                                 let channel = module_with_store.extra().channel();
@@ -158,6 +159,9 @@ where
 
                                 let mut write_guard = channels_widths_net_tensors.write();
                                 let hash_value = stft_config.hash_value();
+
+                                debug!("ApplyMotifNets::new: loaded module_with_store={module_with_store:?} hash_value={hash_value:?}");
+
                                 let vecs = write_guard.entry((channel, motif_width, hash_value)).or_insert((vec![], vec![], vec![]));
 
                                 extract_cosine_conv_2d_once_(&mut vecs.0, &mut vecs.1, &mut vecs.2, module_with_store.data().module());
@@ -238,10 +242,6 @@ where
         let self_clone = Arc::clone(&self);
         async move {
 
-
-
-
-
             let res = with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
                 debug!("ApplyMotifNetsMerged::run: input={input:?}");
                 let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
@@ -274,6 +274,9 @@ where
 
                 Ok(motifs_applied)
             })?;
+
+            //TODO stretch motifs in BatchAppliedMotifNets
+            let batch = BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into());
 
             Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), Tensor::concat(res.as_slice(), 1).squeeze_dim(2))?, vec![]))))
         }
