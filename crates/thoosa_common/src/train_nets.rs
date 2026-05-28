@@ -4114,6 +4114,6 @@ impl StftRunConfig {
 
 impl Default for StftRunConfig {
     fn default() -> Self {
-        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(16000), normalized: false, onesided: true, align_to_window: true }
+        Self { n_fft: 16000, hop_length: Some(4000), win_length: Some(4000), normalized: false, onesided: true, align_to_window: true }
     }
 }
