@@ -1063,14 +1063,14 @@ mod tests {
 
         assert!(ws.store_path().ends_with("main_db.db3"));
 
-        ws.save_motif_net(&0, &0, &0, &VarStore::new(Cpu), &MotifNetParams::new(10, 1, 1, 100, 32, 10))?;
-        ws.save_motif_net(&1, &1, &0, &VarStore::new(Cpu), &MotifNetParams::new(20, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&0, &0, &0, &VarStore::new(Cpu), &MotifNetParams::new_conv(10, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &1, &0, &VarStore::new(Cpu), &MotifNetParams::new_conv(20, 1, 1, 100, 32, 10))?;
 
-        ws.save_motif_net(&1, &2, &2, &VarStore::new(Cpu), &MotifNetParams::new(30, 1, 1, 100, 32, 10))?;
-        ws.save_motif_net(&1, &3, &2, &VarStore::new(Cpu), &MotifNetParams::new(40, 1, 1, 100, 32, 10))?;
-        ws.save_motif_net(&1, &4, &2, &VarStore::new(Cpu), &MotifNetParams::new(50, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &2, &2, &VarStore::new(Cpu), &MotifNetParams::new_conv(30, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &3, &2, &VarStore::new(Cpu), &MotifNetParams::new_conv(40, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &4, &2, &VarStore::new(Cpu), &MotifNetParams::new_conv(50, 1, 1, 100, 32, 10))?;
 
-        ws.save_motif_net(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new(50, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new_conv(50, 1, 1, 100, 32, 10))?;
 
         let models = ws.motif_models(0, 0)?;
 

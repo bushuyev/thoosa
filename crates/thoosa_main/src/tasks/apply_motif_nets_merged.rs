@@ -246,9 +246,10 @@ where
                 debug!("ApplyMotifNetsMerged::run: input={input:?}");
                 let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
 
-                    debug!("ApplyMotifNetsMerged::run: tensors={tensors:?}");
+                    debug!("ApplyMotifNetsMerged::run: tensors={tensors:?} slice_step={}", self_clone.slice_step);
 
-                    let stft = SyncStft::<C>::new("".into(), self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap().clone());
+                    let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
+                    let stft = SyncStft::<C>::new("".into(), stft_config.clone());
 
                     let t = input.t.f_i((tensors.channel as i64, ..))?;
                     let t = if t.size()[0] >= tensors.motif_width as i64 {
@@ -261,10 +262,18 @@ where
                         &t
                     )?;
 
-                    debug!("ApplyMotifNetsMerged::run: stft={stft:?}");
+                    debug!("ApplyMotifNetsMerged::run: stft_t={stft_t:?}");
+                    let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);
+                    let step = self_clone.slice_step as i64 /stft_config.hop_length.as_ref().map(|v|*v).unwrap_or(1);
+
+                    debug!("ApplyMotifNetsMerged::run: window={window} step={step}");
+                    //unfold time frames
+                    let stft_t = stft_t.unfold(1,window,step);
+
+                    debug!("ApplyMotifNetsMerged::run: unfolded stft_t={stft_t:?}");
 
                     apply_cosine_kernel_bank_to_batched_spectrogram(
-                       &stft_t.unfold(0, tensors.motif_width as i64, self_clone.slice_step as i64).unsqueeze(1),
+                       &stft_t.unsqueeze(1),
                        tensors.kernels.as_ref(),
                        tensors.a.as_ref(),
                        tensors.b.as_ref(),
@@ -424,7 +433,7 @@ mod tests {
     use thoosa_store::{SqlStore, Store};
     use crate::ApplyMotifNets;
     use crate::tasks::apply_motif_nets::dummy_motif_net;
-    use crate::tasks::apply_motif_nets::tests::test_apply_motif_nets_3_channels_2_motifs;
+    use crate::tasks::apply_motif_nets::tests::apply_motif_nets_3_channels_2_motifs;
     use crate::tasks::apply_motif_nets_merged::{apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d, ApplyMotifNetsMerged};
 
     #[ctor::ctor]
@@ -498,7 +507,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 5*32000, 10, 10, new_apply_motif_nets, cosine_2d_motif_node_, Default::default()).await
+        apply_motif_nets_3_channels_2_motifs(None, 5*32000, 4000, new_apply_motif_nets, cosine_2d_motif_node_, Default::default(), 40000, 32000).await
     }
 
     async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNetsMerged<MockRunCtx>>, ThoError> {
@@ -519,7 +528,6 @@ mod tests {
     pub fn cosine_2d_motif_node_(
         device: Device,
         motif_t: Arc<ThoTensor<Batch<Slice>, SynKey>>,
-        step: u32, kernel: u32,
     ) -> (
         Box<dyn Fn() -> MotifNetParams + Sync + Send>,
         Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>,
@@ -536,9 +544,9 @@ mod tests {
         };
         let net_type = MotifNetTypeParams::CosineNet2DParams(cosine2d_net_params.clone());
         let motif_init = Arc::new(ThoTensor::new("".into(), motif_t.as_ref().as_ref().stft(
-            50,
-            10,
-            20,
+            16000,
+            4000,
+            4000,
             None::<Tensor>,
             true,
             true,
