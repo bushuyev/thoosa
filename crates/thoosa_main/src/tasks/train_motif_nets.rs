@@ -881,10 +881,10 @@ mod tests {
         let motif_id = 10u32;
         let mut store = Arc::new(
             MockStoreBuilder::new()
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 50, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_run_config_descr([(
                     find_motifs_run_config_id,
                     Ok(RunConfigRow {

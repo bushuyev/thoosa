@@ -448,10 +448,10 @@ mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_run_config_id), 1, 3, None, Some(1.0)).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_list_motif_slices(1u32, Some(vec![select_run_config_id_0]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(1, 10), TensorIdSliceIdx(1, 20)], HashMap::new())))
                 .with_list_motif_slices(2u32, Some(vec![select_run_config_id_1]), None, None, Ok((0i64, find_run_config_id, vec![TensorIdSliceIdx(2, 30), TensorIdSliceIdx(2, 40)], HashMap::new())))
                 .with_save_groups_as_motifs(vec![CheckGroups::Lengths(vec![4])])

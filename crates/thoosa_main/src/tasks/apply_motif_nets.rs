@@ -1304,7 +1304,7 @@ pub(crate) mod tests {
     use thoosa_common::tch_test_utils;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::train_nets::{CommonTrainingRunConfig, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, lin_t, plot_series_with_lanes, reset_print_options, test_net, to_vec_f32};
     use thoosa_common::ws::{Workspace, WsMockBuilder};
     use thoosa_properties_map::ToHashmap;
@@ -1337,32 +1337,32 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 10, 10, new_apply_motif_nets, motif_test_net_).await?;
+        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 10, 10, new_apply_motif_nets, motif_test_net_).await
+        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10, new_apply_motif_nets, motif_test_net_).await
+        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
     }
 
-    pub async fn test_apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32, slice_step: u32, motif_net_fn: F, motif_net_fn_: MF) -> Result<(), ThoError>
+    pub async fn test_apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32, slice_step: u32, motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig) -> Result<(), ThoError>
     where
         for <'a> A:AsyncStage<In<'a>=ThoTensor<ChannelsData, SynKey>, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=MockRunCtx>,
         F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn Store>>) -> Result<Arc<A>, ThoError>,
@@ -1414,19 +1414,15 @@ pub(crate) mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_run_config_values(
-                    find_motifs_run_config_id,
-                    Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
-                )
-                .with_list_run_config_values(
-                    train_motifs_run_config_id,
-                    Ok(TrainMotifNetRunConfig::new(Some(train_motifs_run_config_id), CommonTrainingRunConfig::new(10, 2, 0.1), MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs{
+                .with_list_run_config_values([
+                    (find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect())),
+                    (train_motifs_run_config_id, Ok(TrainMotifNetRunConfig::new(Some(train_motifs_run_config_id), CommonTrainingRunConfig::new(10, 2, 0.1), MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs{
                         a: 10.0,
                         b: 0.0,
                         init_mode: Default::default(),
-                        stft_config: Default::default(),
-                    })).to_properties_iter(None).collect()),
-                )
+                        stft_config: stft_config,
+                    })).to_properties_iter(None).collect())),
+                ])
                 .with_get_input_run_config_ids([
                     (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
                     (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id]))
@@ -1581,10 +1577,10 @@ pub(crate) mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     find_motifs_run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
-                )
+                )])
                 .with_get_input_run_config_ids([
                     (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
                     (select_motifs_run_config_id, Ok(vec![find_motifs_run_config_id])),
@@ -1679,10 +1675,10 @@ pub(crate) mod tests {
                     run_on: "2026-01-01 00:00:00".to_string(),
                 }),
             )])
-            .with_list_run_config_values(
+            .with_list_run_config_values([(
                 find_motifs_run_config_id,
                 Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect()),
-            )
+            )])
 
             .with_get_input_run_config_ids([
                 (train_motifs_run_config_id, Ok(vec![select_motifs_run_config_id])),
