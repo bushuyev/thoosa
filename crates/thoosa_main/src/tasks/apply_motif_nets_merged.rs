@@ -282,9 +282,14 @@ where
                        tensors.b.as_ref(),
                        CosineConv2dBankConfig::default()
                     ).and_then(|v|{
-                        ThoTensor::<MotifProbability, SynKey>::new("".into(),v)
+                        let unbound = v.f_squeeze_dim(2)?.f_unbind(1)?;
+                        debug!("ApplyMotifNetsMerged::run: unbound={unbound:?}");
+                        unbound.into_iter().map(|v| ThoTensor::<MotifProbability, SynKey>::new("".into(), v)).collect::<Result<Vec<_>, ThoError>>()
                     })
-                }).collect::<Result<Vec<_>, ThoError>>()?;
+                }).collect::<Result<Vec<_>, ThoError>>()?
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<ThoTensor<MotifProbability, SynKey>>>();
 
                 debug!("ApplyMotifNetsMerged::run: motifs_applied={motifs_applied:?}");
 
