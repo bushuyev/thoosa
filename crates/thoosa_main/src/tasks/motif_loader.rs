@@ -1150,10 +1150,10 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                 }),
             )])
             .with_get_input_run_config_ids([(motif_source_run_config_id, Ok(vec![find_motifs_run_config_id]))])
-            .with_list_run_config_values(
+            .with_list_run_config_values([(
                 find_motifs_run_config_id,
                 Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 100, 100, None, None).to_properties_iter(None).collect())
-            )
+            )])
             .build();
 
         let motif_loader = Arc::new(MotifLoader::new(
@@ -1232,10 +1232,10 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
                     run_on: "2026-01-01 00:00:00".to_string(),
                 }),
             )])
-            .with_list_run_config_values(
+            .with_list_run_config_values([(
                 run_config_id,
                 Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 100, motif_width, None, None).to_properties_iter(None).collect())
-            )
+            )])
             .with_get_motif_meta( [(motif_id, Ok((0usize, run_config_id)))])
             .build();
 

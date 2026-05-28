@@ -1269,12 +1269,12 @@ mod tests {
                         run_on: "2026-01-01 00:00:00".to_string(),
                     }),
                 )])
-                .with_list_run_config_values(
+                .with_list_run_config_values([(
                     run_config_id,
                     Ok(FindMotifsRunConfig::new_with_running_mean(Some(run_config_id), 1, motif_width, None, None)
                         .to_properties_iter(None)
                         .collect()),
-                )
+                )])
                 .build(),
         );
 

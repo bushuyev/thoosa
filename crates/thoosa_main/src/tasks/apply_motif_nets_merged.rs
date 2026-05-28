@@ -258,11 +258,13 @@ where
                     };
 
                     let stft_t = stft.build_spectrogram(
-                        &t.unfold(0, tensors.motif_width as i64, self_clone.slice_step as i64)
+                        &t
                     )?;
 
+                    debug!("ApplyMotifNetsMerged::run: stft={stft:?}");
+
                     apply_cosine_kernel_bank_to_batched_spectrogram(
-                       &stft_t.unsqueeze(1),
+                       &stft_t.unfold(0, tensors.motif_width as i64, self_clone.slice_step as i64).unsqueeze(1),
                        tensors.kernels.as_ref(),
                        tensors.a.as_ref(),
                        tensors.b.as_ref(),
@@ -496,7 +498,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 5*32000, 10, 10, new_apply_motif_nets, cosine_2d_motif_node_).await
+        test_apply_motif_nets_3_channels_2_motifs(None, 5*32000, 10, 10, new_apply_motif_nets, cosine_2d_motif_node_, Default::default()).await
     }
 
     async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNetsMerged<MockRunCtx>>, ThoError> {
