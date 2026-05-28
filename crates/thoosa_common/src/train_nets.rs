@@ -813,6 +813,12 @@ pub struct TrainMotifNetRunConfig {
 
 }
 
+impl TrainMotifNetRunConfig {
+    pub fn new(id: Option<RunConfigId>, common_training_args: CommonTrainingRunConfig, net: MotifNetTypeArgs) -> Self {
+        Self { id, common_training_args, net }
+    }
+}
+
 impl AsRef<CommonTrainingRunConfig> for TrainMotifNetRunConfig {
     fn as_ref(&self) -> &CommonTrainingRunConfig {
         &self.common_training_args
