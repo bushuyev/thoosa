@@ -3709,7 +3709,7 @@ mod train_tests {
             &motif_node_params_run_config_id,
             &motif_id,
             &vs_0,
-            &MotifNetParams::new(100, 1, 1, 100, 32, 10),
+            &MotifNetParams::new_conv(100, 1, 1, 100, 32, 10),
         )?;
         Ok(())
     }

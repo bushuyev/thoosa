@@ -1337,36 +1337,36 @@ pub(crate) mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4000, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await?;
+        apply_motif_nets_3_channels_2_motifs(None, 4000, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await?;
 
         Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_without_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(None, 4321, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
+        apply_motif_nets_3_channels_2_motifs(None, 4321, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_1_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
+        apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_step_2_with_oom() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
+        apply_motif_nets_3_channels_2_motifs(Some(1000), 4000, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_apply_motif_nets_3_channels_2_motifs_with_oom_uneven() -> Result<(), ThoError> {
-        test_apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, 10, new_apply_motif_nets, motif_test_net_, Default::default()).await
+        apply_motif_nets_3_channels_2_motifs(Some(987), 4321, 10, new_apply_motif_nets, |device, motif, |motif_test_net_(device, motif, 10, 100), Default::default(), 100, 100).await
     }
 
-    pub async fn test_apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, step: u32, slice_step: u32, motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig) -> Result<(), ThoError>
+    pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
     where
         for <'a> A:AsyncStage<In<'a>=ThoTensor<ChannelsData, SynKey>, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=MockRunCtx>,
         F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn Store>>) -> Result<Arc<A>, ThoError>,
-        MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>, u32, u32) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
+        MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
     {
         thoosa_shared::test_utils::maybe_init_perf_tracing_stdout("debug");
         log::set_max_level(Debug);
@@ -1382,19 +1382,19 @@ pub(crate) mod tests {
         let motif_0_1_id = 1; //channel 0 motif 1
         let motif_1_0_id = 2; //channel 1 motif 0
 
-        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
-        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
-        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(100, 3, MotifKind::Sin).f_mul_scalar(0.2)?)?);
+        let motif_0_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, MotifKind::Pulse).f_mul_scalar(0.2)?)?);
+        let motif_0_1 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_0_1", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, MotifKind::Triangle).f_mul_scalar(0.2)?)?);
+        let motif_1_0 = Arc::new(ThoTensor::new(SynKey::new([mono_key!("motif_1_0", "motif_id")]), tch_test_utils::motifs_tensor_fixed(motif_len, 3, MotifKind::Sin).f_mul_scalar(0.2)?)?);
 
         let net_id_0_0 = PathBuf::from(format!("0/{}_{}", motif_0_0_id, train_motifs_run_config_id));
         let net_id_0_1 = PathBuf::from(format!("0/{}_{}", motif_0_1_id, train_motifs_run_config_id));
         let net_id_1_0 = PathBuf::from(format!("1/{}_{}", motif_1_0_id, train_motifs_run_config_id));
-        let (params_0_0, module_0_0) = motif_net_fn_(Cpu, Arc::clone(&motif_0_0), step, 100);
-        let (params_0_1, module_0_1) = motif_net_fn_(Cpu, Arc::clone(&motif_0_1), step, 100);
-        let (params_1_0, module_1_0) = motif_net_fn_(Cpu, Arc::clone(&motif_1_0), step, 100);
+        let (params_0_0, module_0_0) = motif_net_fn_(Cpu, Arc::clone(&motif_0_0));
+        let (params_0_1, module_0_1) = motif_net_fn_(Cpu, Arc::clone(&motif_0_1));
+        let (params_1_0, module_1_0) = motif_net_fn_(Cpu, Arc::clone(&motif_1_0));
 
         let ws = Arc::new(RwLock::new(
-            WsMockBuilder::new(None, 3, 100, input_n_0 as u32)
+            WsMockBuilder::new(None, 3, sample_rate, input_n_0 as u32)
                 .with_load_motif_net(vec![
                     (net_id_0_0.clone(), params_0_0, module_0_0),
                     (net_id_0_1.clone(), params_0_1, module_0_1),
@@ -1415,7 +1415,7 @@ pub(crate) mod tests {
                     }),
                 )])
                 .with_list_run_config_values([
-                    (find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), step, 100, None, None).to_properties_iter(None).collect())),
+                    (find_motifs_run_config_id, Ok(FindMotifsRunConfig::new_with_running_mean(Some(find_motifs_run_config_id), 0, motif_len as u32, None, None).to_properties_iter(None).collect())),
                     (train_motifs_run_config_id, Ok(TrainMotifNetRunConfig::new(Some(train_motifs_run_config_id), CommonTrainingRunConfig::new(10, 2, 0.1), MotifNetTypeArgs::Cosine2DNet(MotifCosine2DNetArgs{
                         a: 10.0,
                         b: 0.0,
@@ -1451,14 +1451,14 @@ pub(crate) mod tests {
                 .build()
         );
 
-        let apply_motif_nets = motif_net_fn(trigger_oom_len, slice_step, select_motifs_run_config_id, &ws, &mut store).await?;
+        let apply_motif_nets = apply_motif_net_fn(trigger_oom_len, apply_motif_net_step, select_motifs_run_config_id, &ws, &mut store).await?;
 
         let channels_patterns = vec![
             vec![motif_0_0.t_ref().i((0, ..)), motif_0_1.t_ref().i((0, ..))],
             vec![motif_1_0.t_ref().i((0, ..))],
             Vec::new(),
         ];
-        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 300, step as usize)?;
+        let (resource_a_t, resource_a_intervals) = tch_test_utils::resource_tensor_from_patterns(input_n_0, channels_patterns.as_slice(), 300, apply_motif_net_step as usize)?;
 
 
         debug!("test_apply_motif_nets_3_channels_1_motif: resource_a_t={resource_a_t:?}");// resource_b_t={resource_b_t:?} resource_c_t={resource_c_t:?}
@@ -1482,7 +1482,7 @@ pub(crate) mod tests {
         let sin_interval_starts_in_resources_a = resource_a_intervals[1][0][0].start;
 
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
-        let slices = ((input_n_0 as i64 - motif_width) / slice_step as i64) + 1;
+        let slices = ((input_n_0 as i64 - motif_width) / apply_motif_net_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
@@ -1493,9 +1493,9 @@ pub(crate) mod tests {
             let (triangle_matches_vals, triangle_matches_idx) = &r.data().t_ref().i((1, 0..slices)).topk(1i64, 0, true, true);
             let (sin_matches_vals, sin_matches_idx) = &r.data().t_ref().i((2, 0..slices)).topk(1i64, 0, true, true);
 
-            assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
-            assert_close(triangle_interval_starts_in_resources_a as f64, step as f64 * triangle_matches_idx.double_value(&[0]), step as f64 * 3.);
-            assert_close(sin_interval_starts_in_resources_a as f64, step as f64 * sin_matches_idx.double_value(&[0]), step as f64 * 3.);
+            assert_close(pulse_interval_starts_in_resources_a as f64, apply_motif_net_step as f64 * pulse_matches_idx.double_value(&[0]), apply_motif_net_step as f64 * 3.);
+            assert_close(triangle_interval_starts_in_resources_a as f64, apply_motif_net_step as f64 * triangle_matches_idx.double_value(&[0]), apply_motif_net_step as f64 * 3.);
+            assert_close(sin_interval_starts_in_resources_a as f64, apply_motif_net_step as f64 * sin_matches_idx.double_value(&[0]), apply_motif_net_step as f64 * 3.);
 
             Ok::<_, ThoError>(())
         })?;
