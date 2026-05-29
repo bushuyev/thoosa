@@ -134,7 +134,7 @@ where
         match self {
             Self::CrossLoader { cross_loader, .. } => Arc::clone(cross_loader).run(input, ctx).await,
             Self::Bucketing { bucketing_stage, .. } => {
-                let input = with_data!(ctx.branch(Some("find_motifs_bucketing_input"), false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
+                let input = with_data!(ctx.branch(false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
                     Ok::<_, ThoError>(BucketingInput::new(input.resources_config().clone()))
                 })?;
                 Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx).await?;
@@ -241,7 +241,7 @@ where
                 let loader = Arc::clone(&loader);
                 let motif_stats = Arc::clone(&motif_stats);
                 let run_config_id = run_config.id.expect("should be pre saved");
-                let mut ctx = init_ctx.branch(Some(&format!("init ctx for run_config {run_config_id}")), false);
+                let mut ctx = init_ctx.branch(false);
 
                 async move {
                     let ctx_id = ctx.id().clone();
@@ -287,7 +287,7 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(Some("cxt for avg_dists_arc"), true)).await?;
+                                    let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true)).await?;
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
@@ -504,7 +504,7 @@ where
             .map(|stage|{
                 info!("running find motifs on run config {:?}", stage.id());
 
-                let ctx_for_stage = ctx.branch(Some(&format!("find_motifs_for_rc_{}", stage.id())), true);
+                let ctx_for_stage = ctx.branch(true);
 
                 stage.run(Arc::clone(&input), ctx_for_stage)
             });
@@ -703,15 +703,15 @@ mod tests {
             ],
             FixedFindMotifsConfig::new(30000, false),
             ThoDevice::from(1),
-            ctx.branch(Some("init"), false)
+            ctx.branch(false)
         ).await.expect("FindMotifsStage::new failed in test"));
 
 
         let result = stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))))), ctx.branch(Some("run"), false),
+            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))))), ctx.branch(false),
         ).await?;
 
-        with_data!(ctx.branch(Some("check"), false), result; |ctx, result:&FindMotifsSavableResult|{
+        with_data!(ctx.branch(false), result; |ctx, result:&FindMotifsSavableResult|{
             debug!("result={result:?}");
             Ok::<_, ThoError>(())
         })?;

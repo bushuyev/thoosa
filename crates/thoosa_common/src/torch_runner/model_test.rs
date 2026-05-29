@@ -445,7 +445,7 @@ mod tests {
                 let feat = Arc::clone(&self.loader)
                     .run_cached(
                         new_file_input_cache(f, loader_device_idx),
-                        ctx.branch(Some(&format!("batch_builder_loader_{fi}")), false),
+                        ctx.branch(false),
                     )
                     .await?;
                 feats.push(feat);
@@ -460,7 +460,7 @@ mod tests {
             // Materialize all features to the target device and build a single stacked batch
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
 
-            let ctx_for_data = ctx.branch(Some("batch_builder_data"), false);
+            let ctx_for_data = ctx.branch(false);
             let output = with_data!(ctx_for_data, [feats];|_ctx, data:&[&ThoTensor<ABData, SimpleId>]|{
 
                 let ax_id = simple_id!(format!("ax_{}", input.id()));
@@ -796,7 +796,7 @@ mod tests {
 
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
-                .run_cached(Arc::clone(&input), ctx.branch(Some("join_and_classify_batch"), false))
+                .run_cached(Arc::clone(&input), ctx.branch(false))
                 .await?;
 
 
@@ -893,13 +893,13 @@ mod tests {
 
         let input_cache = new_file_list_input_cache(input, ctx.device_idx());
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch(Some("join_and_classify_cpu"), false))
+            .run_cached(input_cache, ctx.branch(false))
             .await?;
 
         debug!("acc={acc:?}");
 
         acc.with_data_ref(0,
-                          ctx.branch(Some("join_and_classify_cpu_data"), false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                   debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
                   // Dim impls are to define domain-specific operations on tensors
@@ -947,10 +947,10 @@ mod tests {
 
         let input_cache = new_file_list_input_cache(input, ctx.device_idx());
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch(Some("join_and_classify_cpu_many"), false))
+            .run_cached(input_cache, ctx.branch(false))
             .await?;
 
-        let ctx_for_data = ctx.branch(Some("join_and_classify_cpu_many_data"), false);
+        let ctx_for_data = ctx.branch(false);
         acc.with_data_ref(1,
                           ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);
@@ -1007,13 +1007,13 @@ mod tests {
         let input_cache = new_file_list_input_cache(input, ctx.device_idx());
 
         let acc = Arc::clone(&join_and_cls)
-            .run_cached(input_cache, ctx.branch(Some("join_and_classify_oom"), false))
+            .run_cached(input_cache, ctx.branch(false))
             .await?;
 
         // ctx.add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
-                          ctx.branch(Some("join_and_classify_oom_data"), false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
               debug!("acc={}", acc.t_ref());
 
               let v = ClsOut::accuracy(acc);

@@ -227,7 +227,7 @@ where
             .into_iter()
             .map(|find_motifs_run_config| {
                 let stacked_motifs_loader = Arc::clone(&stacked_motifs_loader);
-                let ctx_for_run = ctx_for_loader.branch(Some("select_motifs_stacked_motifs"), false);
+                let ctx_for_run = ctx_for_loader.branch(false);
 
                 async move {
                     let stacked_motifs_input = Arc::new(DevicesWrap::wrap(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?));
@@ -266,7 +266,7 @@ where
         mut ctx: C,
     ) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
         // TODO: move this into a dedicated stage and cache the resulting motifs stats separately from stacked motifs.
-        let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = with_data!(ctx.branch(Some("select_motifs_stacked_motifs_meta"), false), motif_data;
+        let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = with_data!(ctx.branch(false), motif_data;
             |_ctx, motif_data:&StackedMotifsOutput|{
                 let channels_motif_ids = motif_data.motifs.extra().0.clone();
                 let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
@@ -288,17 +288,17 @@ where
             .map(|motif_id| {
                 let load_and_clc_dist = Arc::clone(&load_and_clc_dist);
                 let slices_selector_metric = slices_selector_metric.clone();
-                let mut ctx_for_motif = ctx.branch(Some(format!("select_motifs_clc_stacked_motifs_statistics_motif_{motif_id}").as_str()), false);
+                let mut ctx_for_motif = ctx.branch(false);
                 async move {
                     let result = (async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
                         let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()])));
                         let motif_stat: f32 = load_and_clc_dist
-                            .run(clc_input, ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc"), false))
+                            .run(clc_input, ctx_for_motif.branch(false))
                             .await?
                             .with_data_ref(
                                 0,
-                                ctx_for_motif.branch(Some("select_motifs_clc_stacked_motifs_statistics_clc_with_data_ref"), false),
+                                ctx_for_motif.branch(false),
                                 None,
                                 |stats: &MotifStatsOutput, _ctx| stats.channel_value(&slices_selector_metric, 0),
                             )
@@ -388,7 +388,7 @@ where
         let run_configs__stacked_motifs = Self::load_stacked_motifs(
             &self.store,
             &self.stacked_motifs_loader,
-            ctx.branch("load_stacked_motifs".into(), true),
+            ctx.branch(true),
             &self.find_motifs_run_config_ids,
         )
             .await?;
@@ -409,7 +409,7 @@ where
                 let loader = Arc::clone(&self.loader);
                 let ws = Arc::clone(&self.ws);
                 let extend_motifs_run_config = extend_motifs_run_config.clone();
-                let mut ctx_to_move = ctx.branch(None, true);
+                let mut ctx_to_move = ctx.branch(true);
                 let clc_dist = Arc::clone(&self.motif_stats);
                 let slices_selector_metric = slices_selector_metric.clone();
                 let run_configs__stacked_motifs_dbg = run_configs__stacked_motifs_dbg;
@@ -420,7 +420,7 @@ where
                             clc_dist,
                             Arc::clone(&motif_data),
                             slices_selector_metric.clone(),
-                            ctx_to_move.branch("clc_stacked_motifs_statistics".into(), false),
+                            ctx_to_move.branch(false),
                         )
                             .await?;
                         Self::extend_with_one_find_run(
@@ -435,7 +435,7 @@ where
                             channels_motifs_added_slices,
                             100000, //TODO to FixedExtenMotifsCOnfig
                             total_size,
-                            ctx_to_move.branch("extend_with_one_find_run".into(), false),
+                            ctx_to_move.branch(false),
                         )
                             .await
                     })
@@ -491,7 +491,7 @@ where
             let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws)?;
 
             let t_0 = Arc::clone(&configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.clone())), ctx.branch(Some("select_motifs_loader"), false))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.clone())), ctx.branch(false))
                 .await?;
 
             t_1_batch_dim_0_size += t_0.size().dim_1();
@@ -542,7 +542,7 @@ where
                 .run(
                     &clc_resources_motifs_dist,
                     Arc::clone(&clc_resources_input),
-                    ctx.branch(Some("select_motifs_clc_resources"), false),
+                    ctx.branch(false),
                     Contexts::new(
                         SelectMotifsSplitterContext::new(
                             t_1_batch_len as i64,
@@ -688,7 +688,7 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("ExtendMotifsStage::run: input={input:?}");
 
-        let resources_config = with_data!(ctx.branch("extend_motifs_load_resources_for_selection".into(), false), input; |_ctx, input: &ExtendMotifsInput| {
+        let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ExtendMotifsInput| {
             Ok::<_, ThoError>(input.resources_input().resources_config().clone())
         })?;
         let resources = Arc::new(resources_config.to_resources(&self.store).await?);
@@ -702,14 +702,14 @@ where
         let futures = self.run_configs.iter().map(|extend_motifs_run_config| {
             let self_for_fut = Arc::clone(&self);
             let resources_for_fut = Arc::clone(&resources);
-            let mut ctx_for_fut = ctx.branch("ExtendMotifsStage::run, run_configs_futures_cycle".into(), false);
+            let mut ctx_for_fut = ctx.branch(false);
             async move {
                 let channels_motifs_added_slices = self_for_fut.extend_motifs_for_run_config(
                     extend_motifs_run_config,
                     resources_for_fut,
                     num_channels,
                     total_size,
-                    ctx_for_fut.branch("extend_motifs_for_run_config".into(), false),
+                    ctx_for_fut.branch(false),
                 ).await?;
                 debug!("ExtendMotifsStage::run: extend_motifs_for_run_config done");
                 let extend_motifs_run_config_id = extend_motifs_run_config.id.expect("no extend_motifs_run_config_id");
@@ -841,7 +841,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                     let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
                     let channels = t.size().dim_0();
                     let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                    let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(Some("select_motifs_input_selected_slice"), false), selector, |data, _ctx| {
+                    let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(false), selector, |data, _ctx| {
                         Ok(data)
                     }).await?));
                     let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
@@ -1348,11 +1348,11 @@ mod tests {
             clc_dist,
             motif_data,
             metric,
-            ctx.branch("test_clc_stacked_motifs_statistics".into(), false),
+            ctx.branch(false),
         )
             .await?;
 
-        let mut ctx_for_data = ctx.branch(Some("test_clc_stacked_motifs_statistics_data"), false);
+        let mut ctx_for_data = ctx.branch(false);
         let motifs_stats_t: Tensor = motifs_stats
             .with_data_ref(0, ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| Ok(motifs_stats.t_ref().shallow_clone()))
             .await?;

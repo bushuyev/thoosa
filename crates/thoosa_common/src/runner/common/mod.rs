@@ -27,7 +27,7 @@ pub trait MaxParallelCtx: Named + Debug + Send + Sync {
 pub trait RunCtx: MaxParallelCtx + WithId {
     fn device_idx(&self) -> usize;
 
-    fn branch(&mut self, new_name: Option<&str>, with_new_cache_area: bool) -> Self
+    fn branch(&mut self, with_new_cache_area: bool) -> Self
     where
         Self: Sized;
 
@@ -71,7 +71,7 @@ pub mod mock_run_ctx {
 
         impl RunCtx for RunCtx {
             fn device_idx(&self) -> usize;
-            fn branch<'a>(&mut self, new_name:Option<&'a str>, with_new_cache_area:bool)-> Self;
+            fn branch<'a>(&mut self, with_new_cache_area:bool)-> Self;
             fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
         }
     }
@@ -117,7 +117,7 @@ pub mod mock_run_ctx {
         pub fn with_branch(mut self, depth: u32) -> Self {
             self.mock.expect_branch()
                 // .with(always(), always())
-                .returning(move |_name:Option<&str>, _with_new_cache_area:bool| {
+                .returning(move |_with_new_cache_area:bool| {
 
                     debug!("with_branch: depth={depth}");
 

@@ -275,7 +275,7 @@ where
         ).run(
             &cross_unfold_clc,
             Arc::new(input),
-            ctx.branch("batch_clc_ctx".into(), false),
+            ctx.branch(false),
             Contexts::new(
                 CrossSplitterContext::new(t_1_batch_resources.len() as i64, batch_1_slice_lengths),
                 NoopRunnableContext {},
@@ -287,7 +287,7 @@ where
         ).await {
             Ok(mut cross_clc_output) => {
                 let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).await?;
-                let receiver_ctx = ctx.branch(Some("cross_loader_receiver"), false);
+                let receiver_ctx = ctx.branch(false);
 
                 tokio::task::spawn_blocking(move || {
                     receiver.consume(cross_clc_output, receiver_ctx);
@@ -320,7 +320,7 @@ where
 
         for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
             let t_1 = Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(Some("cross_loader_t_1"), false))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(false))
                 .await?;
             let t_1_len = t_1.size().dim_1();
 
@@ -331,7 +331,7 @@ where
                         t_0_batch_resources.clone(),
                         std::mem::take(&mut t_1_batch),
                         std::mem::take(&mut t_1_batch_resources),
-                        ctx.branch(Some("cross_loader_t_1_batch_before_large"), false),
+                        ctx.branch(false),
                         Arc::clone(&receiver),
                     ).await?;
                     t_1_batch_len = 0;
@@ -343,7 +343,7 @@ where
                     t_0_batch_resources.clone(),
                     vec![t_1],
                     vec![Arc::clone(resource_1)],
-                    ctx.branch(Some("cross_loader_t_1_batch_large_resource"), false),
+                    ctx.branch(false),
                     Arc::clone(&receiver),
                 ).await?;
                 collect_eta_record_completion(cross_loader_inner.id());
@@ -363,7 +363,7 @@ where
                 t_0_batch_resources.clone(),
                 std::mem::take(&mut t_1_batch),
                 std::mem::take(&mut t_1_batch_resources),
-                ctx.branch(Some("cross_loader_t_1_batch"), false),
+                ctx.branch(false),
                 Arc::clone(&receiver),
             ).await?;
             t_1_batch_len = 0;
@@ -455,7 +455,7 @@ where
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
 
         let resources_config = input
-            .with_data_ref(0, ctx.branch(Some("cross_loader_resources"), false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
+            .with_data_ref(0, ctx.branch(false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
                 Ok(input.resources_config.clone())
             })
             .await?;
@@ -483,7 +483,7 @@ where
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
             let t_0 = Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(Some("cross_loader_t_0"), false))
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(false))
                 .await?;
             let t_0_len = t_0.size().dim_1();
 
@@ -498,7 +498,7 @@ where
                         skip_0_i,
                         max_batch,
                         Arc::clone(&receiver),
-                        ctx.branch(Some("cross_loader_t_0_batch_before_large"), false),
+                        ctx.branch(false),
                     ).await?;
                     skip_0_i = pending_last_i;
                     t_0_batch_len = 0;
@@ -514,7 +514,7 @@ where
                     skip_0_i,
                     max_batch,
                     Arc::clone(&receiver),
-                    ctx.branch(Some("cross_loader_t_0_batch_large_resource"), false),
+                    ctx.branch(false),
                 ).await?;
                 skip_0_i = i_0;
                 collect_eta_record_completion(cross_loader_outer.id());
@@ -538,7 +538,7 @@ where
                 skip_0_i,
                 max_batch,
                 Arc::clone(&receiver),
-                ctx.branch(Some("cross_loader_t_0_batch"), false),
+                ctx.branch(false),
             ).await?;
 
             skip_0_i = i_0;
@@ -907,7 +907,7 @@ impl RangeOrSlice {
                 let channels = batch[*i].size().dim_0();
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
                 vec![
-                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(Some("cross_loader_range_or_slice_select"), false), selector, |data, run_ctx|{
+                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(false), selector, |data, run_ctx|{
                         Ok(data)
                     }).await?))
                 ]
@@ -986,8 +986,8 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
             debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
 
-            let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(Some("cross_loader_batch_0_select"), false)).await?;
-            let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(Some("cross_loader_batch_1_select"), false)).await?;
+            let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(false)).await?;
+            let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(false)).await?;
 
             //TODO move to RangeOrSlice::select
             let resources_0 = match &selector.batch_0_selector {
@@ -1461,7 +1461,7 @@ mod tests {
         let mut selector = CrossInputSelector::default();
 
         let mut run_ctx = RunCtxImpl::new(1, "test");
-        let r = input.with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_full"), false), selector.clone(), None, |data, ctx|{
+        let r = input.with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, ctx|{
             assert_eq!(data.tensors().len(), 4);
 
             assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t.to_device(Cpu), 0.02, 0.02, false));
@@ -1522,7 +1522,7 @@ mod tests {
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_0"), false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
             })
@@ -1538,7 +1538,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_degrades_1"), false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t.size()[1], 4);
                 Ok(())
             })
@@ -1600,7 +1600,7 @@ mod tests {
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_0"), false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
@@ -1617,7 +1617,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_1"), false), selector.clone(), None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
@@ -1634,7 +1634,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
         input
-            .with_selected_data_ref(1, run_ctx.branch(Some("cross_loader_test_adjuster_resources_2"), false), selector, None, |data, _ctx| {
+            .with_selected_data_ref(1, run_ctx.branch(false), selector, None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
                 assert_eq!(data.tensors()[1].t.size()[1], 3);
                 Ok(())
@@ -1794,7 +1794,7 @@ mod tests {
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys)))));
 
         let output:Arc<DevicesWrap<()>> = cross_loader
-            .run(input, ctx.branch(Some("cross_loader_run"), false))
+            .run(input, ctx.branch(false))
             .await?;
 
         assert_eq!(output.id(), &());
@@ -1968,7 +1968,7 @@ mod tests {
         ])))));
 
         let _ = cross_loader
-            .run(input, ctx.branch(Some("cross_loader_run"), false))
+            .run(input, ctx.branch(false))
             .await?;
 
         yield_now().await;
@@ -2108,7 +2108,7 @@ mod tests {
             "resource_large".to_string(),
         ])))));
 
-        let _ = cross_loader.run(input, ctx.branch(Some("cross_loader_run"), false)).await?;
+        let _ = cross_loader.run(input, ctx.branch(false)).await?;
 
         let observed = observations.lock().unwrap().clone();
         let expected = vec![
@@ -2246,7 +2246,7 @@ mod tests {
             "resource_a".to_string(),
         ])))));
 
-        let _ = cross_loader.run(input, ctx.branch(Some("cross_loader_run"), false)).await?;
+        let _ = cross_loader.run(input, ctx.branch(false)).await?;
 
         let observed = observations.lock().expect("observations.lock").clone();
         assert!(oom_triggered.load(Ordering::SeqCst));

@@ -177,7 +177,7 @@ where
 
         let converted = if let Some(target_precision) = self.args.target_precision {
             let output = Arc::new(ConvertPrecisionStage::<C>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::All), target_precision)))
-                .run(Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())), ctx.branch(Some("export_convert_precision"), true))
+                .run(Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())), ctx.branch(true))
                 .await?;
             Arc::into_inner(output).expect("export convert precision output should not be shared").take_data(0).await?.converted().to_vec()
         } else {

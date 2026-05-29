@@ -1260,7 +1260,7 @@ mod tests {
 
         let mut run_ctx = mock_run_ctx::default(1);
         let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
-            .run(input, run_ctx.branch(Some("test_train_motif_nets_cosine_with_filtered_real_eeg"), false))
+            .run(input, run_ctx.branch(false))
             .await?;
         let result = result.load_from_any_device_(1).await?;
 

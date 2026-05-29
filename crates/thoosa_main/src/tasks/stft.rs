@@ -99,7 +99,7 @@ where
             .run(
                 &self.sync_stft,
                 input,
-                ctx.branch(Some("sync_stft"), false),
+                ctx.branch(false),
                 Contexts::new(
                     NoopInputContext(None),
                     NoopRunnableContext {},

@@ -205,7 +205,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SeqScanStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let max_chunk_len = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
-        let resources_config = with_data!(ctx.branch(Some("seq_scan_resources"), false), input; |_ctx, input: &ResourcesConfigInput<RC>| {
+        let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ResourcesConfigInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
         let resources = resources_config.to_resources(&self.store).await?;
@@ -220,7 +220,7 @@ where
                 let loaded = Arc::clone(&configured_stage.configured_loader)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(resource.clone())),
-                        ctx.branch(Some(&format!("seq_scan_load_resource_{}", resource.id())), false),
+                        ctx.branch(false),
                     )
                     .await?;
                 let resource_len = loaded.size().dim_1();
@@ -231,13 +231,13 @@ where
                         batch_tensors.clone(),
                         &configured_stage.run_config,
                         &mut buckets,
-                        ctx.branch(Some("seq_scan_bucket_accumulated_batch_before_large_resource"), false),
+                        ctx.branch(false),
                     ).await?;
                     batch_resources.clear();
                     batch_tensors.clear();
                     batch_len = 0;
 
-                    with_data!(ctx.branch(Some("seq_scan_bucket_large_resource"), false), loaded; |_ctx, tensor: &ThoTensor<ChannelsData, SynKey>| {
+                    with_data!(ctx.branch(false), loaded; |_ctx, tensor: &ThoTensor<ChannelsData, SynKey>| {
                         assign_resource_to_buckets_chunked(resource, tensor.t_ref(), &configured_stage.run_config, max_chunk_len, &mut buckets)
                     })?;
                     continue;
@@ -256,7 +256,7 @@ where
                     batch_tensors.clone(),
                     &configured_stage.run_config,
                     &mut buckets,
-                    ctx.branch(Some("seq_scan_bucket_accumulated_batch"), false),
+                    ctx.branch(false),
                 ).await?;
                 batch_resources.clear();
                 batch_tensors.clear();
@@ -268,7 +268,7 @@ where
                 batch_tensors,
                 &configured_stage.run_config,
                 &mut buckets,
-                ctx.branch(Some("seq_scan_bucket_accumulated_batch_tail"), false),
+                ctx.branch(false),
             ).await?;
 
             info!(

@@ -226,11 +226,11 @@ where
         let stats = Arc::clone(&self.motif_stats)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(motif_stats_input)),
-                ctx.branch(Some("merge_selected_motifs_motif_stats"), false),
+                ctx.branch(false),
             )
             .await?;
 
-        with_data!(ctx.branch(Some("merge_selected_motifs_metric_value"), false), stats; |_ctx, stats: &MotifStatsOutput| {
+        with_data!(ctx.branch(false), stats; |_ctx, stats: &MotifStatsOutput| {
             stats.channel_value(&metric, 0)
         })
     }
@@ -296,7 +296,7 @@ where
         for<'a> Self::In<'a>: Send + Sync,
     {
         async move {
-            let mut run_config_ids = with_data!(ctx.branch(Some("merge_selected_motifs_input"), false), input; |_ctx, input: &MergeSelectedMotifsInput| {
+            let mut run_config_ids = with_data!(ctx.branch(false), input; |_ctx, input: &MergeSelectedMotifsInput| {
                 Ok::<_, ThoError>(input.run_config_ids().clone())
             })?;
             if run_config_ids.is_empty() {
@@ -334,18 +334,18 @@ where
                         let left_metric = if let Some(metric) = self_metric_cache.get(&left.key) {
                             *metric
                         } else {
-                            let metric = self.metric_for_candidate(left, ctx.branch(Some("merge_selected_motifs_self_left"), false)).await?;
+                            let metric = self.metric_for_candidate(left, ctx.branch(false)).await?;
                             self_metric_cache.insert(left.key.clone(), metric);
                             metric
                         };
                         let right_metric = if let Some(metric) = self_metric_cache.get(&right.key) {
                             *metric
                         } else {
-                            let metric = self.metric_for_candidate(right, ctx.branch(Some("merge_selected_motifs_self_right"), false)).await?;
+                            let metric = self.metric_for_candidate(right, ctx.branch(false)).await?;
                             self_metric_cache.insert(right.key.clone(), metric);
                             metric
                         };
-                        let merged_metric = self.metric_for_pair(left, right, ctx.branch(Some("merge_selected_motifs_pair"), false)).await?;
+                        let merged_metric = self.metric_for_pair(left, right, ctx.branch(false)).await?;
 
                         debug!("MergeSelectedMotifs::run: channel={channel} left_metric={left_metric:.6} right_metric={right_metric:.6} merged_metric={merged_metric:.6}");
                         if merged_metric <= left_metric * 1.2 && merged_metric <= right_metric * 1.2 {//TODO param
@@ -493,7 +493,7 @@ mod tests {
             .run(
                 Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1]))),
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(Some("merge_selected_motifs"), false),
+                .branch(false),
             )
             .await?;
 
@@ -501,7 +501,7 @@ mod tests {
             .with_data_ref(
                 0,
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(Some("merge_selected_motifs_output"), false),
+                .branch(false),
                 None,
                 |output: &MergeSelectedMotifsOutput, _ctx| Ok::<_, ThoError>((*output.id(), output.merged_groups_by_channel().clone())),
             )

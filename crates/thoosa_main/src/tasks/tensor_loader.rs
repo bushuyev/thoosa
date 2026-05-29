@@ -75,7 +75,7 @@ where
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        with_data!(ctx.branch(Some("raw_tensor_loader_input"), false), input; |ctx:C, resource: &Resource| {
+        with_data!(ctx.branch(false), input; |ctx:C, resource: &Resource| {
             // TODO(perf): add a shared raw-resource tensor cache/prefetch layer here; traced runs repeatedly reload tens of thousands of raw tensors through this stage.
             let tensor = (self.loader_fn)(resource, &self.device)?;
 
@@ -261,13 +261,13 @@ mod tests {
     //
     //     let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(0, "test_load")));
     //
-    //     let load_ctx = ctx.write().branch(Some("tensor_loader_load"), false);
+    //     let load_ctx = ctx.write().branch(false);
     //     let loaded = loader
     //         .run_cached(Arc::new(DevicesWrap::wrap(Resource::new(0, 0, "aaa", 20), CacheArea::default())), load_ctx)
     //         .await
     //         ?;
     //
-    //     let mut data_ctx = ctx.write().branch(Some("tensor_loader_data"), false);
+    //     let mut data_ctx = ctx.write().branch(false);
     //     let result = loaded
     //         .with_data_ref(0,
     //         &mut data_ctx, None, |v: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
