@@ -1202,37 +1202,4 @@ mod tests {
 
     }
 
-    #[test]
-    fn test_spectrogram() -> Result<(), ThoError> {
-
-
-        // let sig_t = oog;
-        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1,-1));
-        debug!("sig_t = {sig_t:?}");
-
-        let spec = sig_t.stft(
-            16000,
-            4000,
-            16000,
-            None::<Tensor>,
-            false,
-            true,
-            true,
-            true
-        );
-
-        debug!("spec = {spec:?}");
-
-        let spec_abs =spec.squeeze_dim(0).abs();
-        debug!("spec_abs = {spec_abs:?}");
-
-        plot_spectrogram(
-            &spec_abs,
-            "/tmp/plots/spectrogram.png",
-            1200,
-            600,
-        )?;
-
-        Ok(())
-    }
 }

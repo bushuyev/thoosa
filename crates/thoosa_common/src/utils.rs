@@ -52,7 +52,8 @@ where
     };
 
 
-    let mut find_motifs_run_config = FH::from_properties_map(None, &store.list_run_config_values(real_find_motifs_run_config_id).await?)?;
+    let map = store.list_run_config_values(real_find_motifs_run_config_id).await?;
+    let mut find_motifs_run_config = FH::from_properties_map(None, &map)?;
 
     debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
 
@@ -1820,7 +1821,7 @@ pub mod tests {
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, stretch, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::{debug, set_max_level};
@@ -1844,7 +1845,7 @@ pub mod tests {
 
     use thoosa_shared::val::Val::{Int, UInt};
     use thoosa_shared::val::{NamedVal, Val};
-    use thoosa_shared::{cdt_for_dir, clc_step, RangeOrValue, ThoError};
+    use thoosa_shared::{cdt_for_dir, clc_step, sin_v_f, RangeOrValue, ThoError};
     use thoosa_shared::run_configs::RunConfigId;
     use crate::dims::AnyDims;
     use crate::my_tch::ThoModule;
@@ -3012,6 +3013,40 @@ pub mod tests {
         assert_eq!(stretched.kind(), Kind::Int64);
         Ok(())
     }
+
+    // #[test]
+    fn test_spectrogram() -> Result<(), ThoError> {
+
+
+        let sig_t = Tensor::from_slice(sin_v_f(160_000, 8000.0, 32_000.0).as_slice()).view((1,-1));
+        debug!("sig_t = {sig_t:?}");
+
+        let spec = sig_t.stft(
+            16000,
+            4000,
+            16000,
+            None::<Tensor>,
+            false,
+            true,
+            true,
+            true
+        );
+
+        debug!("spec = {spec:?}");
+
+        let spec_abs =spec.squeeze_dim(0).abs();
+        debug!("spec_abs = {spec_abs:?}");
+
+        plot_spectrogram(
+            &spec_abs,
+            "/tmp/plots/spectrogram.png",
+            1200,
+            600,
+        )?;
+
+        Ok(())
+    }
+
 }
 
 /// Deterministic "periodic motif" with exactly `periods` repeats across `width` samples.
