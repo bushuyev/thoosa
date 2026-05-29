@@ -95,7 +95,7 @@ pub async fn new_train_label_nets<L, C, R>(
     max_loss: Option<f32>,
     selected_motif_nets_limit: Option<usize>,
     slices_step: u32
-) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNets/*TODO Merged*/<C>, C>, C>, ThoError>
+) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNetsMerged<C>, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -105,7 +105,7 @@ where
 
     //gpt Build a motif-net application stage to turn raw resources into motif probabilities.
     // let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-    let apply_motif_nets = Arc::new(ApplyMotifNets/*TODO Merged*/::new(
+    let apply_motif_nets = Arc::new(ApplyMotifNetsMerged::new(
         ws,
         store,
         train_motif_net_run_config_ids.clone(),
@@ -453,29 +453,25 @@ where
 
                        },
                         move |_:C, rc:&TrainLabelNetRunConfig, vs: Arc<Mutex<VarStore>>| {
-                            ready(
+                            async move {
                                 match rc.net {
-                                    LabelNetTypeArgs::ConvNet(ConvNetArgs {
-                                                                  num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel, ref joint
-                                                              }) => {
+                                    LabelNetTypeArgs::ConvNet(ConvNetArgs { num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel, ref joint }) => {
                                         //TODO impl From<(num_nets, LabelNetTypeArgs)> for LabelNetParams
                                         let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(num_conv_layers, hidden_conv_channels, kernel, num_head_layers, num_head_features, joint.into())));
 
-                                        Ok((conv_label_node(&net_params).unwrap().build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.lock().root()).unwrap(), net_params))
+                                        Ok((conv_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.lock().root())?, net_params))
                                     }
-                                    LabelNetTypeArgs::LinNet(LinNetArgs {
-                                                             num_layers, features
-                                                         }) => {
+                                    LabelNetTypeArgs::LinNet(LinNetArgs { num_layers, features }) => {
                                         let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(features, num_layers)));
 
-                                        Ok((lin_label_node(&net_params).unwrap().build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.lock().root()).unwrap(), net_params))
+                                        Ok((lin_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.lock().root())?, net_params))
                                     }
                                     LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { head_size, n_heads, ff_mult, dropout }) => {
                                         let net_params = LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(head_size, n_heads, ff_mult, dropout)));
-                                        Ok((self_attention_label_node(&net_params).unwrap().build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.lock().root()).unwrap(), net_params))
+                                        Ok((self_attention_label_node(&net_params)?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&vs.lock().root())?, net_params))
                                     }
                                 }
-                            ).boxed()
+                            }.boxed()
 
                         },
                         opt_config,
