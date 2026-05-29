@@ -253,15 +253,16 @@ where
                     let stft = SyncStft::<C>::new("".into(), stft_config.clone());
 
                     let t = input.t.f_i((tensors.channel as i64, ..))?;
-                    let t = if t.size()[0] >= tensors.motif_width as i64 {
-                        t
-                    } else {
-                        pad_to(&t, &[tensors.motif_width as i64], 0.0)?
-                    };
+                    // let t = if t.size()[0] >= tensors.motif_width as i64 {
+                    //     t
+                    // } else {
+                    //     pad_to(&t, &[tensors.motif_width as i64], 0.0)?
+                    // };
 
-                    let stft_t = stft.build_spectrogram(
-                        &t
-                    )?;
+                    // let stft_t = stft.build_spectrogram(
+                    //     &t
+                    // )?;
+                    let stft_t = t;
 
                     debug!("ApplyMotifNetsMerged::run: stft_t={stft_t:?}");
                     let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);

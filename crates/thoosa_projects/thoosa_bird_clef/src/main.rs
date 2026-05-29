@@ -193,16 +193,25 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 
     let num_files = pathnames.len();
 
-    let mut oggs_t = Tensor::empty([num_files as i64, 1920000], (Kind::BFloat16, Device::Cpu));//1920000 = 32000 × 60 one minute
+    let mut oggs_t = Tensor::empty([num_files as i64, 1920000], (Kind::Float, Device::Cpu));//1920000 = 32000 × 60 one minute
     for (entry_i, ogg_filename) in pathnames.iter().enumerate() {
-        let ogg_t = ogg_to_tensor(ogg_filename, BFloat16)?;
+        let ogg_t = ogg_to_tensor(ogg_filename, Float)?;
         debug!("ogg_filename: {ogg_filename:?} loaded={ogg_t:?} requires_grad={}", ogg_t.requires_grad());
 
         oggs_t.get(entry_i as i64).f_copy_(&pad_to_2(&ogg_t.view(-1), &[1920000], true, false)?.0)?;
     }
 
     debug!("loaded {:?} ", oggs_t);
-    let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t.view((1, -1)))?));//
+    let oggs_tt = Arc::new(DevicesWrap::wrap(ThoTensor::<ChannelsData, SynKey>::new(mono_key!(0, "all".to_string()).into(), oggs_t.view((1, -1)).stft(
+        16000,
+        16000,
+        16000,
+        None::<Tensor>,
+        true,
+        true,
+        true,
+        true,
+    ).abs())?));//
     let label_models = Arc::new(ws.read().label_models()?);
 
 
