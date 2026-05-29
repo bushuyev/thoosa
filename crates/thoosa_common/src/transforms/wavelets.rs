@@ -58,11 +58,16 @@ mod tests {
 
         let input = input_signal_0 + input_signal_1;
         let input_freqs = clc_frequencies(&input, samples, sample_rate, 2)?;
+        assert!(input_freqs.iter().any(|(freq, _)| (*freq - target_freq).abs() < 1e-6), "input_freqs={input_freqs:?}");
+        assert!(input_freqs.iter().any(|(freq, _)| (*freq - 3.0 * target_freq).abs() < 1e-6), "input_freqs={input_freqs:?}");
         let input = input.view((1, 1, -1));
 
         let envelope = complex_conv(&input, &wavelet_real, &wavelet_imag);
+        let expected_envelope_len = samples + 2 - wavelet_real.size()[0] + 1;
+        assert_eq!(envelope.size(), vec![expected_envelope_len]);
 
         let output_freqs = clc_frequencies(&envelope, samples, sample_rate, 5)?;
+        assert_eq!(output_freqs.len(), 5);
 
         /*
         plot_series(
