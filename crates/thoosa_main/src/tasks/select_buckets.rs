@@ -192,7 +192,7 @@ where
         let (resources, output_mode) = Self::load_resources_for_selection(
             &select_motifs_input,
             store,
-            init_ctx.branch(Some("select_buckets_load_resources_for_selection"), false),
+            init_ctx.branch(false),
         )
         .await?;
         if resources.is_empty() {
@@ -207,7 +207,7 @@ where
                 &motif_stats,
                 *find_motifs_run_config_id,
                 motif_ids,
-                init_ctx.branch(Some("select_buckets_preload_bucket_mean_energies"), false),
+                init_ctx.branch(false),
             )
             .await?;
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, *find_motifs_run_config_id).await?;
@@ -217,7 +217,7 @@ where
                 *find_motifs_run_config_id,
                 &find_motifs_run_config,
                 energies.len(),
-                init_ctx.branch(Some("select_buckets_reference_energy_for_find_run"), false),
+                init_ctx.branch(false),
             )
             .await?;
             debug!("SelectBucketsStage::new: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} energies_len={}", energies.len());
@@ -247,7 +247,7 @@ where
         let futures = motif_ids.into_iter().map(|motif_id| {
             let motif_stats = Arc::clone(motif_stats);
             let energy_metric = energy_metric.clone();
-            let mut ctx = ctx.branch(Some("select_buckets_preload_bucket_mean_energy"), false);
+            let mut ctx = ctx.branch(false);
 
             async move {
                 let stats = Arc::clone(&motif_stats)
@@ -256,12 +256,12 @@ where
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
                             vec![energy_metric.clone()],
                         ))),
-                        ctx.branch(Some("select_buckets_preload_bucket_motif_stats"), false),
+                        ctx.branch(false),
                     )
                     .await?;
 
                 let energy = stats
-                    .with_data_ref(0, ctx.branch(Some("select_buckets_preload_bucket_energy"), false), None, |stats: &MotifStatsOutput, _ctx| {
+                    .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
                         Ok::<_, ThoError>(BucketEnergy {
                             mean_energy: stats.channel_value(&energy_metric, 0)? as f64,
                             num_slices: stats.num_slices,
@@ -295,7 +295,7 @@ where
         mut ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
         let (resources_config, output_mode) = input
-            .with_data_ref(0, ctx.branch(Some("select_buckets_input"), false), None, |input: &SelectMotifsInput, _ctx| {
+            .with_data_ref(0, ctx.branch(false), None, |input: &SelectMotifsInput, _ctx| {
                 Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
             })
             .await?;
@@ -339,12 +339,12 @@ where
                     Some(resources.to_vec()),
                     vec![energy_metric.clone()],
                 ))),
-                ctx.branch(Some("select_buckets_reference_energy_motif_stats"), false),
+                ctx.branch(false),
             )
             .await?;
 
         stats
-            .with_data_ref(0, ctx.branch(Some("select_buckets_reference_energy"), false), None, |stats: &MotifStatsOutput, _ctx| {
+            .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
                 let values = stats.channels_values(&energy_metric)?;
                 if values.is_empty() {
                     return Err(ThoError::new("SelectBucketsStage::reference_energy_for_find_run: no channel energy values"));
@@ -439,10 +439,10 @@ where
         let run_configs_len = self.run_configs.len();
         let futures = self.run_configs.iter().map(|select_config| {
             let self_for_fut = Arc::clone(&self);
-            let mut ctx = ctx.branch(Some("select_buckets_run_config"), false);
+            let mut ctx = ctx.branch(false);
             async move {
                 self_for_fut
-                    .select_for_run_config(select_config, ctx.branch(Some("select_buckets_select_for_run_config"), false))
+                    .select_for_run_config(select_config, ctx.branch(false))
                     .await
             }
         });

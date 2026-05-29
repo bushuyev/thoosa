@@ -318,7 +318,7 @@ where
                 let path = trained_net.net_path;
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
-                let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
+                let load_ctx = stage_ctx.branch(false);
                 async move {
                     match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).await {
                         Ok(net) => {
@@ -458,7 +458,7 @@ where
                 Some(freq_filter) => {
                     debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id, apply_motif_net.freq_filter_find_motifs_run_config_id);
 
-                    freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(Some(&format!("apply_motif_nets_prefilter_{group_key:?}")), true)).await?
+                    freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true)).await?
                 }
                 None => {
                     debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id);
@@ -494,7 +494,7 @@ where
                     1
                 };
                 let out_id = apply_motif_net.out_id(&input.id());
-                let apply_motif_net_ctx = ctx.branch(Some(&format!("apply_motif_nets_{out_id:?}")), true);
+                let apply_motif_net_ctx = ctx.branch(true);
                 let apply_motif_net_input = Arc::new(ApplyMotifNetInputWrapper::new(Arc::clone(&input), Arc::clone(&apply_motif_net.net_wrapper)));//The reason to copy apply_motif_net.net_wrapper into apply_motif_net input is to get it out of Wrapper in sync do_run method
 
                 let slice_step = self.slice_step;
@@ -579,7 +579,7 @@ where
         .consume(
             &self.batch_applied_motif_nets,
             batch_input,
-            ctx.branch(Some("apply_motif_nets_batch"), true),
+            ctx.branch(true),
             Contexts::new(
                 NoopInputContext::<BatchAppliedMotifNets<C>>(None),
                 NoopRunnableContext {},
@@ -1721,7 +1721,7 @@ pub(crate) mod tests {
 
         let run_ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
 
-        let run_ctx_branch = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(Some("apply_motif_nets_run"), false);
+        let run_ctx_branch = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
 
         let out = apply_motif_nets.run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test_batch", "test_batch")]), resource_a_t)?)),
@@ -1739,7 +1739,7 @@ pub(crate) mod tests {
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / step as i64) + 1;
 
-        let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(Some("apply_motif_nets_assert"), false);
+        let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
 
         with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);

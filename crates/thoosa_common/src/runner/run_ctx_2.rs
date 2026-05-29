@@ -57,11 +57,9 @@ impl WithId for RunCtxImpl {
 }
 
 impl RunCtxImpl {
-    pub fn new(tho_device_idx: usize, _id: &str,) -> Self {
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _ctx = crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder::install_global_ctx_mock();
+    pub fn new(tho_device_idx: usize, id: &str,) -> Self {
 
-        Self::with_cache_area(tho_device_idx, mono_key!(0, _id).into())
+        Self::with_cache_area(tho_device_idx, mono_key!(0, id).into())
     }
 
 
@@ -101,23 +99,16 @@ impl RunCtx for RunCtxImpl {
 
     fn branch(
         &mut self,
-        new_name: Option<&str>,
-        with_purge_root: bool
+        with_new_cache_area: bool
     ) -> Self {
 
         let branches = self.branches.fetch_add(1, Ordering::SeqCst);
 
-        let branch_full_id = match new_name {
-            None => {
-                self.id.clone()
-            }
-            Some(branch_name) => {
-                &self.id + mono_key!(branches, branch_name)
-            }
-        };
+        let branch_full_id = &self.id + mono_key!(branches, concat!(module_path!(), ":", line!(), ":", column!()));
+
         debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
 
-        let mut branched_ctx= if with_purge_root {
+        let mut branched_ctx= if with_new_cache_area {
 
             let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id);
 

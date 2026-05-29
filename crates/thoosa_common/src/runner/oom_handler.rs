@@ -637,7 +637,7 @@ where
             run_context
                 .as_mut()
                 .expect("run_with_runner_impl: missing run context")
-                .branch(Some("oom_handler_run_initial"), false),
+                .branch(false),
             None,
         )
         .await
@@ -701,7 +701,7 @@ where
                                 run_context
                                     .as_mut()
                                     .expect("run_with_runner_impl: missing run context")
-                                    .branch(None, false),
+                                    .branch(false),
                                 exclusive_job.job_id(),
                             )
                             .await;

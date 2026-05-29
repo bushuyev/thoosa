@@ -115,7 +115,7 @@ where
 
         match self.config {
             OOMRunnerConfig::MaxParallel { max, step } => {
-                let run_ctx = ctx.branch(Some("clc_oom_runner_permits"), false);
+                let run_ctx = ctx.branch(false);
                 OOMHandler::new(
                     vec![Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
                         max,
@@ -137,7 +137,7 @@ where
                 // todo!()
             },
             OOMRunnerConfig::Splits => {
-                let run_ctx = ctx.branch(Some("clc_oom_runner_splits"), false);
+                let run_ctx = ctx.branch(false);
                 OOMHandler::new(
                     vec![
                         Adjusters::Input(Box::new(
@@ -162,7 +162,7 @@ where
                 max: _max,
                 step: _step,
             } => {
-                let run_ctx = ctx.branch(Some("clc_oom_runner_permits_splits"), false);
+                let run_ctx = ctx.branch(false);
                 OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
@@ -188,7 +188,7 @@ where
                 .await
             }
             OOMRunnerConfig::DumpedToCpu => {
-                let run_ctx = ctx.branch(Some("clc_oom_runner_dumped_to_cpu"), false);
+                let run_ctx = ctx.branch(false);
                 OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(DumpToCpu::new("n/a"))),
@@ -275,13 +275,13 @@ where
                 let multed = load_and_mul
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res))),
-                        ctx_device.branch(Some(&format!("run_mul_task_run_{idx}")), false),
+                        ctx_device.branch(false),
                     )
                     .await?;
 
                 multed
                     .with_data_ref(device_idx,
-                                   ctx_device.branch(Some("run_mul_task_data"), false), None, |guard: &<R as Stage>::Out, _ctx| {
+                                   ctx_device.branch(false), None, |guard: &<R as Stage>::Out, _ctx| {
                            // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
                            check_arc(res, &guard);
@@ -882,7 +882,7 @@ mod tests {
 
 
         async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let ctx_for_loader = ctx.branch(Some("load_and_mul_loader"), false);
+            let ctx_for_loader = ctx.branch(false);
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, ctx_for_loader)
                 .await?;
@@ -896,7 +896,7 @@ mod tests {
                                     .run(
                                         &self.mul,
                                         loaded,
-                                        ctx.branch(Some("load_and_mul_mul"), false),
+                                        ctx.branch(false),
                                         &HashMap::from([("", &HashSet::new())]),
                                     )
                                     .await.map_err(|e|{
@@ -918,8 +918,8 @@ mod tests {
         let loader = Arc::new(DummyLoader::new(3));
 
         let mut ctx_device_0 = RunCtxImpl::new(device_idx, "noname");
-        let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false);
-        let ctx_device_0_1 = ctx_device_0.branch(Some("test_load_dummy_0_1"), false);
+        let ctx_device_0_0 = ctx_device_0.branch(false);
+        let ctx_device_0_1 = ctx_device_0.branch(false);
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
@@ -952,8 +952,8 @@ mod tests {
         assert_eq!(loader.run_count.load(Relaxed), 1);
         // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
         let mut ctx_device_1 = RunCtxImpl::new(1, "noname");
-        let ctx_device_1_0 = ctx_device_1.branch(Some("test_load_dummy_1_0"), false);
-        let ctx_device_1_data = ctx_device_1.branch(Some("test_load_dummy_1_0_data"), false);
+        let ctx_device_1_0 = ctx_device_1.branch(false);
+        let ctx_device_1_data = ctx_device_1.branch(false);
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
@@ -995,7 +995,7 @@ mod tests {
         let loader = Arc::new(DummyLoader::new(3));
 
         let mut ctx_device_0 = RunCtxImpl::new(device_idx, "noname");
-        let ctx_device_0_0 = ctx_device_0.branch(Some("test_load_dummy_0_0"), false);
+        let ctx_device_0_0 = ctx_device_0.branch(false);
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
@@ -1058,8 +1058,8 @@ mod tests {
             ),
         ));
         let mut ctx_device_0 = RunCtxImpl::new(1, "noname");
-        let ctx_device_0_run = ctx_device_0.branch(Some("test_load_and_mul_no_oom_run"), false);
-        let ctx_device_0_data = ctx_device_0.branch(Some("test_load_and_mul_no_oom_data"), false);
+        let ctx_device_0_run = ctx_device_0.branch(false);
+        let ctx_device_0_data = ctx_device_0.branch(false);
 
         let multed = load_and_mut.run_cached(
             Arc::new(DevicesWrap::wrap(DLoaderInput {

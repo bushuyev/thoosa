@@ -589,7 +589,7 @@ where
         .run(
             &sync_freq_filter,
             input,
-            ctx.branch(Some("freq_filter"), true),
+            ctx.branch(true),
             Contexts::new(
                 SplitsAdjusterContextImpl::new(input_size, FreqFilterOutputBuilder::new(out_id)),
                 NoopRunnableContext {},
@@ -719,7 +719,7 @@ mod tests {
         let size = [20, 12800];
         let r = Arc::new(bf).run(
             Arc::new(DevicesWrap::wrap(ThoTensor::new(SynKey::new([mono_key!("test", "test")]), Tensor::rand(&size, FLOAT_CPU))?)),
-            ctx.branch(Some("freq_filter_test"), false)
+            ctx.branch(false)
         ).await?;
 
         let find_motifs_run_config = FindMotifsRunConfig::new_with_running_mean(None, 10, 100, Some(filter_configs), None);
@@ -727,7 +727,7 @@ mod tests {
         let adjuster = find_motifs_run_config.input_len_adjuster();
 
 
-        with_data!(ctx.branch(Some("freq_filter_test"), false), r; |ctx, r|{
+        with_data!(ctx.branch(false), r; |ctx, r|{
             debug!("filter r={r:?}");
             Ok::<_, ThoError>(())
         })?;

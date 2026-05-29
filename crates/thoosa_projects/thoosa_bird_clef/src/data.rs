@@ -510,9 +510,9 @@ mod tests {
 
         let stft = Arc::new(Stft::new(StftRunConfig::new(16000, 4000.into(), 4000.into(), true, true, true))?);
         let mut ctx = RunCtxImpl::new(1, "plot_spec");
-        let spec = stft.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), t)?)), ctx.branch("".into(), false)).await?;
+        let spec = stft.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), t)?)), ctx.branch(false)).await?;
 
-        with_data!(ctx.branch("".into(), false), spec; |_, spec:&ThoTensor<Spectorgram, SynKey>|{
+        with_data!(ctx.branch(false), spec; |_, spec:&ThoTensor<Spectorgram, SynKey>|{
             let spec = spec.as_ref();
             debug!("spec = {spec:?}");
             plot_spectrogram(
