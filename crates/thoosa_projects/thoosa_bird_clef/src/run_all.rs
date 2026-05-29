@@ -308,7 +308,7 @@ pub(crate) async fn run_all(
 
                         }
 
-                        info!("train label nets done: label={label} best_min_loss={best_min_loss:?}");
+                        info!("train label nets done: label={label} \x1b[38;50;208mbest_min_loss={best_min_loss:?}\x1b[0m");
 
                         Ok::<_, ThoError>(())
                     })
@@ -625,8 +625,8 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
                 ]),
                 stft_config: StftRunConfigRangeOrValue {
                     n_fft: RangeOrValue::Value(16000),
-                    hop_length: Some(RangeOrValue::Value(4000)),
-                    win_length: Some(RangeOrValue::Value(4000)),
+                    hop_length: Some(RangeOrValue::Value(16000)),
+                    win_length: Some(RangeOrValue::Value(16000)),
                     normalized: RangeOrValue::Value(true),
                     onesided: RangeOrValue::Value(true),
                     align_to_window: RangeOrValue::Value(true),
