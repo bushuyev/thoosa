@@ -14,6 +14,7 @@ use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBan
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifCosine2DNetArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
 use thoosa_common::train_nets::MotifNetTypeArgs::Cosine2DNet;
@@ -200,9 +201,9 @@ where
                 channel,
                 motif_width,
                 stft_hash_value,
-                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(Cuda(0)).into(),//TODO to_device(Cuda(0))
-                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(Cuda(0)).into(),
-                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(Cuda(0)).into(),
+                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.device_idx()).into()).into(),//TODO to_device(Cuda(0))
+                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.device_idx()).into()).into(),
+                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.device_idx()).into()).into(),
             }
         }).collect();
 
