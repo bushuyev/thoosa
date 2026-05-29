@@ -45,16 +45,20 @@ pub fn make_batch_with(
         Kind::Float | Kind::BFloat16 | Kind::Half | Kind::Double
     ));
 
+    let sample_without_replacement = || -> TchResult<Tensor> {
+        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size.min(num_records))?;
+        let selected = in_tensor.f_index_select(0, &idx)?;
+        debug!("make_batch_with: idx={idx} selected={selected:?}");
+        Ok(selected)
+    };
+
     // Case 1: enough data — sample without replacement.
-    // if num_records > 2 * batch_size {
-    let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size.min(num_records))?;
-
-    let selected = in_tensor.f_index_select(0, &idx)?;
-
-    debug!("make_batch_with: idx={idx} selected={selected:?}");
+    if num_records > 2 * batch_size {
+        return sample_without_replacement();
+    }
 
     let Some(cfg) = cfg else {
-        return Ok(selected);
+        return sample_without_replacement();
     };
 
     // Case 2: data paucity — build a batch via sampling with replacement,
@@ -148,6 +152,8 @@ mod tests {
         let mut seen = HashSet::new();
         let out_1d = out.squeeze_dim(1).to_kind(Kind::Int64);
         for i in 0..b {
+            let raw = out.i((i, 0)).double_value(&[]);
+            assert!((raw - raw.round()).abs() < 1e-6, "sampled row was augmented: {}", raw);
             let v = out_1d.i(i).int64_value(&[]);
             assert!(0 <= v && v < n, "sampled index out of bounds: {}", v);
             seen.insert(v);
