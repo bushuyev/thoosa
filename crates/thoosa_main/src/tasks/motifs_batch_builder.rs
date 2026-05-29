@@ -22,19 +22,21 @@ impl Default for MixupJitterCfg {
 
 /// Convenience wrapper with defaults.
 pub fn make_batch(in_tensor: &Tensor, batch_size: i64) -> TchResult<Tensor> {
-    make_batch_with(in_tensor, batch_size, MixupJitterCfg::default())
+    make_batch_with(in_tensor, batch_size, Some(MixupJitterCfg::default()))
 }
 
 ///  Expects `x` of shape [num_records X seq_len], float dtype.
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MixupJitterCfg::make_batch_with"))]
+#[tracing::instrument(level = "debug", skip_all, fields(
+    agg_perf = "MixupJitterCfg::make_batch_with"
+))]
 pub fn make_batch_with(
     in_tensor: &Tensor,
     batch_size: i64,
-    cfg: MixupJitterCfg,
+    cfg: Option<MixupJitterCfg>,
 ) -> TchResult<Tensor> {
     debug!("make_batch_with: batch_size={batch_size} in_tensor.size={:?}",in_tensor.size());
 
-    let (num_records, ..) = in_tensor.size3()?; // ensures 2-D and returns (N, M)
+    let num_records = in_tensor.size()[0]; // ensures 2-D and returns (N, M)
     let device = in_tensor.device();
     let kind = in_tensor.kind();
 
@@ -45,14 +47,15 @@ pub fn make_batch_with(
 
     // Case 1: enough data — sample without replacement.
     // if num_records > 2 * batch_size {
-        let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size.min(num_records))?;
+    let idx = Tensor::f_randperm(num_records, (Kind::Int64, device))?.f_narrow(0, 0, batch_size.min(num_records))?;
 
     let selected = in_tensor.f_index_select(0, &idx)?;
 
     debug!("make_batch_with: idx={idx} selected={selected:?}");
 
-    return Ok(selected);
-    // }
+    let Some(cfg) = cfg else {
+        return Ok(selected);
+    };
 
     // Case 2: data paucity — build a batch via sampling with replacement,
     // then mixup (optional) and jitter (optional).
@@ -160,7 +163,7 @@ mod tests {
         let m = 2;
         let x = row_matrix(n, m); // rows: [0,0], [1,2], [2,4]
         let cfg = MixupJitterCfg { do_mixup: true, do_jitter: false, alpha: 0.4, sigma: 0.0 };
-        let out = make_batch_with(&x, b, cfg).expect("ok");
+        let out = make_batch_with(&x, b, Some(cfg)).expect("ok");
         assert_eq!(out.size().as_slice(), &[b, m]);
 
         // Per-feature bounds from original rows.
@@ -186,7 +189,7 @@ mod tests {
         let m = 3;
         let x = Tensor::zeros([n, m], (Kind::Float, Device::Cpu));
         let cfg = MixupJitterCfg { do_mixup: false, do_jitter: true, alpha: 0.4, sigma: 0.05 };
-        let out = make_batch_with(&x, b, cfg).expect("ok");
+        let out = make_batch_with(&x, b, Some(cfg)).expect("ok");
         assert_eq!(out.size().as_slice(), &[b, m]);
 
         // Since input is all zeros and we only jitter, sum of abs must be > 0.
@@ -203,7 +206,8 @@ mod tests {
         let x = row_matrix(n, m).to_kind(Kind::Double); // input as f64
         // Turn off mixup & jitter to isolate dtype path in the small-N branch.
         let cfg = MixupJitterCfg { do_mixup: false, do_jitter: false, alpha: 0.4, sigma: 0.0 };
-        let out = make_batch_with(&x, b, cfg).expect("ok");
+        let out = make_batch_with(&x, b, Some(cfg)).expect("ok");
+        debug!("out: {out:?}");
         assert_eq!(out.kind(), Kind::Double, "output dtype should match input");
         assert_eq!(out.size().as_slice(), &[b, m]);
     }

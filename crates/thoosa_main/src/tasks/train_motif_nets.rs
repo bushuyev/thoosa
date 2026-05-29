@@ -648,8 +648,8 @@ where
             debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
 
             // TODO(perf): make_batch_with is called twice for every train batch and does heavy random/mixup tensor setup; prebuild reusable mixed batches per epoch when memory allows.
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
-            let random = make_batch_with(random_slices.t_ref(), num_slices, MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })?;
+            let motifs = make_batch_with(motifs.t_ref(), num_slices, Some(MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 }))?;
+            let random = make_batch_with(random_slices.t_ref(), num_slices, Some(MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 }))?;
             // let motifs = &motifs.t;
             // let random = &random_slices.t;
 
