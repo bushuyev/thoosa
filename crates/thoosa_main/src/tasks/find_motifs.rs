@@ -569,7 +569,6 @@ mod tests {
     use std::path::Path;
     use std::sync::Arc;
     use log::LevelFilter::Trace;
-    use rand::random_range;
     use tch::Device::Cuda;
     use tch::{Device, IndexOp, Tensor};
     use tch::display::set_print_options_full;
@@ -614,7 +613,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_find_motifs_max_dist() -> Result<(), ThoError> {
-        setup_find_motifs(FindMotifsRunConfig::new_with_precalculate_stats(Some(1), 10, 100, None, 0.1, 70)).await?;
+        setup_find_motifs(FindMotifsRunConfig::new_with_precalculate_stats(Some(1), 10, 100, None, 0.1, 60)).await?;
 
         Ok(())
     }
@@ -630,7 +629,7 @@ mod tests {
 
 
         let resources = (0..3).map(|i| {
-            let size = random_range(2..5);
+            let size = i + 2;
             let resource = Resource::new(i, 1, format!("resource_{i}"), size * 1000);
 
 
