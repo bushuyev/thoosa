@@ -1011,7 +1011,6 @@ where
     #[cfg(test)]
     fail_if_size_bigger_than:Option<usize>,
     motif_id:MonoKey,
-    stft:SyncStft<C>
 }
 impl <C> ApplyMotifNet<C>
 where
@@ -1030,14 +1029,6 @@ where
 
         debug!("ApplyMotifNet::new: net_wrapper.id={:?}", net_wrapper.id());
 
-        let stft = SyncStft::new("".into(), StftRunConfig::new(
-            16000,
-            Some(4000),
-            Some(4000),
-            true,
-            true,
-            true
-        ));
 
         Self {
             id: mono_key!(APPLY_MOTIF_NET, "ApplyMotifNet") + net_wrapper.id(),
@@ -1049,7 +1040,6 @@ where
             pd: PhantomData ,
             #[cfg(test)]
             fail_if_size_bigger_than,
-            stft,
             motif_id: mono_key!(motif_id, "motif_id")
         }
     }
@@ -1098,7 +1088,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let out_id = self.out_id(&input.id());
 
-        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id(), Some(&self.stft))?;
+        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
@@ -1107,16 +1097,13 @@ impl <C> SyncStage for ApplyMotifNet<C> where
     }
 }
 
-pub fn apply_motif_net_forward<C>(
+pub fn apply_motif_net_forward(
     out_id: SynKey,
     input: &ThoTensor<ChannelsData, SynKey>,
     motif_net: &DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>,
     slice_step: u32,
     input_id: &SynKey,
-    stft: Option<&SyncStft<C>>,
 ) -> Result<ThoTensor<MotifProbability, SynKey>, ThoError>
-where
-    C: RunCtx + Adjustable + 'static
 {
     let motif_id = motif_net.extra().motif_id();
     let c = motif_net.extra().channel() as i64;
