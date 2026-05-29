@@ -29,14 +29,13 @@ use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use thoosa_common::dims::ChannelsData;
-use crate::tasks::apply_motif_nets_merged::ApplyMotifNetsMerged;
 
 #[derive(Debug)]
 struct ApplyNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    apply_motif_nets: Arc<ApplyMotifNetsMerged<C>>,
+    apply_motif_nets: Arc<ApplyMotifNets/*Merged*/<C>>,
     apply_label_net: Arc<ApplyLabelNet<C>>
 }
 
@@ -103,7 +102,7 @@ where
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
                 apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new(ApplyMotifNetsMerged::from_trained_nets(
+                    apply_motif_nets: Arc::new(ApplyMotifNets/*Merged*/::from_trained_nets(
                         ws,
                         store,
                         stage_ctx.branch(false),
@@ -658,7 +657,7 @@ mod tests {
     ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
         GlobalCtx::init_devices(1);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
-        let find_motifs_run_config_id = 30;
+        let find_motifs_run_config_id = 300;
         let device = Device::Cpu;
         let slices_len = slices_len(motif_width, step);
 
