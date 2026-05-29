@@ -88,7 +88,7 @@ pub(crate) async fn run_all(
 
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
-    let init_ctx_find_motifs = root_ctx.branch(Some("init find motifs"), true);
+    let init_ctx_find_motifs = root_ctx.branch(true);
     let store_in_find_motifs = Arc::clone(&store);
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
@@ -123,7 +123,7 @@ pub(crate) async fn run_all(
                         ).await?,
                     ))
                 },
-                || root_ctx.branch(Some("find_motifs"), true),
+                || root_ctx.branch(true),
                 "find motifs"
             ).await?;
 
@@ -173,7 +173,7 @@ pub(crate) async fn run_all(
                             None
                         ).await?))
                     },
-                    || root_ctx.branch(Some("select_motifs"), true),
+                    || root_ctx.branch(true),
                     "find_motifs"
                 ).await?);
 
@@ -200,7 +200,7 @@ pub(crate) async fn run_all(
                         run_all_args.max_chunk_size as i64,
                     )))
                 },
-                || root_ctx.branch(Some("opt find and select motifs"), true),
+                || root_ctx.branch(true),
             ).await?;
 
             info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_config_ids={best_find_and_select_result_ids:?}");
@@ -222,7 +222,7 @@ pub(crate) async fn run_all(
 
     if run_all_args.with_plots {
         for select_motifs_run_config_id in &select_motifs_run_config_ids {
-            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch("plot".into(), false)).await?;
+            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false)).await?;
         }
     }
 
@@ -247,13 +247,13 @@ pub(crate) async fn run_all(
                 None,
             )?))
         },
-        || root_ctx.branch(Some("train motif nets"), true),
+        || root_ctx.branch(true),
     ).await?;
 
     info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
 
     //gpt Pre-create context and shared handles for label-net stage construction.
-    let init_ctx_train_labels = root_ctx.branch(Some("init label nets"), true);
+    let init_ctx_train_labels = root_ctx.branch(true);
     let store_in_train_labels = Arc::clone(&store);
     let ws_in_train_labels = Arc::clone(&ws);
     let labels_filter = run_all_args.labels_filter();
@@ -279,7 +279,7 @@ pub(crate) async fn run_all(
                 run_all_args.motif_slices_step
             ).await.map(|v| Arc::new(v))
         },
-        || root_ctx.branch(Some("train label nets"), true),
+        || root_ctx.branch(true),
     ).await?;
 
     info!("train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
@@ -288,7 +288,7 @@ pub(crate) async fn run_all(
     ////////////////////////
 
     //gpt Pre-create context and shared handles for final-net stage construction.
-    let init_ctx_in_train_final = root_ctx.branch(Some("init final nets"), true, false);
+    let init_ctx_in_train_final = root_ctx.branch(true);
     let store_in_train_final = Arc::clone(&store);
     let ws_in_train_final = Arc::clone(&ws);
     let loader_in_train_final = Arc::clone(&loader);
@@ -313,7 +313,7 @@ pub(crate) async fn run_all(
                 run_all_args.selected_motif_nets_limit,
             ).await.map(|v| Arc::new(v))
         },
-        || root_ctx.branch(Some("train final nets"), true, false),
+        || root_ctx.branch(true),
     ).await?;
     */
 

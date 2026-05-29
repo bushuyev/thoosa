@@ -623,7 +623,7 @@ mod tests {
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
-        let sum_0 = with_data!(root_ctx.branch("aaa".into(), false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
+        let sum_0 = with_data!(root_ctx.branch(false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
             Ok::<_, ThoError>(t_0.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         })?;
         debug!("sum_0={sum_0}");
@@ -641,7 +641,7 @@ mod tests {
         // debug!("t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
-        let sum_1 = with_data!(root_ctx.branch("bbb".into(), false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
+        let sum_1 = with_data!(root_ctx.branch(false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
             Ok::<_, ThoError>(t_0.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
         })?;
 

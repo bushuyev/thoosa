@@ -600,7 +600,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(find_motifs_args.resource_config())));
 
-            let init_ctx = root_ctx.branch(Some("find motifs init ctx"), true);
+            let init_ctx = root_ctx.branch(true);
             let init_loader = Arc::clone(&loader);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
@@ -624,7 +624,7 @@ where
                         .await?,
                     ))
                 },
-                || root_ctx.branch(Some("find motifs"), true),
+                || root_ctx.branch(true),
                 "find motifs",
             ).await?;
 
@@ -655,7 +655,7 @@ where
                         seq_scan_args.max_chunk_size
                     )?))
                 },
-                || root_ctx.branch(Some("seq scan"), true), "find motifs",
+                || root_ctx.branch(true), "find motifs",
             ).await?;
 
             info!("SeqScan done, run_config_ids={run_config_ids:?}");
@@ -693,7 +693,7 @@ where
                         None
                     ).await?))
                 },
-                || root_ctx.branch(Some("select motifs"), true), "find motifs",
+                || root_ctx.branch(true), "find motifs",
             ).await?;
 
             info!("SelectMotifs done, run_config_ids={run_config_ids:?}");
@@ -714,7 +714,7 @@ where
 
             let output_wrap = Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
                 Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone()))),
-                root_ctx.branch(Some("select motifs"), true)
+                root_ctx.branch(true)
             ).await?;
 
             let output  = Arc::into_inner(output_wrap).unwrap().take_data(0).await?;
@@ -746,7 +746,7 @@ where
                         None,
                     )?))
                 },
-                || root_ctx.branch(Some("train motif nets"), true),
+                || root_ctx.branch(true),
             ).await?;
 
             info!("TrainMotifsNets: run_config_ids={run_config_ids:?}");
@@ -760,7 +760,7 @@ where
             let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(train_label_nets_args.resource_config())));
 
             let opt_config = Arc::new(train_label_nets_args.opt_config.clone());
-            let init_ctx = root_ctx.branch(Some("init label nets"), true);
+            let init_ctx = root_ctx.branch(true);
             let labels_filter = train_label_nets_args.labels_filter();
 
             let run_config_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
@@ -784,7 +784,7 @@ where
                         train_label_nets_args.motif_slices_step.unwrap() //TODO or take from find motifs
                     ).await.map(|v|Arc::new(v))
                 },
-                ||root_ctx.branch(Some("train label nets"), true),
+                ||root_ctx.branch(true),
             ).await?;
 
 
@@ -800,7 +800,7 @@ where
                train_final_net_args.resource_config())));
 
             let opt_config = Arc::new(train_final_net_args.opt_config.clone());
-            let init_ctx = root_ctx.branch(Some("init final nets"), true);
+            let init_ctx = root_ctx.branch(true);
             let run_config_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 train_final_net_run_config_range_or_value,
                 input_wrapper,
@@ -821,7 +821,7 @@ where
                     ).await.map(|v|Arc::new(v))
 
                 },
-                || root_ctx.branch(Some("train final nets"), true),
+                || root_ctx.branch(true),
             ).await?;
 
 
@@ -833,7 +833,7 @@ where
             let output = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
                 .run(
                     Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
-                    root_ctx.branch(Some("convert_precision"), true),
+                    root_ctx.branch(true),
                 )
                 .await?;
             let output = Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0).await?;
@@ -845,7 +845,7 @@ where
             let output = Arc::new(ExportStage::<RunCtxImpl>::new(&ws, &store, export_args.clone()))
                 .run(
                     Arc::new(DevicesWrap::wrap(ExportInput::new())),
-                    root_ctx.branch(Some("export"), true),
+                    root_ctx.branch(true),
                 )
                 .await?;
             let output = Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0).await?;
@@ -857,7 +857,7 @@ where
             let output = Arc::new(PurgeModelsStage::<RunCtxImpl>::new(&ws, &store, purge_models_args.clone()))
                 .run(
                     Arc::new(DevicesWrap::wrap(PurgeModelsInput::new())),
-                    root_ctx.branch(Some("purge_models"), true),
+                    root_ctx.branch(true),
                 )
                 .await?;
             let output = Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0).await?;
@@ -1245,7 +1245,7 @@ where
         DataBy::MotifId(motif_ids) => {
             debug!("run_plot: MotifsBy::MotifId motif_ids={motif_ids:?}");
             for motif_id in motif_ids {
-                plot_motif(&ws, ctx.branch(Some(&format!("motif_{motif_id}")), true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout).await?;
+                plot_motif(&ws, ctx.branch(true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout).await?;
             }
         }
         DataBy::RunId {
@@ -1264,7 +1264,7 @@ where
                     select_motifs_run_config_ids.clone(),
                     resolution,
                     print_to_stdout,
-                    ctx.branch(Some(&format!("find_motifs_run_{find_motifs_run_config_id}")), true),
+                    ctx.branch(true),
                 )
                 .await?;
             }
@@ -1280,7 +1280,7 @@ where
                     &clc_dist,
                     resolution,
                     print_to_stdout,
-                    ctx.branch(Some(&format!("selected_motifs_run_{select_motifs_run_config_id}")), true),
+                    ctx.branch(true),
                 )
                 .await?;
             }
@@ -1443,7 +1443,7 @@ where
             let done_cnt = Arc::clone(&done_cnt);
             let clc_dist = Arc::clone(clc_dist);
             let motif_loader_impl = Arc::clone(motif_loader_impl);
-            let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true);
+            let ctx = ctx.branch(true);
             let select_motifs_run_config_ids = select_motifs_run_config_ids.clone();
             async move {
                 debug!("run_plot: motif_id={motif_id}");
@@ -1517,7 +1517,7 @@ where
             let motif_loader_impl = Arc::clone(motif_loader_impl);
             let ws = Arc::clone(ws);
             let suffix = suffix.clone();
-            let ctx = ctx.branch(Some(&format!("motif_{motif_id}")), true);
+            let ctx = ctx.branch(true);
             async move {
                 debug!("plot_selected_motifs: motif_id={motif_id}");
                 if let Err(e) = plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout).await {
@@ -1565,7 +1565,7 @@ where
     Arc::clone(loader)
         .run_cached(
             Arc::new(DevicesWrap::wrap(resource)),
-            ctx.branch(Some("plot_resource_load"), false),
+            ctx.branch(false),
         )
         .await
 }
@@ -1671,12 +1671,12 @@ pub async fn plot_resource<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let raw = load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(Some("plot_resource_load"), false)).await?;
+    let raw = load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false)).await?;
 
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_raw"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+    raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
     }).await?;
 
@@ -1685,12 +1685,12 @@ where
         let filtered = Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id)?)
             .run(
                 Arc::clone(&raw),
-                ctx.branch(Some("plot_resource_freq_filter"), false),
+                ctx.branch(false),
             )
             .await?;
 
         let filtered_channels = channels.clone();
-        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_freq_filter_plot"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+        filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
         }).await?;
     }
@@ -1711,9 +1711,9 @@ async fn plot_motif_net_applied<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let raw = load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(Some("plot_resource_motif_net_load"), false)).await?;
+    let raw = load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false)).await?;
 
-    // raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_all"), false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
+    // raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
     //     plot_resource_channels::<C>(ws, resource_id, "raw_all_channels", &format!("Resource {resource_id} raw (all channels)"), tensor, None)
     // }).await?;
 
@@ -1729,7 +1729,7 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_raw_channel"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+    raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     }).await?;
 
@@ -1739,12 +1739,12 @@ where
         let filtered = Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id)?)
             .run(
                 Arc::clone(&raw),
-                ctx.branch(Some("plot_resource_motif_net_prefilter"), false),
+                ctx.branch(false),
             )
             .await?;
 
         let channel_only_filtered = vec![channel];
-        filtered.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_prefilter_channel"), false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+        filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         }).await?;
 
@@ -1760,7 +1760,7 @@ where
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
     let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
-    filtered_or_raw.with_data_ref(0, ctx.branch(Some("plot_resource_motif_net_apply"), false), None, {
+    filtered_or_raw.with_data_ref(0, ctx.branch(false), None, {
         let motif_net = Arc::clone(&motif_net);
         move |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             let out = apply_motif_net_forward::<C>(
@@ -1808,16 +1808,16 @@ where
 
     let motif = Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
-        ctx.branch(Some("plot_motif_loader"), false),
+        ctx.branch(false),
     )
     .await?;
 
     let metrics_for_plot: Vec<(String, f32)> = motif_stats
-        .run/*_cached*/(clc_input, ctx.branch(Some("plot_motif_clc_dist"), false))
+        .run/*_cached*/(clc_input, ctx.branch(false))
         .await?
         .with_data_ref(
             0,
-            ctx.branch(Some("plot_motif_metrics_values"), false),
+            ctx.branch(false),
             None,
             move |stats: &MotifStatsOutput, _ctx| {
                 metrics
@@ -1832,7 +1832,7 @@ where
 
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
-    let r = motif.with_data_ref(ctx.device_idx(), ctx.branch(Some("plot_motif_data"), false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
+    let r = motif.with_data_ref(ctx.device_idx(), ctx.branch(false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
         let run_config_id = motif.extra().find_motifs_run_config_id;
         let channel = motif.extra().channel;
 
@@ -2569,10 +2569,10 @@ mod cli_tests {
 
             let mut ctx = mock_run_ctx::default(1);
 
-            let pulse_triangle_filtered_t = Arc::clone(&freq_filter).run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_triangle_t.shallow_clone())?)), ctx.branch(Some("filter"), false)).await?;
-            let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(Some("filter"), false)).await?;
+            let pulse_triangle_filtered_t = Arc::clone(&freq_filter).run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_triangle_t.shallow_clone())?)), ctx.branch(false)).await?;
+            let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(false)).await?;
 
-            with_data!(ctx.branch(Some("filter"), false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData, SynKey> |{
+            with_data!(ctx.branch(false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData, SynKey> |{
 
                 debug_plot!(pulse_triangle_t.as_ref(), "pulse_triangle_{freq}_filtered_t")?;
                 debug_plot!(pulse_sin_t.as_ref(), "pulse_sin_{freq}_filtered_t")?;

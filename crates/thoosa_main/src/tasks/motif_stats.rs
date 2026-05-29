@@ -954,7 +954,7 @@ where
         for<'a> Self::In<'a>: Send + Sync,
     {
         let input_id = input.id().clone();
-        let (source, metrics, quantiles) = with_data!(ctx.branch(Some("motif_stats_input"), false), input; |_ctx, input: &MotifStatsInput| {
+        let (source, metrics, quantiles) = with_data!(ctx.branch(false), input; |_ctx, input: &MotifStatsInput| {
             Ok::<_, ThoError>((input.source().clone(), input.metrics().clone(), None))
         })?;
         let stats = match source {
@@ -963,7 +963,7 @@ where
                 let motif = Arc::clone(&self.motif_loader)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(motif_loader_input)),
-                        ctx.branch(Some("motif_stats_motif_loader"), false),
+                        ctx.branch(false),
                     )
                     .await?;
 
@@ -980,7 +980,7 @@ where
                 oom_handler.run(
                     &self.clc_stats_run,
                     clc_input,
-                    ctx.branch(Some("motif_stats_sync"), false),
+                    ctx.branch(false),
                     Contexts::new(
                         NoopInputContext(None),
                         NoopRunnableContext {},
@@ -1005,7 +1005,7 @@ where
                     let motif = Arc::clone(&self.motif_loader)
                         .run_cached(
                             Arc::new(DevicesWrap::wrap(motif_loader_input)),
-                            ctx.branch(Some("motif_stats_merged_motif_loader"), false),
+                            ctx.branch(false),
                         )
                         .await?;
 
@@ -1042,7 +1042,7 @@ where
                 oom_handler.run(
                     &self.clc_stats_run,
                     clc_input,
-                    ctx.branch(Some("motif_stats_sync"), false),
+                    ctx.branch(false),
                     Contexts::new(
                         NoopInputContext(None),
                         NoopRunnableContext {},
@@ -1079,7 +1079,7 @@ where
                     slices,
                     Arc::clone(&self.store),
                     Arc::clone(&self.loader),
-                    ctx.branch(Some("motif_stats_random_load_slices"), false),
+                    ctx.branch(false),
                     &self.ws,
                     "motif_stats_random",
                 )
@@ -1100,7 +1100,7 @@ where
                 oom_handler.consume(
                     &self.clc_stats_consume,
                     clc_input,
-                    ctx.branch(Some("motif_stats_sync"), false),
+                    ctx.branch(false),
                     Contexts::new(
                         NoopInputContext(None),
                         NoopRunnableContext {},
@@ -1306,12 +1306,12 @@ mod tests {
             .run(
                 input,
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                    .branch(Some("random_stats"), false),
+                    .branch(false),
             )
             .await?;
 
         let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-            .branch(Some("random_stats_data"), false);
+            .branch(false);
         let size = output
             .with_data_ref(0, ctx_for_data, None, |stats: &MotifStatsOutput, _ctx| {
                 let t = stats.channels_motifs_dists(&metric)?;
@@ -1369,7 +1369,7 @@ mod tests {
             .run(
                 input,
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(Some("motif_stats_merged"), false),
+                .branch(false),
             )
             .await?;
 
@@ -1377,7 +1377,7 @@ mod tests {
             .with_data_ref(
                 0,
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(Some("motif_stats_merged_data"), false),
+                .branch(false),
                 None,
                 |stats: &MotifStatsOutput, _ctx| stats.channel_value(&metric, 0),
             )

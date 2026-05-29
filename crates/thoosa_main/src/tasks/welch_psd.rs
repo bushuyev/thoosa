@@ -302,7 +302,7 @@ where
         let input_id = input.id().clone();
 
         let (resources_config, nperseg, noverlap) = with_data!(
-            ctx.branch(Some("welch_psd_input"), false),
+            ctx.branch(false),
             input;
             |_ctx, input: &FrequenciesStatsInput<RC>| {
                 Ok::<_, ThoError>((
@@ -338,12 +338,12 @@ where
             let loaded = Arc::clone(&self.loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(resource.clone())),
-                    ctx.branch(Some(&format!("welch_psd_load_resource_{}", resource.id())), false),
+                    ctx.branch(false),
                 )
                 .await?;
 
             let welch_input = loaded
-                .with_data_ref(0, ctx.branch(Some("welch_psd_wrap_input"), false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+                .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 })
                 .await?;
@@ -362,7 +362,7 @@ where
             .run(
                 &welch_stage,
                 Arc::clone(&welch_input),
-                ctx.branch(Some(&format!("welch_psd_resource_{}", resource.id())), false),
+                ctx.branch(false),
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         welch_input_size,

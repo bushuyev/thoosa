@@ -133,8 +133,8 @@ where
                 let path = trained_net.net_path;
                 let ws = Arc::clone(&ws);
                 let load_motif_net = Arc::clone(&load_motif_net);
-                let load_ctx = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
-                let load_ctx_2 = stage_ctx.branch(Some("apply_motif_nets_load_motif_net"), false);
+                let load_ctx = stage_ctx.branch(false);
+                let load_ctx_2 = stage_ctx.branch(false);
 
                 let channels_widths_net_tensors = Arc::clone(&channels_widths_net_tensors);
 
@@ -243,7 +243,7 @@ where
         let self_clone = Arc::clone(&self);
         async move {
 
-            let res = with_data!(ctx.branch("ApplyMotifNetsMerged::run".into(), false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
+            let res = with_data!(ctx.branch(false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
                 debug!("ApplyMotifNetsMerged::run: input={input:?}");
                 let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
                     let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
@@ -300,7 +300,7 @@ where
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));
 
-            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(input.id()), res, ctx.device_idx()), ctx.branch("BatchAppliedMotifNetsInput".into(), false)) {
+            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(input.id()), res, ctx.device_idx()), ctx.branch(false)) {
                 ConsumeResult::Failed { input, error } => {
                     Err(ThoError::from(error))
                 }

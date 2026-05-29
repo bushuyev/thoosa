@@ -798,7 +798,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let resources_config = with_data!(ctx.branch(Some("mel_patch_resources"), false), input; |_ctx, input: &BucketingInput<RC>| {
+        let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &BucketingInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
         let resources = resources_config.to_resources(&self.store).await?;
@@ -808,7 +808,7 @@ where
 
         let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len(), 1);
         let futures = resources.iter().map(|resource|{
-            let mut sync_bucketing_ctx = ctx.branch(Some(&format!("BucketingStage_{}", resource.id())), false);
+            let mut sync_bucketing_ctx = ctx.branch(false);
             let loader = Arc::clone(&self.loader);
             let sync_stage = Arc::clone(&self.sync_bucketing_stage);
             let sample_rate = self.sample_rate;
@@ -817,7 +817,7 @@ where
                 let loaded = loader
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(resource.clone())),
-                        sync_bucketing_ctx.branch(Some(&format!("mel_patch_bucket_resource_{}_loader", resource.id())), false),
+                        sync_bucketing_ctx.branch(false),
                     )
                     .await?;
 
@@ -1365,7 +1365,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
@@ -1386,14 +1386,14 @@ mod tests {
 
         let avg_norm_thickness = futures::stream::iter(motifs.iter().map(|motif_id| {
             let motif_stats = Arc::clone(&motif_stats);
-            let mut motif_load_ctx = ctx.branch("motif_load".into(), false);
+            let mut motif_load_ctx = ctx.branch(false);
             async move {
                 let norm_thickness = Metrics::NormThickness(NormThicknessRunConfig::default());
                 let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                     norm_thickness.clone()
-                ]))), motif_load_ctx.branch("motif_load".into(), false)).await?;
+                ]))), motif_load_ctx.branch(false)).await?;
 
-                let norm_thickness = with_data!(motif_load_ctx.branch("metrics".into(), false), metrics; |ctx, metrics:&MotifStatsOutput|{
+                let norm_thickness = with_data!(motif_load_ctx.branch(false), metrics; |ctx, metrics:&MotifStatsOutput|{
                     Ok::<_, ThoError>(metrics.channel_metric_value(&norm_thickness, 0)?.value())
                 })?;
 
@@ -1429,7 +1429,7 @@ mod tests {
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
@@ -1446,7 +1446,7 @@ mod tests {
 
             plot_motif(
                 &ws,
-                ctx.branch("plot".into(), false),
+                ctx.branch(false),
                 *motif_id as usize,
                 &motif_loader_impl,
                 Arc::clone(&motif_stats),
@@ -1477,7 +1477,7 @@ mod tests {
                 None,
                 Resolution::Normal,
                 false,
-                ctx.branch("plot".into(), false),
+                ctx.branch(false),
                 "0_"
             ).await?
         }
@@ -1494,7 +1494,7 @@ mod tests {
                 None,
                 Resolution::Normal,
                 false,
-                ctx.branch("plot".into(), false),
+                ctx.branch(false),
                 "1_"
             ).await?
         }
@@ -1619,7 +1619,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch("test".into(), false)).await?;
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
@@ -1651,7 +1651,7 @@ mod tests {
                 None,
                 Resolution::Normal,
                 false,
-                ctx.branch("plot".into(), false),
+                ctx.branch(false),
                 ""
             ).await?
 
@@ -1661,7 +1661,7 @@ mod tests {
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch("motif_load".into(), false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
@@ -1677,13 +1677,13 @@ mod tests {
 
             let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                 Metrics::NormThickness(NormThicknessRunConfig::default())
-            ]))), ctx.branch("motif_load".into(), false)).await?;
+            ]))), ctx.branch(false)).await?;
 
             debug!("heavy_run_mel_path: metrics={metrics:?}");
 
             plot_motif(
                 &ws,
-                ctx.branch("plot".into(), false),
+                ctx.branch(false),
                 *motif_id as usize,
                 &motif_loader_impl,
                 Arc::clone(&motif_stats),

@@ -195,7 +195,7 @@ where
 
         async move {
             //gpt Load train/valid logits resources and validate label vector sizes.
-            let resources_config = with_data!(ctx.branch(Some("train_final_resources"), false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
+            let resources_config = with_data!(ctx.branch(false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
                 Ok::<_, ThoError>(input.resources_config().clone())
             })?;
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
@@ -245,7 +245,7 @@ where
 
             let result = Arc::into_inner(train_net.run(
                 Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
-                ctx.branch(Some("train_final_net"), false)).await?
+                ctx.branch(false)).await?
             ).unwrap()
                 .take_data(0)
                 .await?;
@@ -309,14 +309,14 @@ where
         let futures = batches.into_iter().map(move |batch_keys| {
             let loader = Arc::clone(&loader);
             let resources = Arc::clone(&resources);
-            let mut ctx_for_batch = ctx.branch(Some("final_net_batch"), false);
+            let mut ctx_for_batch = ctx.branch(false);
 
             async move {
                 let batch_len = batch_keys.len();
                 let futures = batch_keys.into_iter().map(|index| {
                     let loader = Arc::clone(&loader);
                     let (resource, labels) = resources[index].clone();
-                    let ctx_for_loader = ctx_for_batch.branch(Some("final_net_batch_loader"), false);
+                    let ctx_for_loader = ctx_for_batch.branch(false);
 
                     async move {
                         let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource)), ctx_for_loader).await?;
@@ -342,7 +342,7 @@ where
                 });
 
                 let device_idx = ctx_for_batch.device_idx();
-                let ctx_for_build = ctx_for_batch.branch(Some("final_net_batch_build"), false);
+                let ctx_for_build = ctx_for_batch.branch(false);
 
                 with_data!(ctx_for_build, [outputs]; |_ctx, xs:&[&ThoTensor<LabelProbability, SynKey>]|{
                     let x = Tensor::f_stack(
@@ -562,12 +562,12 @@ mod tests {
         );
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(Some("new_train_final_net_with_ml"), false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
+        let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
 
         let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string())))));
 
-        let r = train_final_net.run(input, run_ctx.branch(Some("train_final_net"), false)).await?;
-        with_data!(run_ctx.branch(Some("train_final_nets_run"), false), r; |_ctx, r:&TrainFinalNetOutput|{
+        let r = train_final_net.run(input, run_ctx.branch(false)).await?;
+        with_data!(run_ctx.branch(false), r; |_ctx, r:&TrainFinalNetOutput|{
 
             debug!("test_train_final_net_smoke: result={r:?}");
 

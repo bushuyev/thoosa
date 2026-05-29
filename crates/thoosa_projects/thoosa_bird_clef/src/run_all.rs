@@ -115,8 +115,8 @@ pub(crate) async fn run_all(
 
                 let fixed_find_motif_config = fixed_find_motifs_config.clone();
 
-                let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
-                let init_ctx_find_motifs = label_ctx.branch(Some("init_ctx_find_motifs"), false);
+                let mut label_ctx = root_ctx.branch(true);
+                let init_ctx_find_motifs = label_ctx.branch(false);
 
                 let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
 
@@ -157,14 +157,14 @@ pub(crate) async fn run_all(
                                     ).await?,
                                 ))
                             },
-                            || label_ctx.branch(Some("find_motifs"), false),
+                            || label_ctx.branch(false),
                             &format!("find motifs for {label}")
                         ).await?;
 
                         info!("run_all: label={label} find_motifs_run_config_ids={find_motifs_run_config_ids:?}");
 
                         let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
-                        let init_ctx_select_buckets = label_ctx.branch(Some("init_ctx_select_buckets"), true);
+                        let init_ctx_select_buckets = label_ctx.branch(true);
                         let ws_for_select_buckets = Arc::clone(&ws);
                         let store_for_select_buckets = Arc::clone(&store);
                         let loader_for_select_buckets = Arc::clone(&loader);
@@ -193,7 +193,7 @@ pub(crate) async fn run_all(
                                     init_ctx_select_buckets,
                                 ).await?))
                             },
-                            || label_ctx.branch(Some("select_motifs"), true),
+                            || label_ctx.branch(true),
                             &format!("select motifs for {label}")
                         ).await?;
 
@@ -204,7 +204,7 @@ pub(crate) async fn run_all(
 
                         if run_all_args.with_plots {
                             for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                                run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, label_ctx.branch("plot".into(), false)).await?;
+                                run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, label_ctx.branch(false)).await?;
                             }
                         }
 
@@ -226,13 +226,13 @@ pub(crate) async fn run_all(
                                     Some(label.clone())
                                 )?))
                             },
-                            || label_ctx.branch(Some("train motif nets"), false),
+                            || label_ctx.branch(false),
                         ).await?;
 
                         info!("train motif nets done: label={label} train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}");
 
                         // Pre-create context and shared handles for label-net stage construction.
-                        let mut init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
+                        let mut init_ctx_train_labels = label_ctx.branch(false);
                         let store_in_train_labels = Arc::clone(&store);
                         let ws_in_train_labels = Arc::clone(&ws);
 
@@ -256,9 +256,9 @@ pub(crate) async fn run_all(
                             let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
                             let store_in_train_labels = Arc::clone(&store_in_train_labels);
 
-                            let mut label_ctx = label_ctx.branch(Some("label combo"), false);
+                            let mut label_ctx = label_ctx.branch(false);
                             let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
-                            let init_ctx_train_labels =  init_ctx_train_labels.branch(Some("init label nets"), false);
+                            let init_ctx_train_labels =  init_ctx_train_labels.branch(false);
                             let best_min_loss= Arc::clone(&best_min_loss);
                             match panic_to_err_async!(
                                   run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
@@ -281,7 +281,7 @@ pub(crate) async fn run_all(
                                             run_all_args.motif_slices_step
                                         ).await.map(|v| Arc::new(v))
                                     },
-                                    || label_ctx.branch(Some("train label nets"), false),
+                                    || label_ctx.branch(false),
                                 )
                             ) {
                                 Ok(train_label_nets_run_config_ids) => {
@@ -338,8 +338,8 @@ pub(crate) async fn run_all(
                 }
             ).map(|label| {
                 info!("run_all: label={label}");
-                let mut label_ctx = root_ctx.branch(Some(&format!("{label}_ctx")), true);
-                let mut init_ctx_train_labels = label_ctx.branch(Some("init label nets"), false);
+                let mut label_ctx = root_ctx.branch(true);
+                let mut init_ctx_train_labels = label_ctx.branch(false);
 
                 let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
                 let ws_in_train_labels = Arc::clone(&ws);
@@ -368,8 +368,8 @@ pub(crate) async fn run_all(
                         let train_motif_net_run_config_ids = train_motif_net_run_config_ids.clone();
                         let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
                         let store_in_train_labels = Arc::clone(&store_in_train_labels);
-                        let init_ctx_train_labels = init_ctx_train_labels.branch(Some("init combo"), false);
-                        let mut label_ctx = label_ctx.branch(Some("label combo"), false);
+                        let init_ctx_train_labels = init_ctx_train_labels.branch(false);
+                        let mut label_ctx = label_ctx.branch(false);
                         let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
                         match panic_to_err_async!(
                               run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
@@ -392,7 +392,7 @@ pub(crate) async fn run_all(
                                         run_all_args.motif_slices_step
                                     ).await.map(|v| Arc::new(v))
                                 },
-                                || label_ctx.branch(Some("train label nets"), false),
+                                || label_ctx.branch(false),
                             )
                         ) {
                             Ok(train_label_nets_run_config_ids) => {

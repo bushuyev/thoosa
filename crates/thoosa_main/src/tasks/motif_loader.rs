@@ -533,7 +533,7 @@ where
     {
         let input_id = input.id().clone();
 
-        let (motif_id, select_motifs_run_config_id) = with_data!(ctx.branch(Some("motif_loader_input"), false), input; |_ctx, input: &MotifLoaderInput| {
+        let (motif_id, select_motifs_run_config_id) = with_data!(ctx.branch(false), input; |_ctx, input: &MotifLoaderInput| {
             Ok::<_, ThoError>((input.motif_id.clone(), input.select_motifs_run_config_id.clone()))
         })?;
 
@@ -565,7 +565,7 @@ where
             resources_map,
             resource_ids_slices,
             configurable_loader,
-            ctx.branch(Some("motif_loader_load_resource_tensors"), false),
+            ctx.branch(false),
             "motif loader",
         )
         .await?;
@@ -594,7 +594,7 @@ where
         .consume(
             &self.sync_motif_loader,
             sync_input,
-            ctx.branch(Some("motif_loader_sync"), true),
+            ctx.branch(true),
             Contexts::new(
                 NoopInputContext(None),
                 NoopRunnableContext {},
@@ -700,7 +700,7 @@ where
             for<'a> Self::In<'a>: Send + Sync,
     {
 
-        let (motif_id, limit) = with_data!(ctx.branch(Some("random_slices_input"), false), input; |_ctx, input: &SlicesLoaderInput| {
+        let (motif_id, limit) = with_data!(ctx.branch(false), input; |_ctx, input: &SlicesLoaderInput| {
             Ok::<(DataId, u32), ThoError>((input.motif_id.clone(), input.limit))
         })?;
 
@@ -736,7 +736,7 @@ where
             resources_map,
             resource_ids_slices,
             configurable_loader,
-            ctx.branch(Some("random_loader_load_resource_tensors"), false),
+            ctx.branch(false),
             "random loader",
         )
         .await?;
@@ -764,7 +764,7 @@ where
         .consume(
             &self.sync_motif_loader,
             sync_input,
-            ctx.branch(Some("random_slices_loader_sync"), true),
+            ctx.branch(true),
             Contexts::new(
                 NoopInputContext(None),
                 NoopRunnableContext {},
@@ -807,9 +807,9 @@ where
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource));
         let raw_tensor = Arc::clone(&configurable_loader)
-            .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
+            .run_cached(resource_cache, ctx.branch(false))
             .await?;
-        let channel_tensor = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}_clone")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
+        let channel_tensor = with_data!(ctx.branch(false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
             let size = raw_tt.size();
             let mut valid_slices = Vec::with_capacity(slices.len());
 
@@ -933,12 +933,12 @@ where
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(DevicesWrap::wrap(resource));
         let raw_tensor = Arc::clone(&configurable_loader)
-            .run_cached(resource_cache, ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false))
+            .run_cached(resource_cache, ctx.branch(false))
             .await?;
         let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        let resource_slices = with_data!(ctx.branch(Some(&format!("motif_loader_resource_{resource_id}")), false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
+        let resource_slices = with_data!(ctx.branch(false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
             let resource_id = resource_id;
             let resource_slice_count = slices.len() as i64;
             let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
@@ -1181,12 +1181,12 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
             .run_cached(
                 Arc::clone(&input_id),
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(Some("motif_loader_test"), false),
+                .branch(false),
             )
             .await?;
 
         let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-        .branch(Some("motif_loader_test_data"), false);
+        .branch(false);
         let r = motif.with_data_ref(0, ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, _ctx|{
             let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
@@ -1262,12 +1262,12 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
             .run(
                 Arc::clone(&input),
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(Some("random_slices_loader"), false),
+                .branch(false),
             )
             .await?;
 
         let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-        .branch(Some("random_slices_loader_data"), false);
+        .branch(false);
         let r = slices.with_data_ref(
             0,
             ctx_for_data, None, |t: &ThoTensor<MotifSlices, SynKey>, _ctx| {

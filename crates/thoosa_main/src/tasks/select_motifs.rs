@@ -342,7 +342,7 @@ where
             let motif_stats = Arc::clone(&motif_stats);
             let criteria_constraints = criteria_constraints.clone();
             let criteria_metrics = criteria_metrics.clone();
-            let mut ctx = ctx.branch(Some("select_motifs_filter_motif_criteria"), false);
+            let mut ctx = ctx.branch(false);
 
             async move {
                 let motif_stats_output = Arc::clone(&motif_stats)
@@ -351,7 +351,7 @@ where
                             MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                             criteria_metrics.clone(),
                         ))),
-                        ctx.branch(Some("select_motifs_filter_motif_stats"), false),
+                        ctx.branch(false),
                     )
                     .await?;
 
@@ -431,7 +431,7 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("SelectMotifsStage::run: input={input:?}");
 
-        let (resources_config, output_mode) = with_data!(ctx.branch("SelectMotifsStage::run, input with_data".into(), false), input; |_ctx, input: &SelectMotifsInput| {
+        let (resources_config, output_mode) = with_data!(ctx.branch(false), input; |_ctx, input: &SelectMotifsInput| {
             Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
         })?;
         let resources = resources_config.to_resources(&self.store).await?;
@@ -452,13 +452,13 @@ where
 
 
         let futures = self.run_configs.iter().map(|select_motifs_run_config|{
-            let mut ctx_for_futs = ctx.branch("SelectMotifsStage::run, run_configs_futures_cycle".into(), false);
+            let mut ctx_for_futs = ctx.branch(false);
             let self_for_futs = Arc::clone(&self);
 
             async move {
                 let selected_motifs = self_for_futs
                     // TODO(perf): criteria filtering reloads metrics for each select config; keep a per-run motif metric cache when only thresholds differ.
-                    .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch("filter_motifs_by_criteria".into(), false))
+                    .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch(false))
                     .await?;
 
                 let constraint_metrics = match output_mode {

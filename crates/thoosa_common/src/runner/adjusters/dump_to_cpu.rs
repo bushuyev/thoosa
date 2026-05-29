@@ -105,7 +105,7 @@ where
         GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu").await;
 
 
-        Ok(adjustable.branch(None, false))
+        Ok(adjustable.branch(false))
     }
 
     fn degrade(&self, _adjust_context: &mut C) -> bool {

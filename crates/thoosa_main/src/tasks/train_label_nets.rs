@@ -325,7 +325,7 @@ where
 
         async move {
             //Split resources into train/valid sets per label for binary label-vs-rest training.
-            let resources_config = with_data!(ctx.branch(Some("train_label_nets_resources"), false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
+            let resources_config = with_data!(ctx.branch(false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoError>(input.resources_config().clone())
             })?;
             let (train_labels_resource_keys, valid_label_resource_keys) = resources_config.to_resources(&self.store).await?;
@@ -373,7 +373,7 @@ where
             })
             .map(|label_tain_and_valid_sets|{
                 let (label, resources_1) = label_tain_and_valid_sets;
-                let mut ctx_for_task = ctx.branch(Some(&format!("Train_{label}")), true);
+                let mut ctx_for_task = ctx.branch(true);
 
                 let opt_config = Arc::clone(&self.opt_config);
                 let train_label_nets_run_configs = Arc::clone(&train_label_nets_run_configs);
@@ -413,7 +413,7 @@ where
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        let label = label.clone();
                                        async move {
-                                           let (x, lengths, y) = with_data!(ctx.branch(Some("train_label_nets_batch_data"), false),[x_1_wrapped], [x_0_wrapped];|_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
+                                           let (x, lengths, y) = with_data!(ctx.branch(false),[x_1_wrapped], [x_0_wrapped];|_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
 
                                                if x_1.is_empty() || x_1.is_empty(){
                                                  error!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
@@ -685,7 +685,7 @@ where
             let loader = Arc::clone(&loader);
             let x_1 = Arc::clone(&x_1);
             let x_0 = Arc::clone(&x_0);
-            let mut ctx_for_build_fn = ctx.branch(Some("for_build_fn"), false);
+            let mut ctx_for_build_fn = ctx.branch(false);
 
             async move {
                 debug!("ResourcesBatch::build_batch_stream: batch_i={i} batch_keys={batch_keys:?}");
@@ -695,8 +695,8 @@ where
                     let loader = Arc::clone(&loader);
                     let x_1 = Arc::clone(&x_1);
                     let x_0 = Arc::clone(&x_0);
-                    let ctx_x1 = ctx_for_build_fn.branch(Some("x_1_batch_loader"), false);
-                    let ctx_x0 = ctx_for_build_fn.branch(Some("x_0_batch_loader"), false);
+                    let ctx_x1 = ctx_for_build_fn.branch(false);
+                    let ctx_x0 = ctx_for_build_fn.branch(false);
 
                     async move {
                         try_join!(
@@ -1010,7 +1010,7 @@ mod tests {
         debug!("test_train_label_net_3x3: PERF=\n{}", format_perf_map(&PERF));
 
 
-        let ctx_for_data = run_ctx.branch(Some("train_label_nets_assert"), false);
+        let ctx_for_data = run_ctx.branch(false);
         with_data!(ctx_for_data, out; |_ctx, out:&TrainLabelNetsOutput|{
             if log_enabled!(Level::Debug) {
                 for r in &out.results {
@@ -1086,7 +1086,7 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
-                    let ctx_for_data = ctx.branch(Some("train_label_nets_batch_data"), false);
+                    let ctx_for_data = ctx.branch(false);
                     with_data!(ctx_for_data, [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<ChannelsData, SynKey>], x_0:&[&ThoTensor<ChannelsData, SynKey>]|{
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
@@ -1158,7 +1158,7 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
-                    let ctx_for_data = ctx.branch(Some("train_label_nets_batch_data"), false);
+                    let ctx_for_data = ctx.branch(false);
                     with_data!(ctx_for_data, [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<ChannelsData, SynKey>], x_0:&[&ThoTensor<ChannelsData, SynKey>]|{
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
