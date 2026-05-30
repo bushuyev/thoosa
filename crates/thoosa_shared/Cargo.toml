@@ -8,6 +8,14 @@ path = "src/lib.rs"
 
 [features]
 mock_global_ctx = []
+rusqlite-error = ["dep:rusqlite"]
+tch-error = ["dep:tch"]
+serde-json-error = ["dep:serde_json"]
+serde-json5-error = ["dep:serde_json5"]
+polars-error = ["dep:polars"]
+lewton-error = ["dep:lewton"]
+ogg-error = ["dep:ogg"]
+hound-error = ["dep:hound"]
 
 [dependencies]
 thoosa_with_data = {path  = "../thoosa_macros/thoosa_with_data"}
@@ -49,6 +57,14 @@ tracing-log.workspace = true
 libc.workspace = true
 console-subscriber.workspace = true
 file-rotate.workspace = true
+rusqlite = { version = "0.37", optional = true }
+tch = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+serde_json5 = { workspace = true, optional = true }
+polars = { workspace = true, optional = true }
+lewton = { version = "0.10", optional = true }
+ogg = { version = "0.8", optional = true }
+hound = { version = "3.5", optional = true }
 
 [dev-dependencies]
 rustfft = "6"
