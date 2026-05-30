@@ -2003,6 +2003,8 @@ mod tch_tests {
 
         println!("y_fast.size = {:?}", y_fast.size());
         println!("max_abs_err = {max_abs_err}");
+        assert_eq!(y_fast.size(), y_ref.size());
+        assert!(max_abs_err.is_finite());
 
         Ok(())
     }
