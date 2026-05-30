@@ -213,7 +213,7 @@ where
 
 
         Box::pin(async move {
-            debug!("TrainNet::run_inner: descr={descr}");
+            debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
             let (node, params) =  (self.net)(ctx.branch(false), &run_config, Arc::clone(&vs)).await?;
 
             let device = Device::from(ThoDevice::from(tho_device_idx));
@@ -313,6 +313,8 @@ where
                             let pred_y = train_step.as_ref().forward(&x_t, lengths.as_mut(), false)?;
 
                             let valid_loss = (train_step.as_ref().loss_fn())(&pred_y.as_ref(), &y_t.as_ref())?;
+                            debug!("TrainNet::run_inner: descr={descr}  valid_loss={valid_loss}");
+
                             let valid_loss_f32 = panic_to_err!(Ok::<_, ThoError>(valid_loss.double_value(&[])))? as f32;
                             valid_loss_sum += valid_loss_f32;
                             valid_loss_count += 1;
@@ -321,9 +323,11 @@ where
                         })?;
                     }
                     if valid_loss_count > 0 {
-                        let valid_loss = valid_loss_sum / valid_loss_count as f32;
-                        if valid_loss < best_valid_loss - min_delta {
-                            best_valid_loss = valid_loss;
+                        let avg_valid_loss = valid_loss_sum / valid_loss_count as f32;
+                        debug!("TrainNet::run_inner: descr={descr}  avg_valid_loss={avg_valid_loss}");
+
+                        if avg_valid_loss < best_valid_loss - min_delta {
+                            best_valid_loss = avg_valid_loss;
                             bad_epochs = 0;
                             {
                                 // TODO(perf): best-checkpoint saves block the training loop; save on a background CPU task or only after a minimum score delta when configs produce many small improvements.
@@ -334,11 +338,11 @@ where
                         } else {
                             bad_epochs += 1;
                             if bad_epochs >= patience {
-                                debug!("TrainNet::run_inner: descr={descr}  early stopping triggered valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                                debug!("TrainNet::run_inner: descr={descr}  early stopping triggered valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                                 break;
                             }
                         }
-                        debug!("TrainNet::run_inner: descr={descr}  valid_loss={valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
+                        debug!("TrainNet::run_inner: descr={descr}  valid_loss={avg_valid_loss} best_valid_loss={best_valid_loss} bad_epochs={bad_epochs} patience={patience} min_delta={min_delta}");
                     } else {
                         debug!("TrainNet::run_inner: descr={descr}  valid_loss skipped, no validation batches");
                     }
