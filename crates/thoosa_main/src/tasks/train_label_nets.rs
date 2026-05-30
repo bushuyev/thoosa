@@ -55,7 +55,7 @@ use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
 use thoosa_shared::comp_id::SynKey;
-use crate::tasks::apply_motif_nets_merged::ApplyMotifNetsMerged;
+use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 
 #[derive(Debug)]
@@ -95,7 +95,7 @@ pub async fn new_train_label_nets<L, C, R>(
     max_loss: Option<f32>,
     selected_motif_nets_limit: Option<usize>,
     slices_step: u32
-) -> Result<TrainLabelNets<L, ABStage<L, ApplyMotifNetsMerged<C>, C>, C>, ThoError>
+) -> Result<TrainLabelNets<L, ABStage<L, ApplyCosine2DMotifNets<C>, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -105,7 +105,7 @@ where
 
     //gpt Build a motif-net application stage to turn raw resources into motif probabilities.
     // let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-    let apply_motif_nets = Arc::new(ApplyMotifNetsMerged::new(
+    let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
         ws,
         store,
         train_motif_net_run_config_ids.clone(),
