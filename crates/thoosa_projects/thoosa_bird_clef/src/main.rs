@@ -481,12 +481,7 @@ mod tests {
                     .map(|(label_i, label)|(
                             label.to_string(),
                             inputs.iter().enumerate().flat_map(|(input_i, _)| (0..12).map(move |chunk| {
-                                let v= (
-                                    1_000_000 +
-                                        label_i * 1_000 +
-                                        input_i * 1_00 +
-                                        chunk
-                                    );
+                                let v= 1_000_000 + label_i * 1_000 + input_i * 1_00 + chunk;
                                 debug!("test_write_birdclef_submission_csv: label_i={label_i} input_i={input_i} chunk={chunk}, v={v}");
                                 v as f32
                             })).collect()

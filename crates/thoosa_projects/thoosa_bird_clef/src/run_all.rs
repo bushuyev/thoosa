@@ -56,6 +56,7 @@ pub enum RunMode {
         train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
         train_labels_opt_config:Arc<OptConfig>,
     },
+    #[allow(dead_code)]
     RunLabels {
         train_label_nets_run_config_range_or_value:TrainLabelNetRunConfigRangeOrValue,
         train_labels_opt_config:Arc<OptConfig>,
@@ -63,6 +64,7 @@ pub enum RunMode {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct ClefRunConfig {
     pub id: RunConfigId
 }
@@ -464,6 +466,7 @@ pub(crate) async fn run_all(
 }
 
 
+#[allow(dead_code)]
 pub(crate) fn run_labels_config_0(run_all_params: &RunAllArgs) -> RunMode {
     //////////////////////train labels
     RunMode::RunLabels {

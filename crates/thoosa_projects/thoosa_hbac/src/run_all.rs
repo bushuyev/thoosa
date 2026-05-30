@@ -32,6 +32,7 @@ use thoosa_shared::val::NamedVal;
 use thoosa_store::Store;
 
 pub enum FindAndSelect {
+    #[allow(dead_code)]
     GridOnly{
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue,
         fixed_find_motifs_config:FixedFindMotifsConfig,
