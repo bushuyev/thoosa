@@ -51,6 +51,30 @@ use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
 use thoosa_shared::traits::DataId;
 
+impl From<tokio_rusqlite::Error> for ThoError {
+    fn from(value: tokio_rusqlite::Error) -> Self {
+        match value {
+            tokio_rusqlite::Error::ConnectionClosed => ThoError::new("tokio_rusqlite connection closed"),
+            tokio_rusqlite::Error::WorkerGone => ThoError::new("tokio_rusqlite worker gone"),
+            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
+            tokio_rusqlite::Error::Panic(err) => ThoError::from_error("tokio_rusqlite worker panic", err),
+            tokio_rusqlite::Error::Error(err) => ThoError::from(err),
+        }
+    }
+}
+
+impl From<tokio_rusqlite::Error<ThoError>> for ThoError {
+    fn from(value: tokio_rusqlite::Error<ThoError>) -> Self {
+        match value {
+            tokio_rusqlite::Error::ConnectionClosed => ThoError::new("tokio_rusqlite connection closed"),
+            tokio_rusqlite::Error::WorkerGone => ThoError::new("tokio_rusqlite worker gone"),
+            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
+            tokio_rusqlite::Error::Panic(err) => ThoError::from_error("tokio_rusqlite worker panic", err),
+            tokio_rusqlite::Error::Error(err) => err,
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct IdSlice(pub u32, pub ResourceId, pub u32); //id, tensor id, slice idx

@@ -525,7 +525,7 @@ impl Clone for ThoError {
 
 impl Display for ThoError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "ThoError: {}, cause={:?}", self.msg, self.what)
+        write!(f, "ThoError: {}, cause={}", self.msg, self.cause_summary())
     }
 }
 
@@ -627,6 +627,60 @@ impl ThoError {
 
     pub fn what(&self) -> &Cause {
         &self.what
+    }
+
+    fn cause_summary(&self) -> String {
+        match &self.what {
+            Cause::Cuda { action, msg } => format!("cuda {action:?}: {msg}"),
+            Cause::AdjusterFailed => "adjuster failed".into(),
+            Cause::UnsupportedDegradeLevel => "unsupported degrade level".into(),
+            Cause::ExpectedValue => "expected value".into(),
+            Cause::ExpectedRange => "expected range".into(),
+            Cause::InvalidRange { range } => format!("invalid range: {range}"),
+            Cause::RegexParse(err) => format!("regex parse: {err}"),
+            Cause::CliParse(err) => format!("cli parse: {err}"),
+            Cause::External { type_name, source } => format!("{type_name}: {source}"),
+            Cause::SomethingElse(msg) => msg.clone(),
+            Cause::NotFound => "not found".into(),
+            Cause::SubmitErrorClosed => "submit error: closed".into(),
+            Cause::SubmitErrorCancelled => "submit error: cancelled".into(),
+            Cause::JobError { job_id, inner } => format!("job {job_id}: {inner}"),
+            Cause::ContextReset => "context reset".into(),
+        }
+    }
+
+    fn backtrace_last_line(&self) -> Option<String> {
+        self.backtrace.to_string().lines().rev().map(str::trim).find(|line| !line.is_empty()).map(ToOwned::to_owned)
+    }
+
+    fn oom_backtrace_last_line(&self) -> Option<String> {
+        match &self.what {
+            Cause::JobError { inner, .. } if inner.is_oom() => inner.oom_backtrace_last_line().or_else(|| self.backtrace_last_line()),
+            _ => self.backtrace_last_line(),
+        }
+    }
+
+    fn backtrace_text(&self) -> String {
+        self.backtrace.to_string()
+    }
+
+    fn from_source<E>(value: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        let msg = value.to_string();
+        debug!("ThoosaError::from: value={msg}");
+        if msg.to_ascii_lowercase().contains("cuda") {
+            ThoError::from_cuda_message(msg)
+        } else {
+            ThoError::new_with_cause(
+                msg,
+                Cause::External {
+                    type_name: std::any::type_name::<E>(),
+                    source: Arc::new(value),
+                },
+            )
+        }
     }
 
     #[deprecated] //it's not checked for cuda/oom. Use into()
@@ -1274,20 +1328,47 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
 }
 
 
-//TODO https://github.com/rust-lang/rust/issues/65280
 impl Debug for ThoError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut debug_struct = f.debug_struct("ThoosaError");
-        let mut x = debug_struct
-            .field("msg", &self.msg)
-            .field("cause", &self.what);
-
-        // #![feature(backtrace_frames)]
-        for (i, frame) in self.backtrace.frames().iter().enumerate() {
-            x = x.field(format!("frame_{}\n", i).as_str(), frame);
+        if self.is_oom() {
+            let mut debug_struct = f.debug_struct("ThoosaError");
+            debug_struct.field("msg", &self.msg).field("cause", &self.what);
+            if let Some(backtrace_last) = self.oom_backtrace_last_line() {
+                debug_struct.field("backtrace_last", &backtrace_last);
+            }
+            return debug_struct.finish();
         }
 
-        x.finish()
+        writeln!(f, "ThoosaError")?;
+        writeln!(f, "  message: {}", self.msg)?;
+        writeln!(f, "  cause: {}", self.cause_summary())?;
+        let mut source = Error::source(self);
+        let mut index = 0usize;
+        while let Some(err) = source {
+            if index == 0 {
+                writeln!(f, "  sources:")?;
+            }
+            writeln!(f, "    {index}: {err}")?;
+            source = err.source();
+            index += 1;
+        }
+        writeln!(f, "  backtrace:")?;
+        for line in self.backtrace_text().lines() {
+            writeln!(f, "    {line}")?;
+        }
+        Ok(())
+    }
+}
+
+impl Error for ThoError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match &self.what {
+            Cause::RegexParse(err) => Some(err),
+            Cause::CliParse(err) => Some(err.as_ref()),
+            Cause::External { source, .. } => Some(source.as_ref()),
+            Cause::JobError { inner, .. } => Some(inner.as_ref()),
+            _ => None,
+        }
     }
 }
 
@@ -1299,17 +1380,82 @@ impl From<Cause> for ThoError {
     }
 }
 
-impl<E> From<E> for ThoError
+macro_rules! impl_from_external_error {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl From<$ty> for ThoError {
+                fn from(value: $ty) -> Self {
+                    ThoError::from_source(value)
+                }
+            }
+        )+
+    };
+}
+
+impl_from_external_error!(
+    std::env::VarError,
+    std::fmt::Error,
+    std::io::Error,
+    std::num::ParseFloatError,
+    std::num::ParseIntError,
+    std::num::TryFromIntError,
+    std::str::ParseBoolError,
+    std::string::FromUtf8Error,
+    tokio::task::JoinError,
+    tokio::time::error::Elapsed,
+    regex::Error,
+);
+
+impl<E> From<plotters::drawing::DrawingAreaErrorKind<E>> for ThoError
 where
     E: Error + Send + Sync + 'static,
 {
-    fn from(value: E) -> Self {
-        debug!("ThoosaError::from: value={}", value);
-
-        ThoError::new(value.to_string())
+    fn from(value: plotters::drawing::DrawingAreaErrorKind<E>) -> Self {
+        ThoError::from_source(value)
     }
 }
 
+impl From<std::convert::Infallible> for ThoError {
+    fn from(value: std::convert::Infallible) -> Self {
+        match value {}
+    }
+}
+
+impl From<clap::Error> for ThoError {
+    fn from(value: clap::Error) -> Self {
+        ThoError::new_with_cause("parse cli", Cause::CliParse(Arc::new(value)))
+    }
+}
+
+impl From<Arc<clap::Error>> for ThoError {
+    fn from(value: Arc<clap::Error>) -> Self {
+        ThoError::new_with_cause("parse cli", Cause::CliParse(value))
+    }
+}
+
+#[cfg(feature = "rusqlite-error")]
+impl_from_external_error!(rusqlite::Error);
+
+#[cfg(feature = "tch-error")]
+impl_from_external_error!(tch::TchError);
+
+#[cfg(feature = "serde-json-error")]
+impl_from_external_error!(serde_json::Error);
+
+#[cfg(feature = "serde-json5-error")]
+impl_from_external_error!(serde_json5::Error);
+
+#[cfg(feature = "polars-error")]
+impl_from_external_error!(polars::error::PolarsError);
+
+#[cfg(feature = "lewton-error")]
+impl_from_external_error!(lewton::VorbisError);
+
+#[cfg(feature = "ogg-error")]
+impl_from_external_error!(ogg::OggReadError);
+
+#[cfg(feature = "hound-error")]
+impl_from_external_error!(hound::Error);
 
 
 #[derive(Debug, Eq, Hash, PartialEq, Clone)]
@@ -2504,6 +2650,23 @@ mod shared_tests {
         assert_eq!(clc_num_batches(1000, 100, 10, 50), 2);
 
         assert_eq!(clc_num_batches(1000, 100, 10, 30), 3);
+    }
+
+    #[test]
+    fn test_tho_error_implements_error_and_keeps_source() {
+        fn assert_error<E: std::error::Error>() {}
+        assert_error::<ThoError>();
+        let err = ThoError::from(std::io::Error::new(std::io::ErrorKind::Other, "io failed"));
+        assert!(std::error::Error::source(&err).is_some(), "expected source for converted external error");
+        assert!(format!("{err:?}").contains("backtrace:"), "expected non-OOM debug output to contain formatted backtrace");
+    }
+
+    #[test]
+    fn test_tho_error_oom_debug_is_short() {
+        let err = ThoError::from_cuda_message("CUDA out of memory. Tried to allocate 1024 bytes");
+        let formatted = format!("{err:?}");
+        assert!(formatted.contains("backtrace_last") || !formatted.contains("backtrace"), "expected OOM debug output to avoid full backtrace");
+        assert!(!formatted.contains("frame_"), "expected OOM debug output to omit per-frame trace");
     }
 
     #[test]

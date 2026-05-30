@@ -1132,8 +1132,8 @@ mod tests {
         // }
 
         assert_eq!(models.len(), 2);
-        assert_eq!(models.get("label_0".into()).expect("label_0").len(), 2);
-        assert_eq!(models.get("label_1".into()).expect("label_1").len(), 2);
+        assert_eq!(models.get("label_0").expect("label_0").len(), 2);
+        assert_eq!(models.get("label_1").expect("label_1").len(), 2);
 
         Ok(())
     }
