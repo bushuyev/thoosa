@@ -29,14 +29,14 @@ use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use thoosa_common::dims::ChannelsData;
-use crate::tasks::apply_motif_nets_merged::ApplyMotifNetsMerged;
+use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 
 #[derive(Debug)]
 struct ApplyNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    apply_motif_nets: Arc<ApplyMotifNetsMerged<C>>,
+    apply_motif_nets: Arc<ApplyCosine2DMotifNets<C>>,
     apply_label_net: Arc<ApplyLabelNet<C>>
 }
 
@@ -103,7 +103,7 @@ where
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
                 apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new(ApplyMotifNetsMerged::from_trained_nets(
+                    apply_motif_nets: Arc::new(ApplyCosine2DMotifNets::from_trained_nets(
                         ws,
                         store,
                         stage_ctx.branch(false),
