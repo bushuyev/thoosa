@@ -33,7 +33,7 @@ lazy_static.workspace = true
 
 libloading.workspace = true
 rand_distr.workspace = true
-thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shared = {path = "../thoosa_shared", features = ["tch-error", "serde-json-error", "serde-json5-error"] }
 thoosa_store = {path = "../thoosa_store" }
 thoosa_shims = {path = "../thoosa_shims" }
 

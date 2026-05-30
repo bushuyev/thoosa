@@ -7,7 +7,7 @@ edition.workspace = true
 path = "src/lib.rs"
 
 [dependencies]
-thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shared = {path = "../thoosa_shared", features = ["rusqlite-error"] }
 bytemuck.workspace = true
 rand.workspace = true
 log.workspace = true

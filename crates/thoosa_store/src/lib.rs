@@ -51,6 +51,30 @@ use thoosa_shared::val::Val::UInt;
 use thoosa_shared::*;
 use thoosa_shared::traits::DataId;
 
+impl From<tokio_rusqlite::Error> for ThoError {
+    fn from(value: tokio_rusqlite::Error) -> Self {
+        match value {
+            tokio_rusqlite::Error::ConnectionClosed => ThoError::new("tokio_rusqlite connection closed"),
+            tokio_rusqlite::Error::WorkerGone => ThoError::new("tokio_rusqlite worker gone"),
+            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
+            tokio_rusqlite::Error::Panic(err) => ThoError::from_error("tokio_rusqlite worker panic", err),
+            tokio_rusqlite::Error::Error(err) => ThoError::from(err),
+        }
+    }
+}
+
+impl From<tokio_rusqlite::Error<ThoError>> for ThoError {
+    fn from(value: tokio_rusqlite::Error<ThoError>) -> Self {
+        match value {
+            tokio_rusqlite::Error::ConnectionClosed => ThoError::new("tokio_rusqlite connection closed"),
+            tokio_rusqlite::Error::WorkerGone => ThoError::new("tokio_rusqlite worker gone"),
+            tokio_rusqlite::Error::Close((_, err)) => ThoError::from(err),
+            tokio_rusqlite::Error::Panic(err) => ThoError::from_error("tokio_rusqlite worker panic", err),
+            tokio_rusqlite::Error::Error(err) => err,
+        }
+    }
+}
+
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct IdSlice(pub u32, pub ResourceId, pub u32); //id, tensor id, slice idx
@@ -4554,7 +4578,10 @@ mod store_tests {
         let t1 = Instant::now();
         store.save_groups_by_label_cnt(10).await?;
 
-        //TODO asserts
+        assert_eq!(store.list_resource_set_group_sets("group 1 labels/all").await?.len(), 3);
+        assert_eq!(store.list_resource_set_group_sets("group 2 labels/all").await?.len(), 3);
+        assert_eq!(store.list_resource_set_group_sets("group 3 labels/all").await?.len(), 1);
+        assert_eq!(store.list_resource_set_group_sets("group 1 labels/10/0-10").await?.len(), 3);
 
         debug!("done in {}", t1.elapsed().as_millis());
 

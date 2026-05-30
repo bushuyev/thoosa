@@ -610,6 +610,7 @@ mod tests {
     use std::sync::Arc;
     use log::debug;
     use parking_lot::RwLock;
+    use thoosa_common::dims::ChannelsData;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
     use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -727,14 +728,12 @@ mod tests {
         let adjuster = find_motifs_run_config.input_len_adjuster();
 
 
-        with_data!(ctx.branch(false), r; |ctx, r|{
+        with_data!(ctx.branch(false), r; |ctx, r:&ThoTensor<ChannelsData, SynKey>|{
             debug!("filter r={r:?}");
+            assert_eq!(r.t_ref().size()[0], size[0]);
+            assert_eq!(r.t_ref().size()[1] as u32, adjuster(size[1] as u32));
             Ok::<_, ThoError>(())
         })?;
-
-
-        // assert_eq!(adjuster(size[1] as u32), r.size().dim_1() as u32);
-        //TODO asserts
 
         Ok(())
     }
