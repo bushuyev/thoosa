@@ -98,6 +98,7 @@ use thoosa_store::rusqlite::Transaction;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
+use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
 use crate::tasks::load_motif_net::MotifNetMeta;
 use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
@@ -600,7 +601,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(find_motifs_args.resource_config())));
 
-            let init_ctx = root_ctx.branch(true);
+            let mut init_ctx = root_ctx.branch(true);
             let init_loader = Arc::clone(&loader);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
@@ -760,7 +761,7 @@ where
             let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(train_label_nets_args.resource_config())));
 
             let opt_config = Arc::new(train_label_nets_args.opt_config.clone());
-            let init_ctx = root_ctx.branch(true);
+            let mut init_ctx = root_ctx.branch(true);
             let labels_filter = train_label_nets_args.labels_filter();
 
             let run_config_ids = run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
@@ -769,19 +770,27 @@ where
                 &ws,
                 &store,
                 async |run_configs| {
+                    let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+                        &ws,
+                        &store,
+                        train_label_nets_args.train_motif_nets_run_config_ids.clone(),
+                        init_ctx.branch(false),
+                        train_label_nets_args.max_motif_net_loss,
+                        train_label_nets_args.selected_motif_nets_limit,
+                        train_label_nets_args.motif_slices_step.unwrap(), //TODO or take from find motifs
+                        None,
+                        false,
+                    ).await?);
 
                     new_train_label_nets(
                         train_label_nets_args.train_motif_nets_run_config_ids.clone(),
                         loader,
+                        apply_motif_nets,
                         run_configs,
                         &ws,
                         &store,
-                        init_ctx,
                         opt_config,
                         labels_filter.clone(),
-                        train_label_nets_args.max_motif_net_loss,
-                        train_label_nets_args.selected_motif_nets_limit,
-                        train_label_nets_args.motif_slices_step.unwrap() //TODO or take from find motifs
                     ).await.map(|v|Arc::new(v))
                 },
                 ||root_ctx.branch(true),

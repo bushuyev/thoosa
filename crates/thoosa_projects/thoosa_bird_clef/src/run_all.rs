@@ -20,7 +20,8 @@ use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_grid, run_opt, run_plot, RunAllArgs};
-use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+use thoosa_main::{ApplyMotifNets, tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+use thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_main::tasks::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, PlainBandAggregationMeanRangeOrValue, PlainConfigRangeOrValue};
 use thoosa_main::tasks::bucketing::PlainBandAggregationRangeOrValue::Mean;
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
@@ -252,13 +253,12 @@ pub(crate) async fn run_all(
 
                             let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
                             let train_labels_input = Arc::clone(&train_labels_input);
-                            let train_motif_net_run_config_ids = train_motif_net_run_config_ids.clone();
                             let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
                             let store_in_train_labels = Arc::clone(&store_in_train_labels);
 
                             let mut label_ctx = label_ctx.branch(false);
                             let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
-                            let init_ctx_train_labels =  init_ctx_train_labels.branch(false);
+                            let mut init_ctx_train_labels =  init_ctx_train_labels.branch(false);
                             let best_min_loss= Arc::clone(&best_min_loss);
                             match panic_to_err_async!(
                                   run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
@@ -267,18 +267,27 @@ pub(crate) async fn run_all(
                                     &ws,
                                     &store,
                                     async move |run_configs| {
+                                        let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
+                                            &ws_in_train_labels,
+                                            &store_in_train_labels,
+                                            train_motif_net_run_config_ids_combo.clone(),
+                                            init_ctx_train_labels.branch(false),
+                                            Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                                            run_all_args.selected_motif_nets_limit,
+                                            run_all_args.motif_slices_step,
+                                            None,
+                                            false,
+                                        ).await?);
+
                                         new_train_label_nets(
-                                            train_motif_net_run_config_ids_combo,
+                                            train_motif_net_run_config_ids_combo.clone(),
                                             Arc::clone(&loader),
+                                            apply_motif_nets,
                                             run_configs,
                                             &ws_in_train_labels,
                                             &store_in_train_labels,
-                                            init_ctx_train_labels,
                                             train_labels_opt_config,
                                             Some(vec![label.clone()]),
-                                            Some(run_all_args.max_motif_net_loss), //to RunAll args,
-                                            run_all_args.selected_motif_nets_limit,
-                                            run_all_args.motif_slices_step
                                         ).await.map(|v| Arc::new(v))
                                     },
                                     || label_ctx.branch(false),
@@ -368,7 +377,7 @@ pub(crate) async fn run_all(
                         let train_motif_net_run_config_ids = train_motif_net_run_config_ids.clone();
                         let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
                         let store_in_train_labels = Arc::clone(&store_in_train_labels);
-                        let init_ctx_train_labels = init_ctx_train_labels.branch(false);
+                        let mut init_ctx_train_labels = init_ctx_train_labels.branch(false);
                         let mut label_ctx = label_ctx.branch(false);
                         let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
                         match panic_to_err_async!(
@@ -378,18 +387,27 @@ pub(crate) async fn run_all(
                                 &ws,
                                 &store,
                                 async move |run_configs| {
+                                    let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+                                        &ws_in_train_labels,
+                                        &store_in_train_labels,
+                                        train_motif_net_run_config_ids.clone(),
+                                        init_ctx_train_labels.branch(false),
+                                        Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                                        run_all_args.selected_motif_nets_limit,
+                                        run_all_args.motif_slices_step,
+                                        None,
+                                        false,
+                                    ).await?);
+
                                     new_train_label_nets(
-                                        train_motif_net_run_config_ids,
+                                        train_motif_net_run_config_ids.clone(),
                                         Arc::clone(&loader),
+                                        apply_motif_nets,
                                         run_configs,
                                         &ws_in_train_labels,
                                         &store_in_train_labels,
-                                        init_ctx_train_labels,
                                         train_labels_opt_config,
                                         Some(vec![label.clone()]),
-                                        Some(run_all_args.max_motif_net_loss), //to RunAll args,
-                                        run_all_args.selected_motif_nets_limit,
-                                        run_all_args.motif_slices_step
                                     ).await.map(|v| Arc::new(v))
                                 },
                                 || label_ctx.branch(false),

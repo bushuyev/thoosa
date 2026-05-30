@@ -15,7 +15,7 @@ use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot, RunAllArgs};
-use thoosa_main::{tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+use thoosa_main::{ApplyMotifNets, tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::extend_motifs::ExtendMotifsStage;
 use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
@@ -253,7 +253,7 @@ pub(crate) async fn run_all(
     info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
 
     //gpt Pre-create context and shared handles for label-net stage construction.
-    let init_ctx_train_labels = root_ctx.branch(true);
+    let mut init_ctx_train_labels = root_ctx.branch(true);
     let store_in_train_labels = Arc::clone(&store);
     let ws_in_train_labels = Arc::clone(&ws);
     let labels_filter = run_all_args.labels_filter();
@@ -265,18 +265,27 @@ pub(crate) async fn run_all(
         &ws,
         &store,
         async move |run_configs| {
+            let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+                &ws_in_train_labels,
+                &store_in_train_labels,
+                train_motif_nets_run_config_ids.clone(),
+                init_ctx_train_labels.branch(false),
+                Some(run_all_args.max_motif_net_loss), //to RunAll args,
+                run_all_args.selected_motif_nets_limit,
+                run_all_args.motif_slices_step,
+                None,
+                false,
+            ).await?);
+
             new_train_label_nets(
-                train_motif_nets_run_config_ids,
+                train_motif_nets_run_config_ids.clone(),
                 Arc::clone(&loader),
+                apply_motif_nets,
                 run_configs,
                 &ws_in_train_labels,
                 &store_in_train_labels,
-                init_ctx_train_labels,
                 Arc::clone(&all_config.train_labels_opt_config),
                 labels_filter.clone(),
-                Some(run_all_args.max_motif_net_loss), //to RunAll args,
-                run_all_args.selected_motif_nets_limit,
-                run_all_args.motif_slices_step
             ).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(true),
