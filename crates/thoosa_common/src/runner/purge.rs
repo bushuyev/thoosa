@@ -36,6 +36,10 @@ impl<M> FuturesRunnerMapPurger for StaticMapPurger<M>
 where
     M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
 {
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.map.has_gpu_data(device_idx).await
+    }
+
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         self.map.purge_gpu(ids_to_keep, device_idx, name).await
     }
@@ -70,6 +74,13 @@ impl<M> FuturesRunnerMapPurger for WeakMapPurger<M>
 where
     M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
 {
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        match self.map.upgrade() {
+            Some(map) => map.has_gpu_data(device_idx).await,
+            None => false,
+        }
+    }
+
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self.map.upgrade() {
             Some(map) => map.purge_gpu(ids_to_keep, device_idx, name).await,
@@ -102,6 +113,8 @@ where
 
 #[async_trait]
 pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
+    async fn has_gpu_data(&self, device_idx: usize) -> bool;
+
     async fn purge_gpu(
         &self,
         ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>,
@@ -149,6 +162,10 @@ where
     O: Data + CopyToDevice + Output + Send + Sync + 'static,
     <O as Data>::M: DevicesWrapCopyMode<O>,
 {
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.iter().any(|entry| entry.value().peek().and_then(|value| value.as_ref().ok()).is_some_and(|wrapper| wrapper.is_on_device(device_idx)))
+    }
+
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         let mut purged_count = 0usize;
         self.retain(|k, v| {
@@ -455,12 +472,14 @@ mod tests {
         for reff in &map {
             reff.value().clone().await?;
         }
+        assert!(map.has_gpu_data(1).await);
 
         let required_ids = HashSet::from([&keep_key as &dyn CachableIdTr]);
         map.purge_gpu(Some(&required_ids), 1, "test").await?;
 
         assert!(!keep_wrapper.is_all_on_cpu().await);
         assert!(drop_wrapper.is_all_on_cpu().await);
+        assert!(map.has_gpu_data(1).await);
         Ok(())
     }
 }

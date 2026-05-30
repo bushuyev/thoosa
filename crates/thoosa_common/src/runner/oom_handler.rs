@@ -10,12 +10,14 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
+use dashmap::DashSet;
 use log::{debug, warn};
 use mockall::{automock, Any};
+use std::any::TypeId;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{Cause, ThoError};
@@ -238,6 +240,34 @@ where
     pd_rc: PhantomData<(RC, &'z RCC)>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct OomFastPathKey {
+    task: TypeId,
+    input: TypeId,
+    selector: TypeId,
+    device_idx: usize,
+}
+
+static OOM_FAST_PATH_DISABLED: OnceLock<DashSet<OomFastPathKey>> = OnceLock::new();
+
+fn oom_fast_path_disabled() -> &'static DashSet<OomFastPathKey> {
+    OOM_FAST_PATH_DISABLED.get_or_init(DashSet::new)
+}
+
+fn oom_fast_path_key<R, W, S>(device_idx: usize) -> OomFastPathKey
+where
+    R: 'static,
+    W: 'static,
+    S: 'static,
+{
+    OomFastPathKey {
+        task: TypeId::of::<R>(),
+        input: TypeId::of::<W>(),
+        selector: TypeId::of::<S>(),
+        device_idx,
+    }
+}
+
 #[cfg(test)]
 fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
     warn!("OOMHandler::oom_executor: for mock");
@@ -279,7 +309,7 @@ where
         &self,
         task: &Arc<R>,
         input: Arc<W>,
-        run_context: R::Ctx,
+        mut run_context: R::Ctx,
         contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoError>
     where
@@ -298,13 +328,41 @@ where
                 .await;
         }
 
-        // TODO(perf): OOMHandler::run is on the hot path for millions of successful TrainStep calls; add a fast path that bypasses selector/runner setup until an OOM has occurred for the same task shape.
+        let device_idx = run_context.device_idx();
+        let fast_path_key = oom_fast_path_key::<R, W, S>(device_idx);
+        let initial_error = if !oom_fast_path_disabled().contains(&fast_path_key) {
+            let fast_task = Arc::clone(task);
+            let fast_input = Arc::clone(&input);
+            let fast_run_ctx = run_context.branch(false);
+            match oom_executor(device_idx).submit(fast_run_ctx.max_other_parallel().into(), async move {
+                fast_input
+                    .with_data_ref(
+                        device_idx,
+                        fast_run_ctx,
+                        None,
+                        |data, ctx| Arc::clone(&fast_task).do_run(data.borrow(), ctx),
+                    )
+                    .await
+            }, None).await {
+                Ok(out) => return Ok(out),
+                Err(err) if err.is_retryable_oom() => {
+                    oom_fast_path_disabled().insert(fast_path_key);
+                    debug!("OOMHandler::run: disabling fast path for key={fast_path_key:?} after retryable OOM err={err:?}");
+                    Some(err)
+                }
+                Err(err) => return Err(err),
+            }
+        } else {
+            None
+        };
+
         run_with_runner(
             &self.adjusters,
             Arc::clone(task),
             input,
             run_context,
             contexts,
+            initial_error,
             |task, input, selector, device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
@@ -605,6 +663,7 @@ async fn run_with_runner_impl<'a, 'z, R, IC, RC, RCC, S, A>(
     out_key: <R::In<'_> as WithId>::ID,
     run_context: R::Ctx,
     mut contexts: Contexts<'a, R, IC, RC, RCC>,
+    initial_error: Option<ThoError>,
     mut runner: A,
 ) -> Result<R::Out, ThoError>
 where
@@ -629,19 +688,23 @@ where
     let mut i = 0;
     let mut input_select_adjusted: Option<S> = None;
 
-    match runner
-        .run(
-            Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
-            None,
-            device_idx,
-            run_context
-                .as_mut()
-                .expect("run_with_runner_impl: missing run context")
-                .branch(false),
-            None,
-        )
-        .await
-    {
+    let initial_result = match initial_error {
+        Some(err) => Err(err),
+        None => runner
+            .run(
+                Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
+                None,
+                device_idx,
+                run_context
+                    .as_mut()
+                    .expect("run_with_runner_impl: missing run context")
+                    .branch(false),
+                None,
+            )
+            .await,
+    };
+
+    match initial_result {
         Err(te) => {
             exclusive_job.update_from_error(&te);
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
@@ -769,6 +832,7 @@ async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
     input: Arc<W>,
     run_context: R::Ctx,
     contexts: Contexts<'a, R, IC, RC, RCC>,
+    initial_error: Option<ThoError>,
     runner: Run,
 ) -> Result<R::Out, ThoError>
 where
@@ -793,6 +857,7 @@ where
         input.id().clone(),
         run_context,
         contexts,
+        initial_error,
         SharedRunnerRetryAdapter { input, runner },
     )
     .await
@@ -830,6 +895,7 @@ where
         input.id().clone(),
         run_context,
         contexts,
+        None,
         ConsumeRunnerRetryAdapter {
             input: Some(input),
             runner,
@@ -845,7 +911,7 @@ pub mod test_types {
     // use crate::common::Data;
     use crate::runner::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::copy_mode::CpuOrGpu;
+    use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use thoosa_shared::traits::{Select, WithId};
     use thoosa_shared::CopyToDevice;
 
@@ -882,7 +948,7 @@ pub mod test_types {
     #[async_trait]
     impl Data for TestInput {
         type Metrics = [usize; 1];
-        type M = CpuOrGpu<Self>;
+        type M = CpuOnly<Self>;
 
         fn size(&self) -> Self::Metrics {
             [self.data.0.len()]

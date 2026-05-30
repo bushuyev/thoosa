@@ -172,6 +172,10 @@ where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
     <D as Data>::M: DevicesWrapCopyMode<D>,
 {
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        self.iter().any(|entry| entry.value().is_on_device(device_idx))
+    }
+
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TmpCached::purge_gpu: ids_to_keep={ids_to_keep:?} device_idx={device_idx}");
         if ids_to_keep.is_some() {
