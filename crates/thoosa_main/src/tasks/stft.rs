@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::dims::{Batch, MotifSlices, Spectorgram};
+use thoosa_common::dims::{Batch, Dims, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -27,14 +27,16 @@ use crate::tasks::stage_ids::STFT;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "Stft"]
-pub struct Stft<C>
+pub struct Stft<C, InD = Batch<MotifSlices>, OutD = Spectorgram>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     id: SynKey,
     run_config: StftRunConfig,
-    sync_stft: Arc<SyncStft<C>>,
-    pd: PhantomData<C>,
+    sync_stft: Arc<SyncStft<C, InD, OutD>>,
+    pd: PhantomData<(C, InD, OutD)>,
 }
 
 impl<C> Stft<C>
@@ -42,6 +44,17 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(run_config: StftRunConfig) -> Result<Self, ThoError> {
+        Self::new_for_dims(run_config)
+    }
+}
+
+impl<C, InD, OutD> Stft<C, InD, OutD>
+where
+    C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
+{
+    pub fn new_for_dims(run_config: StftRunConfig) -> Result<Self, ThoError> {
         run_config.validate()?;
         let id = stft_stage_id(&run_config);
         Ok(Self { id: id.clone(), sync_stft: Arc::new(SyncStft::new(id, run_config.clone())), run_config, pd: PhantomData })
@@ -52,9 +65,11 @@ where
     }
 }
 
-impl<C> WithId for Stft<C>
+impl<C, InD, OutD> WithId for Stft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     type ID = SynKey;
 
@@ -63,27 +78,33 @@ where
     }
 }
 
-impl<C> OutId for Stft<C>
+impl<C, InD, OutD> OutId for Stft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
     }
 }
 
-impl<C> Stage for Stft<C>
+impl<C, InD, OutD> Stage for Stft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<Batch<MotifSlices>, SynKey>;
-    type Out = ThoTensor<Spectorgram, SynKey>;
+    type In<'a> = ThoTensor<InD, SynKey>;
+    type Out = ThoTensor<OutD, SynKey>;
 }
 
-impl<C> AsyncStage for Stft<C>
+impl<C, InD, OutD> AsyncStage for Stft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Stft::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
@@ -119,8 +140,11 @@ struct SyncStftSelector;
 
 impl Adjustable for SyncStftSelector {}
 
-impl Select<SyncStftSelector> for ThoTensor<Batch<MotifSlices>, SynKey> {
-    type Output = ThoTensor<Batch<MotifSlices>, SynKey>;
+impl<D> Select<SyncStftSelector> for ThoTensor<D, SynKey>
+where
+    D: Dims,
+{
+    type Output = ThoTensor<D, SynKey>;
 
     fn subview(&self, _selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
         Err(ThoError::new("SyncStftSelector::subview: input selection is not supported"))
@@ -128,18 +152,22 @@ impl Select<SyncStftSelector> for ThoTensor<Batch<MotifSlices>, SynKey> {
 }
 
 #[derive(Debug, Named)]
-pub struct SyncStft<C>
+pub struct SyncStft<C, InD = Batch<MotifSlices>, OutD = Spectorgram>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     id: SynKey,
     run_config: StftRunConfig,
-    pd: PhantomData<C>,
+    pd: PhantomData<(C, InD, OutD)>,
 }
 
-impl<C> SyncStft<C>
+impl<C, InD, OutD> SyncStft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     pub fn new(id: SynKey, run_config: StftRunConfig) -> Self {
         Self { id, run_config, pd: PhantomData }
@@ -148,47 +176,6 @@ where
     pub fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
         self.run_config.validate()?;
         let input_size = input.size();
-        // if input_size.len() != 2 && input_size.len() != 3 {
-        //     return Err(ThoError::new(format!("SyncStft::build_spectrogram: expected [batch, window] or [batch, slices, window], got {:?}", input_size)));
-        // }
-        //
-        // let motifs = input.unbind(0);
-        // let mut specs = Vec::with_capacity(motifs.len());
-        // for (i, motif) in motifs.iter().enumerate() {
-        //     let spec = match motif.size().len() {
-        //         1 => motif
-        //             .f_unsqueeze(0)?
-        //             .f_stft(
-        //                 self.run_config.n_fft,
-        //                 self.run_config.hop_length,
-        //                 self.run_config.win_length,
-        //                 None::<Tensor>,
-        //                 self.run_config.normalized,
-        //                 self.run_config.onesided,
-        //                 true,
-        //                 self.run_config.align_to_window,
-        //             )?
-        //             .f_squeeze_dim(0)?
-        //             .f_abs()?,
-        //         2 => motif
-        //             .f_stft(
-        //                 self.run_config.n_fft,
-        //                 self.run_config.hop_length,
-        //                 self.run_config.win_length,
-        //                 None::<Tensor>,
-        //                 self.run_config.normalized,
-        //                 self.run_config.onesided,
-        //                 true,
-        //                 self.run_config.align_to_window,
-        //             )?
-        //             .f_abs()?,
-        //         _ => return Err(ThoError::new(format!("SyncStft::build_spectrogram: unexpected motif size {:?}", motif.size()))),
-        //     };
-        //     debug!("SyncStft::build_spectrogram: motif_idx={i} motif_size={:?} spec_size={:?}", motif.size(), spec.size());
-        //     specs.push(spec);
-        // }
-        //
-        // Ok(Tensor::f_stack(&specs, 0)?)
         Ok(
             input.totype(Float)
             .f_stft(
@@ -206,29 +193,40 @@ where
     }
 }
 
-impl<C> Adjustable for SyncStft<C> where C: RunCtx + Adjustable + 'static {}
-
-impl<C> OutId for SyncStft<C>
+impl<C, InD, OutD> Adjustable for SyncStft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
+{}
+
+impl<C, InD, OutD> OutId for SyncStft<C, InD, OutD>
+where
+    C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
     }
 }
 
-impl<C> Stage for SyncStft<C>
+impl<C, InD, OutD> Stage for SyncStft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<Batch<MotifSlices>, SynKey>;
-    type Out = ThoTensor<Spectorgram, SynKey>;
+    type In<'a> = ThoTensor<InD, SynKey>;
+    type Out = ThoTensor<OutD, SynKey>;
 }
 
-impl<C> SyncStage for SyncStft<C>
+impl<C, InD, OutD> SyncStage for SyncStft<C, InD, OutD>
 where
     C: RunCtx + Adjustable + 'static,
+    InD: Dims + 'static,
+    OutD: Dims + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SyncStft::do_run"))]
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
