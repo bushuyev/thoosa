@@ -76,7 +76,7 @@ impl Purger {
             Err(e) => {
                 warn!("Purger::run_purge_gpu: got e {e:?}");
 
-                Err(e.into())
+                Err(ThoError::new(format!("Purger::run_purge_gpu send failed: {e}")))
             }
         }
     }

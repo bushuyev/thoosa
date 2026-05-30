@@ -1197,6 +1197,10 @@ mod tests {
         let buckets = lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, true)?;
 
         debug!("buckets=\n{buckets}");
+        assert_eq!(channels_slices_freqamp.size(), vec![1, 4, 16]);
+        assert_eq!(buckets.size(), vec![1, 4, 10]);
+        let bucket_counts = buckets.sum_dim_intlist(&[2i64][..], false, Kind::Float);
+        assert_eq!(bucket_counts, Tensor::ones([1, 4], FLOAT_CPU));
 
         Ok(())
 
