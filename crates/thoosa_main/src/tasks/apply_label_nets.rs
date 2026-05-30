@@ -24,19 +24,23 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
-use thoosa_store::Store;
+use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 
+pub type MotifNetsOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
+
 #[derive(Debug)]
-struct ApplyNets<C>
+struct ApplyNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
+    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput>,
+    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
 {
-    apply_motif_nets: Arc<ApplyCosine2DMotifNets<C>>,
+    apply_motif_nets: Arc<AMN>,
     apply_label_net: Arc<ApplyLabelNet<C>>
 }
 
@@ -44,17 +48,19 @@ where
 /// scores (Model1ForLabelA, Model2ForLabelA, ...), not a per-label aggregate.
 /// This can be used both for applying models for various labels or many different models for same label (for final model or inference)
 #[derive(Debug, Cached, Named)]
-pub struct ApplyLabelNets<C>
+pub struct ApplyLabelNets<C, AMN = ApplyCosine2DMotifNets<C>>
 where
     C: RunCtx + Adjustable + 'static,
+    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput>,
+    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
 {
     id: SynKey,
-    apply_nets: Vec<ApplyNets<C>>,
+    apply_nets: Vec<ApplyNets<C, AMN>>,
     batch_in_chunks: usize,
     pd: PhantomData<C>,
 }
 
-impl<C> ApplyLabelNets<C>
+impl<C> ApplyLabelNets<C, ApplyCosine2DMotifNets<C>>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -62,12 +68,104 @@ where
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         train_label_nets_run_config_ids: Vec<RunConfigId>,
-        mut stage_ctx: R,
+        stage_ctx: R,
         motif_slices_step: u32,
         batch_in_chunks: usize,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
+    {
+        let motif_ws = Arc::clone(ws);
+        let motif_store = Arc::clone(store);
+
+        Self::new_with_motif_nets_builder(
+            ws,
+            store,
+            train_label_nets_run_config_ids,
+            stage_ctx,
+            batch_in_chunks,
+            move |stage_ctx, motif_nets| {
+                let ws = Arc::clone(&motif_ws);
+                let store = Arc::clone(&motif_store);
+
+                async move {
+                    ApplyCosine2DMotifNets::from_trained_nets(
+                        &ws,
+                        &store,
+                        stage_ctx,
+                        motif_slices_step,
+                        None,
+                        motif_nets,
+                        false,
+                    ).await
+                }
+            },
+        ).await
+    }
+}
+
+impl<C> ApplyLabelNets<C, ApplyMotifNets<C>>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    pub async fn new_with_apply_motif_nets<R>(
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        store: &Arc<Box<dyn Store>>,
+        train_label_nets_run_config_ids: Vec<RunConfigId>,
+        stage_ctx: R,
+        motif_slices_step: u32,
+        batch_in_chunks: usize,
+    ) -> Result<Self, ThoError>
+    where
+        R: RunCtx + Adjustable + 'static,
+    {
+        let motif_ws = Arc::clone(ws);
+        let motif_store = Arc::clone(store);
+
+        Self::new_with_motif_nets_builder(
+            ws,
+            store,
+            train_label_nets_run_config_ids,
+            stage_ctx,
+            batch_in_chunks,
+            move |stage_ctx, motif_nets| {
+                let ws = Arc::clone(&motif_ws);
+                let store = Arc::clone(&motif_store);
+
+                async move {
+                    ApplyMotifNets::from_trained_nets(
+                        &ws,
+                        &store,
+                        stage_ctx,
+                        motif_slices_step,
+                        None,
+                        motif_nets,
+                        false,
+                    ).await
+                }
+            },
+        ).await
+    }
+}
+
+impl<C, AMN> ApplyLabelNets<C, AMN>
+where
+    C: RunCtx + Adjustable + 'static,
+    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput>,
+    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+{
+    pub async fn new_with_motif_nets_builder<R, F, Fut>(
+        ws: &Arc<RwLock<Box<dyn Workspace>>>,
+        store: &Arc<Box<dyn Store>>,
+        train_label_nets_run_config_ids: Vec<RunConfigId>,
+        mut stage_ctx: R,
+        batch_in_chunks: usize,
+        mut build_motif_nets: F,
+    ) -> Result<Self, ThoError>
+    where
+        R: RunCtx + Adjustable + 'static,
+        F: FnMut(R, Vec<TrainedNet>) -> Fut,
+        Fut: Future<Output = Result<AMN, ThoError>>,
     {
         let tho_device_idx = stage_ctx.device_idx();
 
@@ -103,15 +201,7 @@ where
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
                 apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new(ApplyCosine2DMotifNets::from_trained_nets(
-                        ws,
-                        store,
-                        stage_ctx.branch(false),
-                        motif_slices_step,
-                        None,
-                        motif_nets,
-                        false,
-                    ).await?),
+                    apply_motif_nets: Arc::new(build_motif_nets(stage_ctx.branch(false), motif_nets).await?),
                     apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)),
                 });
             }
@@ -131,18 +221,22 @@ where
     }
 }
 
-impl<C> Stage for ApplyLabelNets<C>
+impl<C, AMN> Stage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
+    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput>,
+    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
 {
     type Ctx = C;
     type In<'a> = ThoTensor<ChannelsData, SynKey>;
     type Out = ThoTensor<LabelProbability, SynKey>;
 }
 
-impl<C> AsyncStage for ApplyLabelNets<C>
+impl<C, AMN> AsyncStage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
+    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput>,
+    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run"))]
     async fn run(
@@ -244,9 +338,11 @@ where
     }
 }
 
-impl<C> OutId for ApplyLabelNets<C>
+impl<C, AMN> OutId for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
+    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput>,
+    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -416,6 +512,7 @@ mod tests {
     use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
     use thoosa_with_data::with_data;
     use crate::tasks::apply_label_nets::{logit, sigmoid, ApplyLabelNets};
+    use crate::tasks::apply_motif_nets::ApplyMotifNets;
     use thoosa_common::dims::ChannelsData;
 
     fn const_motif_net(
@@ -758,7 +855,7 @@ mod tests {
         );
 
         debug!("run_apply_label_case: labels={labels:?}");
-        let apply_label_nets = Arc::new(ApplyLabelNets::new(
+        let apply_label_nets = Arc::new(ApplyLabelNets::<mock_run_ctx::MockRunCtx, ApplyMotifNets<mock_run_ctx::MockRunCtx>>::new_with_apply_motif_nets(
             &ws,
             &store,
             labels.iter().map(|label| label.train_run_config_id).collect(),
