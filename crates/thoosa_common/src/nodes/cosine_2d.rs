@@ -66,12 +66,12 @@ impl Default for CosineConv2dBankConfig {
 ///     [B, M, H_out, W_out]
 pub fn cosine_conv2d_bank_logits(
     x: &Tensor,
-    kernels: &Tensor,
+    kernels: &Tensor,//TODO remove &
     alpha: &Tensor,
     beta: &Tensor,
     cfg: CosineConv2dBankConfig,
 ) -> Result<Tensor, ThoError> {
-    debug!("cosine_conv2d_bank_logits: x={x:?} kernels={kernels:?} alpha={alpha:?} beta={beta:?} cfg={cfg:?}");
+    debug!("cosine_conv2d_bank_logits: x={x:?} kernels={kernels:?} alpha={alpha:?} beta={beta:?} cfg={cfg:?}  x.isnan={}", x.isnan().any());
     debug!("cosine_conv2d_bank_logits: devices x={:?} kernels={:?} alpha={:?} beta={:?} ",  x.device(), kernels.device(), alpha.device(), beta.device());
     trace!("cosine_conv2d_bank_logits: x=\n{x} kernels=\n{kernels} alpha=\n{alpha} beta=\n{beta}");
 
@@ -125,6 +125,8 @@ pub fn cosine_conv2d_bank_logits(
         .f_sqrt()?
         .f_clamp_min(cfg.eps)?;
 
+    debug!("cosine_conv2d_bank_logits: k_norm={k_norm:?} k_norm.isnan={}", k_norm.isnan().any());
+
     let k_unit = k.f_div(&k_norm)?; // [M,C,KH,KW]
 
     // Numerator:
@@ -165,6 +167,7 @@ pub fn cosine_conv2d_bank_logits(
             cfg.dilation,
             1,
         )?; // [B,1,H_out,W_out]
+        debug!("cosine_conv2d_bank_logits: local_sum_sq={local_sum_sq:?} local_sum_sq.isnan={}", local_sum_sq.isnan().any());
 
         let area = (c * kh * kw) as f64;
 
@@ -182,13 +185,18 @@ pub fn cosine_conv2d_bank_logits(
             1,
         )? // [B,1,H_out,W_out]
     };
+    debug!("cosine_conv2d_bank_logits: local_norm_sq={local_norm_sq:?} local_norm_sq.isnan={}", local_norm_sq.isnan().any());
 
     let x_norm = local_norm_sq
         .f_clamp_min(cfg.eps)?
         .f_sqrt()?; // [B,1,H_out,W_out]
 
+    debug!("cosine_conv2d_bank_logits: x_norm={x_norm:?} x_norm.isnan={}", x_norm.isnan().any());
+
     // Broadcast x_norm over motif dimension M.
     let score = num.f_div(&x_norm)?; // [B,M,H_out,W_out]
+
+    debug!("cosine_conv2d_bank_logits: score={score:?} score.isnan={}", score.isnan().any());
 
     let alpha = alpha.f_view([1, m, 1, 1])?;
     let beta = beta.f_view([1, m, 1, 1])?;
@@ -249,13 +257,14 @@ impl MyCosineConv2d {
                 let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?;
                 // kernel_init: [1,1,KH,KW]
 
-                let mut kernel =
-                    vs.f_var("kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?;
+                let mut kernel = vs.f_var("kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?;
 
                 tch::no_grad(|| -> Result<(), ThoError> {
                     kernel.f_copy_(&kernel_init)?;
                     Ok(())
                 })?;
+
+                debug!("MyCosineConv2d::new: kernel={kernel:?}  kernel.isnan().any={}", kernel.isnan().any());
 
                 kernel
             }

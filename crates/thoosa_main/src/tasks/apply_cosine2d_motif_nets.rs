@@ -256,6 +256,8 @@ where
                     let t = if t.size()[0] >= tensors.motif_width as i64 {
                         t
                     } else {
+                        debug!("ApplyMotifNetsMerged::run: padding t={t:?} to tensors.motif_width={}", tensors.motif_width);
+
                         pad_to(&t, &[tensors.motif_width as i64], 0.0)?
                     };
 
