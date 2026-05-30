@@ -249,6 +249,12 @@ mod opt_tests {
 
     impl std::error::Error for ArgminCoreError {}
 
+    impl From<ArgminCoreError> for ThoError {
+        fn from(value: ArgminCoreError) -> Self {
+            ThoError::from_error("argmin core error", value)
+        }
+    }
+
     #[allow(dead_code)]
     fn sig_1_norm(_norm: Normal, _rng: ThreadRng, n: i64) -> Tensor {
         Tensor::randn([n], FLOAT_CPU).cumsum(0, None).view((1, -1))
@@ -514,7 +520,10 @@ mod opt_tests {
             .run()
             .map_err(|e| ArgminCoreError::new("brent run", e))?;
 
-        debug!("res={:?}", res.state().get_best_param().unwrap());
+        let best_param = *res.state().get_best_param().unwrap();
+        debug!("res={:?}", best_param);
+        assert!(best_param.is_finite());
+        assert!((-100.0..=100.0).contains(&best_param));
 
         Ok(())
     }
