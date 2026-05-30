@@ -248,7 +248,7 @@ pub(crate) async fn run_all(
                         let limit = combo_sets.len().min(1);//TODO ..100
 
                         let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
-                        let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 1);
+                        let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 100);
                         let best_min_loss = Arc::new(RwLock::new(f32::MAX));
                         for train_motif_net_run_config_ids_combo in train_motif_net_run_config_ids_combos {
                             debug!("run_all: train_motif_net_run_config_ids_combo={train_motif_net_run_config_ids_combo:?}");

@@ -18,6 +18,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard};
@@ -220,6 +221,8 @@ where
             cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
             inflights: Box::new([]),
             size,
+            resident_devices: Box::new([AtomicBool::new(true)]),
+            gpu_resident_count: AtomicUsize::new(0),
             on_cpu_since: Default::default(),
             mem_size,
             pd: PhantomData,
@@ -353,13 +356,14 @@ where
         let size = o.size();
         let device_ordinal = o.device();
         let mem_size = o.mem_size();
+        let num_devices: usize = GlobalCtx::global().device_count();
+        let (resident_devices, gpu_resident_count) = initial_residency(num_devices, device_ordinal);
 
         debug!("DevicesWrapCopyMode<O> for CpuOrGpu<O>::wrap: id={id:?} device_ordinal={device_ordinal}");
 
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let num_devices: usize = GlobalCtx::global().device_count();
         let mut o_op = Some(o);
 
         let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
@@ -384,6 +388,8 @@ where
             cached_data: device_futures,
             inflights,
             size,
+            resident_devices,
+            gpu_resident_count,
             on_cpu_since: Default::default(),
             mem_size,
             pd: PhantomData,
@@ -400,34 +406,36 @@ where
         trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
         assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
 
-        if to_tho_device_idx != 0 {
-            // TODO(perf): avoid writing on_cpu_since when the target residency state is unchanged; this write happens millions of times on hot cache loads.
-            *perf_log!(sync_write_lock!(&wrap.on_cpu_since), "CpuOrGpu::load_from_any_device_ on_cpu_since.write") = None;
-        }
-
-        // TODO(perf): consider an atomic/device-residency bitmap so cache hits do not require a Tokio RwLock read in this very hot path.
-        let read_guard = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
-
-        if read_guard.is_some() {
-            Ok(tokio::sync::RwLockReadGuard::map(
-                read_guard,
-                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-            ))
-        } else {
-            drop(read_guard);
-
-            debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}",wrap.id);
-
-            for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-                let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
-
-                if source_device_idx != to_tho_device_idx && source_read_guard.is_some() {
-                    drop(source_read_guard);
-                    return wrap.copy_and_get(source_device_idx, to_tho_device_idx).await;
-                }
+        if wrap.is_resident_on_device(to_tho_device_idx) {
+            let read_guard = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
+            if read_guard.is_some() {
+                return Ok(tokio::sync::RwLockReadGuard::map(
+                    read_guard,
+                    |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+                ));
             }
-            Err(Cause::NotFound.into())
+            drop(read_guard);
+            wrap.mark_not_resident_on_device(to_tho_device_idx);
         }
+
+        debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}",wrap.id);
+
+        for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
+            if source_device_idx == to_tho_device_idx || !wrap.is_resident_on_device(source_device_idx) {
+                continue;
+            }
+
+            let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
+
+            if source_read_guard.is_some() {
+                drop(source_read_guard);
+                return wrap.copy_and_get(source_device_idx, to_tho_device_idx).await;
+            }
+            drop(source_read_guard);
+            wrap.mark_not_resident_on_device(source_device_idx);
+        }
+
+        Err(Cause::NotFound.into())
     }
 
     fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
@@ -465,31 +473,33 @@ where
         Box::pin(async move {
             let permits_ctx = permits_ctx;
 
-            let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
-
-            if read_guard.is_some() {
-                if to_tho_device_idx > 0 {
-                    let selector = selector.clone();
-                    return with_pooled_cuda_stream(to_tho_device_idx, move |_| {
+            if wrap.is_resident_on_device(to_tho_device_idx) {
+                let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
+                if read_guard.is_some() {
+                    if to_tho_device_idx > 0 {
+                        let selector = selector.clone();
+                        return with_pooled_cuda_stream(to_tho_device_idx, move |_| {
+                            let base: &O = read_guard
+                                .as_ref()
+                                .expect("no value behind guard");
+                            let data: O = base.subview(selector.clone())?;
+                            DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                        }).await;
+                    } else {
                         let base: &O = read_guard
                             .as_ref()
                             .expect("no value behind guard");
                         let data: O = base.subview(selector.clone())?;
-                        DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data)
-                    }).await;
-                } else {
-                    let base: &O = read_guard
-                        .as_ref()
-                        .expect("no value behind guard");
-                    let data: O = base.subview(selector.clone())?;
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                        return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    }
                 }
+
+                drop(read_guard);
+                wrap.mark_not_resident_on_device(to_tho_device_idx);
             }
 
-            drop(read_guard);
-
             for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-                if source_device_idx == to_tho_device_idx {
+                if source_device_idx == to_tho_device_idx || !wrap.is_resident_on_device(source_device_idx) {
                     continue;
                 }
 
@@ -510,6 +520,8 @@ where
                         return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                     }
                 }
+                drop(source_read_guard);
+                wrap.mark_not_resident_on_device(source_device_idx);
             }
 
             Err(Cause::NotFound.into())
@@ -530,31 +542,33 @@ where
         //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
         //     permits_ctx.add_permit(permit);
         // }
-        let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
-
-        if read_guard.is_some() {
-            if to_device_idx > 0 {
-                let selector = selector.clone();
-                return with_pooled_cuda_stream(to_device_idx, move |_| {
+        if wrap.is_resident_on_device(to_device_idx) {
+            let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
+            if read_guard.is_some() {
+                if to_device_idx > 0 {
+                    let selector = selector.clone();
+                    return with_pooled_cuda_stream(to_device_idx, move |_| {
+                        let data = read_guard
+                            .as_ref()
+                            .expect("no value behind guard")
+                            .subview(selector.clone())?;
+                        do_run(data, &permits_ctx)
+                    }).await;
+                } else {
                     let data = read_guard
                         .as_ref()
                         .expect("no value behind guard")
                         .subview(selector.clone())?;
-                    do_run(data, &permits_ctx)
-                }).await;
-            } else {
-                let data = read_guard
-                    .as_ref()
-                    .expect("no value behind guard")
-                    .subview(selector.clone())?;
-                return do_run(data, &permits_ctx);
+                    return do_run(data, &permits_ctx);
+                }
             }
+
+            drop(read_guard);
+            wrap.mark_not_resident_on_device(to_device_idx);
         }
 
-        drop(read_guard);
-
         for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-            if source_device_idx == to_device_idx {
+            if source_device_idx == to_device_idx || !wrap.is_resident_on_device(source_device_idx) {
                 continue;
             }
 
@@ -574,6 +588,8 @@ where
                     return do_run(data, &permits_ctx);
                 }
             }
+            drop(source_read_guard);
+            wrap.mark_not_resident_on_device(source_device_idx);
         }
 
         Err(Cause::NotFound.into())
@@ -587,12 +603,11 @@ where
     {
 
         async move {
-            // TODO(perf): dump_to_cpu scans device residency before and after dumping; return/update a residency bitmap so OOM recovery avoids duplicate lock scans.
-            if wrap.is_all_on_cpu().await {
+            if wrap.is_all_on_cpu_resident() {
                 // #[cfg(any(test, feature = "mock_global_ctx"))]
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-                *perf_log!(sync_write_lock!(&wrap.on_cpu_since), "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(GlobalCtx::global().cache_age());
+                wrap.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
                 return Ok(());
             }
 
@@ -604,13 +619,17 @@ where
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
                 if timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu cpu read check").await.is_none() {
                     let data = lock.take();
+                    wrap.mark_not_resident_on_device(device_idx);
                     debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
 
-                    wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
+                    if data.is_some() {
+                        wrap.ensure_copied(device_idx, 0, data.as_ref(), false).await?;
+                    }
 
                     debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
                 } else {
                     drop(lock.take());
+                    wrap.mark_not_resident_on_device(device_idx);
                 }
             } else {
                 // If it's locked, assume it's the current task's input. DumpToCpu only runs with
@@ -618,7 +637,7 @@ where
                 warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data) //if it was dumped to cpu from DumpAllToCpu and then purged
             }
 
-            let is_all_on_cpu = wrap.is_all_on_cpu().await;
+            let is_all_on_cpu = wrap.is_all_on_cpu_resident();
             let age = GlobalCtx::global().cache_age();
             if is_all_on_cpu {
                 //may rewrite previous Some, but shouldn't be a problem
@@ -627,7 +646,7 @@ where
                 // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
 
-                *perf_log!(sync_write_lock!(&wrap.on_cpu_since), "CpuOrGpu::dump_to_cpu on_cpu_since.write") = Some(age);
+                wrap.mark_on_cpu_since_if_all_on_cpu(age);
             }
 
             debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}",wrap.id);
@@ -643,6 +662,7 @@ where
         async move {
             assert!(device_idx > 0, "can't drop cpu");
             drop(wrap.cached_data[device_idx].write().await.take());
+            wrap.mark_not_resident_on_device(device_idx);
 
             Ok(())
         }
@@ -680,15 +700,9 @@ where
     async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
         trace!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
 
-        // TODO(perf): keep an atomic residency bitset/count per DevicesWrap so frequent CPU-residency checks do not scan every per-device RwLock.
-        for (device_idx, data) in wrap.cached_data.iter().enumerate().skip(1) {
-            if timed_tokio_read(data, "CpuOrGpu::is_all_on_cpu read").await.is_some() {
-                debug!("DataCacheWrapper::is_all_on_cpu: {:?} is on device_idx={device_idx}", wrap.id);
-                return false;
-            }
-        }
-
-        true
+        let is_all_on_cpu = wrap.is_all_on_cpu_resident();
+        debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?} is_all_on_cpu={is_all_on_cpu}", wrap.id);
+        is_all_on_cpu
     }
 }
 
@@ -704,9 +718,61 @@ where
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     size: O::Metrics,
     mem_size: u64,
+    resident_devices: Box<[AtomicBool]>,
+    gpu_resident_count: AtomicUsize,
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was on the cpu
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
     pd: PhantomData<O>,
+}
+
+fn initial_residency(num_devices: usize, resident_device_idx: usize) -> (Box<[AtomicBool]>, AtomicUsize) {
+    assert!(resident_device_idx < num_devices, "resident device index {resident_device_idx} is out of range for {num_devices} devices");
+    let resident_devices = (0..num_devices).map(|idx| AtomicBool::new(idx == resident_device_idx)).collect::<Vec<_>>().into_boxed_slice();
+    let gpu_resident_count = AtomicUsize::new(usize::from(resident_device_idx > 0));
+    (resident_devices, gpu_resident_count)
+}
+
+impl<O> DevicesWrap<O>
+where
+    O: WithId + Data + Send + Sync,
+{
+    fn is_resident_on_device(&self, device_idx: usize) -> bool {
+        self.resident_devices[device_idx].load(Ordering::Acquire)
+    }
+
+    fn is_all_on_cpu_resident(&self) -> bool {
+        self.gpu_resident_count.load(Ordering::Acquire) == 0
+    }
+
+    fn mark_resident_on_device(&self, device_idx: usize) {
+        let was_resident = self.resident_devices[device_idx].swap(true, Ordering::AcqRel);
+        if !was_resident && device_idx > 0 {
+            let previous_gpu_count = self.gpu_resident_count.fetch_add(1, Ordering::AcqRel);
+            if previous_gpu_count == 0 {
+                let mut on_cpu_since = perf_log!(sync_write_lock!(&self.on_cpu_since), "DevicesWrap::mark_resident_on_device on_cpu_since.write");
+                if on_cpu_since.is_some() {
+                    *on_cpu_since = None;
+                }
+            }
+        }
+    }
+
+    fn mark_not_resident_on_device(&self, device_idx: usize) {
+        let was_resident = self.resident_devices[device_idx].swap(false, Ordering::AcqRel);
+        if was_resident && device_idx > 0 {
+            let previous_gpu_count = self.gpu_resident_count.fetch_sub(1, Ordering::AcqRel);
+            assert!(previous_gpu_count > 0, "gpu resident count underflow for {:?}", self.id);
+        }
+    }
+
+    fn mark_on_cpu_since_if_all_on_cpu(&self, age: u64) {
+        if self.is_all_on_cpu_resident() {
+            let mut on_cpu_since = perf_log!(sync_write_lock!(&self.on_cpu_since), "DevicesWrap::mark_on_cpu_since_if_all_on_cpu on_cpu_since.write");
+            if on_cpu_since.is_none() {
+                *on_cpu_since = Some(age);
+            }
+        }
+    }
 }
 
 impl <O> WithId for DevicesWrap<O>
@@ -863,6 +929,10 @@ where
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
         O::M::is_all_on_cpu(self)
     }
+
+    pub fn is_on_device(&self, device_idx: usize) -> bool {
+        self.resident_devices.get(device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
+    }
 }
 
 
@@ -967,20 +1037,23 @@ where
         debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
 
         loop {
-            let dst_read = timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read").await;
-            // ---- Fast path
-            if dst_read.is_some() {
-                debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
+            if self.is_resident_on_device(dst_idx) {
+                let dst_read = timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read").await;
+                // ---- Fast path
+                if dst_read.is_some() {
+                    debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
 
-                if do_return {
-                    return Ok(Some(RwLockReadGuard::map(dst_read, |v| {
-                        v.as_ref().unwrap()
-                    })));
-                } else {
-                    return Ok(None);
+                    if do_return {
+                        return Ok(Some(RwLockReadGuard::map(dst_read, |v| {
+                            v.as_ref().unwrap()
+                        })));
+                    } else {
+                        return Ok(None);
+                    }
                 }
+                drop(dst_read);
+                self.mark_not_resident_on_device(dst_idx);
             }
-            drop(dst_read);
 
             // ---- Try to join or become the leader
             // (Do not hold this lock while awaiting other locks, except briefly to set or read the notify)
@@ -1010,9 +1083,14 @@ where
             );
 
             // Double-check: maybe dst was filled after we dropped the read lock
-            if timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read double-check").await.is_some() {
-                inflight_guard.clear();
-                continue;
+            if self.is_resident_on_device(dst_idx) {
+                let dst_read = timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read double-check").await;
+                if dst_read.is_some() {
+                    inflight_guard.clear();
+                    continue;
+                }
+                drop(dst_read);
+                self.mark_not_resident_on_device(dst_idx);
             }
 
             // Read source value without holding dst locks
@@ -1044,6 +1122,7 @@ where
                 let mut w = timed_tokio_write(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst write").await;
                 if w.is_none() {
                     *w = Some(produced);
+                    self.mark_resident_on_device(dst_idx);
                 }
             }
 
@@ -1230,6 +1309,7 @@ mod tests {
 
         let data = MockDataWithId::whatever();
         let tested = super::DevicesWrap::wrap(data);
+        assert!(tested.is_all_on_cpu().await);
         assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 1").await.is_none());
 
         let ctx_for_data = mock_run_ctx::default(1);
@@ -1243,9 +1323,12 @@ mod tests {
             .await?;
 
         assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 2").await.is_some());
+        assert!(!tested.is_all_on_cpu().await);
 
         tested.dump_to_cpu(1).await?;
         assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 3").await.is_none());
+        assert!(tested.is_all_on_cpu().await);
+        assert!(tested.is_on_cpu_before(0));
 
         Ok(())
     }
