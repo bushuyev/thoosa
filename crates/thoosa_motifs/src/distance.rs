@@ -2117,6 +2117,7 @@ mod distance_tests {
         let q_t = samples.quantile_scalar(0.5, 2, true, "lower");
 
         debug!("full: q_t=\n{q_t}");
+        assert_eq!(q_t.double_value(&[0, 0, 0]), 0.0200);
 
         let samples = Tensor::from_slice(&[
             0.0000,
@@ -2132,6 +2133,7 @@ mod distance_tests {
         let q_t = samples.quantile_scalar(0.5, 2, true, "lower");
 
         debug!("masked: q_t=\n{q_t}");
+        assert_eq!(q_t.double_value(&[0, 0, 0]), 0.0300);
     }
 
     #[test]

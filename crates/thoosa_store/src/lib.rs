@@ -4569,7 +4569,10 @@ mod store_tests {
         let t1 = Instant::now();
         store.save_groups_by_label_cnt(10).await?;
 
-        //TODO asserts
+        assert_eq!(store.list_resource_set_group_sets("group 1 labels/all").await?.len(), 3);
+        assert_eq!(store.list_resource_set_group_sets("group 2 labels/all").await?.len(), 3);
+        assert_eq!(store.list_resource_set_group_sets("group 3 labels/all").await?.len(), 1);
+        assert_eq!(store.list_resource_set_group_sets("group 1 labels/10/0-10").await?.len(), 3);
 
         debug!("done in {}", t1.elapsed().as_millis());
 

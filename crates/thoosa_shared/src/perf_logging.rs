@@ -704,13 +704,15 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::path::Path;
     use crate::cdt_for_dir;
     use crate::perf_logging::init_perf_writer;
 
     #[test]
     fn test_init_perf_writer_none_uses_sink() {
-        let _ = init_perf_writer(None).expect("init_perf_writer(None) should succeed");
+        let (mut writer, _guard) = init_perf_writer(None).expect("init_perf_writer(None) should succeed");
+        writer.write_all(b"perf line\n").expect("sink writer should accept bytes");
     }
 
     #[test]
