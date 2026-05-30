@@ -1276,7 +1276,7 @@ pub fn cosine_motif_node(params: &MotifCosineNetParams, motif: Option<Arc<ThoTen
     };
 
 
-builder
+    let mut builder = builder
     .closure(
         Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
             debug!("cosine_motif_node: 1. t.size={:?}", t.size());
@@ -1284,15 +1284,19 @@ builder
         })),
         None,
     )?
-    .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?
-    // .closure(
-    //     Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-    //         debug!("cosine_motif_node: 2. t.size={:?}", t.size());
-    //         Ok(t.shallow_clone())
-    //     })),
-    //     None,
-    // )?
-    .end_seq()
+    .cosine_conv_1d("cosine_bank", params.num_features, motif, params.a, params.b, params.init_mode)?;
+
+    #[cfg(test)]
+    let mut builder = builder.closure(
+        Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+            debug!("cosine_motif_node: 2. t.size={:?}", t.size());
+            Ok(t.shallow_clone())
+        })),
+        None,
+    )?;
+
+
+    builder.end_seq()
 
 }
 

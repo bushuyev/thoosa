@@ -493,8 +493,8 @@ impl MyCosineConv1d {
         init_mode: MotifInitMode,
         a: f64,
         b: f64,
-    ) -> Result<Self, TchError> {
-        debug!("MyCosineConv1d::new: l={l}, init_mode={init_mode:?}");
+    ) -> Result<Self, ThoError> {
+        debug!("MyCosineConv1d::new: l={l}, init_mode={init_mode:?} init={init:?}");
 
         let kernel = match init {
             None => {
@@ -503,26 +503,16 @@ impl MyCosineConv1d {
             }
             Some(motif_slices) => {
                 let motif_slices = motif_slices.as_ref().as_ref(); // [N, L]
+                debug!("MyCosineConv1d::new: motif_slices={motif_slices:?} motif_slices.isnan={:?}", motif_slices.isnan().any());
+
                 let sz = motif_slices.size();
                 if sz.len() != 2 {
-                    return Err(TchError::Torch(
-                        format!(
-                            "motif_slices must have shape [num_slices, motif_width], got {:?}",
-                            sz
-                        )
-                            .into(),
-                    ));
+                    return Err(ThoError::new(format!("motif_slices must have shape [num_slices, motif_width], got {:?}", sz)));
                 }
 
                 let motif_l = sz[1];
                 if motif_l != l {
-                    return Err(TchError::Torch(
-                        format!(
-                            "MyCosineConv1d::new: provided l={} but motif_slices width={}",
-                            l, motif_l
-                        )
-                            .into(),
-                    ));
+                    return Err(ThoError::new(format!("MyCosineConv1d::new: provided l={} but motif_slices width={}", l, motif_l)));
                 }
 
                 let proto = Self::build_motif_prototype(motif_slices, init_mode)?;
@@ -530,7 +520,7 @@ impl MyCosineConv1d {
 
                 // Final normalization for cosine matching:
                 // zero-mean + unit-L2, then reshape to [1,1,L]
-                let kernel_init = Self::finalize_prototype(&proto, true, true)?; // [1,1,L]
+                let kernel_init = Self::finalize_prototype(proto, true, true)?; // [1,1,L]
 
                 let mut kernel = vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?;
 
@@ -539,7 +529,7 @@ impl MyCosineConv1d {
                     Ok(())
                 })?;
 
-                debug!("MyCosineConv1d::new: kernel={kernel:?}");
+                debug!("MyCosineConv1d::new: kernel={kernel:?} kernel.isnan={:?}", kernel.isnan().any());
                 kernel
             }
         };
@@ -568,6 +558,9 @@ impl MyCosineConv1d {
     /// x: [B, L] or [B,1,L]
     /// returns logits: [B, 1]
     pub fn forward(&self, x: &Tensor) -> Result<Tensor, ThoError> {
+        debug!("MyCosineConv1d::forward: x={x:?}");
+        trace!("MyCosineConv1d::forward: x=\n{x}");
+
         let x = Self::ensure_3d(&x)?;
         let sz = x.size();
 
@@ -575,13 +568,19 @@ impl MyCosineConv1d {
             return Err(ThoError::new(format!("MyCosineConv1d::forward: expected input width {}, got {}", self.l, sz[2])));
         }
 
+        debug!("MyCosineConv1d::forward: self.kernel={:?} self.kernel.isnan={}", self.kernel,  self.kernel.isnan().any());
+
         // Normalize kernel each forward: [1,1,L] / ||kernel||
         let k_sq = self.kernel.f_mul(&self.kernel)?;
         let k_norm = k_sq
             .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
             .f_sqrt()?
             .f_clamp_min(1e-12)?;
+        debug!("MyCosineConv1d::forward: k_norm={k_norm:?} k_norm.isnan={}", k_norm.isnan().any());
+
         let k_unit = self.kernel.f_div(&k_norm)?;
+
+        debug!("MyCosineConv1d::forward: k_unit={k_unit:?} k_unit.isnan={}", k_unit.isnan().any());
 
         // Full-width conv -> [B,1,1]
         let num = x.f_conv1d(
@@ -592,6 +591,7 @@ impl MyCosineConv1d {
             [1],
             1,
         )?;
+        debug!("MyCosineConv1d::forward: num={num:?} num.isnan={}", num.isnan().any());
 
         // ||x|| over channel+time -> [B,1,1]
         let x_sq = x.f_mul(&x)?;
@@ -599,9 +599,11 @@ impl MyCosineConv1d {
             .f_sum_dim_intlist(&[1i64, 2i64][..], true, Kind::Float)?
             .f_sqrt()?
             .f_clamp_min(1e-12)?;
+        debug!("MyCosineConv1d::forward: x_norm={x_norm:?} x_norm.isnan={}", x_norm.isnan().any());
 
         // cosine similarity in [-1, 1]
         let score = num.f_div(&x_norm)?; // [B,1,1]
+        debug!("MyCosineConv1d::forward: score={score:?} score.isnan={}", score.isnan().any());
 
         // logit = alpha * score + beta
         Ok(score
@@ -632,11 +634,11 @@ impl MyCosineConv1d {
     }
 
     fn finalize_prototype(
-        proto: &Tensor, // [L]
+        proto: Tensor, // [L]
         zero_mean: bool,
         unit_l2: bool,
     ) -> Result<Tensor, TchError> {
-        let mut p = proto.shallow_clone();
+        let mut p = proto;
 
         if zero_mean {
             let m = p.f_mean(Kind::Float)?;

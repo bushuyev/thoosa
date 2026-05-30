@@ -37,7 +37,7 @@ use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
 use crate::tasks::stft::SyncStft;
 
 #[derive(Debug, cached_derive::Cached, Named)]
-pub struct ApplyMotifNetsMerged<C>
+pub struct ApplyCosine2DMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
@@ -49,7 +49,7 @@ where
     pub trained_net_ids: Vec<u32>,
 }
 
-impl<C> Stage for ApplyMotifNetsMerged<C>
+impl<C> Stage for ApplyCosine2DMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
@@ -59,7 +59,7 @@ where
     type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;// same as in ApplyMotifNets
 }
 
-impl <C>OutId for ApplyMotifNetsMerged<C>
+impl <C>OutId for ApplyCosine2DMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
@@ -69,7 +69,7 @@ where
 }
 
 
-impl<C> ApplyMotifNetsMerged<C>
+impl<C> ApplyCosine2DMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
@@ -109,7 +109,7 @@ where
         fail_if_size_bigger_than: Option<usize>,
         trained_nets: Vec<TrainedNet>,
         quantize: bool
-    ) -> Result<ApplyMotifNetsMerged<C>, ThoError>
+    ) -> Result<ApplyCosine2DMotifNets<C>, ThoError>
     where
         R: RunCtx + Adjustable + 'static
     {
@@ -233,7 +233,7 @@ where
     }
 }
 
-impl<C> AsyncStage for ApplyMotifNetsMerged<C>
+impl<C> AsyncStage for ApplyCosine2DMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
@@ -253,16 +253,16 @@ where
                     let stft = SyncStft::<C>::new("".into(), stft_config.clone());
 
                     let t = input.t.f_i((tensors.channel as i64, ..))?;
-                    // let t = if t.size()[0] >= tensors.motif_width as i64 {
-                    //     t
-                    // } else {
-                    //     pad_to(&t, &[tensors.motif_width as i64], 0.0)?
-                    // };
+                    let t = if t.size()[0] >= tensors.motif_width as i64 {
+                        t
+                    } else {
+                        pad_to(&t, &[tensors.motif_width as i64], 0.0)?
+                    };
 
-                    // let stft_t = stft.build_spectrogram(
-                    //     &t
-                    // )?;
-                    let stft_t = t;
+                    let stft_t = stft.build_spectrogram(
+                        &t
+                    )?;
+                    // let stft_t = t;
 
                     debug!("ApplyMotifNetsMerged::run: stft_t={stft_t:?}");
                     let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);
@@ -456,7 +456,7 @@ mod tests {
     use crate::ApplyMotifNets;
     use crate::tasks::apply_motif_nets::dummy_motif_net;
     use crate::tasks::apply_motif_nets::tests::apply_motif_nets_3_channels_2_motifs;
-    use crate::tasks::apply_motif_nets_merged::{apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d, ApplyMotifNetsMerged};
+    use crate::tasks::apply_cosine2d_motif_nets::{apply_cosine_kernel_bank_to_batched_spectrogram, extract_cosine_conv_2d, ApplyCosine2DMotifNets};
 
     #[ctor::ctor]
     fn init() {
@@ -536,8 +536,8 @@ mod tests {
         ), 40000, 32000).await
     }
 
-    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyMotifNetsMerged<MockRunCtx>>, ThoError> {
-        let apply_motif_nets = Arc::new(ApplyMotifNetsMerged::new(
+    async fn new_apply_motif_nets(trigger_oom_len: Option<usize>, slice_step: u32, select_motifs_run_config_id: RunConfigId, ws: &Arc<RwLock<Box<dyn Workspace>>>, store: &mut Arc<Box<dyn Store>>) -> Result<Arc<ApplyCosine2DMotifNets<MockRunCtx>>, ThoError> {
+        let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
             &ws,
             &store,
             vec![select_motifs_run_config_id],
