@@ -83,40 +83,56 @@ where
 
 }
 
-pub async fn new_train_label_nets<L, C, R>(
+pub trait AppliedMotifNetsStage<C>: for<'i> AsyncStage<In<'i> = ThoTensor<ChannelsData, SynKey>, Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx = C> + Cached + OutId + 'static
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn num_nets(&self) -> usize;
+    fn motif_nets_ids(&self) -> Vec<u32>;
+}
+
+impl<C> AppliedMotifNetsStage<C> for ApplyMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn num_nets(&self) -> usize {
+        self.num_nets()
+    }
+
+    fn motif_nets_ids(&self) -> Vec<u32> {
+        self.motif_nets_ids()
+    }
+}
+
+impl<C> AppliedMotifNetsStage<C> for ApplyCosine2DMotifNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn num_nets(&self) -> usize {
+        self.num_nets()
+    }
+
+    fn motif_nets_ids(&self) -> Vec<u32> {
+        self.motif_nets_ids()
+    }
+}
+
+pub async fn new_train_label_nets<L, AMN, C>(
     train_motif_net_run_config_ids: Vec<RunConfigId>,
     loader: Arc<L>,
+    apply_motif_nets: Arc<AMN>,
     run_configs: OptRunConfigs<Vec<NamedVal<TrainLabelNetRunConfigFields>>, Vec<NamedRange<TrainLabelNetRunConfigFields>>, Vec<Hyperparameter<TrainLabelNetRunConfigFields>>, TrainLabelNetRunConfigFields>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
-    stage_ctx:R,
     opt_config:Arc<OptConfig>,
     labels: Option<Vec<String>>,
-    max_loss: Option<f32>,
-    selected_motif_nets_limit: Option<usize>,
-    slices_step: u32
-) -> Result<TrainLabelNets<L, ABStage<L, ApplyCosine2DMotifNets<C>, C>, C>, ThoError>
+    ) -> Result<TrainLabelNets<L, ABStage<L, AMN, C>, C>, ThoError>
 where
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static,
+    AMN: AppliedMotifNetsStage<C>,
     C: RunCtx + Adjustable + 'static,
-    R:RunCtx + Adjustable + 'static
 {
     let id = mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_config_ids.iter().map(|run_config_id| mono_key!(*run_config_id, format!("train_motif_nets_run_config_ids_{run_config_id}"))).collect::<Vec<_>>());
-
-    //gpt Build a motif-net application stage to turn raw resources into motif probabilities.
-    // let apply_motif_nets = Arc::new(ApplyMotifNets::new(
-    let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
-        ws,
-        store,
-        train_motif_net_run_config_ids.clone(),
-        stage_ctx,
-        max_loss, //max_loss and selected_motif_nets_limit are used to select motif_nets_ids which will be saved as label net input
-        selected_motif_nets_limit,
-        slices_step,
-        // #[cfg(test)]
-        None,
-        false
-    ).await?);
 
     let num_nets = apply_motif_nets.num_nets() as u32;
     if num_nets == 0 {
@@ -785,7 +801,7 @@ mod tests {
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MockStoreBuilder, TrainedNet};
     use thoosa_with_data::with_data;
-    use crate::tasks::apply_motif_nets::motif_test_net_;
+    use crate::tasks::apply_motif_nets::{motif_test_net_, ApplyMotifNets};
     use thoosa_common::dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use thoosa_common::tch_test_utils::motifs_tensor;
@@ -984,18 +1000,27 @@ mod tests {
         // let ctx = MockRunCtx::purge_gpu_caches_context();
         // ctx.expect().with(always()).times(1..).returning( |_| Box::pin(async { Ok(()) }));
 
+        let apply_motif_nets = Arc::new(ApplyMotifNets::new(
+            &ws,
+            &store,
+            vec![select_motifs_run_config_id],
+            mock_run_ctx::default(1),
+            Some(0.3),
+            Some(3),
+            10,
+            None,
+            false,
+        ).await?);
+
         let train_label_nets = Arc::new(new_train_label_nets(
             vec![select_motifs_run_config_id],
             loader,
+            apply_motif_nets,
             run_configs,
             &ws,
             &store,
-            mock_run_ctx::default(1),
             Arc::new(OptConfig::new(30, 10)),
             None,
-            Some(0.3),
-            Some(3),
-            10
         ).await?);
 
 
