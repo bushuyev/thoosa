@@ -453,6 +453,10 @@ mod tests {
         // debug!("grid: {grid:?}");
 
         let run_configs:Vec<FindMotifsRunConfig> = grid.to_run_configs();
+        assert_eq!(run_configs.len(), 1);
+        assert_eq!(run_configs[0].step, 100);
+        assert_eq!(run_configs[0].window, 200);
+        assert_eq!(run_configs[0].freq_filter.as_ref().map(Vec::len), Some(2));
 
         let map = run_configs[0].to_properties_iter(None);
 

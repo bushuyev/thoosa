@@ -520,7 +520,10 @@ mod opt_tests {
             .run()
             .map_err(|e| ArgminCoreError::new("brent run", e))?;
 
-        debug!("res={:?}", res.state().get_best_param().unwrap());
+        let best_param = *res.state().get_best_param().unwrap();
+        debug!("res={:?}", best_param);
+        assert!(best_param.is_finite());
+        assert!((-100.0..=100.0).contains(&best_param));
 
         Ok(())
     }

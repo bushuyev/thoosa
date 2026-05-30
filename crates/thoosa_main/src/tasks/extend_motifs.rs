@@ -1377,6 +1377,7 @@ mod tests {
         let mut output_builder = Box::new(SelectMotifsSavableResultBuilder::new(StackedMotifsOutputId::new(0, vec![]), num_channels as u32, 50).await);
 
         let mask_0 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
+        let expected_mask_0 = mask_0.f_to_device(tch::Device::Cpu)?;
         let mask_0_size = mask_0.size();
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
@@ -1406,6 +1407,7 @@ mod tests {
         ).await;
 
         let mask_1 = Tensor::rand(&[3, 5, 7], FLOAT_CUDA).lt(0.5);
+        let expected_mask_1 = mask_1.f_to_device(tch::Device::Cpu)?;
         let mask_1_size = mask_1.size();
         output_builder.add_partial_output(
             ClcResourcesMotifsDistOutput::new(
@@ -1439,15 +1441,16 @@ mod tests {
             ..
         } = output_builder.build().await?;
 
-        for masks_dists_ids in channel_masks_dists_ids {
-            match masks_dists_ids {
-                None => {}
-                Some(v) => {
-                    let (mask, _) = v.0.unpack()?;
-                    debug!("mask=\t{mask}");//TODO check mask - should be concat mask_0  mask_1
-                }
-            }
-        }
+        assert_eq!(channel_masks_dists_ids.len(), num_channels);
+        let mut channel_masks_dists_ids = channel_masks_dists_ids.into_iter();
+        let expected_mask = Tensor::f_concat(&[expected_mask_0, expected_mask_1], 2)?;
+        let channel_0 = channel_masks_dists_ids.next().expect("channel 0").expect("channel 0 mask");
+        let (mask, _) = channel_0.0.unpack()?;
+        debug!("mask=\t{mask}");
+        assert_eq!(mask.size(), vec![3, 5, 14]);
+        assert_eq!(mask, expected_mask);
+        assert!(channel_masks_dists_ids.next().expect("channel 1").is_none());
+        assert!(channel_masks_dists_ids.next().expect("channel 2").is_none());
 
 
         Ok(())

@@ -3126,8 +3126,10 @@ mod shared_tests {
 
         let hist = avg_hist(&data, n_bins);
 
-        // Print out the histogram
         println!("Histogram counts in each bin: {:?}", hist);
+        assert_eq!(hist.len(), n_bins);
+        assert_eq!(hist.iter().map(|(_, count)| *count).collect::<Vec<_>>(), vec![1, 5, 3, 0, 1]);
+        assert_eq!(hist.iter().map(|(_, count)| *count).sum::<u32>(), data.len() as u32);
     }
 }
 
