@@ -1,4 +1,4 @@
-use crate::{sin_v, sin_v_f, LOG_INIT};
+use crate::LOG_INIT;
 use crate::perf_logging::{
     init_log_tracer, perf_log_level, perf_output_filter, set_perf_log_level, PerfLayer,
     SimplelogLikeEvent,

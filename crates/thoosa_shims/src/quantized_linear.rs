@@ -1,7 +1,7 @@
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_double, c_int};
 use std::ptr::{null, NonNull};
-use log::{debug, info};
+use log::debug;
 use tch::{nn, Device, Kind, TchError, Tensor};
 use torch_sys::C_tensor;
 

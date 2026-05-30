@@ -392,7 +392,7 @@ mod tests {
             }
         }
 
-        'scope: {
+        {
             let _ = A { val: "_" };
             let _x = A { val: "_x" };
             debug!("scope ended");
