@@ -44,6 +44,13 @@ impl std::fmt::Display for ArgminMathError {
 #[cfg(test)]
 impl std::error::Error for ArgminMathError {}
 
+#[cfg(test)]
+impl From<ArgminMathError> for ThoError {
+    fn from(value: ArgminMathError) -> Self {
+        ThoError::from_error("argmin math error", value)
+    }
+}
+
 #[derive(Debug)]
 pub struct ArgminThoTensor(ThoTensor);
 

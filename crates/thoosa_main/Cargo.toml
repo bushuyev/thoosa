@@ -10,7 +10,7 @@ path = "src/lib.rs"
 thoosa_common = {path = "../thoosa_common", features = ["mock_global_ctx"] }
 thoosa_motifs = {path = "../thoosa_motifs" }
 thoosa_store = {path = "../thoosa_store" }
-thoosa_shared = {path = "../thoosa_shared" }
+thoosa_shared = {path = "../thoosa_shared", features = ["tch-error", "serde-json-error", "serde-json5-error", "polars-error"] }
 thoosa_shims = {path = "../thoosa_shims" }
 tokio.workspace = true
 ambassador.workspace = true
