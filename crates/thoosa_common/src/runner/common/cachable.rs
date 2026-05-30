@@ -929,6 +929,10 @@ where
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
         O::M::is_all_on_cpu(self)
     }
+
+    pub fn is_on_device(&self, device_idx: usize) -> bool {
+        self.resident_devices.get(device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
+    }
 }
 
 
