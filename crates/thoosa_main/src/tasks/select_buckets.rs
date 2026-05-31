@@ -9,14 +9,17 @@ use crate::tasks::select_motifs::{clc_constraint_metrics, SelectMotifsInput, Sel
 use log::{debug, info};
 use parking_lot::RwLock;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use thoosa_common::dims::MotifSlices;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
@@ -27,7 +30,9 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, WithId};
+use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
@@ -129,10 +134,7 @@ where
 {
     id: SynKey,
     run_configs: Vec<SelectBucketsRunConfig>,
-    find_motifs_run_config_ids: Vec<RunConfigId>,
-    bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
-    reference_mean_energies: HashMap<RunConfigId, f64>,
-    output_mode: SelectMotifsOutputMode,
+    sync_select_buckets_stage: Arc<SyncSelectBucketsStage<C>>,
     pd: PhantomData<(L, ML, C)>,
 }
 
@@ -146,10 +148,7 @@ where
         f.debug_struct("SelectBucketsStage")
             .field("id", &self.id)
             .field("run_configs", &self.run_configs)
-            .field("find_motifs_run_config_ids", &self.find_motifs_run_config_ids)
-            .field("bucket_mean_energies", &self.bucket_mean_energies)
-            .field("reference_mean_energies", &self.reference_mean_energies)
-            .field("output_mode", &self.output_mode)
+            .field("sync_select_buckets_stage", &self.sync_select_buckets_stage)
             .finish()
     }
 }
@@ -228,10 +227,12 @@ where
         Ok(Self {
             id: SynKey::new([mono_key!(SELECT_BUCKETS, "SelectBucketsStage")]),
             run_configs,
-            find_motifs_run_config_ids,
-            bucket_mean_energies,
-            reference_mean_energies,
-            output_mode,
+            sync_select_buckets_stage: Arc::new(SyncSelectBucketsStage::new(
+                find_motifs_run_config_ids,
+                bucket_mean_energies,
+                reference_mean_energies,
+                output_mode,
+            )),
             pd: PhantomData,
         })
     }
@@ -277,7 +278,7 @@ where
         let energies = collect_futures_with_progress(
             futures,
             motif_ids_len,
-            SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT,
+            4, //SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT,
             StreamBuffering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
         )
@@ -354,16 +355,125 @@ where
             .await
     }
 
+}
+
+#[derive(Debug)]
+struct SelectBucketsSyncInput<'a> {
+    select_config: &'a SelectBucketsRunConfig,
+}
+
+impl<'a> SelectBucketsSyncInput<'a> {
+    fn new(select_config: &'a SelectBucketsRunConfig) -> Self {
+        Self { select_config }
+    }
+}
+
+impl WithId for SelectBucketsSyncInput<'_> {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
+impl Data for SelectBucketsSyncInput<'_> {
+    type Metrics = ();
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        ()
+    }
+
+    fn device(&self) -> usize {
+        0
+    }
+
+    fn mem_size(&self) -> u64 {
+        std::mem::size_of_val(self.select_config) as u64
+    }
+}
+
+impl Input for SelectBucketsSyncInput<'_> {}
+
+#[derive(Debug)]
+struct SelectBucketsSyncInputWrapper {
+    select_config: SelectBucketsRunConfig,
+}
+
+impl SelectBucketsSyncInputWrapper {
+    fn new(select_config: SelectBucketsRunConfig) -> Self {
+        Self { select_config }
+    }
+}
+
+impl WithId for SelectBucketsSyncInputWrapper {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
+impl WithDataRef for SelectBucketsSyncInputWrapper {
+    type O<'o> = SelectBucketsSyncInput<'o>;
+
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
+    {
+        async move {
+            let input = SelectBucketsSyncInput::new(&self.select_config);
+            do_run(&input, &permits_ctx)
+        }
+    }
+}
+
+impl WithSelectDataRef<()> for SelectBucketsSyncInputWrapper {
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
+    {
+        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await }
+    }
+}
+
+#[derive(Debug)]
+struct SyncSelectBucketsStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    find_motifs_run_config_ids: Vec<RunConfigId>,
+    bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
+    reference_mean_energies: HashMap<RunConfigId, f64>,
+    output_mode: SelectMotifsOutputMode,
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncSelectBucketsStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new(
+        find_motifs_run_config_ids: Vec<RunConfigId>,
+        bucket_mean_energies: HashMap<RunConfigId, HashMap<u32, BucketEnergy>>,
+        reference_mean_energies: HashMap<RunConfigId, f64>,
+        output_mode: SelectMotifsOutputMode,
+    ) -> Self {
+        Self { find_motifs_run_config_ids, bucket_mean_energies, reference_mean_energies, output_mode, pd: PhantomData }
+    }
+
     fn evaluations_for_find_run(&self, find_motifs_run_config_id: RunConfigId) -> Result<Vec<BucketEvaluation>, ThoError> {
         let bucket_energies = self
             .bucket_mean_energies
             .get(&find_motifs_run_config_id)
-            .ok_or_else(|| ThoError::new(format!("SelectBucketsStage::evaluations_for_find_run: missing bucket energies for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
+            .ok_or_else(|| ThoError::new(format!("SyncSelectBucketsStage::evaluations_for_find_run: missing bucket energies for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
         let reference_energy = *self
             .reference_mean_energies
             .get(&find_motifs_run_config_id)
-            .ok_or_else(|| ThoError::new(format!("SelectBucketsStage::evaluations_for_find_run: missing reference energy for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
-        debug!("SelectBucketsStage::evaluations_for_find_run: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} bucket_energies_len={}", bucket_energies.len());
+            .ok_or_else(|| ThoError::new(format!("SyncSelectBucketsStage::evaluations_for_find_run: missing reference energy for find_motifs_run_config_id={find_motifs_run_config_id}")))?;
+        debug!("SyncSelectBucketsStage::evaluations_for_find_run: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} bucket_energies_len={}", bucket_energies.len());
 
         Ok(bucket_energies
             .iter()
@@ -379,11 +489,7 @@ where
             .collect())
     }
 
-    async fn select_for_run_config(
-        &self,
-        select_config: &SelectBucketsRunConfig,
-        ctx: C,
-    ) -> Result<SelectMotifsRunResult, ThoError> {
+    fn select_for_run_config(&self, select_config: &SelectBucketsRunConfig, ctx: &C) -> Result<SelectMotifsRunResult, ThoError> {
         let mut evaluations = Vec::new();
 
         for find_motifs_run_config_id in &self.find_motifs_run_config_ids {
@@ -393,9 +499,9 @@ where
 
         let selected_evaluations = select_config.selection_mode.selected_evaluations(evaluations);
         let selected = selected_evaluations.iter().map(BucketEvaluation::to_savable_score).collect::<Vec<_>>();
-        info!("SelectBucketsStage::select_for_run_config: select_config={select_config:?} selected={selected:?} ctx_id={:?}", ctx.id());
+        info!("SyncSelectBucketsStage::select_for_run_config: select_config={select_config:?} selected={selected:?} ctx_id={:?}", ctx.id());
         for evaluation in &selected_evaluations {
-            debug!("SelectBucketsStage::select_for_run_config: selected motif_id={} energy={} score={}", evaluation.motif_id, evaluation.energy, evaluation.score);
+            debug!("SyncSelectBucketsStage::select_for_run_config: selected motif_id={} energy={} score={}", evaluation.motif_id, evaluation.energy, evaluation.score);
         }
 
         let constraint_metrics = match self.output_mode {
@@ -412,7 +518,36 @@ where
             constraint_metrics,
         ))
     }
+}
 
+impl<C> Adjustable for SyncSelectBucketsStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for SyncSelectBucketsStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id(&self, _input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        ()
+    }
+}
+
+impl<C> Stage for SyncSelectBucketsStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SelectBucketsSyncInput<'a>;
+    type Out = SelectMotifsRunResult;
+}
+
+impl<C> SyncStage for SyncSelectBucketsStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SyncSelectBucketsStage::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        self.select_for_run_config(input.select_config, ctx)
+    }
 }
 
 impl<L, ML, C> Stage for SelectBucketsStage<L, ML, C>
@@ -438,11 +573,33 @@ where
 
         let run_configs_len = self.run_configs.len();
         let futures = self.run_configs.iter().map(|select_config| {
-            let self_for_fut = Arc::clone(&self);
+            let sync_stage = Arc::clone(&self.sync_select_buckets_stage);
             let mut ctx = ctx.branch(false);
+            let select_config = select_config.clone();
             async move {
-                self_for_fut
-                    .select_for_run_config(select_config, ctx.branch(false))
+                let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
+                let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+                    vec![
+                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                        Adjusters::RunContext(Box::new(DumpToCpu::new("select_buckets"))),
+                    ],
+                    None,
+                );
+
+                oom_handler
+                    .run(
+                        &sync_stage,
+                        Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
+                        ctx.branch(false),
+                        Contexts::new(
+                            NoopInputContext(None),
+                            NoopRunnableContext {},
+                            MaxParallelAndDumpToCpuAdjustableContex::new(
+                                MaxParallelAdjustContextImpl::new(),
+                                DumpToCpuContextImpl::new(&required_ids),
+                            ),
+                        ),
+                    )
                     .await
             }
         });

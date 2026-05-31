@@ -188,7 +188,7 @@ pub struct SynKey {
 
 impl Display for SynKey{
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        for val in &self.vals {
+        for val in self.vals.iter().take(5) {//TODO
             write!(f, "_{}_", val)?;
         }
 
@@ -199,7 +199,7 @@ impl Display for SynKey{
 impl fmt::Debug for SynKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("SynKey[")?;
-        for (idx, mono) in self.vals.iter().enumerate() {
+        for (idx, mono) in self.vals.iter().enumerate().take(5) {
             if idx > 0 {
                 f.write_str("/")?;
             }
