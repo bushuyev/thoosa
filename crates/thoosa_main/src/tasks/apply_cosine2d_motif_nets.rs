@@ -47,6 +47,7 @@ where
     stft_run_configs: HashMap<u64, StftRunConfig>,
     slice_step: u32,
     pub trained_net_ids: Vec<u32>,
+    run_stft: bool
 }
 
 impl<C> Stage for ApplyCosine2DMotifNets<C>
@@ -98,7 +99,7 @@ where
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}")));
         };
 
-        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize).await
+        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize, true).await
     }
 
     pub async fn from_trained_nets<R>(
@@ -108,7 +109,8 @@ where
         slice_step: u32,
         fail_if_size_bigger_than: Option<usize>,
         trained_nets: Vec<TrainedNet>,
-        quantize: bool
+        quantize: bool,
+        run_stft: bool
     ) -> Result<ApplyCosine2DMotifNets<C>, ThoError>
     where
         R: RunCtx + Adjustable + 'static
@@ -219,7 +221,8 @@ where
             stft_run_configs,
             conv2d_tensors,
             slice_step,
-            trained_net_ids
+            trained_net_ids,
+            run_stft
         })
     }
 
@@ -253,18 +256,23 @@ where
                     let stft = SyncStft::<C>::new("".into(), stft_config.clone());
 
                     let t = input.t.f_i((tensors.channel as i64, ..))?;
-                    let t = if t.size()[0] >= tensors.motif_width as i64 {
-                        t
+
+                     let stft_t = if self_clone.run_stft {
+                        let t = if t.size()[0] >= tensors.motif_width as i64 {
+                            t
+                        } else {
+                            debug!("ApplyMotifNetsMerged::run: padding t={t:?} to tensors.motif_width={}", tensors.motif_width);
+
+                            pad_to(&t, &[tensors.motif_width as i64], 0.0)?
+                        };
+
+
+                        stft.build_spectrogram(
+                            &t
+                        )?
                     } else {
-                        debug!("ApplyMotifNetsMerged::run: padding t={t:?} to tensors.motif_width={}", tensors.motif_width);
-
-                        pad_to(&t, &[tensors.motif_width as i64], 0.0)?
+                        t
                     };
-
-                    let stft_t = stft.build_spectrogram(
-                        &t
-                    )?;
-                    // let stft_t = t;
 
                     debug!("ApplyMotifNetsMerged::run: stft_t={stft_t:?}");
                     let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);

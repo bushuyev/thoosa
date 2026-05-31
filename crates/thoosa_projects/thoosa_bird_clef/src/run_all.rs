@@ -247,10 +247,10 @@ pub(crate) async fn run_all(
                         )/*.check(&store).await?*/));
 
                          let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(3));
-                        let limit = combo_sets.len().min(1);//TODO ..100
+                        let limit = combo_sets.len().min(30);//TODO ..100
 
                         let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
-                        let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 100);
+                        let combos_eta = CollectEtaInvocationGuard::new(&format!("{label}_combos"), train_motif_net_run_config_ids_combos.len(), 1);
                         let best_min_loss = Arc::new(RwLock::new(f32::MAX));
                         for train_motif_net_run_config_ids_combo in train_motif_net_run_config_ids_combos {
                             debug!("run_all: train_motif_net_run_config_ids_combo={train_motif_net_run_config_ids_combo:?}");
@@ -331,7 +331,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                8,
+                4,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
@@ -530,7 +530,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         find_motifs_run_config_range_or_value: FindMotifsRunConfigRangeOrValue {
             id: None,
             step: RangeOrValue::Value(1000),
-            window: RangeOrValue::Range{ range: Range {start: 32000, end: 64000}, step: Some((8000, 0)) },
+            window: RangeOrValue::Range{ range: Range {start: 8000, end: 136001}, step: Some((32000, 0)) },
             // window: RangeOrValue::Value(10000),
             // freq_filter: None,
             freq_filter: Some(vec![
@@ -597,7 +597,7 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
         train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue {
             id: None,
             common_training_args: CommonTrainingRunConfigRangeOrValue {
-                epochs: RangeOrValue::Value(3),
+                epochs: RangeOrValue::Value(5),
                 batch_size: RangeOrValue::Value(10),
                 // lr: RangeOrValue::Value(0.0001),
                 lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -647,9 +647,9 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
                     // MotifInitModeRangeOrValue::CenteredL2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
                 ]),
                 stft_config: StftRunConfigRangeOrValue {
-                    n_fft: RangeOrValue::Value(16000),
-                    hop_length: Some(RangeOrValue::Value(16000)),
-                    win_length: Some(RangeOrValue::Value(16000)),
+                    n_fft: RangeOrValue::Value(4000),
+                    hop_length: Some(RangeOrValue::Value(4000)),
+                    win_length: Some(RangeOrValue::Value(4000)),
                     normalized: RangeOrValue::Value(true),
                     onesided: RangeOrValue::Value(true),
                     align_to_window: RangeOrValue::Value(true),

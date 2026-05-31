@@ -218,7 +218,16 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     let mut label_results: HashMap<String, Vec<f32>> = HashMap::new();
     for (label_i, label) in LABELS.iter().enumerate()/*.skip(0).take(20)*/ {
 
-        let apply_label_nets = load_apply_label_nets_model(Arc::clone(ws), Arc::clone(store), ctx.branch(false), Arc::clone(&label_models), &LABELS[label_i], num_files * SLOTS_PER_FILE, args.motif_slices_step as u32).await;
+        let apply_label_nets = load_apply_label_nets_model(
+            Arc::clone(ws),
+            Arc::clone(store),
+            ctx.branch(false),
+            Arc::clone(&label_models),
+            &LABELS[label_i],
+            num_files * SLOTS_PER_FILE,
+            args.motif_slices_step as u32,
+            false
+        ).await;
 
 
         let apply_label_nets = match apply_label_nets {
@@ -279,7 +288,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     Ok(())
 }
 
-async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
+async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_config_ids = store.list_label_nets_run_config_ids(label).await?;
     debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_config_ids={run_config_ids:?}");
@@ -290,7 +299,7 @@ async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store:
         run_config_ids,
         ctx,
         motif_slices_step,
-        batch_in_chunks,
+        batch_in_chunks, run_stft,
     ).await?);
     Ok(apply_label_nets)
 }

@@ -70,7 +70,7 @@ where
         train_label_nets_run_config_ids: Vec<RunConfigId>,
         stage_ctx: R,
         motif_slices_step: u32,
-        batch_in_chunks: usize,
+        batch_in_chunks: usize, run_stft: bool,
     ) -> Result<Self, ThoError>
     where
         R: RunCtx + Adjustable + 'static,
@@ -97,6 +97,7 @@ where
                         None,
                         motif_nets,
                         false,
+                        run_stft,
                     ).await
                 }
             },

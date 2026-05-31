@@ -207,7 +207,7 @@ where
                 &motif_stats,
                 *find_motifs_run_config_id,
                 motif_ids,
-                init_ctx.branch(false),
+                init_ctx.branch(true),
             )
             .await?;
             let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, *find_motifs_run_config_id).await?;
@@ -247,11 +247,11 @@ where
         let futures = motif_ids.into_iter().map(|motif_id| {
             let motif_stats = Arc::clone(motif_stats);
             let energy_metric = energy_metric.clone();
-            let mut ctx = ctx.branch(false);
+            let mut ctx = ctx.branch(true);
 
             async move {
                 let stats = Arc::clone(&motif_stats)
-                    .run_cached(
+                    .run(
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
                             vec![energy_metric.clone()],
