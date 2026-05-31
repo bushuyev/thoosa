@@ -246,7 +246,7 @@ pub(crate) async fn run_all(
                             run_all_args.train_resource_config()
                         )/*.check(&store).await?*/));
 
-                         let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(3));
+                         let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(5));
                         let limit = combo_sets.len().min(30);//TODO ..100
 
                         let train_motif_net_run_config_ids_combos = combo_sets[..limit].to_vec();
@@ -331,7 +331,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                4,
+                1,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
