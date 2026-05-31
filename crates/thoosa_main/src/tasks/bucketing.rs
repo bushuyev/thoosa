@@ -589,7 +589,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncBucketingStage::do_run"))]
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn  do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.run_config.mel_config() {
             BucketingConfig::Mel(mel_config) => self.save_resource_patches(input, mel_config)?,
             BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(input, plain_config)?,
