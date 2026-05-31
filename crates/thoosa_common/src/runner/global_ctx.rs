@@ -262,6 +262,9 @@ impl GlobalCtx {
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
         debug!("GlobalCtx::dump_all_to_cpu: tho_device_idx={tho_device_idx} required_ids={required_ids:?} descr={descr} done");
 
+        #[cfg(tho_debug)]
+        self.debug_caches(tho_device_idx, descr).await;
+
         Ok(())
     }
 

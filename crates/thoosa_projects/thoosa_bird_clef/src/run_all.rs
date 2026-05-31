@@ -162,7 +162,7 @@ pub(crate) async fn run_all(
                                     ).await?,
                                 ))
                             },
-                            || label_ctx.branch(false),
+                            || label_ctx.branch(true),
                             &format!("find motifs for {label}")
                         ).await?;
 

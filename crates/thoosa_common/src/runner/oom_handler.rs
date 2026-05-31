@@ -11,7 +11,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use dashmap::DashSet;
-use log::{debug, warn};
+use log::{debug, trace, warn};
 use mockall::{automock, Any};
 use std::any::TypeId;
 use std::fmt::Debug;
@@ -798,7 +798,7 @@ where
                                         break;
                                     }
                                 } else {
-                                    warn!("OOMHandler::run, inner error: ctx_id={ctx_id:?} task={:?} os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
+                                    warn!("OOMHandler::run, inner error: task={:?} os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
                                     return Err(te);
                                 }
                             }
@@ -806,17 +806,17 @@ where
                     }
                 }
             } else {
-                warn!("OOMHandler::run, error: ctx_id={ctx_id:?} os_thread_id={} \nunexpected error: {te:?}",os_thread_id(),);
+                warn!("OOMHandler::run, error: ctx_id={ctx_id:?}  task={:?}  os_thread_id={} \nunexpected error: {te:?}",task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id(),);
                 return Err(te);
             }
 
             collect_eta_record_oom_all_failed();
 
-            warn!("OOMHandler::run, error: ctx_id={ctx_id:?} out_key={out_key:?} os_thread_id={} all failed", os_thread_id());
+            warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} out_key={out_key:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
             #[cfg(tho_debug)]
-            GlobalCtx::global().debug_caches(device_idx, "all failed").await;
+            GlobalCtx::global().debug_caches(device_idx, "all_failed").await;
 
-            Err(Cause::SomethingElse(format!("all failed: task.out_key={out_key:?}")).into())
+            Err(Cause::SomethingElse(format!("all_failed: task.out_key={out_key:?}")).into())
         }
         Ok(o) => {
             debug!("OOMHandler::run: ctx_id={ctx_id:?} os_thread_id={} done without oom ",os_thread_id());

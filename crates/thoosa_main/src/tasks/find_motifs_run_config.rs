@@ -1453,6 +1453,16 @@ impl SelectMotifsRunResult {
     }
 }
 
+impl Output for SelectMotifsRunResult {}
+
+impl WithId for SelectMotifsRunResult {
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
 pub struct SelectMotifsSavableResult {
