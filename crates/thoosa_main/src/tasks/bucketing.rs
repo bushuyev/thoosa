@@ -7,6 +7,7 @@ use std::fs::{File, OpenOptions};
 use std::hash::Hash;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::marker::PhantomData;
+use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -16,12 +17,13 @@ use tch::{Device, Kind, TchError, Tensor};
 use serde::Deserialize;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d, lsh_bucket_one_hot_3d_exact_buckets, make_lsh_planes_for_buckets, BandAggregation, LOG_EPS};
+use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
+use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::runs::SavableResult;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
@@ -234,7 +236,8 @@ where
     sync_bucketing_stage: Arc<SyncBucketingStage<D, Id, C>>,
     pd: PhantomData<(RC, D, Id, C)>,
     channels:u32,
-    sample_rate:u32,
+    bucket_window_samples: i64,
+    bucket_step_samples: i64,
     tmp_path:PathBuf,
     temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>
 }
@@ -271,6 +274,8 @@ where
         }
 
 
+        let bucket_window_samples = i64::from(run_config.window_samples(window, step)?);
+        let bucket_step_samples = bucket_step_samples_for_config(&run_config, step)?;
         let window = i64::from(window);
         let step = i64::from(step);
 
@@ -298,7 +303,8 @@ where
             run_config,
             pd: PhantomData,
             channels,
-            sample_rate,
+            bucket_window_samples,
+            bucket_step_samples,
             tmp_path,
             temp_stores_by_bucket
         })
@@ -314,6 +320,7 @@ where
 {
     resource_id: ResourceId,
     tensor: &'a ThoTensor<D, Id>,
+    sample_offset: i64,
 }
 
 impl<'a, D, Id> BucketingSyncInput<'a, D, Id>
@@ -321,8 +328,8 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn new(resource_id: ResourceId, tensor: &'a ThoTensor<D, Id>) -> Self {
-        Self { resource_id, tensor }
+    fn new(resource_id: ResourceId, tensor: &'a ThoTensor<D, Id>, sample_offset: i64) -> Self {
+        Self { resource_id, tensor, sample_offset }
     }
 }
 
@@ -373,7 +380,8 @@ where
 {
     resource_id: ResourceId,
     tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>,
-    sample_rate: f64,
+    bucket_window_samples: i64,
+    bucket_step_samples: i64,
 }
 
 impl<D, Id> BucketingTensorInput<D, Id>
@@ -381,8 +389,8 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn new(resource_id: ResourceId, tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>, sample_rate: f64) -> Self {
-        Self { resource_id, tensor, sample_rate }
+    fn new(resource_id: ResourceId, tensor: Arc<DevicesWrap<ThoTensor<D, Id>>>, bucket_window_samples: i64, bucket_step_samples: i64) -> Self {
+        Self { resource_id, tensor, bucket_window_samples, bucket_step_samples }
     }
 }
 
@@ -413,14 +421,32 @@ where
         async move {
             let resource_id = self.resource_id;
 
-            let sample_rate = self.sample_rate;
             self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
-                let input = BucketingSyncInput::new(resource_id, tensor);
+                let input = BucketingSyncInput::new(resource_id, tensor, 0);
                 do_run(&input, ctx)
             }).await
         }
     }
 }
+
+#[derive(Debug, Clone)]
+struct SelectBucketsInputSelector {
+    bucket_slice_range: Range<i64>,
+}
+
+impl Default for SelectBucketsInputSelector {
+    fn default() -> Self {
+        Self { bucket_slice_range: 0..0 }
+    }
+}
+
+impl From<Range<i64>> for SelectBucketsInputSelector {
+    fn from(bucket_slice_range: Range<i64>) -> Self {
+        Self { bucket_slice_range }
+    }
+}
+
+impl Adjustable for SelectBucketsInputSelector {}
 
 impl<D, Id> WithSelectDataRef<()> for BucketingTensorInput<D, Id>
 where
@@ -435,6 +461,128 @@ where
         async move {
             self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).await
         }
+    }
+}
+
+impl<D, Id> WithSelectDataRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
+where
+    D: Dims + Send + Sync + 'static,
+    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
+{
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: SelectBucketsInputSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
+    {
+        async move {
+            let resource_id = self.resource_id;
+            let bucket_window_samples = self.bucket_window_samples;
+            let bucket_step_samples = self.bucket_step_samples;
+            self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
+                let audio = tensor.t_ref();
+                let audio_size = audio.size();
+                if audio_size.len() != 2 {
+                    return Err(ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: expected audio shape [channels, samples], got {audio_size:?}")));
+                }
+                let sample_range = bucket_selector_sample_range(&selector, audio_size[1], bucket_window_samples, bucket_step_samples)?;
+                debug!("BucketingTensorInput::with_selected_data_ref: selector={selector:?} sample_range={sample_range:?} audio_size={audio_size:?}");
+                let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: invalid sample_range={sample_range:?}")))?;
+                let selected_audio = audio.f_narrow(1, sample_range.start, sample_len)?;
+                let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
+                let input = BucketingSyncInput::new(resource_id, &selected_tensor, sample_range.start);
+                do_run(&input, ctx)
+            }).await
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SelectBucketsSplitterContext<'a, ST>
+where
+    ST: Stage<Out = ()> + Adjustable + 'a,
+{
+    input_len: i64,
+    split_len: i64,
+    done_to: i64,
+    pd: PhantomData<&'a ST>,
+}
+
+impl<'a, ST> SelectBucketsSplitterContext<'a, ST>
+where
+    ST: Stage<Out = ()> + Adjustable + 'a,
+{
+    fn new(input_len: i64) -> Self {
+        Self { input_len, split_len: input_len, done_to: 0, pd: PhantomData }
+    }
+}
+
+impl<'a, ST> SplitsAdjusterContext for SelectBucketsSplitterContext<'a, ST>
+where
+    ST: Stage<Out = ()> + Adjustable + 'a,
+{
+    type Metrics = i64;
+
+    fn input_len(&self) -> &Self::Metrics {
+        &self.input_len
+    }
+
+    fn split_len(&self) -> &Self::Metrics {
+        &self.split_len
+    }
+
+    fn done_to(&self) -> &Self::Metrics {
+        &self.done_to
+    }
+
+    fn split_len_mut(&mut self) -> &mut Self::Metrics {
+        &mut self.split_len
+    }
+}
+
+impl<'a, 'z, ST> InputContext<'a, ST> for SelectBucketsSplitterContext<'z, ST>
+where
+    ST: Stage<Out = ()> + Adjustable + 'a,
+{
+    async fn add_partial_output(&mut self, _out: ST::Out) {
+        self.done_to += self.split_len;
+        debug!("SelectBucketsSplitterContext::add_partial_output: done_to={} split_len={} input_len={}", self.done_to, self.split_len, self.input_len);
+    }
+
+    fn all_done(&self) -> bool {
+        self.done_to >= self.input_len
+    }
+
+    async fn build_final_output(self) -> Result<ST::Out, ThoError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct SelectBucketsAdjuster {
+    bucket_slice_adjuster: SplitsAdjuster<SelectBucketsInputSelector, i64>,
+}
+
+impl SelectBucketsAdjuster {
+    fn new() -> Self {
+        Self { bucket_slice_adjuster: SplitsAdjuster::new(1) }
+    }
+}
+
+#[async_trait]
+impl<'a, ST> Adjuster<SelectBucketsSplitterContext<'a, ST>> for SelectBucketsAdjuster
+where
+    ST: Stage<Out = ()> + Adjustable + 'a,
+{
+    type A = SelectBucketsInputSelector;
+
+    async fn adjust(&self, adjustable: Self::A, adjust_context: &mut SelectBucketsSplitterContext<'a, ST>) -> Result<Self::A, AdjusterError<Self::A>> {
+        let result = self.bucket_slice_adjuster.adjust(adjustable, adjust_context).await;
+        debug!("SelectBucketsAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
+        result
+    }
+
+    fn degrade(&self, adjust_context: &mut SelectBucketsSplitterContext<'a, ST>) -> bool {
+        self.bucket_slice_adjuster.degrade(adjust_context)
     }
 }
 
@@ -487,12 +635,14 @@ where
 
             for ((sample_start, _sample_end), bucket) in patch_ranges[channel].iter().zip(channels_bucket_ids[channel].iter()) {
                 let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: bucket={bucket} does not fit into u16")))?;
-                let slice_start = u32::try_from(*sample_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: sample_start={sample_start} does not fit into u32")))?;
+                let sample_start = i64::try_from(*sample_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: sample_start={sample_start} does not fit into i64")))?;
+                let slice_start = input.sample_offset.checked_add(sample_start).ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_patches: sample_start overflow"))?;
+                let slice_start = u32::try_from(slice_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_patches: sample_start={slice_start} does not fit into u32")))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(input.resource_id, slice_start));
             }
 
             for (group, slices) in slices_by_bucket {
-                debug!("save_resource_patches: group={group} slices={slices:?}");
+                debug!("SyncBucketingStage::save_resource_patches: group={group} slices={slices:?}");
                 temp_stores[group as usize].save_slices(channel as u32, &slices)?;
             }
         }
@@ -503,6 +653,8 @@ where
     fn save_resource_plain_buckets(&self, input: &BucketingSyncInput<'_, D, Id>, plain_config: &PlainConfig) -> Result<(), ThoError> {
         let audio = input.tensor.t_ref();
         let audio_size = audio.size();
+        debug!("SyncBucketingStage::save_resource_plain_buckets: id={:?} audio_size={audio_size:?}", input.id());
+
         if audio_size.len() != 2 {
             return Err(ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: expected audio shape [channels, samples], got {audio_size:?}")));
         }
@@ -514,17 +666,16 @@ where
         }
 
         let slices = audio.f_unfold(1, self.window, self.step)?;
-        debug!("save_resource_plain_buckets: slices={slices:?}");
+        debug!("SyncBucketingStage::save_resource_plain_buckets: id={:?} slices={slices:?}", input.id());
 
         let channels_slices_freqamp = panic_to_err!(fft_band_amplitudes_sliced(&slices, self.sample_rate as f64, plain_config.band_hz, plain_config.aggregation.to_audio(), plain_config.apply_hann_window, plain_config.remove_dc_offset))?;
-        debug!("save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
+        debug!("SyncBucketingStage::save_resource_plain_buckets: channels_slices_freqamp={channels_slices_freqamp:?}");
 
-        // TODO(perf): random projection planes are rebuilt per resource; cache them for each (input_size, bucket_count, device, normalize) within the bucketing run.
-        let planes = panic_to_err!(make_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], self.run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device()))?;
-        debug!("save_resource_plain_buckets: planes={planes:?}");
+        let planes = deterministic_plain_lsh_planes_for_buckets(channels_slices_freqamp.size()[2], self.run_config.bucket_count as i64, Kind::Float, channels_slices_freqamp.device())?;
+        debug!("SyncBucketingStage::save_resource_plain_buckets: planes={planes:?}");
 
         let buckets_one_hot = panic_to_err!(lsh_bucket_one_hot_3d_exact_buckets(&channels_slices_freqamp, &planes, plain_config.normalize_lsh))?;
-        debug!("save_resource_plain_buckets: buckets_one_hot={buckets_one_hot:?}");
+        debug!("SyncBucketingStage::save_resource_plain_buckets: buckets_one_hot={buckets_one_hot:?}");
 
         let channels_bucket_ids = panic_to_err!(bucket_ids_from_one_hot_3d(&buckets_one_hot))?;
 
@@ -538,13 +689,13 @@ where
             let mut slices_by_bucket: HashMap<u16, Vec<TensorIdSliceIdx>> = HashMap::new();
             for (slice_idx, bucket) in bucket_ids.iter().enumerate() {
                 let group = u16::try_from(*bucket).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: bucket={bucket} does not fit into u16")))?;
-                let sample_start = (slice_idx as i64).checked_mul(self.step).ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
+                let sample_start = (slice_idx as i64).checked_mul(self.step).and_then(|v| v.checked_add(input.sample_offset)).ok_or_else(|| ThoError::new("SyncBucketingStage::save_resource_plain_buckets: sample_start overflow"))?;
                 let slice_start = u32::try_from(sample_start).map_err(|_| ThoError::new(format!("SyncBucketingStage::save_resource_plain_buckets: sample_start={sample_start} does not fit into u32")))?;
                 slices_by_bucket.entry(group).or_default().push(TensorIdSliceIdx(input.resource_id, slice_start));
             }
 
             for (group, slices) in slices_by_bucket {
-                debug!("save_resource_plain_buckets: group={group} slices={slices:?}");
+                debug!("SyncBucketingStage::save_resource_plain_buckets: group={group} slices={slices:?}");
                 temp_stores[group as usize].save_slices(channel as u32, &slices)?;
             }
         }
@@ -811,7 +962,8 @@ where
             let mut sync_bucketing_ctx = ctx.branch(false);
             let loader = Arc::clone(&self.loader);
             let sync_stage = Arc::clone(&self.sync_bucketing_stage);
-            let sample_rate = self.sample_rate;
+            let bucket_window_samples = self.bucket_window_samples;
+            let bucket_step_samples = self.bucket_step_samples;
             async move {
 
                 let loaded = loader
@@ -822,10 +974,12 @@ where
                     .await?;
 
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-                let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+                let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
+                let oom_handler: OOMHandler<'_, '_, _, _, _, _, SelectBucketsInputSelector> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new("bucketing"))),
+                        Adjusters::Input(Box::new(SelectBucketsAdjuster::new())),
                     ],
                     None,
                 );
@@ -833,10 +987,10 @@ where
                 match oom_handler
                     .run(
                         &sync_stage,
-                        Arc::new(BucketingTensorInput::new(resource.id(), loaded, sample_rate as f64)),
+                        Arc::new(BucketingTensorInput::new(resource.id(), loaded, bucket_window_samples, bucket_step_samples)),
                         sync_bucketing_ctx,
                         Contexts::new(
-                            NoopInputContext(None),
+                            SelectBucketsSplitterContext::new(bucket_slice_count),
                             NoopRunnableContext {},
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
@@ -960,6 +1114,27 @@ fn deterministic_plain_lsh_planes(data_dim: i64, num_bits: i64, kind: Kind, devi
     }
 
     Ok(Tensor::f_from_slice(&values)?.f_to_kind(kind)?.f_to_device(device)?.f_view([data_dim, num_bits])?)
+}
+
+fn deterministic_plain_lsh_planes_for_buckets(data_dim: i64, wanted_buckets: i64, kind: Kind, device: Device) -> Result<LshPlanes, ThoError> {
+    if wanted_buckets <= 1 {
+        return Err(ThoError::new("deterministic_plain_lsh_planes_for_buckets: wanted_buckets must be > 1"));
+    }
+    let mut num_bits = 0_i64;
+    let mut raw_buckets = 1_i64;
+    while raw_buckets < wanted_buckets {
+        num_bits += 1;
+        if num_bits > 30 {
+            return Err(ThoError::new("deterministic_plain_lsh_planes_for_buckets: too many buckets requested; refusing num_bits > 30"));
+        }
+        raw_buckets <<= 1;
+    }
+    Ok(LshPlanes {
+        planes: deterministic_plain_lsh_planes(data_dim, num_bits, kind, device)?,
+        num_bits,
+        raw_buckets,
+        wanted_buckets,
+    })
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
@@ -1111,6 +1286,46 @@ impl BucketRunConfig {
     }
 }
 
+fn bucket_step_samples_for_config(run_config: &BucketRunConfig, step: u32) -> Result<i64, ThoError> {
+    let step = i64::from(step);
+    match run_config.mel_config() {
+        BucketingConfig::Plain(_) => Ok(step),
+        BucketingConfig::Mel(mel_config) => {
+            if mel_config.mel_patch_step <= 0 {
+                return Err(ThoError::new(format!("bucket_step_samples_for_config: invalid mel_patch_step={}", mel_config.mel_patch_step)));
+            }
+            step.checked_mul(mel_config.mel_patch_step).ok_or_else(|| ThoError::new(format!("bucket_step_samples_for_config: sample step overflow for step={step} mel_patch_step={}", mel_config.mel_patch_step)))
+        }
+    }
+}
+
+fn bucket_slice_count(samples: i64, bucket_window_samples: i64, bucket_step_samples: i64) -> Result<i64, ThoError> {
+    if bucket_window_samples <= 0 || bucket_step_samples <= 0 {
+        return Err(ThoError::new(format!("bucket_slice_count: invalid bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")));
+    }
+    if samples < bucket_window_samples {
+        return Ok(0);
+    }
+    Ok((samples - bucket_window_samples) / bucket_step_samples + 1)
+}
+
+fn bucket_selector_sample_range(selector: &SelectBucketsInputSelector, samples: i64, bucket_window_samples: i64, bucket_step_samples: i64) -> Result<Range<i64>, ThoError> {
+    if selector.bucket_slice_range.start < 0 || selector.bucket_slice_range.end <= selector.bucket_slice_range.start {
+        return Err(ThoError::new(format!("bucket_selector_sample_range: invalid selector={selector:?}")));
+    }
+    if bucket_window_samples <= 0 || bucket_step_samples <= 0 {
+        return Err(ThoError::new(format!("bucket_selector_sample_range: invalid bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")));
+    }
+    let sample_start = selector.bucket_slice_range.start.checked_mul(bucket_step_samples).ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: sample_start overflow selector={selector:?} bucket_step_samples={bucket_step_samples}")))?;
+    let last_bucket_slice = selector.bucket_slice_range.end.checked_sub(1).ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: selector end overflow selector={selector:?}")))?;
+    let sample_end = last_bucket_slice.checked_mul(bucket_step_samples).and_then(|v| v.checked_add(bucket_window_samples)).ok_or_else(|| ThoError::new(format!("bucket_selector_sample_range: sample_end overflow selector={selector:?} bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")))?;
+    let sample_end = sample_end.min(samples);
+    if sample_start >= sample_end {
+        return Err(ThoError::new(format!("bucket_selector_sample_range: selected sample range is empty selector={selector:?} samples={samples} bucket_window_samples={bucket_window_samples} bucket_step_samples={bucket_step_samples}")));
+    }
+    Ok(sample_start..sample_end)
+}
+
 impl Default for BucketRunConfig {
     fn default() -> Self {
         Self {
@@ -1156,7 +1371,7 @@ mod tests {
     use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
-    use super::{filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, BucketingInput, MelPatchTempStore};
+    use super::{bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, BucketingInput, MelPatchTempStore, SelectBucketsInputSelector};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
@@ -1250,6 +1465,21 @@ mod tests {
         assert_eq!(256, run_configs[0].bucket_count);
         assert_eq!(10, run_configs[0].min_slices);
         assert_eq!(100, run_configs[0].max_slices);
+    }
+
+    #[test]
+    fn bucket_selector_sample_range_uses_bucket_slice_units() -> Result<(), ThoError> {
+        let selector = SelectBucketsInputSelector::from(2..5);
+        assert_eq!(bucket_selector_sample_range(&selector, 100, 10, 4)?, 8..26);
+        assert_eq!(bucket_slice_count(26, 10, 4)?, 5);
+        Ok(())
+    }
+
+    #[test]
+    fn bucket_step_samples_for_config_uses_mel_patch_stride() -> Result<(), ThoError> {
+        let run_config = BucketRunConfig::new(None, 16, 1, 100, BucketingConfig::Mel(LogMelPatchConfig { mel_patch_step: 3, ..LogMelPatchConfig::default() }));
+        assert_eq!(bucket_step_samples_for_config(&run_config, 4)?, 12);
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
