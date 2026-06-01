@@ -641,9 +641,9 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
                     MotifInitModeRangeOrValue::Mean(InitDummyRangeOrValue { _path_pd: Default::default() }),
                     // MotifInitModeRangeOrValue::Median(InitDummyRangeOrValue { _path_pd: Default::default() }),
                     // MotifInitModeRangeOrValue::TrimmedMean(TrimmedMeanRangeOrValue { trim_frac: RangeOrValue::Value(0.3) }),
-                    MotifInitModeRangeOrValue::CenteredMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    // MotifInitModeRangeOrValue::L2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
-                    MotifInitModeRangeOrValue::ZScoreMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    // MotifInitModeRangeOrValue::CenteredMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    MotifInitModeRangeOrValue::L2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
+                    // MotifInitModeRangeOrValue::ZScoreMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
                     // MotifInitModeRangeOrValue::CenteredL2NormalizedMean(InitDummyRangeOrValue { _path_pd: Default::default() }),
                 ]),
                 stft_config: StftRunConfigRangeOrValue {
