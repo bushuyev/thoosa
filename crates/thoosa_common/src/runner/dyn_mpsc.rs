@@ -412,6 +412,8 @@ impl DynamicTaskExecutor {
         loop {
             self.wait_until_accepting(parent.as_ref()).await?;
 
+            debug!("DynamicTaskExecutor::submit: job_id={job_id} accepted");
+
             let permit = match tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve()).await {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
@@ -438,6 +440,8 @@ impl DynamicTaskExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
+                debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 1");
+
                 continue;
             }
 
@@ -459,6 +463,8 @@ impl DynamicTaskExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
+                debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 2");
+
                 continue;
             }
 
@@ -475,6 +481,8 @@ impl DynamicTaskExecutor {
                     if parent.is_some() {
                         return Err(Self::resetting_submit_error());
                     }
+                    debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 3");
+
                     continue;
                 }
             };
@@ -489,6 +497,8 @@ impl DynamicTaskExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
+                debug!("DynamicTaskExecutor::submit: reserve job_id={job_id} cuda_activity_gate is paused 4");
+
                 continue;
             }
 
@@ -541,7 +551,7 @@ impl DynamicTaskExecutor {
                         let _ = result_tx.send(Err(ThoError::new_with_cause("Context was reset", Cause::ContextReset)));
                         return JobFeedback::Neutral;
                     } else {
-                        warn!("DynamicTaskExecutor::submit: reset requested on CPU/test executor");
+                        warn!("DynamicTaskExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
                     }
                 };
 
@@ -571,7 +581,7 @@ impl DynamicTaskExecutor {
                     result
                 };
 
-                debug!("DynamicTaskExecutor::submit: wrapped result={result:?}");
+                debug!("DynamicTaskExecutor::submit: job_id={job_id} wrapped result={result:?}");
 
                 let _ = result_tx.send(result);
 
@@ -587,7 +597,7 @@ impl DynamicTaskExecutor {
             permit.send(Job::new(job_id, max_other_parallel, wrapped));
             drop(accept_guard);
 
-            debug!("DynamicTaskExecutor::submit: submitted job_id={job_id}");
+            debug!("DynamicTaskExecutor::submit: job_id={job_id} submitted job_id={job_id}");
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
@@ -752,7 +762,10 @@ impl DynamicTaskExecutor {
             // path out: a child can return ContextReset while its parent is suspended,
             // and that parent may hold cache/device resources that reset_fn needs before
             // the reset can complete.
-            if !cuda_activity_gate().is_paused() {
+            let cuda_activity_gate_is_paused = cuda_activity_gate().is_paused();
+            debug!("DynamicTaskExecutor::run_manager: cuda_activity_gate_is_paused={cuda_activity_gate_is_paused}" );
+
+            if !cuda_activity_gate_is_paused {
                 let current_exclusive_job_id = *exclusive_job_id.read();
                 Self::try_resume_waiters(
                     &mut jobs,
@@ -1007,6 +1020,8 @@ impl DynamicTaskExecutor {
                     let cmd_tx_for_tasks = cmd_tx_for_tasks.clone();
                     let global_limit = Arc::clone(&global_limit);
 
+                    debug!("DynamicTaskExecutor::try_spawn_ready_jobs: spawning job_id={job_id}");
+
                     running.spawn(async move {
                         struct DoneGuard {
                             job_id: JobId,
@@ -1028,7 +1043,7 @@ impl DynamicTaskExecutor {
                                     cmd_tx: cmd_tx_for_tasks,
                                 },
                                 async move {
-                                    debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job {job_id}");
+                                    debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job job_id={job_id}");
 
                                     job.run().await
                                 },
@@ -1037,20 +1052,20 @@ impl DynamicTaskExecutor {
 
                         match feedback {
                             JobFeedback::Oom => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: OOM job {job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: OOM job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
 
                                 if global_limit.load(Ordering::Relaxed) > 8 {
                                     global_limit.fetch_sub(1, Ordering::SeqCst);
                                 }
                             }
                             JobFeedback::Success => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job {job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
                                 if global_limit.load(Ordering::Relaxed) < 16 {
                                     global_limit.fetch_add(1, Ordering::SeqCst);
                                 }
                             }
                             JobFeedback::Neutral => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job {job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
                             }
                         }
                     });

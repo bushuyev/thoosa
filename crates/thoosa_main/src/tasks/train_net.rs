@@ -259,11 +259,11 @@ where
             let epochs_eta_guard = CollectEtaInvocationGuard::new(&format!("train_{descr}"), epochs as usize, 1);
             for idx in 0..epochs {
 
-                debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?} epoch={idx}",maybe_cuda_mem(&device));
+                debug!("TrainNet::run_inner, train: descr={descr}   0. cuda_mem={:?} epoch={idx} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
 
                 // TODO(perf): rebuilding the batch stream every epoch duplicates batch-index/resource setup; reuse per-epoch planning state when stochastic inputs allow it.
                 let mut batches = batch.train_batch_stream(ctx.branch(false));
-                debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} ",maybe_cuda_mem(&device));
+                debug!("TrainNet::run_inner, train: descr={descr}  1. cuda_mem={:?} tokio::task_id={:?}",maybe_cuda_mem(&device), tokio::task::try_id());
 
                 let batch_eta_guard = CollectEtaInvocationGuard::new(&format!("epoch_{idx}_batches_in_{descr}"), batch.num_batches(), 1);
 
@@ -272,7 +272,7 @@ where
                 while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
-                    debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?}", input.id());
+                    debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
                     oom_handler.run(
                         &train_step,
@@ -288,7 +288,7 @@ where
                         ),
                     ).await?;
 
-                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?}", input.id());
+                    debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
                     collect_eta_record_completion(batch_eta_guard.id());
 
@@ -296,7 +296,7 @@ where
 
                 if idx % validation_step == 0 || idx == epochs - 1 {
 
-                    debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?}",maybe_cuda_mem(&device));
+                    debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?} tokio::task_id={:?}", maybe_cuda_mem(&device), tokio::task::try_id());
 
                     let mut batches = batch.valid_batch_stream(ctx.branch(false));
                     debug!("TrainNet::run_inner, valid: descr={descr}  1. cuda_mem={:?}",maybe_cuda_mem(&device));

@@ -628,13 +628,13 @@ where
         let grids_eta_guard = CollectEtaInvocationGuard::new(&format!("opt_{}", self.descr), self.config.opt_max_evals as usize, 1);
         for i in 0..self.config.opt_max_evals {
             let eval_config = if let Some(config) = self.queued_configs.pop_front() {
-                debug!("AsyncTPEOptimizerImpl::optimize: i={i} queued sample");
+                debug!("AsyncTPEOptimizerImpl::optimize: queued sample i={i} ");
                 config
             } else if i < self.config.opt_num_init {
-                debug!("AsyncTPEOptimizerImpl::optimize: i={i} random sample");
+                debug!("AsyncTPEOptimizerImpl::optimize: random sample i={i} ");
                 self.cs.random_sample()
             } else {
-                debug!("AsyncTPEOptimizerImpl::optimize: i={i} sample");
+                debug!("AsyncTPEOptimizerImpl::optimize: sample i={i} ");
                 self.sample()
             };
 
@@ -644,7 +644,10 @@ where
                 .map(|(val, hp)| NamedVal::from((hp.name().clone(), val.clone())))
                 .collect::<Vec<_>>();
 
+            debug!("AsyncTPEOptimizerImpl::optimize:sample about to call obj_func  i={i} ");
             let results = self.obj_func.async_call_mut((&eval_config_named.as_slice(),)).await;
+            debug!("AsyncTPEOptimizerImpl::optimize:sample got results from obj_func results={results:?} i={i} ");
+
             let loss = results.loss();
             let is_satisfied = self.constraint_keys.iter().all(|constraint_name| {
                 let upper_bound = self.constraints[constraint_name];
@@ -687,6 +690,7 @@ where
                 debug!("AsyncTPEOptimizerImpl::optimize: descr={} early stopping triggered i={i} loss={loss} best_loss={best_loss} bad_evals={bad_evals} patience={} min_delta={}", self.descr, self.config.patience, self.config.min_delta);
                 break;
             }
+            debug!("AsyncTPEOptimizerImpl::optimize:sample done  i={i} ");
         }
 
         best_config.unwrap_or(vec![]) //TODO

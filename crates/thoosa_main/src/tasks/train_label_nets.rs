@@ -609,6 +609,7 @@ where
         resources_0_valid:Arc<Vec<Resource>>,
         build_batch_fn:BuildBatchFn<LD, X, Y, C>,
     ) -> Self {
+        debug!("ResourcesBatch::new: batch_size={batch_size:?}");
         debug!("ResourcesBatch::new: resources_1_train={resources_1_train:?}");
         debug!("ResourcesBatch::new: resources_1_valid={resources_1_valid:?}");
         debug!("ResourcesBatch::new: resources_0_train={resources_0_train:?}");
