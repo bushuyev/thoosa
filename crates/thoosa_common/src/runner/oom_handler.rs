@@ -18,9 +18,11 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
+use tokio::task::spawn_blocking;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{Cause, ThoError};
+use thoosa_shims::stream::ThoStreamGuard;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -368,32 +370,45 @@ where
             run_context,
             contexts,
             initial_error,
-            |task, input, selector, device_idx, run_ctx, job_id_to_rerun| async move {
+            |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                oom_executor(device_idx).submit(
+                let stream = crate::runner::global_ctx::GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
+
+                oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
-                        if let Some(selector) = selector {
+                        let out = if let Some(selector) = selector {
                             input
                                 .with_selected_data_ref(
-                                    device_idx,
+                                    tho_device_idx,
                                     run_ctx,
                                     selector,
                                     None,
-                                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                    |data, ctx| {
+                                        let _guard = ThoStreamGuard::new(&stream)?;
+                                        Arc::clone(&task).do_run(data.borrow(), ctx)
+                                    },
                                 )
                                 .await
                         } else {
                             input
                                 .with_data_ref(
-                                    device_idx,
+                                    tho_device_idx,
                                     run_ctx,
                                     None,
-                                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                    |data, ctx| {
+                                        let _guard = ThoStreamGuard::new(&stream)?;
+                                        Arc::clone(&task).do_run(data.borrow(), ctx)
+                                    },
                                 )
                                 .await
-                        }
+                        };
+                        spawn_blocking(move || {
+                            stream.synchronize()
+                        }).await??;
+
+                        out
                     },
                     job_id_to_rerun
                 ).await
@@ -423,17 +438,24 @@ where
             input,
             run_context,
             contexts,
-            |task: Arc<R>, input: W, _selector: Option<S>, device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
+            |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                oom_executor(device_idx).submit(run_ctx.max_other_parallel().into(), async move {
-                    let consume_result = input.consume(device_idx, run_ctx, None, |input, run_ctx| {
+                oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
+                    let stream = crate::runner::global_ctx::GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
+
+                    let consume_result = input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
+                        let _guard = ThoStreamGuard::new(&stream).unwrap();//TODO unwrap
                         Arc::clone(&task).consume(input, run_ctx)
                     }).await;
 
+                    spawn_blocking(move || {
+                        stream.synchronize()
+                    }).await??;
+
                     if matches!(&consume_result, ConsumeResult::Failed { error, .. } if error.needs_cuda_ctx_reset()) {
-                        warn!("OOMHandler::consume: needs_cuda_ctx_reset device_idx={device_idx}");
-                        oom_executor(device_idx).request_cuda_reset();
+                        warn!("OOMHandler::consume: needs_cuda_ctx_reset device_idx={tho_device_idx}");
+                        oom_executor(tho_device_idx).request_cuda_reset();
                     }
 
                     Ok(consume_result)

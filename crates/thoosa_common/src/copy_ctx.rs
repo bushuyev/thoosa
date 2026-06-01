@@ -15,7 +15,7 @@ pub struct CopyCtx {
     cu_ctx: Arc<ThoCudaContext>,
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
-    stream_pool: Arc<Pool<ThoCudaStream>>,
+    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
     bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
 }
 
@@ -40,7 +40,7 @@ impl CopyCtx {
             cu_ctx,
             buffs,
             buf_size,
-            stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(device, false).unwrap()))),//TODO unwrap)),
+            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(device, false).unwrap()))),//TODO unwrap)),
             bufs_pool,
         }
     }
@@ -85,8 +85,8 @@ impl CopyCtx {
     }
 
     //TODO these are 'exec' streams, not for copy
-    pub async fn acquire_stream(&self) -> Guard<ThoCudaStream> {
-        self.stream_pool.acquire().await
+    pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
+        self.exec_stream_pool.acquire().await
     }
 
     pub fn make_instance(mem_k: f64, buffs: usize) -> CopyCtx {
