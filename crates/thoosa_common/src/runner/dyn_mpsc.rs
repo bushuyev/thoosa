@@ -721,14 +721,7 @@ impl DynamicTaskExecutor {
         let global_limit = Arc::new(AtomicU64::new(*limit_rx.borrow() as u64));
 
         loop {
-            debug!(
-                "DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} \
-                 active_count={active_count} running.len={} pending.len={} global_limit={} jobs.len={}",
-                running.len(),
-                pending.len(),
-                global_limit.load(Ordering::Relaxed),
-                jobs.len(),
-            );
+            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} global_limit={} jobs.len={}",running.len(),pending.len(),global_limit.load(Ordering::Relaxed),jobs.len());
 
             Self::drain_finished(
                 &mut running,
@@ -1110,11 +1103,7 @@ impl DynamicTaskExecutor {
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!(
-            "DynamicTaskExecutor::can_activate_now: job_id={job_id} \
-             active_count={active_count} next_total={next_total} global_limit={global_limit} \
-             min={min} r={r}"
-        );
+        debug!("DynamicTaskExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} global_limit={global_limit} min={min} r={r}");
         r
     }
 
