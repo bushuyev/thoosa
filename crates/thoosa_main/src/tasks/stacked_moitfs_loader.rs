@@ -193,7 +193,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
 
         let num_channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();

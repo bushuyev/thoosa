@@ -296,13 +296,13 @@ where
                                         let metric_val_id = metric_val.id().clone();
                                         debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 
-                                        ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.device_idx()).into())?)
+                                        ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)
                                     })?;
                                     MasksCtx::PrecalculatedDist { dists }
                                 }
                                 SlicesFilter::ExactS(v) => {
                                     let exact_stats_t = Tensor::f_from_slice(&[v.euc_dist])?
-                                        .f_to_device(ThoDevice::from(ctx.device_idx()).into())?
+                                        .f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?
                                         .f_broadcast_to([channels as i64, 1])?;
                                     debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
                                     MasksCtx::PrecalculatedDist { //rename to PreSet
@@ -316,7 +316,7 @@ where
 
                             let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
                                 Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
-                                    let device_idx = ctx.device_idx();
+                                    let device_idx = ctx.tho_device_idx();
                                     let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
 
                                     let mut mask_makers = match &masks_ctx {

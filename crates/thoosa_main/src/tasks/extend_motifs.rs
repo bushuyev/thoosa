@@ -274,7 +274,7 @@ where
                 Ok::<_, ThoError>((channels_motif_ids, find_motifs_run_config, max_motif_slices))
         })?;
 
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
         let motif_ids = channels_motif_ids
             .iter()
             .flat_map(|ids| ids.iter().cloned())
@@ -841,7 +841,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                     let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
                     let channels = t.size().dim_0();
                     let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                    let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.device_idx(), ctx.branch(false), selector, |data, _ctx| {
+                    let selected = Arc::new(DevicesWrap::wrap(t.with_selected_data(ctx.tho_device_idx(), ctx.branch(false), selector, |data, _ctx| {
                         Ok(data)
                     }).await?));
                     let offset = self.resource_offsets.get(i).copied().unwrap_or(0);

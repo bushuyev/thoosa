@@ -211,7 +211,6 @@ where
             }
         };
 
-
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
             let (node, params) =  (self.net)(ctx.branch(false), &run_config, Arc::clone(&vs)).await?;
@@ -407,7 +406,7 @@ where
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
 
         let run_config_source = Arc::clone(&self.run_config_source);
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
         let reusable_completed_trials = self.reusable_completed_trials.clone();
 
         debug!("TrainNet::run: self.descr={:?}", self.descr);

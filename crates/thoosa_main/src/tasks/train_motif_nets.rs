@@ -190,7 +190,7 @@ async fn run_stft_as_motif_slices<C>(
 where
     C: RunCtx + Adjustable + 'static,
 {
-    let device_idx = ctx.device_idx();
+    let device_idx = ctx.tho_device_idx();
     let out_id = input.id().clone();
     let specs = Arc::clone(&stft)
         .run(
@@ -335,7 +335,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
 
         let (motifs_by, opt_config) = with_data!(ctx.branch(false), input; |_ctx, input: &TrainMotifNetInput| {
             Ok::<(MotifsBy, Arc<OptConfig>), ThoError>((input.motifs_by.clone(), input.opt_config.clone()))

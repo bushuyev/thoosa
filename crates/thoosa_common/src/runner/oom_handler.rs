@@ -317,7 +317,7 @@ where
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
-        if run_context.device_idx() == 0 {
+        if run_context.tho_device_idx() == 0 {
             return input
                 .with_data_ref(
                     0,
@@ -328,7 +328,7 @@ where
                 .await;
         }
 
-        let device_idx = run_context.device_idx();
+        let device_idx = run_context.tho_device_idx();
         let fast_path_key = oom_fast_path_key::<R, W, S>(device_idx);
         let initial_error = if !oom_fast_path_disabled().contains(&fast_path_key) {
             let fast_task = Arc::clone(task);
@@ -677,7 +677,7 @@ where
     R::Out: WithId + Send + Sync + 'static,
     A: RunnerRetryAdapter<'z, R, S>,
 {
-    let (device_idx, ctx_id) = (run_context.device_idx(), run_context.id().clone());
+    let (device_idx, ctx_id) = (run_context.tho_device_idx(), run_context.id().clone());
     let mut exclusive_job = ExclusiveJobGuard::new(device_idx);
     let mut task = Some(task);
     let mut run_context = Some(run_context);

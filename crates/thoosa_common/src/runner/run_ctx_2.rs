@@ -29,7 +29,7 @@ type SharedPurgeGpuClosures = Arc<Mutex<Vec<PurgeGpuClosure>>>;
 #[derive(Named)]
 pub struct RunCtxImpl {
     id: SynKey,
-    device_idx: usize,
+    tho_device_idx: usize,
 
     max_other_parallel: MaxParallel,
 
@@ -41,7 +41,7 @@ pub struct RunCtxImpl {
 impl Debug for RunCtxImpl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RunCtxWithPermits")
-            .field("device_idx", &self.device_idx)
+            .field("device_idx", &self.tho_device_idx)
             .finish()
     }
 }
@@ -63,14 +63,14 @@ impl RunCtxImpl {
     }
 
 
-    fn with_cache_area(device_idx: usize, id: SynKey) -> Self {
+    fn with_cache_area(tho_device_idx: usize, id: SynKey) -> Self {
 
 
-        debug!("RunCtxWithPermits::with_cache_area: device_idx={device_idx} branch_name={id:?}");
+        debug!("RunCtxWithPermits::with_cache_area: device_idx={tho_device_idx} branch_name={id:?}");
 
         Self {
             id,
-            device_idx,
+            tho_device_idx,
             purge_gpu_closures: Some(Arc::new(Mutex::new(vec![]))),
             pending_purge_gpu_closures: vec![],
             max_other_parallel: MaxParallel::MAX,
@@ -93,8 +93,9 @@ impl MaxParallelCtx for RunCtxImpl {
 
 #[async_trait]
 impl RunCtx for RunCtxImpl {
-    fn device_idx(&self) -> usize {
-        self.device_idx
+    #[inline]
+    fn tho_device_idx(&self) -> usize {
+        self.tho_device_idx
     }
 
     fn branch(
@@ -110,7 +111,7 @@ impl RunCtx for RunCtxImpl {
 
         let mut branched_ctx= if with_new_cache_area {
 
-            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id);
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
 
             debug!("RunCtxWithPermits::branch: branch_name={:?}", branched_ctx.id);
 
@@ -119,7 +120,7 @@ impl RunCtx for RunCtxImpl {
             branched_ctx
 
         } else {
-            let mut branched_ctx = RunCtxImpl::with_cache_area(self.device_idx, branch_full_id);
+            let mut branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
 
             branched_ctx.purge_gpu_closures = self.purge_gpu_closures.as_ref().map(|v| Arc::clone(v));
 
@@ -134,7 +135,7 @@ impl RunCtx for RunCtxImpl {
         branched_ctx.max_other_parallel = parent_permits;
 
 
-        branched_ctx.device_idx = self.device_idx;
+        branched_ctx.tho_device_idx = self.tho_device_idx;
 
 
         branched_ctx

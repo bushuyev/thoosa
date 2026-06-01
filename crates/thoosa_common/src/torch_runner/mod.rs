@@ -211,7 +211,7 @@ mod tests {
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
 
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
 
             let num_devices = GlobalCtx::global().device_count();
 
@@ -358,7 +358,7 @@ mod tests {
             // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
             debug!("MulTask::run: loaded.id={:?}", input.id());
 
-            let deive_idx = ctx.device_idx();
+            let deive_idx = ctx.tho_device_idx();
 
             for fail_until in &self.fail_until {
                 match fail_until {
@@ -383,7 +383,7 @@ mod tests {
                     }
 
                     FailUntil::DumpedToCpu => {
-                        let device_idx = ctx.device_idx();
+                        let device_idx = ctx.tho_device_idx();
                         let is_all_on_cpu =
                             GlobalCtx::global().is_all_on_cpu(device_idx);
                         debug!(
@@ -416,7 +416,7 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
@@ -492,7 +492,7 @@ mod tests {
                 .run(&self.clc_task, loaded, ctx.branch(false), &required_ids)
                 .await?;
 
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(result)))

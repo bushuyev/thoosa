@@ -364,7 +364,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input = Arc::into_inner(input)
             .expect("FindAndSelectMotifsStage::run: input still shared")
-            .take_data(ctx.device_idx())
+            .take_data(ctx.tho_device_idx())
             .await?;
 
         let find_resources = parse_resources(&input.find_resources)
@@ -378,7 +378,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let opt_config = self.opt_config.as_ref().clone();
         let opt_max_evals = opt_config.opt_max_evals;
         let mut find_and_select_run_find_ctx = ctx.branch(true);
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
         let grid_runs_len = grid_runs.len();
         info!("FindAndSelectMotifsStage::run: grid_runs_len={grid_runs_len:?} opt_max_evals={opt_max_evals}");
 

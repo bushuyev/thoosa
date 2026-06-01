@@ -693,7 +693,7 @@ mod tests {
             // #[cfg(any(test, feature = "mock_global_ctx"))]
             // let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-            let deive_idx = ctx.device_idx();
+            let deive_idx = ctx.tho_device_idx();
 
             match self.fail_until {
                 FailUntil::MemLimit(mem_limit) => {
@@ -712,7 +712,7 @@ mod tests {
                 }
 
                 FailUntil::DumpedToCpu => {
-                    let device_idx = ctx.device_idx();
+                    let device_idx = ctx.tho_device_idx();
                     let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
                     debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
@@ -723,7 +723,7 @@ mod tests {
                 FailUntil::Never => {}
             }
 
-            debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ","ctx.name()",ctx.device_idx());
+            debug!("MulTask::do_run: running ctx.name={:?} device_idx={} ","ctx.name()",ctx.tho_device_idx());
 
             Ok(DMulTaskOutput {
                 id: self.out_id(WithId::id(input)),

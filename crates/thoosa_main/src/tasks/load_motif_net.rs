@@ -121,7 +121,7 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
 
         let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
 

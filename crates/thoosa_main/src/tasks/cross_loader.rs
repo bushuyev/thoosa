@@ -907,7 +907,7 @@ impl RangeOrSlice {
                 let channels = batch[*i].size().dim_0();
                 let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
                 vec![
-                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.device_idx(), run_ctx.branch(false), selector, |data, run_ctx|{
+                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.tho_device_idx(), run_ctx.branch(false), selector, |data, run_ctx|{
                         Ok(data)
                     }).await?))
                 ]
