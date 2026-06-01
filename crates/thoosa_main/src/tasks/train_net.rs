@@ -442,7 +442,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")]), var_store, node_params, run_config, loss))))
+            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store, node_params, run_config, loss))))
         }
     }
 }

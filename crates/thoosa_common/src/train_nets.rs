@@ -2050,7 +2050,8 @@ where
         .grid_run_config_source()
         .const_params()
         .clone();
-    let min_loss = Arc::new(RwLock::new(f32::MAX));
+    const MAX_LOSS:f32 = 1f32;
+    let min_loss = Arc::new(RwLock::new(MAX_LOSS));
 
     let min_var_store: Arc<RwLock<Option<(VarStore, N, R, f32)>>> = Arc::new(RwLock::new(None));
 
@@ -2101,7 +2102,7 @@ where
                     )
                 ).unwrap_or_else(|e| {
                     warn!("opt_train failed with {e:?} on {run_config:?} ");
-                    (1.0, Default::default())
+                    (MAX_LOSS, Default::default())
                 });
                 // listener.plot();
 

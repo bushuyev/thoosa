@@ -112,6 +112,8 @@ fn main() -> Result<(), ThoError>{
                 SqlStore::save_leaky_data_sets("H", LimitBy::Length(1_000_000), None, 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("I", LimitBy::Length(3_000_000), None, 0.6, 0.2, 0.9, &t)?;
                 SqlStore::save_leaky_data_sets("J", LimitBy::Length(10_000_000), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("K", LimitBy::Length(30_000_000), None, 0.6, 0.2, 0.9, &t)?;
+                SqlStore::save_leaky_data_sets("L", LimitBy::Length(60_000_000), None, 0.6, 0.2, 0.9, &t)?;
 
 
                 //shuffles randomly

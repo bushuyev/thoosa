@@ -253,17 +253,30 @@ where
                     debug!("ApplyMotifNetsMerged::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);
 
 
-                    let stft = SyncStft::<C>::new("".into(), stft_config.clone());
+                    let stft = SyncStft::<C>::new("".into(), stft_config.clone())?;
 
                     let t = input.t.f_i((tensors.channel as i64, ..))?;
-
+                    let size = t.size();
+                    let pad_to_width = tensors.motif_width.max(stft_config.n_fft as u32);
                      let stft_t = if self_clone.run_stft {
-                        let t = if t.size()[0] >= tensors.motif_width as i64 {
-                            t
-                        } else {
-                            debug!("ApplyMotifNetsMerged::run: padding t={t:?} to tensors.motif_width={}", tensors.motif_width);
+                        let t = if size.len() == 1 {
+                            if size[0] >= pad_to_width as i64 {
+                                t
+                            } else {
+                                debug!("ApplyMotifNetsMerged::run: padding t={t:?} to pad_to={}", pad_to_width);
 
-                            pad_to(&t, &[tensors.motif_width as i64], 0.0)?
+                                pad_to(&t, &[pad_to_width as i64], 0.0)?
+                            }
+                        } else if size.len()== 2 {//batch of motif slices
+                            if size[1] >= pad_to_width as i64 {
+                                t
+                            } else {
+                                debug!("ApplyMotifNetsMerged::run: padding t={t:?} to pad_to={}", pad_to_width);
+
+                                pad_to(&t, &[size[0], pad_to_width as i64], 0.0)?
+                            }
+                        } else {
+                            panic!("ApplyMotifNetsMerged::run: unexpected input={input:?} shape: {:?}", size);
                         };
 
 
