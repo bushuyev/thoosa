@@ -87,7 +87,7 @@ pub struct MaxParallelAdjustContextImpl {
 impl MaxParallelAdjustContextImpl {
     pub fn new() -> Self {
         Self {
-            max_other_parallel: 0,
+            max_other_parallel: MAX_PARALLEL,
         }
     }
 }

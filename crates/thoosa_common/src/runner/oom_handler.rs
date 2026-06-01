@@ -773,7 +773,7 @@ where
                                     .as_mut()
                                     .expect("run_with_runner_impl: missing run context")
                                     .branch(false),
-                                exclusive_job.job_id(),
+                                run_context.as_ref().and_then(|ctx| if ctx.max_other_parallel() == 0 {exclusive_job.job_id()} else {None}),
                             )
                             .await;
 

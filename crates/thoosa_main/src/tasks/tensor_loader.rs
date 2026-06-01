@@ -249,7 +249,7 @@ mod tests {
     //     rand::rng().fill(&mut data[..]);
     //     let data_0 = data.clone();
     //
-    //     let loader = Arc::new(RawTensorLoader::<RunCtxWithPermits>::new(
+    //     let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(
     //         move |key, _| {
     //             Ok(ThoTensor::new(
     //                 SynKey::new([mono_key!(key.id(), format!("resource_id={}", key.id()))]),
@@ -259,7 +259,7 @@ mod tests {
     //         ThoDevice::from(Device::Cpu),
     //     ));
     //
-    //     let ctx = Arc::new(parking_lot::RwLock::new(RunCtxWithPermits::new(0, "test_load")));
+    //     let ctx = Arc::new(parking_lot::RwLock::new(RunCtxImpl::new(0, "test_load")));
     //
     //     let load_ctx = ctx.write().branch(false);
     //     let loaded = loader
