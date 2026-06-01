@@ -17,7 +17,6 @@ use thoosa_named_derive::Named;
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 
-use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_common::dims::{AnyDims, ChannelsData, Dims, MotifSlices};
@@ -390,21 +389,7 @@ impl ConsumeData for SyncMotifLoaderInputWrapper {
                 descr,
             );
 
-            if to_device_idx == 0 {
-                do_run(input, ctx)
-            } else {
-                let mut r = None;
-                let stream_result = with_pooled_cuda_stream(to_device_idx, |_| {
-                    r = Some(do_run(input, ctx));
-                    Ok(())
-                }).await;
-                if let Some(r) = r {
-                    r
-                } else {
-                    stream_result.expect("with_pooled_cuda_stream failed before do_run");
-                    unreachable!("with_pooled_cuda_stream returned without running do_run")
-                }
-            }
+            do_run(input, ctx)
         }
     }
 

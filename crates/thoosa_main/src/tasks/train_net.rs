@@ -7,7 +7,6 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, 
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
-use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, perf_log, sync_mutex_lock};
 use futures_util::{future::BoxFuture, StreamExt};
@@ -534,12 +533,8 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
         P: RunCtx + 'a,
     {
         async move {
-
-
             if self.x.device_idx() == to_device_idx {
-                with_pooled_cuda_stream(to_device_idx, |_| {
-                    do_run(self, &permits_ctx)
-                }).await
+                do_run(self, &permits_ctx)
 
             } else {
 
@@ -551,10 +546,7 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
                 let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
 
                 let input = TrainStepInput::new(x, lengths, expected_y);
-
-                with_pooled_cuda_stream(to_device_idx, |_| {
-                    do_run(&input, &permits_ctx)
-                }).await
+                do_run(&input, &permits_ctx)
             }
         }
 

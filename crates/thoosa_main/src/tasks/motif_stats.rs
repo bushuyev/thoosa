@@ -35,7 +35,6 @@ use thoosa_common::copy_ctx;
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::error;
-use thoosa_common::cuda_utils::with_pooled_cuda_stream;
 use thoosa_common::runs::Simple;
 use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
 use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices};
@@ -499,21 +498,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
 
             let input = MotifStatsLoadedChannelsInput::new(id, channels_motifs_slices, metrics, quantiles);
 
-            if to_device_idx == 0 {
-                do_run(input, ctx)
-            } else {
-                let mut r = None;
-                let stream_result = with_pooled_cuda_stream(to_device_idx, |_| {
-                    r = Some(do_run(input, ctx));
-                    Ok(())
-                }).await;
-                if let Some(r) = r {
-                    r
-                } else {
-                    stream_result.expect("with_pooled_cuda_stream failed before do_run");
-                    unreachable!("with_pooled_cuda_stream returned without running do_run")
-                }
-            }
+            do_run(input, ctx)
         }
     }
 
