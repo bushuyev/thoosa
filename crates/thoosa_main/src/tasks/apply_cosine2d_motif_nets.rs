@@ -247,10 +247,10 @@ where
         async move {
 
             let res = with_data!(ctx.branch(false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
-                debug!("ApplyMotifNetsMerged::run: input={input:?}");
+                debug!("ApplyCosine2DMotifNets::run: input={input:?}");
                 let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
                     let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
-                    debug!("ApplyMotifNetsMerged::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);
+                    debug!("ApplyCosine2DMotifNets::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);
 
 
                     let stft = SyncStft::<C>::new("".into(), stft_config.clone())?;
@@ -263,7 +263,7 @@ where
                             if size[0] >= pad_to_width as i64 {
                                 t
                             } else {
-                                debug!("ApplyMotifNetsMerged::run: padding t={t:?} to pad_to={}", pad_to_width);
+                                debug!("ApplyCosine2DMotifNets::run: padding t={t:?} to pad_to={}", pad_to_width);
 
                                 pad_to(&t, &[pad_to_width as i64], 0.0)?
                             }
@@ -271,12 +271,12 @@ where
                             if size[1] >= pad_to_width as i64 {
                                 t
                             } else {
-                                debug!("ApplyMotifNetsMerged::run: padding t={t:?} to pad_to={}", pad_to_width);
+                                debug!("ApplyCosine2DMotifNets::run: padding t={t:?} to pad_to={}", pad_to_width);
 
                                 pad_to(&t, &[size[0], pad_to_width as i64], 0.0)?
                             }
                         } else {
-                            panic!("ApplyMotifNetsMerged::run: unexpected input={input:?} shape: {:?}", size);
+                            panic!("ApplyCosine2DMotifNets::run: unexpected input={input:?} shape: {:?}", size);
                         };
 
 
@@ -287,18 +287,18 @@ where
                         t
                     };
 
-                    debug!("ApplyMotifNetsMerged::run: stft_t={stft_t:?}");
+                    debug!("ApplyCosine2DMotifNets::run: stft_t={stft_t:?}");
                     let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);
                     let step = self_clone.slice_step as i64 /stft_config.hop_length.as_ref().map(|v|*v).unwrap_or(1);
 
-                    debug!("ApplyMotifNetsMerged::run: step={step} window={window}");
+                    debug!("ApplyCosine2DMotifNets::run: step={step} window={window}");
                     //unfold time frames
                     let stft_t = stft_t.unfold(1,window,step);
 
-                    debug!("ApplyMotifNetsMerged::run: unfolded stft_t={stft_t:?}");
+                    debug!("ApplyCosine2DMotifNets::run: unfolded stft_t={stft_t:?}");
                     let stft_t = stft_t.permute([1, 0, 2]);
 
-                    debug!("ApplyMotifNetsMerged::run: permuted stft_t={stft_t:?}");
+                    debug!("ApplyCosine2DMotifNets::run: permuted stft_t={stft_t:?}");
 
                      apply_cosine_kernel_bank_to_batched_spectrogram(
                        &stft_t.unsqueeze(1),
@@ -308,7 +308,7 @@ where
                        CosineConv2dBankConfig::default()
                     ).and_then(|v|{
                         let unbound = v.f_squeeze_dim(2)?.f_unbind(1)?;
-                        debug!("ApplyMotifNetsMerged::run: unbound={unbound:?}");
+                        debug!("ApplyCosine2DMotifNets::run: unbound={unbound:?}");
                         unbound.into_iter().map(|v| ThoTensor::<MotifProbability, SynKey>::new("".into(), v)).collect::<Result<Vec<_>, ThoError>>()
                     })
                 }).collect::<Result<Vec<_>, ThoError>>()?
@@ -316,7 +316,7 @@ where
                     .flatten()
                     .collect::<Vec<ThoTensor<MotifProbability, SynKey>>>();
 
-                debug!("ApplyMotifNetsMerged::run: motifs_applied={motifs_applied:?}");
+                debug!("ApplyCosine2DMotifNets::run: motifs_applied={motifs_applied:?}");
 
                 Ok(motifs_applied)
             })?;
