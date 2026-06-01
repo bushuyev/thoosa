@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
 use log::{debug, error, info, warn};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
 use tch::{Cuda, Device, IndexOp, Kind, Tensor};
@@ -31,13 +31,14 @@ use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, os_thread_id, StreamBuffering, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
 use thoosa_with_data::with_data;
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
+use std::cell::Cell;
 
 mod data;
 mod labels;
@@ -46,6 +47,11 @@ mod run_all;
 const SLOTS_PER_FILE: usize = 12;
 const SLOT_SECONDS: usize = 5;
 const EXPECTED_LABELS: usize = 234;
+
+thread_local! {
+    static POLL_START: Cell<Option<Instant>> = const { Cell::new(None) };
+    static POLL_START_TID: Cell<i64> = const { Cell::new(0) };
+}
 
 fn main() -> Result<(), ThoError>{
     info!("bird_clef main");
@@ -75,6 +81,53 @@ fn main() -> Result<(), ThoError>{
         .worker_threads(worker_threads.unwrap_or(cpu_num/2))
         .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
         .enable_all()
+        .on_before_task_poll(|meta| {
+            let tid = os_thread_id();
+
+            POLL_START.with(|s| s.set(Some(Instant::now())));
+            POLL_START_TID.with(|s| s.set(tid as i64));
+
+            tracing::debug!(
+                task_id = %meta.id(),
+                os_tid = tid,
+                thread = ?std::thread::current().name(),
+                "tokio on_before_task_poll"
+            );
+        })
+        .on_after_task_poll(|meta| {
+            let tid = os_thread_id();
+            tracing::debug!(
+                task_id = %meta.id(),
+                os_tid = tid,
+                thread = ?std::thread::current().name(),
+                "tokio on_after_task_poll"
+            );
+
+            let elapsed = POLL_START.with(|s| {
+                s.take().map(|start| start.elapsed())
+            });
+
+            let tid = POLL_START_TID.with(|s| s.get());
+
+            if let Some(elapsed) = elapsed {
+                if elapsed > Duration::from_millis(50) {
+                    tracing::warn!(
+                        task_id = %meta.id(),
+                        os_tid = tid,
+                        thread = ?std::thread::current().name(),
+                        ?elapsed,
+                        "slow tokio task poll"
+                    );
+                }
+            }
+        })
+        .on_task_terminate(|meta| {
+            tracing::debug!(
+                task_id = %meta.id(),
+                os_tid = os_thread_id(),
+                "tokio task terminated"
+            );
+        })
         .build()
         .map_err(|err| {
             error!("main: {err:?}");
