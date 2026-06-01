@@ -4964,6 +4964,7 @@ dependencies = [
  "thoosa_with_data",
  "tokio",
  "torch-sys",
+ "tracing",
 ]
 
 [[package]]

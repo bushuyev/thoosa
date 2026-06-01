@@ -34,6 +34,7 @@ use file_rotate::{
 use parking_lot::{Mutex, MutexGuard};
 use tracing_appender::non_blocking;
 use tracing_subscriber::fmt::MakeWriter;
+use thoosa_shared::os_thread_id;
 
 #[derive(Clone)]
 pub struct SimplelogLikeEvent<T> {
@@ -91,10 +92,18 @@ where
         // level
         write_level(&mut w, meta.level(), self.use_color)?;
 
+
+        fn tokio_task_id_string() -> String {
+            match tokio::task::try_id() {
+                Some(id) => id.to_string(),
+                None => "-".to_string(),
+            }
+        }
+
         // thread name
         let thread = std::thread::current();
         let tname = thread.name().unwrap_or("unknown");
-        write!(w, "({}) ", tname)?;
+        write!(w, "({}/{}/{:?}) ", tname, os_thread_id(),  tokio_task_id_string())?;
 
         // target (module path)
         write!(w, "{}: ", meta.target())?;
@@ -357,8 +366,7 @@ pub fn init_tracing(
 
     set_perf_log_level(perf_filter)?;
 
-    let timer =
-        tracing_subscriber::fmt::time::ChronoLocal::new("%Y-%m-%d %H:%M:%S".to_string());
+    let timer = tracing_subscriber::fmt::time::ChronoLocal::new( "%Y-%m-%d %H:%M:%S%.3f".to_string());
 
     let stdout_writer = SyncMakeWriter::new(std::io::stdout());
     let stdout_layer = fmt::layer()

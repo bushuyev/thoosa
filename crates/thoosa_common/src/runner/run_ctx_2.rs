@@ -128,11 +128,11 @@ impl RunCtx for RunCtxImpl {
         };
 
 
-        let parent_permits = self.max_other_parallel.clone();
+        let max_other_parallel = self.max_other_parallel.clone();
 
-        debug!("RunCtxImpl::branch: parent_permits={parent_permits:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
+        debug!("RunCtxImpl::branch: max_other_parallel={max_other_parallel:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
 
-        branched_ctx.max_other_parallel = parent_permits;
+        branched_ctx.max_other_parallel = max_other_parallel;
 
 
         branched_ctx.tho_device_idx = self.tho_device_idx;
