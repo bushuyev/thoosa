@@ -2,18 +2,23 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use async_trait::async_trait;
 use log::{error, warn};
-use parking_lot::{RawRwLock, RwLock};
+use mockall_double::double;
+use parking_lot::{Mutex, RwLock};
 use tch::{IndexOp, Kind, Tensor};
-use tch::Device::Cuda;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
-use thoosa_common::dims::{AnyDims, Batch, ChannelsData, MotifProbability, Slice};
+use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifCosine2DNetArgs, StftRunConfig, ThoModuleWithStore, TrainMotifNetRunConfig};
@@ -22,11 +27,13 @@ use thoosa_common::utils::{load_run_config, pad_to};
 use thoosa_common::ws::Workspace;
 use thoosa_named_derive::Named;
 use thoosa_properties_map::FromHashmap;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
-use thoosa_shared::traits::{Adjustable, WithId};
+use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, WithId};
 use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
@@ -35,6 +42,9 @@ use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
 use crate::tasks::stft::SyncStft;
+
+#[double]
+use thoosa_common::runner::global_ctx::GlobalCtx;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyCosine2DMotifNets<C>
@@ -121,13 +131,16 @@ where
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 
 
-        let channels_widths_net_tensors:Arc<RwLock<HashMap<(u32, u32, u64), (Vec<ThoTensor>, Vec<ThoTensor>, Vec<ThoTensor>)>>> = Arc::new(RwLock::new(HashMap::new()));
+        let tmp_cache = TmpCached::new("tmp_apply_cosine2d_motif_nets").await;
+        let tmp_cache_name = tmp_cache.registered_name();
+        let tmp_cache: Arc<Mutex<TmpCached<CosineConv2dTensorPart>>> = Arc::new(Mutex::new(tmp_cache));
 
         //this defines order in which motif nets should be applied to a resource before running label net
 
         let futures = trained_nets
             .into_iter()
-            .map(|trained_net| {
+            .enumerate()
+            .map(|(trained_net_idx, trained_net)| {
                 debug!("ApplyMotifNets::new: trained_net={trained_net:?}");
 
                 let trained_net_id = trained_net.id;
@@ -138,7 +151,7 @@ where
                 let load_ctx = stage_ctx.branch(false);
                 let load_ctx_2 = stage_ctx.branch(false);
 
-                let channels_widths_net_tensors = Arc::clone(&channels_widths_net_tensors);
+                let tmp_cache = Arc::clone(&tmp_cache);
 
                 async move {
                     // let train_motif_net_run_config: TrainMotifNetRunConfig = load_run_config(&store, train_motif_net_run_config_id).await?;
@@ -156,18 +169,17 @@ where
                         Ok(net) => {
 
 
-                            let (hash_value, config) = net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, ctx|{
+                            let (hash_value, config) = net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, _ctx|{
                                 let channel = module_with_store.extra().channel();
                                 let motif_width = module_with_store.extra().motif_net_params.num_features();
 
-                                let mut write_guard = channels_widths_net_tensors.write();
                                 let hash_value = stft_config.hash_value();
 
                                 debug!("ApplyMotifNets::new: loaded module_with_store={module_with_store:?} hash_value={hash_value:?}");
 
-                                let vecs = write_guard.entry((channel, motif_width, hash_value)).or_insert((vec![], vec![], vec![]));
-
-                                extract_cosine_conv_2d_once_(&mut vecs.0, &mut vecs.1, &mut vecs.2, module_with_store.data().module());
+                                for tensor_part in extract_cosine_conv_2d_parts(channel, motif_width, hash_value, trained_net_id, trained_net_idx, module_with_store.data().module())? {
+                                    tmp_cache.lock().insert(tensor_part);
+                                }
 
                                 Ok((hash_value, stft_config))
                             }).await?;
@@ -194,25 +206,38 @@ where
             .flatten()
             .collect::<HashMap<_, _>>();
 
-        let conv2d_tensors = Arc::into_inner(channels_widths_net_tensors)
-            .expect("Arc::into_inner(channels_widths_net_tensors) failed")
-            .into_inner()
-            .into_iter()
-            .map(|((channel, motif_width, stft_hash_value),(kernels, alphas, betas))|{
-            MyCosineConv2dTensors {
-                channel,
-                motif_width,
-                stft_hash_value,
-                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.tho_device_idx()).into()).into(),//TODO to_device(Cuda(0))
-                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.tho_device_idx()).into()).into(),
-                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.tho_device_idx()).into()).into(),
-            }
-        }).collect();
-
-
         if stft_run_configs.is_empty() {
             return Err(ThoError::new(format!("No motif nets for trained_net_ids={trained_net_ids:?}")));
         };
+
+        let batch_cosine_conv2d_tensors = Arc::new(BatchCosineConv2dTensors::<R>::new(mono_key!(0, "BatchCosineConv2dTensors").into()));
+        let batch_input = BatchCosineConv2dTensorsInputWrapper::new(id.clone(), Arc::into_inner(tmp_cache).expect("Arc::into_inner(tmp_cache) failed").into_inner());
+        let required_tmp_cache_ids = std::collections::HashSet::<&dyn CachableIdTr>::new();
+        let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
+        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(Box::new(DumpToCpu::new("batch_apply_cosine2d_motif_nets"))),
+            ],
+            None,
+        );
+        let raw_conv2d_tensors = oom_handler
+            .consume(
+                &batch_cosine_conv2d_tensors,
+                batch_input,
+                stage_ctx.branch(true),
+                Contexts::new(
+                    NoopInputContext::<BatchCosineConv2dTensors<R>>(None),
+                    NoopRunnableContext {},
+                    MaxParallelAndDumpToCpuAdjustableContex::new(
+                        MaxParallelAdjustContextImpl::new(),
+                        DumpToCpuContextImpl::new(&required_ids),
+                    ),
+                ),
+            )
+            .await?;
+        let conv2d_tensors = move_cosine_conv2d_tensors_to_cpu(raw_conv2d_tensors.conv2d_tensors).await?;
+
         debug!("ApplyMotifNets::new: stft_run_configs={stft_run_configs:?} conv2d_tensors={conv2d_tensors:?} trained_net_ids={trained_net_ids:?}");
 
         Ok(Self {
@@ -227,7 +252,7 @@ where
     }
 
     pub fn num_nets(&self) -> usize {
-        self.conv2d_tensors.iter().map(|v|v.kernels.size()[0] as usize).sum()
+        self.conv2d_tensors.iter().map(|v|v.num_nets).sum()
     }
 
 
@@ -246,9 +271,13 @@ where
         let self_clone = Arc::clone(&self);
         async move {
 
-            let res = with_data!(ctx.branch(false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
+            let kernels = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.kernels)).collect::<Vec<_>>();
+            let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
+            let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
+
+            let res = with_data!(ctx.branch(false), input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");
-                let motifs_applied = self_clone.conv2d_tensors.iter().map(|tensors|{
+                let motifs_applied = self_clone.conv2d_tensors.iter().enumerate().map(|(tensors_idx, tensors)|{
                     let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
                     debug!("ApplyCosine2DMotifNets::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);
 
@@ -302,9 +331,9 @@ where
 
                      apply_cosine_kernel_bank_to_batched_spectrogram(
                        &stft_t.unsqueeze(1),
-                       tensors.kernels.as_ref(),
-                       tensors.a.as_ref(),
-                       tensors.b.as_ref(),
+                       kernels[tensors_idx].as_ref(),
+                       alphas[tensors_idx].as_ref(),
+                       betas[tensors_idx].as_ref(),
                        CosineConv2dBankConfig::default()
                     ).and_then(|v|{
                         let unbound = v.f_squeeze_dim(2)?.f_unbind(1)?;
@@ -393,12 +422,393 @@ struct MyCosineConv2dTensors {
     channel:u32,
     motif_width:u32,
     stft_hash_value: u64,
-    kernels: ThoTensor,
-    a: ThoTensor,
-    b: ThoTensor,
+    kernels: Arc<DevicesWrap<CosineConv2dTensor>>,
+    a: Arc<DevicesWrap<CosineConv2dTensor>>,
+    b: Arc<DevicesWrap<CosineConv2dTensor>>,
+    num_nets: usize,
 }
 
-fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifProbability>>>) -> MyCosineConv2dTensors {
+type CosineConv2dTensor = ThoTensor<AnyDims, SynKey>;
+
+#[derive(Debug)]
+struct RawMyCosineConv2dTensors {
+    channel:u32,
+    motif_width:u32,
+    stft_hash_value: u64,
+    kernels: CosineConv2dTensor,
+    a: CosineConv2dTensor,
+    b: CosineConv2dTensor,
+    num_nets: usize,
+}
+
+impl RawMyCosineConv2dTensors {
+    fn mem_size(&self) -> u64 {
+        self.kernels.mem_size() + self.a.mem_size() + self.b.mem_size()
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+enum CosineConv2dTensorKind {
+    Kernel,
+    Alpha,
+    Beta,
+}
+
+impl CosineConv2dTensorKind {
+    fn id_value(self) -> u32 {
+        match self {
+            CosineConv2dTensorKind::Kernel => 0,
+            CosineConv2dTensorKind::Alpha => 1,
+            CosineConv2dTensorKind::Beta => 2,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CosineConv2dTensorPart {
+    id: SynKey,
+    channel: u32,
+    motif_width: u32,
+    stft_hash_value: u64,
+    trained_net_order: usize,
+    kind: CosineConv2dTensorKind,
+    tensor: CosineConv2dTensor,
+}
+
+impl CosineConv2dTensorPart {
+    fn new(channel: u32, motif_width: u32, stft_hash_value: u64, trained_net_id: u32, trained_net_order: usize, kind: CosineConv2dTensorKind, tensor: Tensor) -> Result<Self, ThoError> {
+        let id = cosine_conv2d_tensor_part_id(channel, motif_width, stft_hash_value, trained_net_id, trained_net_order, kind);
+        Ok(Self {
+            tensor: ThoTensor::new(id.clone(), tensor)?,
+            id,
+            channel,
+            motif_width,
+            stft_hash_value,
+            trained_net_order,
+            kind,
+        })
+    }
+}
+
+impl WithId for CosineConv2dTensorPart {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for CosineConv2dTensorPart {
+    type Metrics = AnyMetrics;
+    type M = CpuOrGpu<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.tensor.size().into()
+    }
+
+    fn device(&self) -> usize {
+        self.tensor.device()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.tensor.mem_size()
+    }
+}
+
+#[async_trait]
+impl CopyToDevice for CosineConv2dTensorPart {
+    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+        Ok(Self {
+            id: self.id.clone(),
+            channel: self.channel,
+            motif_width: self.motif_width,
+            stft_hash_value: self.stft_hash_value,
+            trained_net_order: self.trained_net_order,
+            kind: self.kind,
+            tensor: self.tensor.copy_to_device(dst_device).await?,
+        })
+    }
+}
+
+impl Output for CosineConv2dTensorPart {}
+
+#[derive(Debug)]
+struct BatchCosineConv2dTensorsInput {
+    id: SynKey,
+    device_idx: usize,
+    parts: Vec<CosineConv2dTensorPart>,
+}
+
+impl BatchCosineConv2dTensorsInput {
+    fn new(id: SynKey, parts: Vec<CosineConv2dTensorPart>, device_idx: usize) -> Self {
+        Self { id, device_idx, parts }
+    }
+}
+
+impl WithId for BatchCosineConv2dTensorsInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for BatchCosineConv2dTensorsInput {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.parts.len().into()
+    }
+
+    fn device(&self) -> usize {
+        self.device_idx
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.parts.iter().map(|part| part.mem_size()).sum()
+    }
+}
+
+impl Input for BatchCosineConv2dTensorsInput {}
+impl Adjustable for BatchCosineConv2dTensorsInput {}
+
+#[derive(Debug)]
+struct BatchCosineConv2dTensorsInputWrapper {
+    id: SynKey,
+    tmp_cache: TmpCached<CosineConv2dTensorPart>,
+}
+
+impl BatchCosineConv2dTensorsInputWrapper {
+    fn new(id: SynKey, tmp_cache: TmpCached<CosineConv2dTensorPart>) -> Self {
+        Self { id, tmp_cache }
+    }
+}
+
+impl WithId for BatchCosineConv2dTensorsInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl ConsumeData for BatchCosineConv2dTensorsInputWrapper {
+    type O = BatchCosineConv2dTensorsInput;
+
+    fn consume<R: Send, F, P>(
+        self,
+        to_device_idx: usize,
+        ctx: P,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
+    where
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
+        P: RunCtx,
+    {
+        async move {
+            let BatchCosineConv2dTensorsInputWrapper { id, tmp_cache } = self;
+            match tmp_cache.take_all_recovering(to_device_idx).await {
+                Ok(parts) => do_run(BatchCosineConv2dTensorsInput::new(id, parts, to_device_idx), ctx),
+                Err(err) => ConsumeResult::Failed { input: BatchCosineConv2dTensorsInput::new(id, err.data, to_device_idx), error: err.error },
+            }
+        }
+    }
+
+    fn burp(o: Self::O) -> impl Future<Output = Self> + Send {
+        async move {
+            let cache = TmpCached::new("tmp_apply_cosine2d_motif_nets_burp").await;
+            for part in o.parts {
+                cache.insert(part);
+            }
+            BatchCosineConv2dTensorsInputWrapper::new(o.id, cache)
+        }
+    }
+}
+
+#[derive(Debug)]
+struct BatchedCosineConv2dTensors {
+    id: SynKey,
+    device_idx: usize,
+    conv2d_tensors: Vec<RawMyCosineConv2dTensors>,
+}
+
+impl WithId for BatchedCosineConv2dTensors {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for BatchedCosineConv2dTensors {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.conv2d_tensors.len().into()
+    }
+
+    fn device(&self) -> usize {
+        self.device_idx
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.conv2d_tensors.iter().map(|tensors| tensors.mem_size()).sum()
+    }
+}
+
+impl Output for BatchedCosineConv2dTensors {}
+
+#[derive(Debug, Named)]
+struct BatchCosineConv2dTensors<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    pd: PhantomData<C>,
+}
+
+impl<C> BatchCosineConv2dTensors<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new(id: SynKey) -> Self {
+        Self { id, pd: PhantomData }
+    }
+}
+
+impl<C> Adjustable for BatchCosineConv2dTensors<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+}
+
+impl<C> OutId for BatchCosineConv2dTensors<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl<C> Stage for BatchCosineConv2dTensors<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = BatchCosineConv2dTensorsInput;
+    type Out = BatchedCosineConv2dTensors;
+}
+
+#[derive(Debug, Default)]
+struct CosineConv2dTensorPartGroup {
+    kernels: Vec<usize>,
+    alphas: Vec<usize>,
+    betas: Vec<usize>,
+}
+
+impl<C> SyncStage for BatchCosineConv2dTensors<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="BatchCosineConv2dTensors::consume"))]
+    fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
+        let input_id = input.id().clone();
+        let parts = std::mem::take(&mut input.parts);
+        let mut groups: HashMap<(u32, u32, u64), CosineConv2dTensorPartGroup> = HashMap::new();
+
+        for (part_idx, part) in parts.iter().enumerate() {
+            let group = groups.entry((part.channel, part.motif_width, part.stft_hash_value)).or_default();
+            match part.kind {
+                CosineConv2dTensorKind::Kernel => group.kernels.push(part_idx),
+                CosineConv2dTensorKind::Alpha => group.alphas.push(part_idx),
+                CosineConv2dTensorKind::Beta => group.betas.push(part_idx),
+            }
+        }
+
+        let mut groups = groups.into_iter().collect::<Vec<_>>();
+        groups.sort_by_key(|((channel, motif_width, stft_hash_value), _)| (*channel, *motif_width, *stft_hash_value));
+
+        let mut conv2d_tensors = Vec::with_capacity(groups.len());
+        for ((channel, motif_width, stft_hash_value), mut group) in groups {
+            group.kernels.sort_by_key(|part_idx| parts[*part_idx].trained_net_order);
+            group.alphas.sort_by_key(|part_idx| parts[*part_idx].trained_net_order);
+            group.betas.sort_by_key(|part_idx| parts[*part_idx].trained_net_order);
+
+            if group.kernels.is_empty() || group.kernels.len() != group.alphas.len() || group.kernels.len() != group.betas.len() {
+                input.parts = parts;
+                return ConsumeResult::Failed { input, error: ThoError::new(format!("BatchCosineConv2dTensors::consume: mismatched cosine tensor parts for channel={channel} motif_width={motif_width} stft_hash_value={stft_hash_value}: kernels={} alphas={} betas={}", group.kernels.len(), group.alphas.len(), group.betas.len())) };
+            }
+
+            let group_id = cosine_conv2d_tensor_group_id(channel, motif_width, stft_hash_value);
+            let kernels = match cat_cosine_conv2d_parts(&parts, &group.kernels, &group_id + mono_key!(0, "kernels")) {
+                Ok(kernels) => kernels,
+                Err(error) => {
+                    input.parts = parts;
+                    return ConsumeResult::Failed { input, error };
+                }
+            };
+            let a = match cat_cosine_conv2d_parts(&parts, &group.alphas, &group_id + mono_key!(1, "alphas")) {
+                Ok(a) => a,
+                Err(error) => {
+                    input.parts = parts;
+                    return ConsumeResult::Failed { input, error };
+                }
+            };
+            let b = match cat_cosine_conv2d_parts(&parts, &group.betas, &group_id + mono_key!(2, "betas")) {
+                Ok(b) => b,
+                Err(error) => {
+                    input.parts = parts;
+                    return ConsumeResult::Failed { input, error };
+                }
+            };
+
+            conv2d_tensors.push(RawMyCosineConv2dTensors { channel, motif_width, stft_hash_value, kernels, a, b, num_nets: group.kernels.len() });
+        }
+
+        ConsumeResult::Ok(BatchedCosineConv2dTensors { id: self.out_id(&input_id), device_idx: input.device_idx, conv2d_tensors })
+    }
+}
+
+fn cat_cosine_conv2d_parts(parts: &[CosineConv2dTensorPart], indexes: &[usize], id: SynKey) -> Result<CosineConv2dTensor, ThoError> {
+    let tensor_refs = indexes.iter().map(|part_idx| parts[*part_idx].tensor.as_ref()).collect::<Vec<_>>();
+    ThoTensor::new(id, Tensor::f_cat(tensor_refs.as_slice(), 0)?)
+}
+
+async fn move_cosine_conv2d_tensors_to_cpu(raw_tensors: Vec<RawMyCosineConv2dTensors>) -> Result<Vec<MyCosineConv2dTensors>, ThoError> {
+    let mut tensors = Vec::with_capacity(raw_tensors.len());
+    for raw in raw_tensors {
+        tensors.push(MyCosineConv2dTensors {
+            channel: raw.channel,
+            motif_width: raw.motif_width,
+            stft_hash_value: raw.stft_hash_value,
+            kernels: move_cosine_tensor_to_cpu(raw.kernels).await?,
+            a: move_cosine_tensor_to_cpu(raw.a).await?,
+            b: move_cosine_tensor_to_cpu(raw.b).await?,
+            num_nets: raw.num_nets,
+        });
+    }
+    Ok(tensors)
+}
+
+async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<DevicesWrap<CosineConv2dTensor>>, ThoError> {
+    let id = tensor.id().clone();
+    let mask = tensor.t;
+    let mask = if mask.device().eq(&tch::Device::Cpu) {
+        mask
+    } else {
+        let mask = if mask.is_contiguous() { mask } else { mask.f_contiguous()? };
+        let device = ThoDevice::from(mask.device());
+        let kind = mask.kind();
+        GlobalCtx::global().copy_ctx(device).await.move_t(mask, 0, kind).await?
+    };
+    Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, mask)?)))
+}
+
+fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifProbability>>>) -> Result<RawMyCosineConv2dTensors, ThoError> {
 
     let mut kernels = Vec::with_capacity(nets.len());
     let mut alphas = Vec::with_capacity(nets.len());
@@ -409,46 +819,60 @@ fn extract_cosine_conv_2d(mut nets: Vec<Box<dyn ThoModule<Batch<Slice>, MotifPro
 
 
 
-    MyCosineConv2dTensors {
+    Ok(RawMyCosineConv2dTensors {
         channel: 0,
         motif_width: 0,
         stft_hash_value: 0,
-        kernels: Tensor::cat(kernels.as_slice(), 0).copy().into(),
-        a: Tensor::cat(alphas.as_slice(), 0).copy().into(),
-        b: Tensor::cat(betas.as_slice(), 0).copy().into(),
-    }
+        kernels: ThoTensor::new(mono_key!(0, "kernels").into(), Tensor::f_cat(kernels.as_slice(), 0)?)?,
+        a: ThoTensor::new(mono_key!(1, "alphas").into(), Tensor::f_cat(alphas.as_slice(), 0)?)?,
+        b: ThoTensor::new(mono_key!(2, "betas").into(), Tensor::f_cat(betas.as_slice(), 0)?)?,
+        num_nets: kernels.len(),
+    })
 }
 
 fn extract_cosine_conv_2d_once(kernels: &mut Vec<Tensor>, alphas: &mut Vec<Tensor>, betas: &mut Vec<Tensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
-    let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
-    debug!("extract_cosine_conv_2d_once: net_1_ref={net_1_ref:?}");
-
-    let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
-
-    let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
-    debug!("extract_cosine_conv_2d_once: layer={layer:?}");
-
-    let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
-
-    kernels.push(net_1.kernel.shallow_clone());
-    alphas.push(net_1.alpha.unsqueeze(0).shallow_clone());
-    betas.push(net_1.beta.unsqueeze(0).shallow_clone());
+    let net_1 = cosine_conv_2d_layer(net);
+    kernels.push(net_1.kernel.copy());
+    alphas.push(net_1.alpha.unsqueeze(0).copy());
+    betas.push(net_1.beta.unsqueeze(0).copy());
 }
 
-fn extract_cosine_conv_2d_once_(kernels: &mut Vec<ThoTensor>, alphas: &mut Vec<ThoTensor>, betas: &mut Vec<ThoTensor>, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) {
+fn extract_cosine_conv_2d_parts(channel: u32, motif_width: u32, stft_hash_value: u64, trained_net_id: u32, trained_net_order: usize, net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) -> Result<Vec<CosineConv2dTensorPart>, ThoError> {
+    let net_1 = cosine_conv_2d_layer(net);
+    Ok(vec![
+        CosineConv2dTensorPart::new(channel, motif_width, stft_hash_value, trained_net_id, trained_net_order, CosineConv2dTensorKind::Kernel, net_1.kernel.copy())?,
+        CosineConv2dTensorPart::new(channel, motif_width, stft_hash_value, trained_net_id, trained_net_order, CosineConv2dTensorKind::Alpha, net_1.alpha.unsqueeze(0).copy())?,
+        CosineConv2dTensorPart::new(channel, motif_width, stft_hash_value, trained_net_id, trained_net_order, CosineConv2dTensorKind::Beta, net_1.beta.unsqueeze(0).copy())?,
+    ])
+}
+
+fn cosine_conv_2d_layer(net: &Box<dyn ThoModule<Batch<Slice>, MotifProbability>>) -> &MyCosineConv2d {
     let net_1_ref: &dyn ThoModule<Batch<Slice>, MotifProbability> = net.as_ref();
-    debug!("extract_cosine_conv_2d_once_: net_1_ref={net_1_ref:?}");
+    debug!("cosine_conv_2d_layer: net_1_ref={net_1_ref:?}");
 
     let net_1_cosine_2_d = net_1_ref.as_any().downcast_ref::<MySequential<Batch<Slice>, MotifProbability>>().expect("downcast_mut fails");
 
     let layer = net_1_cosine_2_d.layers.get(1).expect("no MyCosineConv2d layer"); //TODO
-    debug!("extract_cosine_conv_2d_once_: layer={layer:?}");
+    debug!("cosine_conv_2d_layer: layer={layer:?}");
 
-    let net_1: &MyCosineConv2d = layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d");
+    layer.as_ref().as_any().downcast_ref::<MyCosineConv2d>().expect("net_1_cosine_2_d")
+}
 
-    kernels.push(ThoTensor::new((), net_1.kernel.shallow_clone()).unwrap());//TODO
-    alphas.push(ThoTensor::new((),net_1.alpha.unsqueeze(0)).unwrap());
-    betas.push(ThoTensor::new((),net_1.beta.unsqueeze(0)).unwrap());
+fn cosine_conv2d_tensor_group_id(channel: u32, motif_width: u32, stft_hash_value: u64) -> SynKey {
+    [
+        mono_key!(channel, "channel"),
+        mono_key!(motif_width, "motif_width"),
+        mono_key!(stft_hash_value as usize, "stft_hash_value"),
+    ].into()
+}
+
+fn cosine_conv2d_tensor_part_id(channel: u32, motif_width: u32, stft_hash_value: u64, trained_net_id: u32, trained_net_order: usize, kind: CosineConv2dTensorKind) -> SynKey {
+    let suffix = SynKey::from([
+        mono_key!(trained_net_id, "trained_net_id"),
+        mono_key!(trained_net_order, "trained_net_order"),
+        mono_key!(kind.id_value(), "tensor_kind"),
+    ]);
+    &cosine_conv2d_tensor_group_id(channel, motif_width, stft_hash_value) + &suffix
 }
 
 
@@ -522,7 +946,7 @@ mod tests {
 
         debug!("test_apply_cosine_kernel_bank_to_batched_spectrogram: net_1={net_1:?} type_name={:?}", net_1.as_ref().type_name());
 
-        let tensors = extract_cosine_conv_2d(vec![net_1, net_2]);
+        let tensors = extract_cosine_conv_2d(vec![net_1, net_2])?;
 
         let r = apply_cosine_kernel_bank_to_batched_spectrogram(
             &stft_t.as_ref().unsqueeze(1),
