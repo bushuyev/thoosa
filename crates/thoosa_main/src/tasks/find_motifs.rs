@@ -40,7 +40,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::cuda_utils::{pack_bits_bool, with_pooled_cuda_stream};
+use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::{ChannelsData, MotifSlices};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -362,7 +362,7 @@ where
                                     debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
 
                                     //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
-                                    let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask( //stream is set in CrossInputSelectorWrap/with_[select]_data_ref + with_data
+                                    let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask(
                                          &t_0,
                                          &t_1,
                                          cross_loader_run_config.similarity_metric,
