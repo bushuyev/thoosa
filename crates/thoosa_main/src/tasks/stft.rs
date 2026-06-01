@@ -57,7 +57,7 @@ where
     pub fn new_for_dims(run_config: StftRunConfig) -> Result<Self, ThoError> {
         run_config.validate()?;
         let id = stft_stage_id(&run_config);
-        Ok(Self { id: id.clone(), sync_stft: Arc::new(SyncStft::new(id, run_config.clone())), run_config, pd: PhantomData })
+        Ok(Self { id: id.clone(), sync_stft: Arc::new(SyncStft::new(id, run_config.clone())?), run_config, pd: PhantomData })
     }
 
     pub fn run_config(&self) -> &StftRunConfig {
@@ -169,15 +169,18 @@ where
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
-    pub fn new(id: SynKey, run_config: StftRunConfig) -> Self {
-        Self { id, run_config, pd: PhantomData }
+    pub fn new(id: SynKey, run_config: StftRunConfig) -> Result<Self, ThoError> {
+        run_config.validate()?;
+        Ok(Self { id, run_config, pd: PhantomData })
     }
 
     pub fn build_spectrogram(&self, input: &Tensor) -> Result<Tensor, ThoError> {
-        self.run_config.validate()?;
+
         let input_size = input.size();
+        debug!("SyncStft::build_spectrogram: input_size={input_size:?} run_config={:?}", self.run_config);
+
         Ok(
-            input.totype(Float)
+            input.f_totype(Float)?
             .f_stft(
                 self.run_config.n_fft,
                 self.run_config.hop_length,
@@ -250,7 +253,9 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 
 #[cfg(test)]
 mod tests {
+    use log::debug;
     use tch::{Device, Kind, Tensor};
+    use tch::kind::FLOAT_CUDA;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::StftRunConfig;
     use thoosa_shared::ThoError;
@@ -261,7 +266,7 @@ mod tests {
     fn test_sync_stft_build_spectrogram_stacks_batched_motifs() -> Result<(), ThoError> {
         let run_config = StftRunConfig::new(4, Some(2), Some(4), false, true, true);
         let input = Tensor::from_slice(&[0.0f32, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 1.0, 0.0, -1.0, 0.0, 1.0, 0.0, -1.0, 0.0]).f_view([2, 8])?;
-        let stage = SyncStft::<RunCtxImpl>::new(stft_stage_id(&run_config), run_config);
+        let stage = SyncStft::<RunCtxImpl>::new(stft_stage_id(&run_config), run_config)?;
 
         let output = stage.build_spectrogram(&input)?;
 
@@ -270,4 +275,21 @@ mod tests {
         assert_eq!(output.device(), Device::Cpu);
         Ok(())
     }
+
+    // #[test]
+    // fn test_sync_stft_build_spectrogram_stacks_batched_motifs_1() -> Result<(), ThoError> {
+    //     let run_config = StftRunConfig::new(16000, Some(4000), Some(4000), true, true, true);
+    //     let input = Tensor::rand(&[15999], FLOAT_CUDA);
+    //     let stage = SyncStft::<RunCtxImpl>::new(stft_stage_id(&run_config), run_config)?;
+    //
+    //     let output = stage.build_spectrogram(&input)?;
+    //
+    //     debug!("output={output:?}");
+    //
+    //     // assert_eq!(output.size(), vec![2, 3, 3]);
+    //     // assert_eq!(output.kind(), Kind::Float);
+    //     // assert_eq!(output.device(), Device::Cpu);
+    //     Ok(())
+    // }
+
 }
