@@ -100,14 +100,8 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
     }
 
     let invoke_closure = quote! {
-
-        if __device_idx > 0 {
-            thoosa_common::cuda_utils::with_pooled_cuda_stream(__device_idx, |_| {
-                (#closure)(__with_data_ctx #(, #arg_refs)*)
-            }).await
-        } else {
-            (#closure)(__with_data_ctx #(, #arg_refs)*)
-        }
+        let __with_data_result: ::std::result::Result<_, thoosa_shared::ThoError> = (#closure)(__with_data_ctx #(, #arg_refs)*);
+        __with_data_result
     };
 
 

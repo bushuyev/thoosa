@@ -29,7 +29,6 @@ use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
-use crate::cuda_utils::with_pooled_cuda_stream;
 
 
 
@@ -448,14 +447,7 @@ where
             match wrap.load_from_any_device_(to_tho_device_idx).await {
                 Ok(v) => {
                     let data = v.deref();
-
-                    if to_tho_device_idx > 0 {
-                        with_pooled_cuda_stream(to_tho_device_idx, |_| {
-                            DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
-                        }).await
-                    }  else {
-                        DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
-                    }
+                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
 
                 }
                 Err(e) => Err(e),
@@ -476,22 +468,11 @@ where
             if wrap.is_resident_on_device(to_tho_device_idx) {
                 let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
                 if read_guard.is_some() {
-                    if to_tho_device_idx > 0 {
-                        let selector = selector.clone();
-                        return with_pooled_cuda_stream(to_tho_device_idx, move |_| {
-                            let base: &O = read_guard
-                                .as_ref()
-                                .expect("no value behind guard");
-                            let data: O = base.subview(selector.clone())?;
-                            DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data)
-                        }).await;
-                    } else {
-                        let base: &O = read_guard
-                            .as_ref()
-                            .expect("no value behind guard");
-                        let data: O = base.subview(selector.clone())?;
-                        return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                    }
+                    let base: &O = read_guard
+                        .as_ref()
+                        .expect("no value behind guard");
+                    let data: O = base.subview(selector.clone())?;
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                 }
 
                 drop(read_guard);
@@ -511,14 +492,7 @@ where
                     debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
 
                     let data = sub_t.copy_to_device(to_tho_device_idx).await?;
-
-                    if to_tho_device_idx > 0 {
-                        return with_pooled_cuda_stream(to_tho_device_idx, |_| {
-                            DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data)
-                        }).await;
-                    } else {
-                        return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                    }
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                 }
                 drop(source_read_guard);
                 wrap.mark_not_resident_on_device(source_device_idx);
@@ -545,22 +519,11 @@ where
         if wrap.is_resident_on_device(to_device_idx) {
             let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
             if read_guard.is_some() {
-                if to_device_idx > 0 {
-                    let selector = selector.clone();
-                    return with_pooled_cuda_stream(to_device_idx, move |_| {
-                        let data = read_guard
-                            .as_ref()
-                            .expect("no value behind guard")
-                            .subview(selector.clone())?;
-                        do_run(data, &permits_ctx)
-                    }).await;
-                } else {
-                    let data = read_guard
-                        .as_ref()
-                        .expect("no value behind guard")
-                        .subview(selector.clone())?;
-                    return do_run(data, &permits_ctx);
-                }
+                let data = read_guard
+                    .as_ref()
+                    .expect("no value behind guard")
+                    .subview(selector.clone())?;
+                return do_run(data, &permits_ctx);
             }
 
             drop(read_guard);
@@ -579,14 +542,7 @@ where
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
 
                 let data = sub_t.copy_to_device(to_device_idx).await?;
-
-                if to_device_idx > 0 {
-                    return with_pooled_cuda_stream(to_device_idx, |_| {
-                        do_run(data, &permits_ctx)
-                    }).await;
-                } else {
-                    return do_run(data, &permits_ctx);
-                }
+                return do_run(data, &permits_ctx);
             }
             drop(source_read_guard);
             wrap.mark_not_resident_on_device(source_device_idx);

@@ -5,7 +5,8 @@ use crate::runner::common::cachable::{ConsumeData, WithDataRef, WithSelectDataRe
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
 use crate as thoosa_common;
-#[cfg(not(test))]
+use mockall_double::double;
+#[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::runner::statistics::Statistics;
@@ -340,14 +341,22 @@ where
             match oom_executor(device_idx).submit(
                 fast_run_ctx.max_other_parallel().into(),
                 async move {
-                    fast_input
+                    let stream = GlobalCtx::global().copy_ctx(device_idx).await.acquire_exec_stream().await;
+                    let out = fast_input
                         .with_data_ref(
                             device_idx,
                             fast_run_ctx,
                             None,
-                            |data, ctx| Arc::clone(&fast_task).do_run(data.borrow(), ctx),
+                            |data, ctx| {
+                                let _guard = ThoStreamGuard::new(&stream)?;
+                                Arc::clone(&fast_task).do_run(data.borrow(), ctx)
+                            },
                         )
-                        .await
+                        .await;
+                    spawn_blocking(move || {
+                        stream.synchronize()
+                    }).await??;
+                    out
                 },
                 None
             ).await {
@@ -372,12 +381,10 @@ where
             initial_error,
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
-
-                let stream = crate::runner::global_ctx::GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
-
                 oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
+                        let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
                         let out = if let Some(selector) = selector {
                             input
                                 .with_selected_data_ref(
@@ -442,16 +449,21 @@ where
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
                 oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
-                    let stream = crate::runner::global_ctx::GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
-
-                    let consume_result = input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
-                        let _guard = ThoStreamGuard::new(&stream).unwrap();//TODO unwrap
-                        Arc::clone(&task).consume(input, run_ctx)
-                    }).await;
-
-                    spawn_blocking(move || {
-                        stream.synchronize()
-                    }).await??;
+                    let consume_result = if tho_device_idx == 0 {
+                        input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx)).await
+                    } else {
+                        let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
+                        let consume_result = input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
+                            match ThoStreamGuard::new(&stream) {
+                                Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
+                                Err(error) => ConsumeResult::Failed { input, error },
+                            }
+                        }).await;
+                        spawn_blocking(move || {
+                            stream.synchronize()
+                        }).await??;
+                        consume_result
+                    };
 
                     if matches!(&consume_result, ConsumeResult::Failed { error, .. } if error.needs_cuda_ctx_reset()) {
                         warn!("OOMHandler::consume: needs_cuda_ctx_reset device_idx={tho_device_idx}");
