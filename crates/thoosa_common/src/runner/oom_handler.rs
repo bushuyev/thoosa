@@ -330,20 +330,25 @@ where
 
         let device_idx = run_context.tho_device_idx();
         let fast_path_key = oom_fast_path_key::<R, W, S>(device_idx);
-        let initial_error = if !oom_fast_path_disabled().contains(&fast_path_key) {
+        let initial_error = if !oom_fast_path_disabled().contains(&fast_path_key) {//TODO remove
             let fast_task = Arc::clone(task);
             let fast_input = Arc::clone(&input);
             let fast_run_ctx = run_context.branch(false);
-            match oom_executor(device_idx).submit(fast_run_ctx.max_other_parallel().into(), async move {
-                fast_input
-                    .with_data_ref(
-                        device_idx,
-                        fast_run_ctx,
-                        None,
-                        |data, ctx| Arc::clone(&fast_task).do_run(data.borrow(), ctx),
-                    )
-                    .await
-            }, None).await {
+
+            match oom_executor(device_idx).submit(
+                fast_run_ctx.max_other_parallel().into(),
+                async move {
+                    fast_input
+                        .with_data_ref(
+                            device_idx,
+                            fast_run_ctx,
+                            None,
+                            |data, ctx| Arc::clone(&fast_task).do_run(data.borrow(), ctx),
+                        )
+                        .await
+                },
+                None
+            ).await {
                 Ok(out) => return Ok(out),
                 Err(err) if err.is_retryable_oom() => {
                     oom_fast_path_disabled().insert(fast_path_key);
@@ -366,29 +371,32 @@ where
             |task, input, selector, device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                oom_executor(device_idx).submit(run_ctx.max_other_parallel().into(), async move {
-                    if let Some(selector) = selector {
-                        input
-                            .with_selected_data_ref(
-                                device_idx,
-                                run_ctx,
-                                selector,
-                                None,
-                                |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
-                            )
-                            .await
-                    } else {
-                        input
-                            .with_data_ref(
-                                device_idx,
-                                run_ctx,
-                                None,
-                                |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
-                            )
-                            .await
-                    }
-                }, job_id_to_rerun)
-                .await
+                oom_executor(device_idx).submit(
+                    run_ctx.max_other_parallel().into(),
+                    async move {
+                        if let Some(selector) = selector {
+                            input
+                                .with_selected_data_ref(
+                                    device_idx,
+                                    run_ctx,
+                                    selector,
+                                    None,
+                                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                )
+                                .await
+                        } else {
+                            input
+                                .with_data_ref(
+                                    device_idx,
+                                    run_ctx,
+                                    None,
+                                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                )
+                                .await
+                        }
+                    },
+                    job_id_to_rerun
+                ).await
             },
         )
         .await
