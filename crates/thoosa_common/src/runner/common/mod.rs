@@ -25,7 +25,7 @@ pub trait MaxParallelCtx: Named + Debug + Send + Sync {
 }
 
 pub trait RunCtx: MaxParallelCtx + WithId {
-    fn device_idx(&self) -> usize;
+    fn tho_device_idx(&self) -> usize;
 
     fn branch(&mut self, with_new_cache_area: bool) -> Self
     where
@@ -70,7 +70,7 @@ pub mod mock_run_ctx {
         }
 
         impl RunCtx for RunCtx {
-            fn device_idx(&self) -> usize;
+            fn tho_device_idx(&self) -> usize;
             fn branch<'a>(&mut self, with_new_cache_area:bool)-> Self;
             fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
         }

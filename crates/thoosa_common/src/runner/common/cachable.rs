@@ -62,7 +62,7 @@ where
         Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
         let key = self.out_id(WithId::id(input.as_ref()));
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
         // #[cfg(any(test, feature = "mock_global_ctx"))]

@@ -146,12 +146,12 @@ impl Output for BucketingOutput {}
 
 
 #[derive(Debug)]
-pub struct MelPatchTempStore {//TODO it's similar to FileMotifTrackerStore  but saves single slices instead of pairs. Rename and put together with FileMotifTrackerStore in same mod
+pub struct PatchTempStore {//TODO it's similar to FileMotifTrackerStore  but saves single slices instead of pairs. Rename and put together with FileMotifTrackerStore in same mod
     path: PathBuf,
     writer: BufWriter<File>,
 }
 
-impl MelPatchTempStore {
+impl PatchTempStore {
     fn new(path: &Path, run_config_id: RunConfigId, bucket: u16) -> Result<Self, ThoError> {
         fs::create_dir_all(path)?;
         let file_path = path.join(format!("{run_config_id}_bucket_{bucket}_bucketing.bin"));
@@ -239,7 +239,7 @@ where
     bucket_window_samples: i64,
     bucket_step_samples: i64,
     tmp_path:PathBuf,
-    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>
+    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>
 }
 
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
@@ -273,7 +273,6 @@ where
             return Err(ThoError::new(format!("BucketingStage::new: window={window} step={step} must be positive")));
         }
 
-
         let bucket_window_samples = i64::from(run_config.window_samples(window, step)?);
         let bucket_step_samples = bucket_step_samples_for_config(&run_config, step)?;
         let window = i64::from(window);
@@ -284,16 +283,14 @@ where
             (ws.channels(), ws.sample_rate(), ws.tmp_path().clone())
         };
 
-
-
         let temp_stores_by_bucket =
             (0..run_config.bucket_count).map(|bucket| {
                 let bucket = u16::try_from(bucket).map_err(|_| ThoError::new(format!("BucketingStage::run: bucket={bucket} does not fit into u16")))?;
-                MelPatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
+                PatchTempStore::new(&tmp_path, run_config.id.expect("no run id").clone(), bucket)
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
 
-        let temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>> = Arc::new(Mutex::new(temp_stores_by_bucket));
+        let temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>> = Arc::new(Mutex::new(temp_stores_by_bucket));
 
         Ok(Self {
             ws: Arc::clone(ws),
@@ -597,7 +594,7 @@ where
     window: i64,
     step: i64,
     sample_rate:u32,
-    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>,
+    temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>,
     pd: PhantomData<(D, Id, C)>,
 }
 
@@ -607,11 +604,11 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    fn new(run_config: BucketRunConfig, window: i64, step: i64, sample_rate:u32, temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<MelPatchTempStore>>>) -> Self {
+    fn new(run_config: BucketRunConfig, window: i64, step: i64, sample_rate:u32, temp_stores_by_bucket: Arc<parking_lot::lock_api::Mutex<RawMutex, Vec<PatchTempStore>>>) -> Self {
         Self { run_config, window, step, temp_stores_by_bucket, sample_rate, pd: PhantomData }
     }
 
-    fn save_resource_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
+    fn save_resource_mel_patches(&self, input: &BucketingSyncInput<'_, D, Id>, mel_config:&LogMelPatchConfig) -> Result<(), ThoError> {
         let patches = audio_to_log_mel_patches(input.tensor.t_ref(), mel_config, self.sample_rate as f64, self.window, self.step)?;
         let patch_ranges = patch_sample_ranges_flat(&patches, mel_config, self.window, self.step)?;
         let channels_bucket_ids = assign_lsh_buckets_per_channel(&patches, self.run_config.bucket_count_i64())?;
@@ -742,7 +739,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncBucketingStage::do_run"))]
     fn  do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.run_config.mel_config() {
-            BucketingConfig::Mel(mel_config) => self.save_resource_patches(input, mel_config)?,
+            BucketingConfig::Mel(mel_config) => self.save_resource_mel_patches(input, mel_config)?,
             BucketingConfig::Plain(plain_config) => self.save_resource_plain_buckets(input, plain_config)?,
         }
 
@@ -1371,7 +1368,7 @@ mod tests {
     use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
     use thoosa_properties_map::ToHashmap;
-    use super::{bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, BucketingInput, MelPatchTempStore, SelectBucketsInputSelector};
+    use super::{bucket_selector_sample_range, bucket_slice_count, bucket_step_samples_for_config, filter_mel_patch_groups, BucketRunConfig, BucketRunConfigRangeOrValue, BucketingConfig, BucketingConfigRangeOrValue, BucketingStage, LogMelPatchConfig, LogMelPatchConfigRangeOrValue, BucketingInput, PatchTempStore, SelectBucketsInputSelector};
     use thoosa_run_config_args::GridRunConfigSource;
     use thoosa_shared::{cdt_for_dir, mono_key, RangeOrValue, ResourceType, TensorIdSliceIdx, ThoError};
     use thoosa_shared::comp_id::SynKey;
@@ -1404,7 +1401,7 @@ mod tests {
     #[test]
     fn mel_patch_temp_store_loads_saved_slices_as_groups() -> Result<(), ThoError> {
         let dir = temp_dir("mel_patch_temp_store_loads_saved_slices_as_groups");
-        let mut store = MelPatchTempStore::new(&dir, 7, 3)?;
+        let mut store = PatchTempStore::new(&dir, 7, 3)?;
 
         store.save_slices(1, &[slice(10, 100), slice(11, 110)])?;
         store.save_slices(2, &[slice(12, 120)])?;

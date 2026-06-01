@@ -203,9 +203,9 @@ where
                 channel,
                 motif_width,
                 stft_hash_value,
-                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.device_idx()).into()).into(),//TODO to_device(Cuda(0))
-                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.device_idx()).into()).into(),
-                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.device_idx()).into()).into(),
+                kernels:Tensor::cat(kernels.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.tho_device_idx()).into()).into(),//TODO to_device(Cuda(0))
+                a: Tensor::cat(alphas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.tho_device_idx()).into()).into(),
+                b: Tensor::cat(betas.into_iter().map(|v|v.t).collect::<Vec<_>>().as_slice(), 0).to_device(ThoDevice::from(stage_ctx.tho_device_idx()).into()).into(),
             }
         }).collect();
 
@@ -324,7 +324,7 @@ where
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));
 
-            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(input.id()), res, ctx.device_idx()), ctx.branch(false)) {
+            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(input.id()), res, ctx.tho_device_idx()), ctx.branch(false)) {
                 ConsumeResult::Failed { input, error } => {
                     Err(ThoError::from(error))
                 }

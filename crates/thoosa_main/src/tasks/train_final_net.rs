@@ -341,7 +341,7 @@ where
                     a
                 });
 
-                let device_idx = ctx_for_batch.device_idx();
+                let device_idx = ctx_for_batch.tho_device_idx();
                 let ctx_for_build = ctx_for_batch.branch(false);
 
                 with_data!(ctx_for_build, [outputs]; |_ctx, xs:&[&ThoTensor<LabelProbability, SynKey>]|{
