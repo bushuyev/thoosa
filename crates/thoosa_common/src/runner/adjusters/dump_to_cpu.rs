@@ -81,7 +81,7 @@ where
     ) -> Result<<Self as Adjuster<C>>::A, AdjusterError<<Self as Adjuster<C>>::A>> {
 
 
-        let device_idx   = adjustable.device_idx();
+        let device_idx   = adjustable.tho_device_idx();
 
         debug!("DumpToCpu::adjust: adjustable={adjustable:?}");
 

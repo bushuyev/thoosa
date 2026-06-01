@@ -106,7 +106,7 @@ where
     ) -> Result<Self::Out, ThoError> {
         debug!("ClcResourcesMotifsDist::do_run: input={input:?}");
 
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
 
         let unfold_params = UnfoldParams::new(
             1,

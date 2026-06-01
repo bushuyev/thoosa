@@ -295,7 +295,7 @@ mod tests {
             let x = Tensor::ones([self.input_len, self.feat], (self.kind, Device::Cpu)) * base;
             let id = self.out_id(WithId::id(input.as_ref()));
 
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
             let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, x)?)))
@@ -438,7 +438,7 @@ mod tests {
             let mut feats: Vec<Arc<DevicesWrap<ThoTensor<ABData, SimpleId>>>> =
                 Vec::with_capacity(self.batch_size);
 
-            let loader_device_idx = ctx.device_idx();
+            let loader_device_idx = ctx.tho_device_idx();
 
             for &fi in &chosen {
                 let (f, lbl) = files[fi];
@@ -452,7 +452,7 @@ mod tests {
                 label_vec.push(lbl);
             }
 
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
             // #[cfg(any(test, feature = "mock_global_ctx"))]
             // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
             let num_devices = GlobalCtx::global().device_count();
@@ -642,7 +642,7 @@ mod tests {
                                     }
                                 }
                                 DumpedToCpu => {
-                                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.device_idx());
+                                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx());
                                     if !is_all_on_cpu {
                                         debug!("Err(MyError::OutOfMemory) DumpedToCpu");
                                         return Err(ThoError::oom());
@@ -685,7 +685,7 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
             let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
@@ -792,7 +792,7 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
 
             // Orchestrate: build cached batch and run classifier on it.
             let batched = Arc::clone(&self.batch_builder)
@@ -891,7 +891,7 @@ mod tests {
         registry().insert("files_0_1".to_string(), files.clone());
         let input = FileListInput::new(files, simple_id!("files_0_1"));
 
-        let input_cache = new_file_list_input_cache(input, ctx.device_idx());
+        let input_cache = new_file_list_input_cache(input, ctx.tho_device_idx());
         let acc = Arc::clone(&join_and_cls)
             .run_cached(input_cache, ctx.branch(false))
             .await?;
@@ -945,7 +945,7 @@ mod tests {
         registry().insert("files_0_1_2_3".to_string(), files.clone());
         let input = FileListInput::new(files, simple_id!("files_0_1_2_3"));
 
-        let input_cache = new_file_list_input_cache(input, ctx.device_idx());
+        let input_cache = new_file_list_input_cache(input, ctx.tho_device_idx());
         let acc = Arc::clone(&join_and_cls)
             .run_cached(input_cache, ctx.branch(false))
             .await?;
@@ -1004,7 +1004,7 @@ mod tests {
         registry().insert("files_oom_permits".to_string(), files.clone());
         let input = FileListInput::new(files, simple_id!("files_oom_permits"));
 
-        let input_cache = new_file_list_input_cache(input, ctx.device_idx());
+        let input_cache = new_file_list_input_cache(input, ctx.tho_device_idx());
 
         let acc = Arc::clone(&join_and_cls)
             .run_cached(input_cache, ctx.branch(false))

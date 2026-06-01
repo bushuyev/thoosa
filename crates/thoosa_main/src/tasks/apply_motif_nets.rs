@@ -439,7 +439,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let device_idx = ctx.device_idx();
+        let device_idx = ctx.tho_device_idx();
 
         debug!("ApplyMotifNets::run: self.loaded_motif_nets.len={:?} input={input:?}", self.apply_motif_nets.len());
 
@@ -698,7 +698,7 @@ impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
     {
         async move {
             let BatchAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
-            let device_idx = ctx.device_idx();
+            let device_idx = ctx.tho_device_idx();
 
             match tmp_cache.take_all_recovering(device_idx).await {
                 Ok(motif_nets_applied) => {

@@ -488,7 +488,7 @@ where
             input.channel,
             input.window,
             &input.loaded_resources,
-            ctx.device_idx(),
+            ctx.tho_device_idx(),
             input.descr,
         ) {
             Ok(motif) => motif,
@@ -725,7 +725,7 @@ where
         });
         assert!(!resource_ids_slices.is_empty());
 
-        debug!("RandomSlicesLoader::run: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={}", ctx.device_idx());
+        debug!("RandomSlicesLoader::run: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={}", ctx.tho_device_idx());
 
         let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
         let loaded_resources = load_motif_resource_tensors(
@@ -902,7 +902,7 @@ where
     C: 'static + RunCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>,
 {
-    let device_idx = ctx.device_idx();
+    let device_idx = ctx.tho_device_idx();
     debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} slices={slices:?} descr={descr}");
 
     let find_motifs_run_config: FindMotifsRunConfig = load_run_config(&store, find_motifs_run_config_id).await?;
@@ -944,7 +944,7 @@ where
             let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
                 DataId(resource_id),
                 [channels, resource_slice_count, window as i64],
-                (Float, ThoDevice::from(ctx.device_idx()).into()),
+                (Float, ThoDevice::from(ctx.tho_device_idx()).into()),
             )?;
             let mut slice_i: i64 = 0;
             for slice in slices {

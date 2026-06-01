@@ -168,7 +168,7 @@ where
         F: FnMut(R, Vec<TrainedNet>) -> Fut,
         Fut: Future<Output = Result<AMN, ThoError>>,
     {
-        let tho_device_idx = stage_ctx.device_idx();
+        let tho_device_idx = stage_ctx.tho_device_idx();
 
         let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false)?;
 
@@ -309,7 +309,7 @@ where
         //TODO consuming SyncStage for gpu
         let out_id = self.out_id(&input_id);
         if label_outputs.is_empty() {
-            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.device_idx()).into())) )?)))
+            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.tho_device_idx()).into())) )?)))
         } else {
             let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
 
