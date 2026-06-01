@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Stream;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use futures_util::future::BoxFuture;
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
@@ -722,16 +722,10 @@ where
                     }
                 });
 
-                let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
-                    futures,
-                    batch_len,
-                    crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
-                    StreamBuffering::Ordered,
-                    "ResourcesBatch::build_batch_stream",
-                )
-                    .await
-                    .into_iter()
-                    .collect::<Vec<_>>()
+                let (x_1_wrapped, x_0_wrapped) = futures::stream::iter(futures)
+                    .buffered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)
+                    .try_collect::<Vec<_>>()
+                    .await?
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
                         a.0.push(v.0);
@@ -739,7 +733,24 @@ where
                         a
                     });
 
-                let r = build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await;
+                // let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
+                //     futures,
+                //     batch_len,
+                //     crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
+                //     StreamBuffering::Ordered,
+                //     "ResourcesBatch::build_batch_stream",
+                // )
+                //     .await
+                //     .into_iter()
+                //     .collect::<Vec<_>>()
+                //     .into_iter()
+                //     .fold((vec![], vec![]), |mut a, v| {
+                //         a.0.push(v.0);
+                //         a.1.push(v.1);
+                //         a
+                //     });
+                //
+                let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).await;
 
                 debug!("ResourcesBatch::build_batch_stream: batch_i={i} r={r:?}");
 
