@@ -116,7 +116,7 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
             use thoosa_shared::traits::WithId;
 
             let mut __with_data_ctx = #ctx_expr;
-            let __device_idx = __with_data_ctx.device_idx();
+            let __device_idx = __with_data_ctx.tho_device_idx();
             let r = async {
                 #(#prelude)*
                 // #max_parallel

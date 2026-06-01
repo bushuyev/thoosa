@@ -19,7 +19,7 @@ use crate as thoosa_common;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use thoosa_shared::mono_key;
-use crate::runner::adjusters::max_parallel::MaxParallel;
+use crate::runner::adjusters::max_parallel::{MaxParallel, MAX_PARALLEL};
 
 type PurgeGpuClosure = Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>;
 type SharedPurgeGpuClosures = Arc<Mutex<Vec<PurgeGpuClosure>>>;
@@ -40,7 +40,7 @@ pub struct RunCtxImpl {
 
 impl Debug for RunCtxImpl {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RunCtxWithPermits")
+        f.debug_struct("RunCtxImpl")
             .field("device_idx", &self.tho_device_idx)
             .finish()
     }
@@ -66,14 +66,14 @@ impl RunCtxImpl {
     fn with_cache_area(tho_device_idx: usize, id: SynKey) -> Self {
 
 
-        debug!("RunCtxWithPermits::with_cache_area: device_idx={tho_device_idx} branch_name={id:?}");
+        debug!("RunCtxImpl::with_cache_area: device_idx={tho_device_idx} branch_name={id:?}");
 
         Self {
             id,
             tho_device_idx,
             purge_gpu_closures: Some(Arc::new(Mutex::new(vec![]))),
             pending_purge_gpu_closures: vec![],
-            max_other_parallel: MaxParallel::MAX,
+            max_other_parallel: MAX_PARALLEL,
             branches: AtomicU32::new(0)
         }
     }
@@ -107,13 +107,13 @@ impl RunCtx for RunCtxImpl {
 
         let branch_full_id = &self.id + mono_key!(branches, concat!(module_path!(), ":", line!(), ":", column!()));
 
-        debug!("RunCtxWithPermits::branch: branch_full_id={branch_full_id:?}");
+        debug!("RunCtxImpl::branch: branch_full_id={branch_full_id:?}");
 
         let mut branched_ctx= if with_new_cache_area {
 
             let mut branched_ctx = RunCtxImpl::with_cache_area(self.tho_device_idx, branch_full_id);
 
-            debug!("RunCtxWithPermits::branch: branch_name={:?}", branched_ctx.id);
+            debug!("RunCtxImpl::branch: branch_name={:?}", branched_ctx.id);
 
             branched_ctx.purge_gpu_closures = Some(Arc::new(Mutex::new(vec![])));//Arc::strong_count == 1 causes it to purge gpu caches on Drop
 
@@ -130,7 +130,7 @@ impl RunCtx for RunCtxImpl {
 
         let parent_permits = self.max_other_parallel.clone();
 
-        debug!("RunCtxWithPermits::branch: parent_permits={parent_permits:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
+        debug!("RunCtxImpl::branch: parent_permits={parent_permits:?} set_return_to={:?}  from={}", branched_ctx.id, self.id, );
 
         branched_ctx.max_other_parallel = parent_permits;
 
@@ -156,12 +156,12 @@ impl Drop for RunCtxImpl {
             let count = Arc::strong_count(&purge_gpu_closures);
             let mut pending = std::mem::take(&mut self.pending_purge_gpu_closures);
 
-            debug!("Drop for RunCtxWithPermits::drop: id={:?} count={count} pending_purge_gpu_closures.len={}", self.id, pending.len());
+            debug!("Drop for RunCtxImpl::drop: id={:?} count={count} pending_purge_gpu_closures.len={}", self.id, pending.len());
 
             if count == 1 {// it's topmost ctx
                 match Arc::into_inner(purge_gpu_closures) {
                     None => {
-                        warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtxWithPermits");
+                        warn!("can't get inner from Arc with 1 strong ref in Drop for RunCtxImpl");
                     }
                     Some(m) => {
 

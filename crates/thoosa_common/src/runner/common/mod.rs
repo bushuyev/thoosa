@@ -90,7 +90,7 @@ pub mod mock_run_ctx {
 
         pub fn with_device_idx(mut self, device_idx: usize) -> Self {
             self.device_idx = Some(device_idx);
-            self.mock.expect_device_idx().return_const(device_idx);
+            self.mock.expect_tho_device_idx().return_const(device_idx);
             self
         }
 
