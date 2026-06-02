@@ -142,10 +142,10 @@ pub fn cosine_conv2d_bank_logits(
     )?; // [B,M,H_out,W_out]
 
     // Local input norm. Same spatial sliding window as numerator.
-    let ones = Tensor::ones(
+    let ones = Tensor::f_ones(
         &[1, c, kh, kw],
         (x.kind(), x.device()),
-    );
+    )?;
 
     let x_sq = x.f_mul(x)?;
 
