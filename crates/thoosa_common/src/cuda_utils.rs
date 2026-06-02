@@ -17,6 +17,7 @@ use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
 use crate as thoosa_common;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 
 const COPY_CONCURRENCY: usize = 8;
@@ -720,6 +721,26 @@ fn ceil_div(a: i64, b: i64) -> i64 {
     } else {
         (a + b - 1) / b
     }
+}
+
+pub async fn with_pooled_cuda_stream<F, R>(
+    tho_device_idx: usize,
+    f: F,
+) -> Result<R, ThoError>
+where
+    F: FnOnce(Option<&ThoCudaStream>) -> Result<R, ThoError>,
+{
+    if tho_device_idx == 0 {
+        return f(None);
+    }
+
+    let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
+    let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
+    spawn_blocking(move || {
+        stream.synchronize()
+    }).await??;
+
+    out
 }
 
 #[cfg(test)]
