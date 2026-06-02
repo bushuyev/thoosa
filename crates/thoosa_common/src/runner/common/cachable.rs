@@ -400,7 +400,6 @@ where
         Self: Sized
     {
         //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
-        //TODO add GlobalCtx::purge_lock just in case?
         debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx}",wrap.id);
         trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
         assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
@@ -512,10 +511,7 @@ where
         Self: Sized
     {
         let permits_ctx = permits_ctx;
-        // if permits_ctx.acquired_permits() == 0 {
-        //     let permit = GlobalCtx::global().acquire_one(to_device_idx, Arc::new(permits_ctx.id().clone())).await?;
-        //     permits_ctx.add_permit(permit);
-        // }
+
         if wrap.is_resident_on_device(to_device_idx) {
             let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
             if read_guard.is_some() {

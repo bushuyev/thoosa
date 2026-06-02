@@ -8,7 +8,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::{cdt_for_dir, mono_key, now_ms, perf_log, sync_mutex_lock};
+use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace, warn};
 use parking_lot::Mutex;
@@ -641,6 +641,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        info!("TrainStep::do_run: os_thread_id={}", os_thread_id());
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
 

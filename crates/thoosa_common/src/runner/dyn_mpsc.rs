@@ -1023,6 +1023,8 @@ impl DynamicTaskExecutor {
                     debug!("DynamicTaskExecutor::try_spawn_ready_jobs: spawning job_id={job_id}");
 
                     running.spawn(async move {
+                        debug!("DynamicTaskExecutor::try_spawn_ready_jobs: spawned job_id={job_id}");
+
                         struct DoneGuard {
                             job_id: JobId,
                             done_tx: mpsc::UnboundedSender<JobId>,

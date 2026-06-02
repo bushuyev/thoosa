@@ -8,6 +8,7 @@ use mockall_double::double;
 use parking_lot::{Mutex, RwLock};
 use tch::{IndexOp, Kind, Tensor};
 use tokio::io::AsyncWriteExt;
+use tokio::task::spawn_blocking;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
@@ -45,6 +46,7 @@ use crate::tasks::stft::SyncStft;
 
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_shims::stream::ThoStreamGuard;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyCosine2DMotifNets<C>
@@ -274,9 +276,10 @@ where
             let kernels = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.kernels)).collect::<Vec<_>>();
             let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
             let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
-
+            let stream = GlobalCtx::global().copy_ctx(ctx.tho_device_idx()).await.acquire_exec_stream().await;
             let res = with_data!(ctx.branch(false), input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");
+                let _guard = ThoStreamGuard::new(&stream)?;
                 let motifs_applied = self_clone.conv2d_tensors.iter().enumerate().map(|(tensors_idx, tensors)|{
                     let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
                     debug!("ApplyCosine2DMotifNets::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);
@@ -349,6 +352,9 @@ where
 
                 Ok(motifs_applied)
             })?;
+            spawn_blocking(move || {
+                stream.synchronize()
+            }).await??;
 
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));

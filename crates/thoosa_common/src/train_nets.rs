@@ -10,7 +10,7 @@ use crate::utils::{mask_from_lengths, masked_max, masked_mean, plot_spectrogram,
 use crate::utils::{plot_series, ListenerResponse, TrainListener};
 use crate::ws::Workspace;
 use clap::clap_derive::Args;
-use thoosa_shared::{mono_key, panic_to_err_async, CopyToDevice};
+use thoosa_shared::{mono_key, panic_to_err, panic_to_err_async, CopyToDevice};
 
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
@@ -204,13 +204,13 @@ impl SavableResult for TrainLabelNetRunConfigResult {
             self.train_label_nets_run_config.to_properties_iter(None).collect(),
         ).await?;
 
-        let path = ws.read()
+        let path = panic_to_err!(ws.read()
             .save_label_net(
                 run_config_id,
                 &self.label,
                 &self.var_store,
                 &self.label_node_params,
-            )?;
+            ))?;
 
         debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
@@ -1946,13 +1946,13 @@ impl SavableResult for TrainMotifNetResult {
             self.run_config_values.to_properties_iter(None).collect(),
         ).await?;
 
-        let path = ws.read().save_motif_net(
+        let path = panic_to_err!(ws.read().save_motif_net(
             &self.channel,
             &train_motif_net_run_config_id,
             &self.motif_id,
             &self.vs,
             &self.params,
-        )?;
+        ))?;
 
         store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None).await?;
 
