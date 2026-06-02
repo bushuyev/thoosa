@@ -473,7 +473,7 @@ where
                     Ok(consume_result)
 
 
-                }, job_id_to_rerun).await.unwrap()
+                }, job_id_to_rerun).await
             },
         )
         .await
@@ -578,7 +578,7 @@ where
     R: Stage,
     W: ConsumeData<O = R::In<'z>>,
     Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
-    Fut: Future<Output = ConsumeResult<R::In<'z>, R::Out>>,
+    Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
     async fn run(
         &mut self,
@@ -596,7 +596,7 @@ where
         }))
         .await
         {
-            Ok(run_result) => run_result,
+            Ok(run_result) => run_result?,
             Err(panic) => std::panic::resume_unwind(panic),
         };
 
@@ -924,7 +924,7 @@ where
     R::Out: WithId + Send + Sync + 'static,
     W: ConsumeData<O = <R as Stage>::In<'z>> + WithId<ID = <R::In<'z> as WithId>::ID>,
     Run: Fn(Arc<R>, W, Option<S>, usize, R::Ctx, Option<u64>) -> Fut,
-    Fut: Future<Output = ConsumeResult<R::In<'z>, R::Out>>,
+    Fut: Future<Output = Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>>,
 {
     let input_id_dbg = format!("{:?}", input.id());
 
