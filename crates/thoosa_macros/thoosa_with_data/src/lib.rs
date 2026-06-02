@@ -47,12 +47,18 @@ impl Parse for WithDataInput {
 #[proc_macro]
 pub fn with_data(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as WithDataInput);
-    expand_with_data(input ).into()
+    expand_with_data(input, false).into()
+}
+
+#[proc_macro]
+pub fn with_data_on_str(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as WithDataInput);
+    expand_with_data(input, true).into()
 }
 
 
 
-fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
+fn expand_with_data(input: WithDataInput, with_stream: bool) -> proc_macro2::TokenStream {
     let ctx_expr = input.ctx;
     let closure = input.closure;
 
@@ -99,9 +105,21 @@ fn expand_with_data(input: WithDataInput) -> proc_macro2::TokenStream {
         }
     }
 
-    let invoke_closure = quote! {
-        let __with_data_result: ::std::result::Result<_, thoosa_shared::ThoError> = (#closure)(__with_data_ctx #(, #arg_refs)*);
-        __with_data_result
+    let invoke_closure = if with_stream {
+        quote! {
+            if __device_idx > 0 {
+                thoosa_common::cuda_utils::with_pooled_cuda_stream(__device_idx, |_| {
+                    (#closure)(__with_data_ctx #(, #arg_refs)*)
+                }).await
+            } else {
+                (#closure)(__with_data_ctx #(, #arg_refs)*)
+            }
+        }
+    } else {
+        quote! {
+            let __with_data_result: ::std::result::Result<_, thoosa_shared::ThoError> = (#closure)(__with_data_ctx #(, #arg_refs)*);
+            __with_data_result
+        }
     };
 
 
