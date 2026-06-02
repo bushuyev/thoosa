@@ -4,6 +4,7 @@ use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use futures::StreamExt;
 use log::{debug, error, info};
 use tch::Device::Cpu;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue, TrimmedMeanRangeOrValue};
@@ -108,8 +109,9 @@ pub(crate) async fn run_all(
 
             let find_resources = run_all_args.find_resources.clone();
             let _select_resources = run_all_args.select_resources.clone();
-
-            let futures = labels.iter().filter(|label|
+            let labels_eta_guard = CollectEtaInvocationGuard::new("labels", labels_filter_ref.map(|v|v.len()).unwrap_or(labels.len()), 1);
+            let labels_eta_guard_id = labels_eta_guard.id();
+            let futures = labels.into_iter().filter(|label|
                 {
                     labels_filter_ref
                         .map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label)))
@@ -133,7 +135,18 @@ pub(crate) async fn run_all(
 
                 let find_resources = find_resources.clone();
                 let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
-                async move {
+                let label = label.clone();
+                let ws = Arc::clone(&ws);
+                let ws_spawn = Arc::clone(&ws);
+                let store_spawn = Arc::clone(&store);
+                let ws_plot = Arc::clone(&ws);
+
+                let store = Arc::clone(&store);
+                let loader = Arc::clone(&loader);
+                let loader_spawn = Arc::clone(&loader);
+                let run_all_args = run_all_args.clone();
+
+                tokio::spawn(async move {
                     panic_to_err_async!(async move {
 
                         let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
@@ -145,16 +158,16 @@ pub(crate) async fn run_all(
                             None,
                             find_motifs_run_config_rov,
                             find_motifs_input,
-                            &ws,
-                            &store,
+                            &Arc::clone(&ws_spawn),
+                            &Arc::clone(&store_spawn),
                             async move |run_configs| {
                                 debug!("run_all: run_configs={run_configs:?}");
 
                                 Ok(Arc::new(
                                     tasks::find_motifs::FindMotifsStage::new(
-                                        &ws,
-                                        &store,
-                                        Arc::clone(loader),
+                                        &Arc::clone(&ws_spawn),
+                                        &Arc::clone(&store_spawn),
+                                        Arc::clone(&loader_spawn),
                                         run_configs,
                                         fixed_find_motif_config,
                                         ThoDevice::from(1),
@@ -180,7 +193,7 @@ pub(crate) async fn run_all(
                             Some(find_motifs_run_config_ids.clone()),
                             Arc::clone(&select_motifs_run_config),
                             Arc::clone(&select_motifs_input),
-                            &ws,
+                            &Arc::clone(&ws_for_select_buckets),
                             &store,
                             async move |run_configs| {
                                 Ok(Arc::new(SelectBucketsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
@@ -209,7 +222,7 @@ pub(crate) async fn run_all(
 
                         if run_all_args.with_plots {
                             for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                                run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, label_ctx.branch(false)).await?;
+                                run_plot(&ws_plot, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, label_ctx.branch(false)).await?;
                             }
                         }
 
@@ -240,6 +253,8 @@ pub(crate) async fn run_all(
                         let mut init_ctx_train_labels = label_ctx.branch(false);
                         let store_in_train_labels = Arc::clone(&store);
                         let ws_in_train_labels = Arc::clone(&ws);
+                        let store_in_train_labels = Arc::clone(&store);
+                        let loader_in_train_labels = Arc::clone(&loader);
 
 
                         let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
@@ -259,16 +274,18 @@ pub(crate) async fn run_all(
                             let train_labels_input = Arc::clone(&train_labels_input);
                             let ws_in_train_labels = Arc::clone(&ws_in_train_labels);
                             let store_in_train_labels = Arc::clone(&store_in_train_labels);
-
+                            let loader_in_train_labels = Arc::clone(&loader_in_train_labels);
                             let mut label_ctx = label_ctx.branch(false);
                             let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
                             let mut init_ctx_train_labels =  init_ctx_train_labels.branch(false);
                             let best_min_loss= Arc::clone(&best_min_loss);
+                            let label_for_opt = label.clone();
+                            let ws_opt = Arc::clone(&ws_in_train_labels);
                             match panic_to_err_async!(
                                   run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                                     train_label_nets_run_config_range_or_value,
                                     train_labels_input,
-                                    &ws,
+                                    &ws_opt,
                                     &store,
                                     async move |run_configs| {
                                         let apply_motif_nets = Arc::new(ApplyCosine2DMotifNets::new(
@@ -285,13 +302,13 @@ pub(crate) async fn run_all(
 
                                         new_train_label_nets(
                                             train_motif_net_run_config_ids_combo.clone(),
-                                            Arc::clone(&loader),
+                                            Arc::clone(&loader_in_train_labels),
                                             apply_motif_nets,
                                             run_configs,
                                             &ws_in_train_labels,
                                             &store_in_train_labels,
                                             train_labels_opt_config,
-                                            Some(vec![label.clone()]),
+                                            Some(vec![label_for_opt.clone()]),
                                         ).await.map(|v| Arc::new(v))
                                     },
                                     || label_ctx.branch(false),
@@ -323,18 +340,24 @@ pub(crate) async fn run_all(
 
                         info!("train label nets done: label={label} \x1b[38;50;208mbest_min_loss={best_min_loss:?}\x1b[0m");
 
+                        collect_eta_record_completion(labels_eta_guard_id);
                         Ok::<_, ThoError>(())
                     })
-                }
+                })
             });
 
-            let _ = collect_futures_with_progress(
-                futures,
-                labels.len(),
-                4,
-                StreamBuffering::Unordered,
-                "bird_clef_labels",
-            ).await;
+            futures::stream::iter(futures)
+            .buffer_unordered(4)
+            .collect::<Vec<_>>()
+            .await;
+
+            // let _ = collect_futures_with_progress(
+            //     futures,
+            //     labels.len(),
+            //     4,
+            //     StreamBuffering::Unordered,
+            //     "bird_clef_labels",
+            // ).await;
 
             Ok::<_, ThoError>(())
         }   
@@ -447,7 +470,7 @@ pub(crate) async fn run_all(
             let _ = collect_futures_with_progress(
                 futures,
                 labels.len(),
-                8,
+                16,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             ).await;
@@ -844,4 +867,6 @@ mod tests {
         ).await
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_0() {}
 }
