@@ -739,12 +739,16 @@ where
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
 
-    tokio::time::timeout(
-        Duration::from_secs(50),
-        tokio::task::spawn_blocking(move || {
-            stream.synchronize();
-        }),
-    ).await??;
+    // tokio::time::timeout(
+    //     Duration::from_secs(50),
+    //     tokio::task::spawn_blocking(move || {
+    //         stream.synchronize();
+    //     }),
+    // ).await??;
+
+    spawn_blocking(move || {
+        stream.synchronize()
+    }).await??;
 
     out
 }
