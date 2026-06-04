@@ -11,7 +11,6 @@ use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
-use polars_arrow::io::iterator::StreamingIterator;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
 use cached_derive::Cached;

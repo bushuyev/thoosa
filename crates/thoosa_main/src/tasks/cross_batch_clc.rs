@@ -541,7 +541,6 @@ mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::sync::Arc;
-    use polars::prelude::RevMapping::Global;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Uint8};
     use tch::{Kind, Tensor};
