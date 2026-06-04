@@ -9,7 +9,6 @@ use std::sync::atomic::Ordering::Relaxed;
 use async_trait::async_trait;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
-use polars_arrow::io::iterator::StreamingIterator;
 use tch::Device::Cpu;
 use tch::Kind::{Float, Uint8};
 use tch::{IndexOp, Kind, Tensor};

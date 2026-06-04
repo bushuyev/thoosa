@@ -122,7 +122,7 @@ where
 
     assert!(ids.len() > 1);
 
-    df.with_column(Series::from_vec("frag_id".into(), ids))?;
+    df.with_column(Series::from_vec("frag_id".into(), ids).into())?;
 
     df.partition_by::<_, &str>(["frag_id"], false)
 }
@@ -156,7 +156,7 @@ pub fn parquet_to_tensor_by_path(
     let df = read_parquet_to_df(path)?;
 
     let tensor = Tensor::f_vstack(
-        &df.get_columns()
+        &df.columns()
             .into_iter()
             .map(|s| series_to_tensor(s.as_series().unwrap()))
             .collect::<Result<Vec<Tensor>, ThoError>>()?,
@@ -169,7 +169,7 @@ pub fn read_parquet_to_df(path: impl AsRef<Path>) -> Result<DataFrame, ThoError>
 
     let df = LazyFrame::scan_parquet(
         //TODO read_parallel?
-        path, scan_conf,
+        PlRefPath::try_from_path(path.as_ref()).unwrap(), scan_conf,
     )?;
 
     Ok(df.collect()?)
@@ -184,7 +184,7 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
         .map(|resource_id| {
             //TODO config path
             let df = LazyFrame::scan_parquet(
-                format!("{}/train_eegs/{}.parquet", base_dir, resource_id),
+                PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_dir, resource_id)),
                 scan_conf.clone(),
             )
             .unwrap()
@@ -203,6 +203,7 @@ pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     assert_eq!(t.size()[1] as usize, columns.len() - 1);
 
     let mut df = DataFrame::new(
+        1, //TODO - just to fix compile errors
         [
             vec![Series::new(columns[0].into(), ids).into()],
             columns
@@ -259,8 +260,6 @@ mod data_tests {
     use crate::data::{split_frame_by_offsets};
     use log::debug;
     use polars::prelude::*;
-    use polars_arrow::array::Float32Array;
-    use polars_arrow::buffer::Buffer;
     use std::mem::forget;
     use tch::Device::Cpu;
     use tch::Kind::Float;
@@ -333,16 +332,16 @@ mod data_tests {
             path,
         );
 
-        let lf = LazyCsvReader::new(path).finish().unwrap().collect()?;
+        let lf = LazyCsvReader::new(path.into()).finish().unwrap().collect()?;
         let mut checked = 0;
-        for (column_i, column) in lf.get_columns().iter().enumerate() {
+        for (column_i, column) in lf.columns().iter().enumerate() {
             if column_i == 0 {
-                for (row_i, v) in column.str()?.into_iter().enumerate() {
+                for (row_i, v) in column.str()?.iter().enumerate() {
                     assert_eq!(ids[row_i], v.unwrap());
                     checked += 1;
                 }
             } else {
-                for (row_i, v) in column.f64()?.into_iter().enumerate() {
+                for (row_i, v) in column.f64()?.iter().enumerate() {
                     assert_eq!(
                         format!(
                             "{:.3}",

@@ -123,7 +123,7 @@ pub fn labeled_resourses(
             let secondary_labels: Vec<String> = match secondary_labels
                 .column("secondary_labels")?
                 .str()?
-                .into_iter()
+                .iter()
                 .next()
                 .flatten() {
                 Some(s) => parse_secondary_labels(s),
