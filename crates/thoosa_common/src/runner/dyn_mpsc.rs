@@ -518,7 +518,7 @@ impl DynamicTaskExecutor {
 
                 if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
                     if tho_device_idx > 0 {
-                        warn!("DynamicTaskExecutor::submit: job_id={job_id} needs CUDA reset");
+                        warn!("DynamicTaskExecutor::submit: job_id={job_id} needs CUDA reset, result={result:?}");
 
                         if rerun_job_id == Some(job_id) {
                             let mut exclusive = exclusive_job_id.write();
@@ -548,7 +548,7 @@ impl DynamicTaskExecutor {
                             );
                         }
 
-                        let _ = result_tx.send(Err(ThoError::new_with_cause("Context was reset", Cause::ContextReset)));
+                        let _ = result_tx.send(Err(ThoError::new_with_cause("Resetting cuda context", Cause::ContextReset)));
                         return JobFeedback::Neutral;
                     } else {
                         warn!("DynamicTaskExecutor::submit: job_id={job_id} reset requested on CPU/test executor");

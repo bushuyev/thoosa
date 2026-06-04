@@ -19,6 +19,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tokio::task::spawn_blocking;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
@@ -331,20 +332,20 @@ where
                 .await;
         }
 
-        let device_idx = run_context.tho_device_idx();
-        let fast_path_key = oom_fast_path_key::<R, W, S>(device_idx);
+        let tho_device_idx = run_context.tho_device_idx();
+        let fast_path_key = oom_fast_path_key::<R, W, S>(tho_device_idx);
         let initial_error = if !oom_fast_path_disabled().contains(&fast_path_key) {//TODO remove
             let fast_task = Arc::clone(task);
             let fast_input = Arc::clone(&input);
             let fast_run_ctx = run_context.branch(false);
 
-            match oom_executor(device_idx).submit(
+            match oom_executor(tho_device_idx).submit(
                 fast_run_ctx.max_other_parallel().into(),
                 async move {
-                    let stream = GlobalCtx::global().copy_ctx(device_idx).await.acquire_exec_stream().await;
+                    let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
                     let out = fast_input
                         .with_data_ref(
-                            device_idx,
+                            tho_device_idx,
                             fast_run_ctx,
                             None,
                             |data, ctx| {
@@ -353,9 +354,12 @@ where
                             },
                         )
                         .await;
-                    spawn_blocking(move || {
-                        stream.synchronize()
-                    }).await??;
+                    tokio::time::timeout(
+                        Duration::from_secs(5),
+                        tokio::task::spawn_blocking(move || {
+                            stream.synchronize();
+                        }),
+                    ).await??;
                     out
                 },
                 None
@@ -411,9 +415,12 @@ where
                                 )
                                 .await
                         };
-                        spawn_blocking(move || {
-                            stream.synchronize()
-                        }).await??;
+                        tokio::time::timeout(
+                            Duration::from_secs(5),
+                            tokio::task::spawn_blocking(move || {
+                                stream.synchronize();
+                            }),
+                        ).await??;
 
                         out
                     },
@@ -459,9 +466,12 @@ where
                                 Err(error) => ConsumeResult::Failed { input, error },
                             }
                         }).await;
-                        spawn_blocking(move || {
-                            stream.synchronize()
-                        }).await??;
+                        tokio::time::timeout(
+                            Duration::from_secs(5),
+                            tokio::task::spawn_blocking(move || {
+                                stream.synchronize();
+                            }),
+                        ).await??;
                         consume_result
                     };
 

@@ -641,7 +641,7 @@ where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::do_run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        info!("TrainStep::do_run: os_thread_id={}", os_thread_id());
+        debug!("TrainStep::do_run: os_thread_id={}", os_thread_id());
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
 
