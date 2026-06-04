@@ -650,8 +650,9 @@ impl ThoError {
     }
 
     fn backtrace_last_line(&self) -> Option<String> {
-        self.backtrace.to_string().lines().rev().map(str::trim).find(|line| !line.is_empty()).map(ToOwned::to_owned)
+        last_trace_line(&self.backtrace)
     }
+
 
     fn oom_backtrace_last_line(&self) -> Option<String> {
         match &self.what {
@@ -725,6 +726,16 @@ fn cuda_cause(action: CudaAction, msg: impl Into<String>) -> Cause {
         msg: msg.into(),
     }
 }
+
+pub fn last_trace_line(backtrace: &Backtrace) -> Option<String> {
+    backtrace.to_string().lines().rev().map(str::trim).find(|line| !line.is_empty()).map(ToOwned::to_owned)
+}
+
+pub fn n_trace_line(backtrace: &Backtrace, n:usize) -> String {
+    backtrace.to_string().lines().rev().map(str::trim).filter(|line| !line.is_empty()).take(n).map(ToOwned::to_owned).collect()
+}
+
+
 
 /// Classifies known CUDA Runtime API `cudaError_t` and CUDA Driver API `CUresult`
 /// numeric codes.

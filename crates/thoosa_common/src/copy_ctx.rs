@@ -12,7 +12,7 @@ use thoosa_shared::ThoError;
 
 //TODO to be renamed to StreamCtx?
 pub struct CopyCtx {
-    cu_ctx: Arc<ThoCudaContext>,
+    // cu_ctx: Arc<ThoCudaContext>,
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
     exec_stream_pool: Arc<Pool<ThoCudaStream>>,
@@ -22,7 +22,7 @@ pub struct CopyCtx {
 impl Debug for CopyCtx {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CopyCtx")
-            .field("cu_ctx", &self.cu_ctx)
+            // .field("cu_ctx", &self.cu_ctx)
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
             .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
@@ -32,15 +32,15 @@ impl Debug for CopyCtx {
 
 impl CopyCtx {
     pub fn new(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
-        let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-        let bufs_pool = Self::build_pool(buffs, buf_size, &cu_ctx);
-        let device = cu_ctx.ordinal() as i32;
+        // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
+        let bufs_pool = Self::build_pool(buffs, buf_size, cuda_device);
+        // let device = cu_ctx.ordinal() as i32;
 
         Self {
-            cu_ctx,
+            // cu_ctx,
             buffs,
             buf_size,
-            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(device, false).unwrap()))),//TODO unwrap)),
+            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap()))),//TODO unwrap)),
             bufs_pool,
         }
     }
@@ -48,16 +48,17 @@ impl CopyCtx {
     fn build_pool(
         num_buffs: usize,
         buf_size: usize,
-        cu_ctx: &Arc<ThoCudaContext>,
+        //cu_ctx: &Arc<ThoCudaContext>,
+        cuda_device:usize
     ) -> Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>> {
-        cu_ctx
-            .bind_to_thread()
-            .expect("failed to bind CUDA context to thread");
-        let device = cu_ctx.ordinal() as i32;
+        // cu_ctx
+        //     .bind_to_thread()
+        //     .expect("failed to bind CUDA context to thread");
+        // let device = cu_ctx.ordinal() as i32;
         Arc::new(Pool::from_iter((0..num_buffs).map(|_| {
             (
                 PinnedHostBuffer::new(buf_size).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(device, true).unwrap()),//TODO unwrap
+                Arc::new(ThoCudaStream::from_pool(cuda_device as i32, true).unwrap()), //TODO unwrap
             )
         })))
     }
@@ -66,22 +67,22 @@ impl CopyCtx {
     #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) {
         assert_eq!(self.bufs_pool.remaining_capacity(), self.buffs);
-        self
-            .cu_ctx
-            .bind_to_thread()
-            .expect("failed to bind CUDA context to thread");
+        // self
+            // .cu_ctx
+            // .bind_to_thread()
+            // .expect("failed to bind CUDA context to thread");
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool,
             Arc::new(Pool::from_vec(vec![(
                 PinnedHostBuffer::new(1).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(self.cu_ctx.ordinal() as i32, true).unwrap()),
+                Arc::new(ThoCudaStream::from_pool(0/*self.cu_ctx.ordinal()*/ as i32, true).unwrap()),
             )])),
         )));
 
         self.buffs = buffs;
-        self.buf_size = Self::clc_buff_size(self.cu_ctx.ordinal(), mem_k, buffs);
-        self.bufs_pool = Self::build_pool(buffs, self.buf_size, &self.cu_ctx)
+        self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs);
+        self.bufs_pool = Self::build_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/)
     }
 
     //TODO these are 'exec' streams, not for copy

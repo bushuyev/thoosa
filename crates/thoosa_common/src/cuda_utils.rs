@@ -1,6 +1,7 @@
 use std::ffi::c_void;
 use std::ops::Add;
 use std::sync::Arc;
+use std::time::Duration;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use futures_util::{stream, StreamExt};
 use log::debug;
@@ -736,9 +737,14 @@ where
 
     let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
-    spawn_blocking(move || {
-        stream.synchronize()
-    }).await??;
+
+
+    tokio::time::timeout(
+        Duration::from_secs(50),
+        tokio::task::spawn_blocking(move || {
+            stream.synchronize();
+        }),
+    ).await??;
 
     out
 }

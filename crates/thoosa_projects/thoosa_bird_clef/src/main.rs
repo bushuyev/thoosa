@@ -2,7 +2,9 @@
 #![allow(deprecated)]
 #![allow(unused_imports, unused_variables, unused_mut, noop_method_call)]
 
-use std::collections::HashMap;
+use std::any::Any;
+use std::backtrace::Backtrace;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Write};
@@ -10,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
-use log::{debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use std::time::{Duration, Instant};
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
@@ -31,7 +33,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
-use thoosa_shared::{collect_futures_with_progress, mono_key, os_thread_id, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, StreamBuffering, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
@@ -54,6 +56,9 @@ thread_local! {
 }
 
 fn main() -> Result<(), ThoError>{
+    tch::set_num_threads(1);
+    tch::set_num_interop_threads(1);
+
     info!("bird_clef main");
     if let Ok(thoosa_num_interop_threads)= std::env::var("THOOSA_NUM_INTEROP_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<u32>().map_err(|e|ThoError::from(e))){
         info!("thoosa_num_interop_threads={thoosa_num_interop_threads}");
@@ -69,6 +74,9 @@ fn main() -> Result<(), ThoError>{
 
     // Navigation note: each Tokio worker pins CUDA device 0 before any stage runs.
     // CUDA init failures from BirdCLEF usually happen here or later in GlobalCtx::init_devices inside run_cli.
+    let mut task_ids = Arc::new(parking_lot::RwLock::new(HashSet::new()));
+    let mut task_ids_0 = Arc::clone(&task_ids);
+    let mut task_ids_1 = Arc::clone(&task_ids);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             if tch::Cuda::is_available() {
@@ -81,6 +89,14 @@ fn main() -> Result<(), ThoError>{
         .worker_threads(worker_threads.unwrap_or(cpu_num/2))
         .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
         .enable_all()
+        .on_thread_park(||{
+            trace!("on_thread_park: trace={:?}", n_trace_line(&Backtrace::capture(), 20))
+        })
+        .on_task_spawn(move |meta|{
+            task_ids_0.write().insert(meta.id());
+            debug!("on_task_spawn:  task_id={:?}", meta.id());
+
+        })
         .on_before_task_poll(|meta| {
             let tid = os_thread_id();
 
@@ -110,7 +126,7 @@ fn main() -> Result<(), ThoError>{
             let tid = POLL_START_TID.with(|s| s.get());
 
             if let Some(elapsed) = elapsed {
-                if elapsed > Duration::from_millis(50) {
+                if elapsed > Duration::from_millis(1000) {
                     tracing::warn!(
                         task_id = %meta.id(),
                         os_tid = tid,
@@ -121,12 +137,14 @@ fn main() -> Result<(), ThoError>{
                 }
             }
         })
-        .on_task_terminate(|meta| {
-            tracing::debug!(
-                task_id = %meta.id(),
-                os_tid = os_thread_id(),
-                "tokio task terminated"
-            );
+        .on_task_terminate(move |meta| {
+            task_ids_1.write().remove(&meta.id());
+            debug!("on_task_terminate:  task_id={:?}", meta.id());
+            // tracing::debug!(
+            //     task_id = %meta.id(),
+            //     os_tid = os_thread_id(),
+            //     "tokio task terminated"
+            // );
         })
         .build()
         .map_err(|err| {

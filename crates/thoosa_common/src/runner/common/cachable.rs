@@ -232,7 +232,8 @@ where
     where
         Self: Sized
     {
-        let read_guard = timed_tokio_read(&wrap.cached_data[0], "CpuOnly::load_from_any_device_").await;
+        let lock = &wrap.cached_data[0];
+        let read_guard = async_perf_log!(async_read_lock!(lock));
 
         if read_guard.is_some() {
             Ok(tokio::sync::RwLockReadGuard::map(
@@ -335,7 +336,8 @@ where
     where
         Self: Sized
     {
-        Ok(timed_tokio_write(&wrap.cached_data[0], "CpuOnly::take_data").await.take().expect(&format!("no cpu data {:?}", wrap.id)))
+        let lock = &wrap.cached_data[0];
+        Ok(async_perf_log!(async_write_lock!(lock)).take().expect(&format!("no cpu data {:?}", wrap.id)))
     }
 
     async fn is_all_on_cpu(_wrap: &DevicesWrap<O>) -> bool {
@@ -405,7 +407,8 @@ where
         assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
 
         if wrap.is_resident_on_device(to_tho_device_idx) {
-            let read_guard = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::load_from_any_device_ target read").await;
+            let lock = &wrap.cached_data[to_tho_device_idx];
+            let read_guard = async_perf_log!(async_read_lock!(lock));
             if read_guard.is_some() {
                 return Ok(tokio::sync::RwLockReadGuard::map(
                     read_guard,
@@ -423,7 +426,7 @@ where
                 continue;
             }
 
-            let source_read_guard = timed_tokio_read(op, "CpuOrGpu::load_from_any_device_ source read").await;
+            let source_read_guard = async_perf_log!(async_read_lock!(op));
 
             if source_read_guard.is_some() {
                 drop(source_read_guard);
@@ -465,7 +468,8 @@ where
             let permits_ctx = permits_ctx;
 
             if wrap.is_resident_on_device(to_tho_device_idx) {
-                let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_tho_device_idx], "CpuOrGpu::with_selected_data_ref target read").await;
+                let lock = &wrap.cached_data[to_tho_device_idx];
+                let read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(lock));
                 if read_guard.is_some() {
                     let base: &O = read_guard
                         .as_ref()
@@ -483,7 +487,7 @@ where
                     continue;
                 }
 
-                let source_read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(op, "CpuOrGpu::with_selected_data_ref source read").await;
+                let source_read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(op));
 
                 if let Some(src) = source_read_guard.as_ref() {
                     let sub_t: O = src.subview(selector.clone())?;
@@ -513,7 +517,8 @@ where
         let permits_ctx = permits_ctx;
 
         if wrap.is_resident_on_device(to_device_idx) {
-            let read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(&wrap.cached_data[to_device_idx], "CpuOrGpu::with_selected_data target read").await;
+            let lock = &wrap.cached_data[to_device_idx];
+            let read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(lock));
             if read_guard.is_some() {
                 let data = read_guard
                     .as_ref()
@@ -531,7 +536,7 @@ where
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = timed_tokio_read(op, "CpuOrGpu::with_selected_data source read").await;
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(op));
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
@@ -569,7 +574,8 @@ where
             debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",wrap.id);
 
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
-                if timed_tokio_read(&wrap.cached_data[0], "CpuOrGpu::dump_to_cpu cpu read check").await.is_none() {
+
+                if async_perf_log!(async_read_lock!(&wrap.cached_data[0])).is_none() {
                     let data = lock.take();
                     wrap.mark_not_resident_on_device(device_idx);
                     debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
@@ -906,7 +912,8 @@ where
 
     pub async fn clone_from_cpu(&self) -> Result<O, ThoError>
     where O: Clone {
-        Ok(timed_tokio_read(&self.cached_data[0], "DevicesWrap::clone_from_cpu read").await.clone().expect("no data in cpu"))
+        let lock = &self.cached_data[0];
+        Ok(async_perf_log!(async_read_lock!(lock)).clone().expect("no data in cpu"))
     }
 
 
@@ -967,7 +974,7 @@ where
                     return;
                 }
                 self.cleared = true;
-                let mut g = timed_parking_mutex_lock(self.inflight, "DevicesWrap::ensure_copied inflight lock");
+                let mut g = perf_log!(sync_mutex_lock!(self.inflight));
                 if g
                     .as_ref()
                     .map(|n| Arc::ptr_eq(n, &self.notify))
@@ -990,7 +997,8 @@ where
 
         loop {
             if self.is_resident_on_device(dst_idx) {
-                let dst_read = timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read").await;
+                let lock = &self.cached_data[dst_idx];
+                let dst_read = async_perf_log!(async_read_lock!(lock));
                 // ---- Fast path
                 if dst_read.is_some() {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
@@ -1010,7 +1018,8 @@ where
             // ---- Try to join or become the leader
             // (Do not hold this lock while awaiting other locks, except briefly to set or read the notify)
             let (maybe_notify, leader_notify) = {
-                let mut g = timed_parking_mutex_lock(&self.inflights[dst_idx], "DevicesWrap::ensure_copied inflights lock");
+                let lock = &self.inflights[dst_idx];
+                let mut g = perf_log!(sync_mutex_lock!(lock));
                 if let Some(n) = &*g {
                     // someone is already copying → wait on their notify
                     (Some(n.clone()), None)
@@ -1036,7 +1045,8 @@ where
 
             // Double-check: maybe dst was filled after we dropped the read lock
             if self.is_resident_on_device(dst_idx) {
-                let dst_read = timed_tokio_read(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst read double-check").await;
+                let lock = &self.cached_data[dst_idx];
+                let dst_read = async_perf_log!(async_read_lock!(lock));
                 if dst_read.is_some() {
                     inflight_guard.clear();
                     continue;
@@ -1049,7 +1059,8 @@ where
             let produced = match src {
                 None => {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from cached_data", self.id);
-                    let src_read_guard = timed_tokio_read(&self.cached_data[src_idx], "DevicesWrap::ensure_copied src read").await;
+                    let lock = &self.cached_data[src_idx];
+                    let src_read_guard = async_perf_log!(async_read_lock!(lock));
                     src_read_guard.as_ref().expect("src missing unexpectedly").copy_to_device(dst_idx).await
                 }
                 Some(v) => {
@@ -1071,7 +1082,8 @@ where
             {
                 debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.device());
 
-                let mut w = timed_tokio_write(&self.cached_data[dst_idx], "DevicesWrap::ensure_copied dst write").await;
+                let lock = &self.cached_data[dst_idx];
+                let mut w = async_perf_log!(async_write_lock!(lock));
                 if w.is_none() {
                     *w = Some(produced);
                     self.mark_resident_on_device(dst_idx);
@@ -1212,7 +1224,7 @@ where
         // A concurrent dump_to_cpu can move data from a device slot to CPU while this method is scanning slots; the second pass avoids a false NotFound after waiting on the old device slot.
         for _attempt in 0..2 {
             for op in self.cached_data.iter() {
-                let source_read_guard = timed_tokio_read(op, "CpuOrGpu::extra source read").await;
+                let source_read_guard = async_perf_log!(async_read_lock!(op));
 
                 if let Some(data_with_extra) = source_read_guard.as_ref() {
                     return Ok(data_with_extra.extra().clone());
@@ -1224,22 +1236,10 @@ where
     }
 }
 
-//TODO inline
-async fn timed_tokio_read<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockReadGuard<'a, T> {
-    async_perf_log!(async_read_lock!(lock, "{ctx}"), "{ctx}")
-}
-
-async fn timed_tokio_write<'a, T>(lock: &'a tokio::sync::RwLock<T>, ctx: &'static str) -> tokio::sync::RwLockWriteGuard<'a, T> {
-    async_perf_log!(async_write_lock!(lock, "{ctx}"), "{ctx}")
-}
-
-fn timed_parking_mutex_lock<'a, T>(lock: &'a Mutex<T>, ctx: &'static str) -> parking_lot::MutexGuard<'a, T> {
-    perf_log!(sync_mutex_lock!(lock, "{ctx}"), "{ctx}")
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use thoosa_shared::{async_perf_log, async_read_lock};
     use crate::runner::global_ctx::MockGlobalCtx;
     use thoosa_with_data::with_data;
     extern crate self as caching_runner;
@@ -1260,9 +1260,10 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
 
         let data = MockDataWithId::whatever();
-        let tested = super::DevicesWrap::wrap(data);
+        let tested = DevicesWrap::wrap(data);
         assert!(tested.is_all_on_cpu().await);
-        assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 1").await.is_none());
+        let lock = &tested.cached_data[1];
+        assert!(async_perf_log!(async_read_lock!(lock)).is_none());
 
         let ctx_for_data = mock_run_ctx::default(1);
         tested
@@ -1274,11 +1275,13 @@ mod tests {
                })
             .await?;
 
-        assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 2").await.is_some());
+        let lock = &tested.cached_data[1];
+        assert!(async_perf_log!(async_read_lock!(lock)).is_some());
         assert!(!tested.is_all_on_cpu().await);
 
         tested.dump_to_cpu(1).await?;
-        assert!(super::timed_tokio_read(&tested.cached_data[1], "test_dump_to_cpu read 3").await.is_none());
+        let lock = &tested.cached_data[1];
+        assert!(async_perf_log!(async_read_lock!(lock)).is_none());
         assert!(tested.is_all_on_cpu().await);
         assert!(tested.is_on_cpu_before(0));
 
@@ -1291,7 +1294,7 @@ mod tests {
         ctx.expect().returning(|| {
             Box::leak(Box::new(
                 mock_global_ctx::build_default(),
-            )) as &'static global_ctx::MockGlobalCtx
+            )) as &'static MockGlobalCtx
         });
 
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));

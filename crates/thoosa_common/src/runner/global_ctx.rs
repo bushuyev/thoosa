@@ -4,6 +4,7 @@ use log::{debug, info};
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::future::ready;
 use std::num::NonZeroUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
@@ -34,7 +35,9 @@ pub struct GlobalCtx {
     purger: Purger,
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
-    copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>
+    copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>,
+
+    reset_mutex:Vec<parking_lot::Mutex<bool>>
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -97,29 +100,37 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            copy_ctx: (1..num_devices).map(|device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(device_idx - 1, 0.2, 16))).collect()
+            copy_ctx: (1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
+            reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
         }
     }
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
+        let mut guard  = GlobalCtx::global().reset_mutex[tho_device_idx-1].lock();
+        if *guard {
+            return ready(Ok(())).boxed()
+        }
+        *guard = true;
         async move {
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
             GlobalCtx::global().drop_device(tho_device_idx, "drop").await?;
+            info!("GlobalCtx::reset_cuda_context: drop_device done");
 
             let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
             cu_ctx.reset()?;//it only calls clearCublasWorkspaces and CUDACachingAllocator::emptyCache, see  tho_cu_reset crates/thoosa_shims/src-cpp/context.cpp:16
+            info!("GlobalCtx::reset_cuda_context: cu_ctx.reset done");
 
             *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
 
-            info!("GlobalCtx::reset_cuda_context: done");
+            info!("GlobalCtx::reset_cuda_context: all done");
             Ok(())
         }.boxed()
     }
 
     pub fn get_executor(&self, tho_device:usize) -> &DynamicTaskExecutor {
         debug!("GlobalCtx::get_executor: tho_device={tho_device} self.executors.len={}", self.executors.len());
-        &self.executors[tho_device.saturating_sub(1)]//tho_device is 0 in tests
+        &self.executors[tho_device]//tho_device is 0 in tests
     }
 
     pub fn run_purge_gpu(&self, closures: Vec<Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>>) ->Result<(), ThoError>{
@@ -289,7 +300,7 @@ impl GlobalCtx {
         }
 
         self.is_all_on_cpu[tho_device_idx].store(true, Relaxed);
-        debug!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr} done");
+        info!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr} done");
 
         Ok(())
     }
@@ -592,7 +603,10 @@ impl MockGlobalCtx {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::future;
     use std::sync::Arc;
+    use std::time::Instant;
+    use futures_util::{StreamExt, TryStreamExt};
     use log::debug;
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Kind::Float;
@@ -606,6 +620,7 @@ mod tests {
     use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::global_ctx::CopyCtx;
     use crate as thoosa_common;
+    use crate::cuda_utils::with_pooled_cuda_stream;
     use crate::dims::AnyDims;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::tmp_cache::TmpCached;
@@ -644,9 +659,9 @@ mod tests {
         GlobalCtx::reset_cuda_context(1).await?;
         debug!("reset done");
 
-        // let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
-        // let t_cuda = GlobalCtx::global().copy_ctx(1).await.copy(&t_cpu, 1, Float).await?;
-        // debug!("t_cuda={t_cuda:?}");
+        let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
+        let t_cuda = GlobalCtx::global().copy_ctx(1).await.copy(&t_cpu, 1, Float).await?;
+        debug!("t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let sum_1 = with_data!(root_ctx.branch(false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
@@ -660,4 +675,78 @@ mod tests {
         Ok(())
     }
 
+
+    //nsys profile   -t cuda,osrt,nvtx   -s cpu   --cuda-memory-usage=true   --cudabacktrace=sync:1000000,memory:1000000,kernel:1000000   --force-overwrite=true   -o /tmp/tch-heavy   cargo test test_parallel_load -- --nocapture
+    //nsys-ui /tmp/tch-heavy.nsys-rep
+    #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
+    async fn test_parallel_load() -> Result<(), ThoError> {
+        // let cu_ctx = ThoCudaContext::new(0 as i32).expect("failed to create CUDA context");
+        // cu_ctx.bind_to_thread()?;
+        // GlobalCtx::init_devices(2);
+
+        fn sync_probe(label: &str, inst: &Instant) {
+            let t = Instant::now();
+
+            // Adjust device id if needed.
+            tch::Cuda::synchronize(0);
+
+            debug!("SYNC {label}: waited={:?} total_elapsed={:?}",t.elapsed(),inst.elapsed());
+        }
+
+        fn run_heavy(cycles: usize, n: i64, i:usize, inst:Arc<Instant>) -> Result<Tensor, ThoError> {
+            debug!("run_heavy: starting {i} elapsed={:?}", inst.elapsed());
+            // Power of two makes the division exact in Float32.
+            let mut a = Tensor::ones(&[n, n], FLOAT_CUDA);
+
+            // sync_probe(&format!("{i}/after ones"), &inst);
+
+            for _ in 0..cycles {
+                a = a
+                    .f_matmul(&a)?
+                    .f_div_scalar(n as f64)?;
+            }
+            // tch::Cuda::synchronize(0);
+
+            // sync_probe(&format!("{i}/before return"), &inst);
+
+            debug!("run_heavy: {i} done  elapsed={:?}", inst.elapsed());
+            Ok(a)
+        }
+
+        let cycles = 100;
+
+        let inst = Arc::new(Instant::now());
+
+        let results: Vec<Tensor> = futures::stream::iter(0..10).map(|i| {
+            let inst = Arc::clone(&inst);
+
+            tokio::task::spawn(async move {
+
+                // with_pooled_cuda_stream(1, |_|{
+                    run_heavy(cycles, 10000, i, inst)
+                // }).await
+            })
+        })
+            .buffer_unordered(1)
+            .map_err(ThoError::from)
+            .and_then(future::ready)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let r = Tensor::f_cat(results.as_slice(), 0)?;
+
+        // Force CUDA work to finish before measuring / checking.
+        // let max_err = 0f64;
+        let max_err = r
+            .f_sub_scalar(1.0)?
+            .f_abs()?
+            .f_max()?
+            .double_value(&[]);
+
+        debug!("run heavy={cycles} r.size={:?} max_err={max_err} elapsed={}ms",r.size(),inst.elapsed().as_millis());
+
+        assert!(max_err < 1e-6, "expected tensor full of 1.0, max_err={max_err}");
+
+        Ok(())
+    }
 }
