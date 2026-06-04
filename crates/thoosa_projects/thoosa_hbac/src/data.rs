@@ -3,7 +3,7 @@ use polars::datatypes::DataType;
 use polars::frame::DataFrame;
 use polars::prelude::{
     col, concat_list, lit, BooleanChunked, Expr, IntoLazy, JoinArgs,
-    JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, ScanArgsParquet, Series, SortMultipleOptions,
+    JoinType, LazyCsvReader, LazyFileListReader, LazyFrame, NamedFrom, PlRefPath, ScanArgsParquet, Series, SortMultipleOptions,
 };
 use rand::{Rng, RngExt};
 use std::collections::HashMap;
@@ -85,7 +85,7 @@ impl Splitter for ByPatientIdSplitter {
                     }
                 })
                 .collect::<Vec<_>>(),
-        ))?;
+        ).into())?;
 
         Ok(df.clone().join(
             df_set.clone().lazy(),
@@ -113,14 +113,14 @@ pub fn labeled_resourses(
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
     let path = base.as_ref().join(file);
     let eeg_path = path.clone().parent().unwrap().to_path_buf();
-    let df = LazyCsvReader::new(path).finish()?.with_streaming(true);
+    let df = LazyCsvReader::new(PlRefPath::new(path.display().to_string())).finish()?.with_streaming(true);
 
     let gr_by_eeg_id_df = EEGs::group_by_eeg_id(None, df)?;
 
     let mask: BooleanChunked = gr_by_eeg_id_df
         .column("eeg_id")?
         .i64()?
-        .into_iter()
+        .iter()
         .map(|opt| {
             opt.map(|id| {
                 let p = PathBuf::from(format!("{}/train_eegs/{id}.parquet", eeg_path.display()));
@@ -136,15 +136,15 @@ pub fn labeled_resourses(
         .filter(&mask)?
         .column("eeg_id")?
         .i64()?
-        .into_iter()
+        .iter()
         // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
         // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-        .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
-        .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+        .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+        .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
         .map(
             |(
                 (
@@ -244,7 +244,7 @@ pub fn eegs_to_tensors() -> Result<(), ThoError> {
 
     // debug!("saved to {}", name);
 
-    let df = LazyCsvReader::new("../../data/train.csv")
+    let df = LazyCsvReader::new("../../data/train.csv".into())
         .finish()?
         .with_streaming(true);
 
@@ -265,15 +265,15 @@ pub fn eegs_to_tensors() -> Result<(), ThoError> {
         gr_by_eeg_id_df
             .column("eeg_id")?
             .i64()?
-            .into_iter()
+            .iter()
             // .zip(gr_by_eeg_id_df.column("set")?.i32()?)
             // .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
             .map(
                 |(
                     (
@@ -489,7 +489,7 @@ impl EEGs {
     }
 
     fn good_eegs_filter(base_path: &str) -> Result<LazyFrame, ThoError> {
-        Ok(LazyCsvReader::new(format!("{}/train.csv", base_path))
+        Ok(LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path)))
             .finish()?
             .with_streaming(true)
             .group_by([col("eeg_id")])
@@ -533,7 +533,7 @@ impl EEGs {
     where
         S: Splitter<Type = EEG>,
     {
-        let df = LazyCsvReader::new(format!("{}/train.csv", base_path))
+        let df = LazyCsvReader::new(PlRefPath::new(format!("{}/train.csv", base_path)))
             .finish()?
             .with_streaming(true);
 
@@ -565,15 +565,15 @@ impl EEGs {
         ) in gr_by_eeg_id_df
             .column("eeg_id")?
             .i64()?
-            .into_iter()
-            .zip(gr_by_eeg_id_df.column("set")?.i32()?)
-            .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?)
-            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?)
-            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?)
+            .iter()
+            .zip(gr_by_eeg_id_df.column("set")?.i32()?.iter())
+            .zip(gr_by_eeg_id_df.column("eeg_label_offset_seconds")?.list()?.amortized_iter())
+            .zip(gr_by_eeg_id_df.column("seizure_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("gpd_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("lrda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("grda_vote")?.i64()?.iter())
+            .zip(gr_by_eeg_id_df.column("other_vote")?.i64()?.iter())
             .map(
                 |(
                     (
@@ -594,7 +594,7 @@ impl EEGs {
                     (
                         eeg_id.unwrap_or_default(),
                         set.unwrap_or_default(),
-                        eeg_label_offset_seconds.unwrap_or_default(),
+                        eeg_label_offset_seconds.expect("no eeg_label_offset_seconds"),
                         seizure_vote.unwrap_or_default(),
                         lpd_vote.unwrap_or_default(),
                         gpd_vote.unwrap_or_default(),
@@ -606,8 +606,9 @@ impl EEGs {
             )
         {
             let fragments_rows = eeg_label_offset_seconds
+                .as_ref()
                 .f64()?
-                .into_iter()
+                .iter()
                 .map(|v| v.expect("no id :(") as u32 * 200)
                 .collect::<Vec<u32>>();
 
@@ -618,7 +619,7 @@ impl EEGs {
             // scan_conf.cache = false;
 
             let eeg_df = LazyFrame::scan_parquet(
-                format!("{}/train_eegs/{}.parquet", base_path, eeg_id),
+                PlRefPath::new(format!("{}/train_eegs/{}.parquet", base_path, eeg_id)),
                 scan_conf,
             )?;
 
@@ -627,7 +628,7 @@ impl EEGs {
             let mut eegs_vec = vec![];
             let mut names_vec = vec![];
 
-            for s in df.get_columns() {
+            for s in df.columns() {
                 names_vec.push(s.name().to_owned());
 
                 match s.dtype() {
@@ -851,7 +852,7 @@ mod tests {
     // #[test]
     pub fn test_fetch_similarities() -> Result<(), ThoError> {
         // let good_eegs = EEGs::good_eegs("../../data")?;
-        let df = LazyCsvReader::new("../../../data/train.csv")
+        let df = LazyCsvReader::new("../../../data/train.csv".into())
             .finish()?
             .with_streaming(true)
             .group_by([col("eeg_id")])
@@ -913,8 +914,8 @@ mod tests {
         //TODO hash + assert
         df.column("win_vote")?
             .str()?
-            .into_iter()
-            .zip(df.column("votes_count")?.u32()?.into_iter())
+            .iter()
+            .zip(df.column("votes_count")?.u32()?.iter())
             .for_each(|v| {
                 debug!("v={:?}", v);
             });

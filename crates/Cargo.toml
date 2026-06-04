@@ -82,7 +82,7 @@ mockall_double = "0.3"
 ambassador = "0.5"
 dashmap = "6"
 #TODO move to polars_utils
-polars = { version = "0", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "list_any_all", "dtype-array"] }
+polars = { version = "0.54", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "dtype-array", "strings"] }
 
 tokio = { version = "1.52", features = ["full", "test-util", "tracing"] }
 tokio-utils = "0.1"

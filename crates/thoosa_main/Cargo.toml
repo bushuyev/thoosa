@@ -30,8 +30,8 @@ libloading.workspace = true
 interprocess.workspace = true
 
 polars.workspace = true
-polars-arrow = "0.46.0"
-plotters = { version = "0.3.5"}
+#polars-arrow = "0.46.0"
+plotters.workspace = true
 
 
 log.workspace = true
