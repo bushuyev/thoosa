@@ -17,8 +17,11 @@ CUresult tho_cu_reset(CUdevice device) {
   try {
     at::cuda::clearCublasWorkspaces();
     c10::cuda::CUDACachingAllocator::emptyCache();
+    auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRelease_v2(device));
+    // auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRetain(device));
     // return tho_record_cuda_result("cuDevicePrimaryCtxReset", cuDevicePrimaryCtxReset(device));
-    return CUresult::CUDA_SUCCESS;//TODO add ThoShimResult and use its errors
+    return record_cuda_result;
+    // return CUresult::CUDA_SUCCESS;//TODO add ThoShimResult and use its errors
   } catch (...) {
     return CUresult::CUDA_ERROR_UNKNOWN;
   }

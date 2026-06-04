@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use std::time::Duration;
 use async_trait::async_trait;
 use log::{error, warn};
 use mockall_double::double;
@@ -352,9 +353,13 @@ where
 
                 Ok(motifs_applied)
             })?;
-            spawn_blocking(move || {
-                stream.synchronize()
-            }).await??;
+
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                spawn_blocking(move || {
+                    stream.synchronize();
+                }),
+            ).await??;
 
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));

@@ -333,7 +333,6 @@ pub(crate) async fn run_all(
                                 }
                             };
 
-
                             collect_eta_record_completion(combos_eta.id());
 
                         }
@@ -347,7 +346,7 @@ pub(crate) async fn run_all(
             });
 
             futures::stream::iter(futures)
-            .buffer_unordered(4)
+            .buffer_unordered(2)
             .collect::<Vec<_>>()
             .await;
 
