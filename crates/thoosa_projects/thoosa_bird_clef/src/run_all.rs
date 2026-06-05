@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use futures::StreamExt;
 use log::{debug, error, info};
 use tch::Device::Cpu;
+use tracing::Instrument;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue, TrimmedMeanRangeOrValue};
 use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, Metrics, NormThicknessRunConfig};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
@@ -342,7 +343,12 @@ pub(crate) async fn run_all(
                         collect_eta_record_completion(labels_eta_guard_id);
                         Ok::<_, ThoError>(())
                     })
-                })
+                }).instrument(tracing::info_span!(
+                    "my_task",
+                    file = file!(),
+                    line = line!(),
+                    task = "apply_label_nets",
+                ))
             });
 
             futures::stream::iter(futures)

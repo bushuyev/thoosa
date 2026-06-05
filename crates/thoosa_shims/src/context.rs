@@ -32,7 +32,7 @@ pub struct ThoCudaContext {
 }
 
 impl ThoCudaContext {
-    pub fn new(device: i32) -> Result<Arc<Self>, ThoError> {
+    pub fn new(device: i32) -> Result<Self, ThoError> {
         unsafe {
             check_cuda_status(tho_cu_init(0), "cuInit")?;
 
@@ -55,12 +55,12 @@ impl ThoCudaContext {
                 "cuDeviceGetAttribute",
             )?;
 
-            let ctx = Arc::new(Self {
+            let ctx = Self {
                 device,
                 cu_device,
                 ctx,
                 has_memory_pools: pools_supported > 0,
-            });
+            };
 
             ctx.bind_to_thread()?;
             Ok(ctx)
@@ -94,8 +94,16 @@ impl ThoCudaContext {
         unsafe { check_cuda_status(tho_cu_ctx_synchronize(), "cuCtxSynchronize") }
     }
 
-    pub fn reset(&self) -> Result<(), ThoError> {
-        unsafe { check_cuda_status(tho_cu_reset(self.cu_device), "cuDevicePrimaryCtxReset") }
+    pub fn reset(&mut self) -> Result<(), ThoError> {
+        unsafe {
+            check_cuda_status(tho_cu_reset(self.cu_device), "cuDevicePrimaryCtxReset")?;
+
+            let mut cu_device: CuDevice = 0;
+            check_cuda_status(
+                tho_cu_device_primary_ctx_retain(&mut self.ctx, cu_device),
+                "cuDevicePrimaryCtxRetain",
+            )
+        }
     }
 }
 
