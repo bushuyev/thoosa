@@ -75,6 +75,7 @@ use thoosa_store::{SqlStore, Store};
 use tokio::runtime::{Handle, Runtime};
 use tokio::{select, sync::watch, time::{self, Duration}};
 use tokio::time::MissedTickBehavior;
+use tracing::Instrument;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CopyCtx;
@@ -540,7 +541,13 @@ where
                 }
             }
         }
-    });
+    }.instrument(tracing::info_span!(
+        "cli::purge_cpu_worker",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "periodically purge CPU caches and log Tokio metrics",
+    )));
 
 
     let loader = Arc::new(RawTensorLoader::<RunCtxImpl>::new(

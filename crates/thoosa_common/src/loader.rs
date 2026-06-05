@@ -105,7 +105,15 @@ where
             let done_sender = done_sender.clone();
 
             self_write_guard.loader_pool.spawn(move || {
-                Self::loader_task(cache_area, loader, self_arc_pool, &key, done_sender);
+                tracing::info_span!(
+                    "loader::preload_vec",
+                    kind = "spawn",
+                    file = file!(),
+                    line = line!(),
+                    task = format!("preload resource key={key:?}"),
+                ).in_scope(|| {
+                    Self::loader_task(cache_area, loader, self_arc_pool, &key, done_sender);
+                })
             });
         }
     }
@@ -135,8 +143,16 @@ where
             let key = key.clone();
 
             self_lock.loader_pool.spawn(move || {
-                Self::loader_task(cache_area, loader_fn, self_arc_pool, &key, done_sender);
-                debug!("Loader::load_future: sending done for future_id={future_id} key={key:?}");
+                tracing::info_span!(
+                    "loader::load_future",
+                    kind = "spawn",
+                    file = file!(),
+                    line = line!(),
+                    task = format!("load future resource key={key:?}"),
+                ).in_scope(|| {
+                    Self::loader_task(cache_area, loader_fn, self_arc_pool, &key, done_sender);
+                    debug!("Loader::load_future: sending done for future_id={future_id} key={key:?}");
+                })
             });
         } else if let Some(resources_being_loaded) = self_lock.resources_being_loaded.get_mut(&key)
         {

@@ -20,7 +20,7 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     task::{JoinHandle, JoinSet},
 };
-use tracing::{debug, warn};
+use tracing::{debug, warn, Instrument};
 
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
 
@@ -249,7 +249,13 @@ impl Drop for ParentSuspendGuard {
                 {
                     let _ = ack_rx.await;
                 }
-            });
+            }.instrument(tracing::info_span!(
+                "dyn_mpsc::parent_suspend_guard",
+                kind = "spawn",
+                file = file!(),
+                line = line!(),
+                task = "resume parent job",
+            )));
         }
     }
 }
@@ -338,7 +344,13 @@ impl DynamicTaskExecutor {
                 tho_device_idx,
                 reset_fn_for_manager,
             ).await;
-        });
+        }.instrument(tracing::info_span!(
+            "dyn_mpsc::manager",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = format!("run manager for tho_device_idx={tho_device_idx}"),
+        )));
 
         Self {
             tx,
@@ -665,7 +677,13 @@ impl DynamicTaskExecutor {
             } else {
                 warn!("DynamicTaskExecutor::spawn_cuda_reset_task: reset requested on CPU/test executor source={source}");
             }
-        });
+        }.instrument(tracing::info_span!(
+            "dyn_mpsc::cuda_reset",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = format!("reset cuda context for source={source} tho_device_idx={tho_device_idx}"),
+        )));
     }
 
     pub fn clear_exclusive_job_id(&self, job_id: u64) {
@@ -1070,7 +1088,13 @@ impl DynamicTaskExecutor {
                                 debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
                             }
                         }
-                    });
+                    }.instrument(tracing::info_span!(
+                        "dyn_mpsc::job",
+                        kind = "spawn",
+                        file = file!(),
+                        line = line!(),
+                        task = format!("run dynamic executor job_id={job_id}"),
+                    )));
 
                     spawned_any = true;
                     break;
