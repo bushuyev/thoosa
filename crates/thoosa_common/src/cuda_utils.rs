@@ -176,7 +176,6 @@ impl Drop for PinnedHostBuffer {
 pub fn cuda_mem_for_device(cuda_device: usize) -> (usize, usize) {
     use cust::sys::cuMemGetInfo_v2;
 
-    //TODO replace with shim
     let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
     ctx
         .bind_to_thread()
@@ -739,16 +738,16 @@ where
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
 
-    // tokio::time::timeout(
-    //     Duration::from_secs(50),
-    //     tokio::task::spawn_blocking(move || {
-    //         stream.synchronize();
-    //     }),
-    // ).await??;
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        spawn_blocking(move || {
+            Ok::<_, ThoError>(stream.synchronize()?)
+        }),
+    ).await???;
 
-    spawn_blocking(move || {
-        stream.synchronize()
-    }).await??;
+    // spawn_blocking(move || {
+    //     stream.synchronize()
+    // }).await??;
 
     out
 }
@@ -824,20 +823,23 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     #[allow(dead_code)]
     async fn heavy_test_copy_from_ptr() {
+        let cu_ctx = ThoCudaContext::new(0 as i32).expect("failed to create CUDA context");
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
 
             let mut ctx: Option<UnsafeCell<crate::copy_ctx::CopyCtx>> = None;
 
-            for mem_k in [0.1, 0.5, 1.0, 2.] {
-                for buffs in [8, 16, 32, 64] {
+            for mem_k in [0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 2.] {
+                for buffs in [2, 4, 8, 16, 32, 64] {
                     if ctx.is_none() {
                         ctx = Some(UnsafeCell::new(CopyCtx::make_instance(mem_k, buffs)));
                     } else {
                         ctx.as_mut().unwrap().get_mut().rebuild(mem_k, buffs)
                     }
 
-                    run_test_copy_from_ptr(&*ctx.as_ref().unwrap().get(), 3, 3).await;
+                    let (d2h, h2d) = run_test_copy_from_ptr(&*ctx.as_ref().unwrap().get(), 10, 10).await;
+
+                    info!("\n mem_k={mem_k}, buffs={buffs} ctx={ctx:?} d2h speed: {d2h:#2} Gb/s, h2d speed {h2d:#2} Gb/s");
                 }
             }
         }
@@ -855,7 +857,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    async fn run_test_copy_from_ptr(ctx: &'static CopyCtx, threads: u8, runs: u8) {
+    async fn run_test_copy_from_ptr(ctx: &'static CopyCtx, threads: u8, runs: u8) -> (f64, f64) {
         let (free_mem, _total_mem) = cuda_mem();
 
         let init_type = Float;
@@ -891,11 +893,10 @@ mod tests {
         let total_copied_mem_size_kb =
             input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
 
-        println!(
-            "\nd2h speed: {:#2} Gb/s, h2d speed {:#2} Gb/s",
+        (
             speed_gb_per_s(total_copied_mem_size_kb, d2h_time.load(Relaxed)),
             speed_gb_per_s(total_copied_mem_size_kb, h2d_time.load(Relaxed))
-        );
+        )
     }
 
     #[allow(dead_code)]

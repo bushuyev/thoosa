@@ -12,7 +12,7 @@ use thoosa_shared::ThoError;
 
 //TODO to be renamed to StreamCtx?
 pub struct CopyCtx {
-    // cu_ctx: Arc<ThoCudaContext>,
+    pub(crate) cu_ctx: ThoCudaContext,
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
     exec_stream_pool: Arc<Pool<ThoCudaStream>>,
@@ -37,7 +37,7 @@ impl CopyCtx {
         // let device = cu_ctx.ordinal() as i32;
 
         Self {
-            // cu_ctx,
+            cu_ctx:ThoCudaContext::new(cuda_device as i32).unwrap(),
             buffs,
             buf_size,
             exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap()))),//TODO unwrap)),
@@ -161,4 +161,6 @@ impl CopyCtx {
     pub fn buf_size(&self) -> usize {
         self.buf_size
     }
+
+
 }
