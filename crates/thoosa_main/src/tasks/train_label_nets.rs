@@ -503,7 +503,7 @@ where
                             rc.common_training_args.build_optimizer(vs)
                         },
                         |t:ThoBatch<MotifProbability>| {
-                            debug!("TrainLabelNets::run, x_f: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
+                            // debug!("TrainLabelNets::run, x_f: t.size={:?} cuda_mem={:?}",t.size(),cuda_mem());
                             t
                         },
                         |rc:&TrainLabelNetRunConfig|{

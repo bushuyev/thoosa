@@ -25,7 +25,7 @@ unsafe extern "C" {
 
 #[derive(Debug)]
 pub struct ThoCudaContext {
-    device: i32,
+    pub device: i32,
     cu_device: CuDevice,
     ctx: CuContext,
     has_memory_pools: bool,

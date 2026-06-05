@@ -41,9 +41,9 @@ fn main() -> Result<(), ThoError> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
             //runs cuCtxSetCurrent
-            if let Err(err) = ThoCudaContext::new(0) {
-                panic!("Failed to create context: {err:?}"); //TODO device
-            }
+            // if let Err(err) = ThoCudaContext::new(0) {
+            //     panic!("Failed to create context: {err:?}"); //TODO device
+            // }
         })
         .worker_threads(cpu_num)
         .max_blocking_threads(cpu_num)

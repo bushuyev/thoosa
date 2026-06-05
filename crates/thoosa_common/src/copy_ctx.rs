@@ -32,12 +32,15 @@ impl Debug for CopyCtx {
 
 impl CopyCtx {
     pub fn new(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
+        let cuda_context = ThoCudaContext::new(cuda_device as i32).unwrap();
+        cuda_context.bind_to_thread().unwrap();
         // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
         let bufs_pool = Self::build_pool(buffs, buf_size, cuda_device);
         // let device = cu_ctx.ordinal() as i32;
 
+
         Self {
-            cu_ctx:ThoCudaContext::new(cuda_device as i32).unwrap(),
+            cu_ctx: cuda_context,
             buffs,
             buf_size,
             exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap()))),//TODO unwrap)),
@@ -88,6 +91,14 @@ impl CopyCtx {
     //TODO these are 'exec' streams, not for copy
     pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
         self.exec_stream_pool.acquire().await
+    }
+
+    pub fn reset(&mut self) -> Result<(), ThoError> {
+        self.cu_ctx.reset()?;
+        self.bufs_pool = Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize);
+        self.exec_stream_pool = Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cu_ctx.device, false).unwrap())));
+
+        Ok(())
     }
 
     pub fn make_instance(mem_k: f64, buffs: usize) -> CopyCtx {
