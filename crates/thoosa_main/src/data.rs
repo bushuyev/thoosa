@@ -15,6 +15,7 @@ use thoosa_common::utils::{from};
 use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_store::Store;
+use tracing::Instrument;
 
 #[derive(Default)]
 pub enum Set {
@@ -133,7 +134,7 @@ pub async fn load_to_logits_tensors(
 ) -> Vec<(Resource, Vec<f32>)> {
     store
         .list_resource_random_in_group(group)
-        .await
+        .instrument(tracing::debug_span!("load_to_logits_tensors/1", file = file!(), line = line!())).await
         .expect("list_resource_random_in_group")
         .into_iter()
         .map(move |(resource_id, labels_p)| {
@@ -242,14 +243,14 @@ pub async fn labeled_tensors_by_descr<'a>(
             1,
             store_lock
                 .list_resource_set_resources_by_descr(resource_set_descr)
-                .await
+                .instrument(tracing::debug_span!("labeled_tensors_by_descr/1", file = file!(), line = line!())).await
                 .expect("list_resource_set_resources_by_descr"),
         ),
         (
             0,
             store_lock
                 .list_resource_random_not_labeled(label.as_str(), 100)
-                .await
+                .instrument(tracing::debug_span!("labeled_tensors_by_descr/2", file = file!(), line = line!())).await
                 .expect("list_resource_random_not_label"),
         ),
     ]

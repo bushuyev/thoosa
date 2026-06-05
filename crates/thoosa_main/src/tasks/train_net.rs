@@ -449,7 +449,7 @@ where
                 ThoDevice::from(device_idx).into(),
                 &self.descr,
                 reusable_completed_trials,
-            ).await?;
+            ).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
@@ -529,9 +529,9 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
     {
         Ok(TrainStepInput {
             id: self.id.clone(),
-            x: self.x.copy_to_device(dst_device).await?,
+            x: self.x.copy_to_device(dst_device).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
             lengths: self.lengths.clone(),
-            expected_y: self.expected_y.copy_to_device(dst_device).await?,
+            expected_y: self.expected_y.copy_to_device(dst_device).instrument(tracing::debug_span!("copy_to_device/2", file = file!(), line = line!())).await?,
             cache_area: self.cache_area.clone(),
         })
     }
@@ -552,11 +552,11 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
             } else {
 
                 let (x, lengths) = (
-                    self.x.copy_to_device(to_device_idx).await?,
+                    self.x.copy_to_device(to_device_idx).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await?,
                     self.lengths.clone(),
                 );
 
-                let expected_y = self.expected_y.copy_to_device(to_device_idx).await?;
+                let expected_y = self.expected_y.copy_to_device(to_device_idx).instrument(tracing::debug_span!("with_data_ref/2", file = file!(), line = line!())).await?;
 
                 let input = TrainStepInput::new(x, lengths, expected_y);
                 do_run(&input, &permits_ctx)

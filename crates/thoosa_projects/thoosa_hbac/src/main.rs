@@ -21,6 +21,7 @@ use thoosa_shared::ThoError;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0};
+use tracing::Instrument;
 
 fn main() -> Result<(), ThoError> {
     kick_register_cuda_hooks();
@@ -88,7 +89,7 @@ fn main() -> Result<(), ThoError> {
 
                 let all_configs = run_all_config_0(run_all_args);
 
-                run_all(ws, store, loader, root_ctx, run_all_args, all_configs).await
+                run_all(ws, store, loader, root_ctx, run_all_args, all_configs).instrument(tracing::debug_span!("main/1", file = file!(), line = line!())).await
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,
@@ -99,7 +100,7 @@ fn main() -> Result<(), ThoError> {
                 todo!()
             }),
         )
-        .await
+        .instrument(tracing::debug_span!("main/2", file = file!(), line = line!())).await
     });
 
     match run_result {

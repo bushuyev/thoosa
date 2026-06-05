@@ -5183,6 +5183,7 @@ dependencies = [
  "thoosa_store",
  "tokio",
  "torch-sys",
+ "tracing",
 ]
 
 [[package]]

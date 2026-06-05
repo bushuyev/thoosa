@@ -60,6 +60,7 @@ use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
 use crate::tasks::stft::SyncStft;
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_common::runner::tmp_cache::TmpCached;
+use tracing::Instrument;
 
 
 #[derive(Debug, cached_derive::Cached, Named)]
@@ -283,13 +284,13 @@ where
     {
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
-        let motif_nets = store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit).await?;
+        let motif_nets = store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
 
         if motif_nets.is_empty() {
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}")));
         };
 
-        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize).await
+        Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await
     }
 
     pub async fn from_trained_nets<R>(
@@ -319,7 +320,7 @@ where
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(false);
                 async move {
-                    match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).await {
+                    match load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx).instrument(tracing::debug_span!("from_trained_nets/1", file = file!(), line = line!())).await {
                         Ok(net) => {
                             debug!("ApplyMotifNets::new: loaded net={net:?}");
                             Ok::<_, ThoError>(Some((id, net)))
@@ -339,7 +340,7 @@ where
             StreamBuffering::Ordered, //to keep same order as in trained_nets_ids
             "ApplyMotifNets::new/load motif nets",
         )
-            .await
+            .instrument(tracing::debug_span!("from_trained_nets/2", file = file!(), line = line!())).await
             .into_iter()
             .flatten()
             .collect::<Vec<_>>();
@@ -352,14 +353,14 @@ where
         let mut freq_filters_by_find_motifs_run_config_id: HashMap<RunConfigId, Option<Arc<FreqFilter<C>>>> = HashMap::new();
         let mut loaded_motif_nets_with_filters = Vec::with_capacity(loaded_motif_nets.len());
         for (net_id, motif_net) in loaded_motif_nets {
-            let extra = motif_net.extra().await?;
+            let extra = motif_net.extra().instrument(tracing::debug_span!("from_trained_nets/3", file = file!(), line = line!())).await?;
 
             let motif_id = extra.motif_id();
             let motif_width = extra.motif_net_params.num_features();
             motif_widths.insert(motif_width);
 
-            let (_channel, find_motifs_run_config_id) = store.get_motif_meta(motif_id).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_config_id).await?;
+            let (_channel, find_motifs_run_config_id) = store.get_motif_meta(motif_id).instrument(tracing::debug_span!("from_trained_nets/4", file = file!(), line = line!())).await?;
+            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, find_motifs_run_config_id).instrument(tracing::debug_span!("from_trained_nets/5", file = file!(), line = line!())).await?;
 
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
                 freq_filter.clone()
@@ -457,7 +458,7 @@ where
                 Some(freq_filter) => {
                     debug!("ApplyMotifNets::run: freq_filter={freq_filter:?} motif_id={:?} apply_motif_net.freq_filter_find_motifs_run_config_id={:?}", apply_motif_net.motif_id, apply_motif_net.freq_filter_find_motifs_run_config_id);
 
-                    freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true)).await?
+                    freq_filter.clone().run_cached(Arc::clone(&input), ctx.branch(true)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?
                 }
                 None => {
                     debug!("ApplyMotifNets::run: no freq_filter for  motif_id={:?}", apply_motif_net.motif_id);
@@ -467,7 +468,7 @@ where
             inputs_by_filter_group.insert(group_key, filtered_input);
         }
 
-        let tmp_cache = TmpCached::new("tmp_apply_motif_nets").await;
+        let tmp_cache = TmpCached::new("tmp_apply_motif_nets").instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
         let tmp_cache_name = tmp_cache.registered_name();
         let tmp_cache:Arc<Mutex<TmpCached<ThoTensor<MotifProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
 
@@ -539,7 +540,7 @@ where
                                     DumpToCpuContextImpl::new(&required_ids),
                                 ),
                             ),
-                        ).await;
+                        ).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
 
                     debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
                     if let Ok(r)= r {
@@ -558,7 +559,7 @@ where
             StreamBuffering::Unordered, //it's sorted in BatchAppliedMotifNets
             "ApplyMotifNets::run",
         )
-        .await
+        .instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -588,7 +589,7 @@ where
                 ),
             ),
         )
-        .await?;
+        .instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied)))
 
@@ -700,7 +701,7 @@ impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
             let BatchAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
             let device_idx = ctx.tho_device_idx();
 
-            match tmp_cache.take_all_recovering(device_idx).await {
+            match tmp_cache.take_all_recovering(device_idx).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await {
                 Ok(motif_nets_applied) => {
                     let len = motif_nets_applied.len();
                     do_run(BatchAppliedMotifNetsInput::new(id, motif_nets_applied, device_idx), ctx)
@@ -721,7 +722,7 @@ impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
     fn burp(o: Self::O) -> impl Future<Output=Self> + Send {
         debug!("TmpCacheWrapper::burp: o.motif_nets_applied.len={}", o.motif_nets_applied.len());
         async {
-            let cache = TmpCached::new("tmp tmp").await;
+            let cache = TmpCached::new("tmp tmp").instrument(tracing::debug_span!("burp/1", file = file!(), line = line!())).await;
             for x in o.motif_nets_applied {
                 cache.insert(x);
             }
