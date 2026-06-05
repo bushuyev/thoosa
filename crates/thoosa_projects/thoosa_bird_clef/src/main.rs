@@ -41,6 +41,7 @@ use thoosa_store::{LimitBy, SqlStore, Store};
 use thoosa_with_data::with_data;
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
 use std::cell::Cell;
+use tracing::Instrument;
 
 mod data;
 mod labels;
@@ -213,7 +214,7 @@ fn main() -> Result<(), ThoError>{
                     root_ctx,
                     run_all_args,
                     run_mode
-                ).await?;
+                ).instrument(tracing::debug_span!("main/1", file = file!(), line = line!())).await?;
 
                 Ok(())
             },
@@ -223,10 +224,10 @@ fn main() -> Result<(), ThoError>{
             32000,
             Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>,|{
                 debug!("bird_clef: infer");
-                infer_labels(params, ws, store).await
+                infer_labels(params, ws, store).instrument(tracing::debug_span!("main/2", file = file!(), line = line!())).await
 
             }),
-        ).await
+        ).instrument(tracing::debug_span!("main/3", file = file!(), line = line!())).await
     });
 
 
@@ -300,7 +301,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
             num_files * SLOTS_PER_FILE,
             args.motif_slices_step as u32,
             false
-        ).await;
+        ).instrument(tracing::debug_span!("infer_labels/1", file = file!(), line = line!())).await;
 
 
         let apply_label_nets = match apply_label_nets {
@@ -322,7 +323,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 
         debug!("label={label:?}  apply_label_nets loaded");//path={path:?}
 
-        match Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(false)).await{
+        match Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(false)).instrument(tracing::debug_span!("infer_labels/2", file = file!(), line = line!())).await{
             Ok(results) => {
                 with_data!(ctx.branch(false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
 
@@ -363,7 +364,7 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 
 async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
-    let run_config_ids = store.list_label_nets_run_config_ids(label).await?;
+    let run_config_ids = store.list_label_nets_run_config_ids(label).instrument(tracing::debug_span!("load_apply_label_nets_model/1", file = file!(), line = line!())).await?;
     debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_config_ids={run_config_ids:?}");
 
     let apply_label_nets = Arc::new(ApplyLabelNets::<RunCtxImpl>::new(
@@ -373,7 +374,7 @@ async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store:
         ctx,
         motif_slices_step,
         batch_in_chunks, run_stft,
-    ).await?);
+    ).instrument(tracing::debug_span!("load_apply_label_nets_model/2", file = file!(), line = line!())).await?);
     Ok(apply_label_nets)
 }
 

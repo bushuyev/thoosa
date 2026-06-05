@@ -7,6 +7,7 @@ use std::sync::Arc;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 use thoosa_shared::{ResourceType, ThoError};
 use thoosa_store::Store;
+use tracing::Instrument;
 
 
 #[derive(Debug, Clone)]
@@ -35,21 +36,21 @@ impl ResourcesConfig for Simple {
         Ok(match self.resources() {
             ResourceType::List(list) => store
                 .list_resources_by_file_stems(&list.into_iter().map(|v| v.as_str()).collect::<Vec<_>>())
-                .await?,
+                .instrument(tracing::debug_span!("to_resources/1", file = file!(), line = line!())).await?,
             ResourceType::Set(set) => store
                 .list_resource_set_resources_by_descr(set)
-                .await?,
+                .instrument(tracing::debug_span!("to_resources/2", file = file!(), line = line!())).await?,
             ResourceType::Group(group) => {
                 let store_guard = store;
                 let mut resources = Vec::new();
                 for (_, resource_set) in store_guard
                     .list_resource_set_group_sets(group)
-                    .await?
+                    .instrument(tracing::debug_span!("to_resources/3", file = file!(), line = line!())).await?
                 {
                     resources.extend(
                         store_guard
                             .list_resource_set_resources_by_descr(&resource_set)
-                            .await
+                            .instrument(tracing::debug_span!("to_resources/4", file = file!(), line = line!())).await
                             .expect("list_resource_set_resources_by_descr"),
                     );
                 }
@@ -57,7 +58,7 @@ impl ResourcesConfig for Simple {
             }
             ResourceType::NotInGroup(descr) => store
                 .list_resources_not_in_group(descr, 1000)
-                .await?, //TODO limit
+                .instrument(tracing::debug_span!("to_resources/5", file = file!(), line = line!())).await?, //TODO limit
         })
     }
 
@@ -68,7 +69,7 @@ impl ResourcesConfig for Simple {
             }
         }
 
-        let resources = self.to_resources(store).await?;
+        let resources = self.to_resources(store).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?;
         if resources.is_empty() {
             Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no resources"
@@ -126,14 +127,14 @@ impl ResourcesConfig for Labeled {
     ) -> Result<Vec<(String, Vec<Resource>)>, ThoError> {
         let store_guard = store;
         let mut out = Vec::new();
-        for (label, resource_set) in store_guard.list_group_labeled_resources_sets(&self.group).await? {
-            out.push((label, store_guard.list_resource_set_resources_by_descr(&resource_set).await?));
+        for (label, resource_set) in store_guard.list_group_labeled_resources_sets(&self.group).instrument(tracing::debug_span!("to_resources/1", file = file!(), line = line!())).await? {
+            out.push((label, store_guard.list_resource_set_resources_by_descr(&resource_set).instrument(tracing::debug_span!("to_resources/2", file = file!(), line = line!())).await?));
         }
         Ok(out)
     }
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
-        let labeled_resources = self.to_resources(store).await?;
+        let labeled_resources = self.to_resources(store).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?;
         if labeled_resources.is_empty() {
             return Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no labeled resource sets"
@@ -180,7 +181,7 @@ impl ResourcesConfig for Logits {
     ) -> Result<Vec<(Resource, Vec<f32>)>, ThoError> {
         store
             .list_resource_random_in_group(&self.group)
-            .await?
+            .instrument(tracing::debug_span!("to_resources/1", file = file!(), line = line!())).await?
             .into_iter()
             .map(move |(resource_id, labels_p)| {
                 debug!(
@@ -196,7 +197,7 @@ impl ResourcesConfig for Logits {
     }
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
-        if store.list_resource_random_in_group(&self.group).await?.is_empty() {
+        if store.list_resource_random_in_group(&self.group).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?.is_empty() {
             Err(ThoError::new(format!(
                 "resource config {self:?} resolved to no logits resources"
             )))
@@ -239,12 +240,12 @@ where
         &self,
         store: &Arc<Box<S>>,
     ) -> Result<(RC::R, RC::R), ThoError> {
-        Ok((self.train_resources.to_resources(store).await?, self.valid_resources.to_resources(store).await?))
+        Ok((self.train_resources.to_resources(store).instrument(tracing::debug_span!("to_resources/1", file = file!(), line = line!())).await?, self.valid_resources.to_resources(store).instrument(tracing::debug_span!("to_resources/2", file = file!(), line = line!())).await?))
     }
 
     async fn check<S: ResourceStore + ?Sized + Send + Sync>(&self, store: &Arc<Box<S>>) -> Result<(), ThoError> {
-        self.train_resources.check(store).await?;
-        self.valid_resources.check(store).await?;
+        self.train_resources.check(store).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?;
+        self.valid_resources.check(store).instrument(tracing::debug_span!("check/2", file = file!(), line = line!())).await?;
         Ok(())
     }
 }

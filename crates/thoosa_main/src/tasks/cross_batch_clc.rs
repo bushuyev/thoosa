@@ -26,6 +26,7 @@ use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
+use tracing::Instrument;
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
@@ -367,7 +368,7 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 
     pub async fn replace_clc_result<OnBatchDone>(mut self, f: &OnBatchDone) -> Result<Self, ThoError>
     where OnBatchDone: Fn(R) -> BoxFuture<'static, Result<R, ThoError>> + Sync + Send + 'static,{
-        self.clc_result = f(self.clc_result).await?;
+        self.clc_result = f(self.clc_result).instrument(tracing::debug_span!("replace_clc_result/1", file = file!(), line = line!())).await?;
         Ok(self)
     }
 }

@@ -20,6 +20,7 @@ use thoosa_shared::os_thread_id;
 use crate as thoosa_common;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
+use tracing::Instrument;
 
 const COPY_CONCURRENCY: usize = 8;
 
@@ -261,7 +262,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
 
-    copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await
+    copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).instrument(tracing::debug_span!("copy_d2h/1", file = file!(), line = line!())).await
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_d2h"))]
@@ -283,7 +284,7 @@ pub async fn move_d2h(
     let src_ptr: usize = src_t.data_ptr() as usize;
     let src_size = src_t.size();
 
-    let res = copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).await;
+    let res = copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size).instrument(tracing::debug_span!("move_d2h/1", file = file!(), line = line!())).await;
     drop(src_t); // keep source alive until the copy finishes
     res
 }
@@ -317,7 +318,7 @@ pub async fn copy_d2h_from_ptr(
             .map(|chunk_group| {
                 let pool = Arc::clone(&bufs_pool);
                 async move {
-                    let buf_stream = pool.acquire().await;
+                    let buf_stream = pool.acquire().instrument(tracing::debug_span!("copy_d2h_from_ptr/1", file = file!(), line = line!())).await;
 
                     spawn_blocking(move || {
                         tracing::info_span!(
@@ -362,7 +363,7 @@ pub async fn copy_d2h_from_ptr(
                             Ok::<(), ThoError>(())
                         })
                     })
-                    .await
+                    .instrument(tracing::debug_span!("copy_d2h_from_ptr/2", file = file!(), line = line!())).await
                     .map_err(join_error_to_tho_error)??;
 
                     Ok(())
@@ -370,7 +371,7 @@ pub async fn copy_d2h_from_ptr(
             })
             .buffer_unordered(COPY_CONCURRENCY)
             .collect::<Vec<_>>()
-            .await
+            .instrument(tracing::debug_span!("copy_d2h_from_ptr/3", file = file!(), line = line!())).await
             .into_iter()
             .collect::<Result<(), ThoError>>()?;
     }
@@ -406,7 +407,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
         src_ptr,
         &src_size,
     )
-    .await
+    .instrument(tracing::debug_span!("copy_h2d/1", file = file!(), line = line!())).await
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_h2d"))]
@@ -436,7 +437,7 @@ pub async fn move_h2d(
         src_ptr,
         &src_size,
     )
-    .await;
+    .instrument(tracing::debug_span!("move_h2d/1", file = file!(), line = line!())).await;
     drop(src_t); // keep source alive until the copy finishes
     res
 }
@@ -471,7 +472,7 @@ pub async fn copy_h2d_from_ptr(
                 let pool = Arc::clone(bufs_pool);
 
                 async move {
-                    let buf_stream = pool.acquire().await;
+                    let buf_stream = pool.acquire().instrument(tracing::debug_span!("copy_h2d_from_ptr/1", file = file!(), line = line!())).await;
 
                     spawn_blocking(move || {
                         tracing::info_span!(
@@ -516,14 +517,14 @@ pub async fn copy_h2d_from_ptr(
                             Ok::<(), ThoError>(())
                         })
 
-                    }).await.map_err(join_error_to_tho_error)??;
+                    }).instrument(tracing::debug_span!("copy_h2d_from_ptr/2", file = file!(), line = line!())).await.map_err(join_error_to_tho_error)??;
 
                     Ok(())
                 }
             })
             .buffer_unordered(COPY_CONCURRENCY)
             .collect::<Vec<_>>()
-            .await
+            .instrument(tracing::debug_span!("copy_h2d_from_ptr/3", file = file!(), line = line!())).await
             .into_iter()
             .collect::<Result<(), ThoError>>()?;
     }
@@ -750,7 +751,7 @@ where
         return f(None);
     }
 
-    let stream = GlobalCtx::global().copy_ctx(tho_device_idx).await.acquire_exec_stream().await;
+    let stream = GlobalCtx::global().copy_ctx(tho_device_idx).instrument(tracing::debug_span!("with_pooled_cuda_stream/1", file = file!(), line = line!())).await.acquire_exec_stream().instrument(tracing::debug_span!("with_pooled_cuda_stream/2", file = file!(), line = line!())).await;
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
 
@@ -767,7 +768,7 @@ where
                 Ok::<_, ThoError>(stream.synchronize()?)
             })
         }),
-    ).await???;
+    ).instrument(tracing::debug_span!("with_pooled_cuda_stream/3", file = file!(), line = line!())).await???;
 
     // spawn_blocking(move || {
     //     stream.synchronize()

@@ -34,6 +34,7 @@ use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsData2Selector;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
+use tracing::Instrument;
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -416,7 +417,7 @@ impl OutputBuilder for FreqFilterOutputBuilder {
         let partial = if partial.device() == 0 {
             partial
         } else {
-            match partial.copy_to_device(0).await {
+            match partial.copy_to_device(0).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
                 Ok(partial) => partial,
                 Err(error) => {
                     self.error = Some(error);
@@ -596,7 +597,7 @@ where
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
             ),
         )
-        .await?;
+        .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         debug!("FreqFilter::run: filtered={filtered:?} done");
 

@@ -31,6 +31,7 @@ use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::motif_stats::RANDOM_STATS_GROUP;
 use crate::tasks::stage_ids::{WELCH_PSD, WELCH_PSD_PER_RESOURCE};
+use tracing::Instrument;
 
 #[derive(Clone, Debug)]
 pub struct WelchInputChannels;
@@ -250,9 +251,9 @@ where
 
     async fn load_resources_for_input(&self, resources_config: Option<RC>) -> Result<Vec<Resource>, ThoError> {
         match resources_config {
-            Some(resources_config) => resources_config.to_resources(&self.store).await,
+            Some(resources_config) => resources_config.to_resources(&self.store).instrument(tracing::debug_span!("load_resources_for_input/1", file = file!(), line = line!())).await,
             None => {
-                let resources = self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX).await?;
+                let resources = self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX).instrument(tracing::debug_span!("load_resources_for_input/2", file = file!(), line = line!())).await?;
                 if resources.is_empty() {
                     warn!("WelchPSD::load_resources_for_input: no resources found outside group={RANDOM_STATS_GROUP}");
                 }
@@ -318,7 +319,7 @@ where
         let sample_rate = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .sample_rate() as f64;
 
-        let resources = self.load_resources_for_input(resources_config).await?;
+        let resources = self.load_resources_for_input(resources_config).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
         if resources.is_empty() {
             return Err(ThoError::new("WelchPSD: no resources to process"));
         }
@@ -340,13 +341,13 @@ where
                     Arc::new(DevicesWrap::wrap(resource.clone())),
                     ctx.branch(false),
                 )
-                .await?;
+                .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
 
             let welch_input = loaded
                 .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 })
-                .await?;
+                .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 
             let welch_input_size = welch_input.size().clone();
@@ -378,7 +379,7 @@ where
                     NoopRunCtxContext {},
                 ),
             )
-            .await?;
+            .instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
 
             let resource_psd_t = resource_psd.t_ref().shallow_clone();
 

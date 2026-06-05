@@ -21,6 +21,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{mono_key, perf_log, simple_id, sync_read_lock, ThoError};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::comp_id::SynKey;
+use tracing::Instrument;
 #[derive(Debug, Clone, DummyData)]
 pub struct LoadMotifNetInput {
     id: SynKey,
@@ -123,7 +124,7 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
-        let input = input.load_from_any_device_(0).await?;//TODO clone_from_cpu
+        let input = input.load_from_any_device_(0).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;//TODO clone_from_cpu
 
 
         let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into(), input.quantize)?;

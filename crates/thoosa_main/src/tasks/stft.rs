@@ -24,6 +24,7 @@ use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{mono_key, ThoError};
 
 use crate::tasks::stage_ids::STFT;
+use tracing::Instrument;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "Stft"]
@@ -130,7 +131,7 @@ where
                     ),
                 ),
             )
-            .await?;
+            .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
         Ok(Arc::new(DevicesWrap::wrap(output)))
     }
 }
