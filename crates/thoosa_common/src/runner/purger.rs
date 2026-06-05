@@ -3,6 +3,7 @@ use futures_util::future::BoxFuture;
 use log::{debug, error, trace, warn};
 use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 use thoosa_shared::{panic_to_err_async, ThoError};
 
 
@@ -57,7 +58,13 @@ impl Purger {
                 }
             }
             warn!("Purger::new: loop exited");
-        });
+        }.instrument(tracing::info_span!(
+            "purger::worker",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = "process GPU purge commands",
+        )));
 
         Self {
             tx,

@@ -271,7 +271,15 @@ where
             .collect::<Vec<_>>();
         let futures = entries.into_iter().map(|entry| {
             async move {
-                tokio::task::spawn_blocking(move || purge_entry(entry))
+                tokio::task::spawn_blocking(move || {
+                    tracing::info_span!(
+                        "purge_models::purge_entry",
+                        kind = "spawn_blocking",
+                        file = file!(),
+                        line = line!(),
+                        task = "purge selected model entry",
+                    ).in_scope(|| purge_entry(entry))
+                })
                     .await
                     .map_err(|e| ThoError::from_error("join purge models worker", e))?
             }

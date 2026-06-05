@@ -274,7 +274,15 @@ where
         let target_precision = self.args.target_precision();
         let futures = entries.into_iter().map(move |entry| {
             async move {
-                tokio::task::spawn_blocking(move || convert_entry(entry, target_precision))
+                tokio::task::spawn_blocking(move || {
+                    tracing::info_span!(
+                        "convert_precision::convert_entry",
+                        kind = "spawn_blocking",
+                        file = file!(),
+                        line = line!(),
+                        task = format!("convert net entry to {target_precision:?}"),
+                    ).in_scope(|| convert_entry(entry, target_precision))
+                })
                     .await
                     .map_err(|e| ThoError::from_error("join convert precision worker", e))?
             }

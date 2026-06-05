@@ -357,7 +357,15 @@ where
             tokio::time::timeout(
                 Duration::from_secs(5),
                 spawn_blocking(move || {
-                    stream.synchronize();
+                    tracing::info_span!(
+                        "apply_cosine2d_motif_nets::sync_stream",
+                        kind = "spawn_blocking",
+                        file = file!(),
+                        line = line!(),
+                        task = "synchronize cosine2d motif application stream",
+                    ).in_scope(|| {
+                        let _ = stream.synchronize();
+                    })
                 }),
             ).await??;
 

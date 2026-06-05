@@ -29,6 +29,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 
 const SEARCH_TYPE_NONE_LABEL: &str = "no value";
 const RUN_ON_DATE_FORMAT: &str = "%Y-%m-%d";
@@ -2111,7 +2112,13 @@ impl App {
         self.pending_plot_open = Some(PendingMotifPlotOpen {
             motif_id,
             started_at: Instant::now(),
-            task: tokio::spawn(async move { open_motif_plot_task(ws_path, motif_id).await }),
+            task: tokio::spawn(async move { open_motif_plot_task(ws_path, motif_id).await }.instrument(tracing::info_span!(
+                "tui::open_motif_plot",
+                kind = "spawn",
+                file = file!(),
+                line = line!(),
+                task = format!("open motif plot for motif_id={motif_id}"),
+            ))),
         });
     }
 
@@ -3414,7 +3421,13 @@ fn drain_progress_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<Progres
 fn spawn_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) -> JoinHandle<()> {
     tokio::spawn(async move {
         run_progress_client(socket_id, tx).await;
-    })
+    }.instrument(tracing::info_span!(
+        "tui::progress_client",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "receive progress socket events",
+    )))
 }
 
 async fn run_progress_client(socket_id: String, tx: mpsc::UnboundedSender<ProgressClientEvent>) {

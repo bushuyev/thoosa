@@ -320,9 +320,16 @@ pub async fn copy_d2h_from_ptr(
                     let buf_stream = pool.acquire().await;
 
                     spawn_blocking(move || {
-                        let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
-                        let stream = Arc::clone(&buf_stream.1);
-                        let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                        tracing::info_span!(
+                            "cuda_utils::copy_d2h_from_ptr_chunk_group",
+                            kind = "spawn_blocking",
+                            file = file!(),
+                            line = line!(),
+                            task = format!("copy {} D2H chunks", chunk_group.len()),
+                        ).in_scope(|| {
+                            let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
+                            let stream = Arc::clone(&buf_stream.1);
+                            let _guard = ThoStreamGuard::new(stream.as_ref())?;
 
                         for chunk in chunk_group {
                             let src_off_ptr = src_ptr.add(chunk.offset) as thoosa_shims::memcpy::CuDevicePtr;
@@ -351,8 +358,9 @@ pub async fn copy_d2h_from_ptr(
                             );
                         }
 
-                        drop(buf_stream);
-                        Ok::<(), ThoError>(())
+                            drop(buf_stream);
+                            Ok::<(), ThoError>(())
+                        })
                     })
                     .await
                     .map_err(join_error_to_tho_error)??;
@@ -466,9 +474,16 @@ pub async fn copy_h2d_from_ptr(
                     let buf_stream = pool.acquire().await;
 
                     spawn_blocking(move || {
-                        let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
-                        let stream = Arc::clone(&buf_stream.1);
-                        let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                        tracing::info_span!(
+                            "cuda_utils::copy_h2d_from_ptr_chunk_group",
+                            kind = "spawn_blocking",
+                            file = file!(),
+                            line = line!(),
+                            task = format!("copy {} H2D chunks", chunk_group.len()),
+                        ).in_scope(|| {
+                            let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
+                            let stream = Arc::clone(&buf_stream.1);
+                            let _guard = ThoStreamGuard::new(stream.as_ref())?;
 
                         for chunk in chunk_group {
                             let src_off_ptr = src_ptr.add(chunk.offset);
@@ -496,9 +511,10 @@ pub async fn copy_h2d_from_ptr(
                             debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={} thread_name={:?} done", chunk.len, os_thread_id());
                         }
 
-                        drop(buf_stream); // return buffer/stream to pool
+                            drop(buf_stream); // return buffer/stream to pool
 
-                        Ok::<(), ThoError>(())
+                            Ok::<(), ThoError>(())
+                        })
 
                     }).await.map_err(join_error_to_tho_error)??;
 
@@ -741,7 +757,15 @@ where
     tokio::time::timeout(
         Duration::from_secs(5),
         spawn_blocking(move || {
-            Ok::<_, ThoError>(stream.synchronize()?)
+            tracing::info_span!(
+                "cuda_utils::with_exec_stream_sync",
+                kind = "spawn_blocking",
+                file = file!(),
+                line = line!(),
+                task = format!("synchronize exec stream for tho_device_idx={tho_device_idx}"),
+            ).in_scope(|| {
+                Ok::<_, ThoError>(stream.synchronize()?)
+            })
         }),
     ).await???;
 
