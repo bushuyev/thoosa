@@ -31,6 +31,7 @@ use crate::tasks::cross_dims::ChannelsMotifsSlices;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
+use tracing::Instrument;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct StackedMotifsInput {
@@ -93,7 +94,7 @@ impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(StackedMotifsOutput {
             id:self.id.clone(),
-            motifs: self.motifs.copy_to_device(dst_device).await?,
+            motifs: self.motifs.copy_to_device(dst_device).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
         })
 
     }
@@ -206,7 +207,7 @@ where
         let motif_ids = self
             .store
             .list_motifs(find_motifs_run_config_id)
-            .await?;
+            .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
         if motif_ids.is_empty() {
@@ -227,7 +228,7 @@ where
 
                     match motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(false)
-                    ).await {
+                    ).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await {
                         Ok(motif) => {
                             debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
                             Ok::<_, ThoError>(Some(motif))
@@ -247,7 +248,7 @@ where
             StreamBuffering::Ordered,
             "StackedMotifsLoader::run",
         )
-        .await
+        .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();

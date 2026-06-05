@@ -19,6 +19,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_store::{SqlStore, Store};
+use tracing::Instrument;
 
 #[derive(Debug, Args, Clone)]
 pub struct ExportArgs {
@@ -163,23 +164,23 @@ where
         let target_ws = self.create_target_workspace()?;
         let target_store_path = { target_ws.read().store_path().clone() };
         {
-            let target_store = SqlStore::from_path(&target_store_path).await?;
+            let target_store = SqlStore::from_path(&target_store_path).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
             drop(target_store);
         }
 
-        let label_net_run_config_ids = self.label_net_run_config_ids().await?;
+        let label_net_run_config_ids = self.label_net_run_config_ids().instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
         if label_net_run_config_ids.is_empty() {
             warn!("Export::run: no label net run configs found for export");
         }
 
-        let (motif_net_run_config_ids, copied_models) = self.copy_required_models(&target_ws, label_net_run_config_ids.as_slice()).await?;
-        self.store.export_apply_label_nets_records(target_store_path, label_net_run_config_ids.clone()).await?;
+        let (motif_net_run_config_ids, copied_models) = self.copy_required_models(&target_ws, label_net_run_config_ids.as_slice()).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
+        self.store.export_apply_label_nets_records(target_store_path, label_net_run_config_ids.clone()).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
 
         let converted = if let Some(target_precision) = self.args.target_precision {
             let output = Arc::new(ConvertPrecisionStage::<C>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::All), target_precision)))
                 .run(Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())), ctx.branch(true))
-                .await?;
-            Arc::into_inner(output).expect("export convert precision output should not be shared").take_data(0).await?.converted().to_vec()
+                .instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
+            Arc::into_inner(output).expect("export convert precision output should not be shared").take_data(0).instrument(tracing::debug_span!("run/6", file = file!(), line = line!())).await?.converted().to_vec()
         } else {
             Vec::new()
         };
@@ -202,10 +203,10 @@ where
     }
 
     async fn label_net_run_config_ids(&self) -> Result<Vec<RunConfigId>, ThoError> {
-        let labels = self.store.list_labels(true).await?;
+        let labels = self.store.list_labels(true).instrument(tracing::debug_span!("label_net_run_config_ids/1", file = file!(), line = line!())).await?;
         let mut ids = Vec::new();
         for label in labels {
-            ids.extend(self.store.list_label_nets_run_config_ids(&label).await?);
+            ids.extend(self.store.list_label_nets_run_config_ids(&label).instrument(tracing::debug_span!("label_net_run_config_ids/2", file = file!(), line = line!())).await?);
         }
         ids.sort_unstable();
         ids.dedup();
@@ -213,15 +214,15 @@ where
     }
 
     async fn copy_required_models(&self, target_ws: &Arc<RwLock<Box<dyn Workspace>>>, label_net_run_config_ids: &[RunConfigId]) -> Result<(Vec<RunConfigId>, Vec<PathBuf>), ThoError> {
-        let label_nets = self.store.list_trained_nets(label_net_run_config_ids.to_vec(), None, None).await?;
+        let label_nets = self.store.list_trained_nets(label_net_run_config_ids.to_vec(), None, None).instrument(tracing::debug_span!("copy_required_models/1", file = file!(), line = line!())).await?;
         let mut motif_net_run_config_ids = Vec::new();
         for label_net in &label_nets {
-            motif_net_run_config_ids.extend(self.store.list_input_nets(label_net.id).await?);
+            motif_net_run_config_ids.extend(self.store.list_input_nets(label_net.id).instrument(tracing::debug_span!("copy_required_models/2", file = file!(), line = line!())).await?);
         }
         motif_net_run_config_ids.sort_unstable();
         motif_net_run_config_ids.dedup();
 
-        let motif_nets = self.store.list_trained_nets(motif_net_run_config_ids.clone(), None, None).await?;
+        let motif_nets = self.store.list_trained_nets(motif_net_run_config_ids.clone(), None, None).instrument(tracing::debug_span!("copy_required_models/3", file = file!(), line = line!())).await?;
         let mut copied = Vec::new();
         let mut copied_targets = HashSet::new();
         {

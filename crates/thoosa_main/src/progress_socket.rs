@@ -72,7 +72,7 @@ impl CollectEtaProgressSocketServer {
                             Ok(stream) => {
                                 let rx = snapshot_rx.clone();
                                 tokio::spawn(async move {
-                                    if let Err(err) = serve_one_client(stream, rx).await {
+                                    if let Err(err) = serve_one_client(stream, rx).instrument(tracing::debug_span!("start_with_name/1", file = file!(), line = line!())).await {
                                         debug!("collect ETA socket client disconnected: {err}");
                                     }
                                 }.instrument(tracing::info_span!(
@@ -138,10 +138,10 @@ impl CollectEtaProgressSocketServer {
     pub(crate) async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.take() {
-            let _ = task.await;
+            let _ = task.instrument(tracing::debug_span!("shutdown/1", file = file!(), line = line!())).await;
         }
         if let Some(stats_task) = self.stats_task.take() {
-            let _ = stats_task.await;
+            let _ = stats_task.instrument(tracing::debug_span!("shutdown/2", file = file!(), line = line!())).await;
         }
     }
 }
@@ -203,15 +203,15 @@ async fn serve_one_client(
 ) -> SocketResult<()> {
     let mut writer = &stream;
     let first = rx.borrow_and_update().clone();
-    send_snapshot(&mut writer, &first).await?;
+    send_snapshot(&mut writer, &first).instrument(tracing::debug_span!("serve_one_client/1", file = file!(), line = line!())).await?;
 
     loop {
-        if rx.changed().await.is_err() {
+        if rx.changed().instrument(tracing::debug_span!("serve_one_client/2", file = file!(), line = line!())).await.is_err() {
             break;
         }
 
         let snapshot = rx.borrow_and_update().clone();
-        send_snapshot(&mut writer, &snapshot).await?;
+        send_snapshot(&mut writer, &snapshot).instrument(tracing::debug_span!("serve_one_client/3", file = file!(), line = line!())).await?;
     }
 
     Ok(())
@@ -223,8 +223,8 @@ where
 {
     let mut bytes = serde_json::to_vec(snapshot)?;
     bytes.push(b'\n');
-    writer.write_all(&bytes).await?;
-    writer.flush().await?;
+    writer.write_all(&bytes).instrument(tracing::debug_span!("send_snapshot/1", file = file!(), line = line!())).await?;
+    writer.flush().instrument(tracing::debug_span!("send_snapshot/2", file = file!(), line = line!())).await?;
     Ok(())
 }
 

@@ -18,6 +18,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, StreamBuffering, ThoError};
 use thoosa_store::{Store, TrainedNetEntry};
+use tracing::Instrument;
 
 const PURGE_MODELS_BUFFER_LIMIT: usize = 16;
 
@@ -256,7 +257,7 @@ where
             ModelRoots::from_ws(ws_guard.as_ref())
         };
         let purge_mode = self.args.purge_mode();
-        let entries = selected_purge_entries(&roots, &self.store, purge_mode).await?;
+        let entries = selected_purge_entries(&roots, &self.store, purge_mode).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         let entries_len = entries.len();
         if entries_len == 0 {
@@ -280,7 +281,7 @@ where
                         task = "purge selected model entry",
                     ).in_scope(|| purge_entry(entry))
                 })
-                    .await
+                    .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await
                     .map_err(|e| ThoError::from_error("join purge models worker", e))?
             }
         });
@@ -292,14 +293,14 @@ where
             StreamBuffering::Unordered,
             "PurgeModelsStage::run",
         )
-        .await;
+        .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
 
         if purged.len() != entries_len {
             return Err(ThoError::new(format!("PurgeModelsStage::run: purged {} of {entries_len} models", purged.len())));
         }
 
         if !ids_to_delete.is_empty() {
-            self.store.delete_trained_nets(ids_to_delete).await?;
+            self.store.delete_trained_nets(ids_to_delete).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
         }
 
         info!("PurgeModelsStage::run: purged {} models for {:?}", purged.len(), self.args.purge_mode());
@@ -343,16 +344,16 @@ struct PurgeEntry {
 
 async fn selected_purge_entries(roots: &ModelRoots, store: &Arc<Box<dyn Store>>, purge_mode: PurgeMode) -> Result<Vec<PurgeEntry>, ThoError> {
     match purge_mode {
-        PurgeMode::PurgeLost => purge_lost_entries(roots, store.list_trained_net_entries().await?),
+        PurgeMode::PurgeLost => purge_lost_entries(roots, store.list_trained_net_entries().instrument(tracing::debug_span!("selected_purge_entries/1", file = file!(), line = line!())).await?),
         PurgeMode::PurgeLabelModels(by) => {
             let rows = match by {
-                PurgeLabelModelsBy::Date(date) => store.list_label_trained_nets_before(date.as_str().to_string()).await?,
-                PurgeLabelModelsBy::Loss(loss) => store.list_label_trained_nets_loss_gt(loss).await?,
+                PurgeLabelModelsBy::Date(date) => store.list_label_trained_nets_before(date.as_str().to_string()).instrument(tracing::debug_span!("selected_purge_entries/2", file = file!(), line = line!())).await?,
+                PurgeLabelModelsBy::Loss(loss) => store.list_label_trained_nets_loss_gt(loss).instrument(tracing::debug_span!("selected_purge_entries/3", file = file!(), line = line!())).await?,
             };
             Ok(rows_to_purge_entries(roots, PurgeModelType::Labels, rows))
         }
         PurgeMode::PurgeUnusedMotifModels => {
-            let rows = store.list_unused_motif_trained_nets().await?;
+            let rows = store.list_unused_motif_trained_nets().instrument(tracing::debug_span!("selected_purge_entries/4", file = file!(), line = line!())).await?;
             Ok(rows_to_purge_entries(roots, PurgeModelType::Motifs, rows))
         }
     }

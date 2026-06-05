@@ -60,6 +60,7 @@ use crate::tasks::stages_seq::ABStage;
 use crate::tasks::stft::Stft;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
+use tracing::Instrument;
 
 type RandomSlicesStft<C> = Stft<C, MotifSlices, MotifSlices>;
 type RandomSlicesLoaderWithStft<L, C> = ABStage<RandomSlicesLoader<L, C>, RandomSlicesStft<C>, C>;
@@ -104,8 +105,8 @@ where
 {
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         match &*self {
-            RandomSlicesStage::Raw(stage) => Arc::clone(stage).run_cached(input, ctx).await,
-            RandomSlicesStage::WithStft(stage) => Arc::clone(stage).run_cached(input, ctx).await,
+            RandomSlicesStage::Raw(stage) => Arc::clone(stage).run_cached(input, ctx).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await,
+            RandomSlicesStage::WithStft(stage) => Arc::clone(stage).run_cached(input, ctx).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await,
         }
     }
 }
@@ -197,11 +198,11 @@ where
             Arc::new(DevicesWrap::wrap(input)),
             ctx.branch(false),
         )
-        .await?;
+        .instrument(tracing::debug_span!("run_stft_as_motif_slices/1", file = file!(), line = line!())).await?;
     let specs = Arc::into_inner(specs)
         .ok_or_else(|| ThoError::new("run_stft_as_motif_slices: stft output should not be shared"))?
         .take_data(device_idx)
-        .await?;
+        .instrument(tracing::debug_span!("run_stft_as_motif_slices/2", file = file!(), line = line!())).await?;
     ThoTensor::new(out_id, specs.t())
 }
 
@@ -264,7 +265,7 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
     let mut train_parent_ids = Vec::new();
     let mut seen_parent_candidates = HashSet::new();
     for select_motifs_run_config_id in select_motifs_run_config_ids {
-        for output_run_config_id in store.list_output_run_config_ids(*select_motifs_run_config_id).await? {
+        for output_run_config_id in store.list_output_run_config_ids(*select_motifs_run_config_id).instrument(tracing::debug_span!("completed_train_motif_trials/1", file = file!(), line = line!())).await? {
             if seen_parent_candidates.insert(output_run_config_id) {
                 train_parent_ids.push(output_run_config_id);
             }
@@ -277,7 +278,7 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
 
     let train_parent_ids = store
         .list_run_configs_by_ids(&train_parent_ids)
-        .await?
+        .instrument(tracing::debug_span!("completed_train_motif_trials/2", file = file!(), line = line!())).await?
         .into_iter()
         .filter(|entry| entry.run_config_type == TrainMotifNetRunConfig::type_name() && entry.descr == "TrainMotifsNetsResult")
         .map(|entry| entry.id)
@@ -286,7 +287,7 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
     let mut child_ids = Vec::new();
     let mut seen_child_candidates = HashSet::new();
     for train_parent_id in train_parent_ids {
-        for output_run_config_id in store.list_output_run_config_ids(train_parent_id).await? {
+        for output_run_config_id in store.list_output_run_config_ids(train_parent_id).instrument(tracing::debug_span!("completed_train_motif_trials/3", file = file!(), line = line!())).await? {
             if seen_child_candidates.insert(output_run_config_id) {
                 child_ids.push(output_run_config_id);
             }
@@ -299,14 +300,14 @@ async fn completed_train_motif_trials(store: &Arc<Box<dyn Store>>, select_motifs
 
     let child_entries = store
         .list_run_configs_by_ids(&child_ids)
-        .await?
+        .instrument(tracing::debug_span!("completed_train_motif_trials/4", file = file!(), line = line!())).await?
         .into_iter()
         .filter(|entry| entry.run_config_type == TrainMotifNetRunConfig::type_name() && entry.descr == "TrainMotifNetResult")
         .collect::<Vec<_>>();
 
     let mut trials = Vec::new();
     for child_entry in child_entries {
-        let values = store.list_run_config_values(child_entry.id).await?;
+        let values = store.list_run_config_values(child_entry.id).instrument(tracing::debug_span!("completed_train_motif_trials/5", file = file!(), line = line!())).await?;
         let Some(loss) = values.get("loss").and_then(val_to_f32) else {
             continue;
         };
@@ -351,7 +352,7 @@ where
 
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
                 for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).await?;
+                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
                     debug!("TrainMotifNets::run: select_motifs_run_config_id={select_motifs_run_config_id} selected_motifs={selected_motifs:?}");
                     motifs_rates_selected_motifs_run_config_ids.extend(
                         selected_motifs
@@ -363,14 +364,14 @@ where
             }
             MotifsBy::MotifId { motif_id, select_motifs_run_config_ids } => {
 
-                let (channel, find_motifs_run_config_id) = self.store.get_motif_meta(motif_id).await?;
+                let (channel, find_motifs_run_config_id) = self.store.get_motif_meta(motif_id).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
                 let select_motifs_run_config_ids = match select_motifs_run_config_ids {
                     Some(select_motifs_run_config_ids) => select_motifs_run_config_ids,
-                    None => self.store.list_output_run_config_ids(find_motifs_run_config_id).await?,
+                    None => self.store.list_output_run_config_ids(find_motifs_run_config_id).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?,
                 };
                 let mut motifs_rates_selected_motifs_run_config_ids = Vec::new();
                 for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).await?;
+                    let selected_motifs = self.store.list_selected_motifs(*select_motifs_run_config_id, channels).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
                     let motif_is_selected = selected_motifs
                         .get(channel)
                         .map(|channel_motifs| channel_motifs.iter().any(|(selected_motif_id, _)| *selected_motif_id == motif_id))
@@ -385,7 +386,7 @@ where
         let motifs_rates_selected_motifs_run_config_ids_len = motifs_rates_selected_motifs_run_config_ids.len();
         debug!("TrainMotifNets::run: motifs_rates_selected_motifs_run_config_ids_len={motifs_rates_selected_motifs_run_config_ids_len} motifs_rates_selected_motifs_run_config_ids={motifs_rates_selected_motifs_run_config_ids:?}");
 
-        let reusable_completed_trials = completed_train_motif_trials(&self.store, &select_motifs_run_config_ids).await?;
+        let reusable_completed_trials = completed_train_motif_trials(&self.store, &select_motifs_run_config_ids).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
         debug!("TrainMotifNets::run: reusable_completed_trials.len={}", reusable_completed_trials.len());
 
         let futures = motifs_rates_selected_motifs_run_config_ids.into_iter()
@@ -407,11 +408,11 @@ where
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = motif_loader.run_cached(
                     Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id])))),
                     ctx.branch(false),
-                ).await?;
+                ).instrument(tracing::debug_span!("run/6", file = file!(), line = line!())).await?;
 
                 let motif_net = Arc::clone(&motif);
 
-                let motif_meta = motif.extra().await?;
+                let motif_meta = motif.extra().instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await?;
                 let motif_width = motif_meta.window;
 
 
@@ -454,13 +455,13 @@ where
                                         stft_input,
                                         ctx.branch(false),
                                         "train_motif_nets_motif_stft",
-                                    ).await?;
+                                    ).instrument(tracing::debug_span!("run/8", file = file!(), line = line!())).await?;
 
                                     let motif_specs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::new(DevicesWrap::wrap(DataWithExtra::new(motif_specs, motif_meta)));
 
                                     debug!("TrainMotifNets::run: batch, rc.id={:?} motif_specs={motif_specs:?}", rc.id);
 
-                                    MotifsBatch::new(motif_specs, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
+                                    MotifsBatch::new(motif_specs, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).instrument(tracing::debug_span!("run/9", file = file!(), line = line!())).await
                                 }.boxed()
                             }
                             MotifNetTypeArgs::CosineNet(args) => {
@@ -469,7 +470,7 @@ where
                                 let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::Raw(Arc::clone(&random_slices_loader_for_batch)));
                                 async move {
-                                    MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
+                                    MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).instrument(tracing::debug_span!("run/10", file = file!(), line = line!())).await
                                 }.boxed()
                             }
                             _ => {
@@ -478,7 +479,7 @@ where
                                 let motif = Arc::clone(&motif_batch);
                                 let random_slices_loader: Arc<RandomSlicesStage<L, C>> = Arc::new(RandomSlicesStage::Raw(Arc::clone(&random_slices_loader_for_batch)));
                                 async move {
-                                    MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).await
+                                    MotifsBatch::new(motif, Arc::clone(&random_slices_loader), rc.common_training_args.batch_size as i64, device_idx, ctx, epoch_size).instrument(tracing::debug_span!("run/11", file = file!(), line = line!())).await
                                 }.boxed()
                             }
                         }
@@ -532,7 +533,7 @@ where
                                         stft_input,
                                         ctx.branch(false),
                                         "train_motif_nets_motif_stft",
-                                    ).await?;
+                                    ).instrument(tracing::debug_span!("run/12", file = file!(), line = line!())).await?;
                                     let size = motif_specs.size();
                                     let params = MotifNetParams::new_cosine_2d(size[2] as u32, size[1] as u32, args.a, args.b, args.init_mode.clone(), motif_width);
 
@@ -575,11 +576,11 @@ where
                     Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
 
                     ctx_run
-                ).await?).unwrap().take_data(0).await?;
+                ).instrument(tracing::debug_span!("run/13", file = file!(), line = line!())).await?).unwrap().take_data(0).instrument(tracing::debug_span!("run/14", file = file!(), line = line!())).await?;
 
                 debug!("TrainMotifNets::run, done: motif_id_rate={motif_id_rate:?} min_loss={}", train_net_output.min_loss);
 
-                let (channel, _find_motifs_run_config_id) = store.get_motif_meta(motif_id_rate.0).await?;
+                let (channel, _find_motifs_run_config_id) = store.get_motif_meta(motif_id_rate.0).instrument(tracing::debug_span!("run/15", file = file!(), line = line!())).await?;
                 Ok(TrainMotifNetResult::new(
                     train_net_output.min_loss,
                     channel as u32,
@@ -603,7 +604,7 @@ where
             crate::buffer_limits::TRAIN_MOTIF_NETS_RUN_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "train motif",
-        ).await;
+        ).instrument(tracing::debug_span!("run/16", file = file!(), line = line!())).await;
 
         Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_config_ids, results))))
     }
@@ -689,7 +690,7 @@ where
     }
 
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
-        let random_slices = self.current_random_slices(ctx.branch(false)).await?;
+        let random_slices = self.current_random_slices(ctx.branch(false)).instrument(tracing::debug_span!("make_batch/1", file = file!(), line = line!())).await?;
         let num_slices = (self.batch_size / 2) as i64;
 
         debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
@@ -751,7 +752,7 @@ where
                 Arc::new(DevicesWrap::wrap(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit))),
                 ctx.branch(false),
             )
-            .await?;
+            .instrument(tracing::debug_span!("current_random_slices/1", file = file!(), line = line!())).await?;
 
         let mut current_random_slices = self.random_slices.lock();
         current_random_slices.slices = Some(Arc::clone(&random_slices));
@@ -786,7 +787,7 @@ where
                         "train",
                         ctx,
                     )
-                        .await
+                        .instrument(tracing::debug_span!("train_batch_stream/1", file = file!(), line = line!())).await
                 }
             })
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
@@ -814,7 +815,7 @@ where
                         "valid",
                         ctx,
                     )
-                        .await
+                        .instrument(tracing::debug_span!("valid_batch_stream/1", file = file!(), line = line!())).await
                 }
             })
             .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))

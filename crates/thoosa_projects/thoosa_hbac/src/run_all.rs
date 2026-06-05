@@ -30,6 +30,7 @@ use thoosa_shared::{RangeOrValue, ThoError};
 use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::val::NamedVal;
 use thoosa_store::Store;
+use tracing::Instrument;
 
 pub enum FindAndSelect {
     #[allow(dead_code)]
@@ -73,19 +74,19 @@ pub(crate) async fn run_all(
 ) -> Result<(), ThoError> {
 
     //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
-    let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store).await?));
+    let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store).instrument(tracing::debug_span!("run_all/1", file = file!(), line = line!())).await?));
 
     //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
-    let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).await?)));
+    let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store).instrument(tracing::debug_span!("run_all/2", file = file!(), line = line!())).await?)));
 
     //gpt Build the input for label training: this is typically a labeled resource set.
     let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
        run_all_args.train_resource_config()
-    ).check(&store).await?));
+    ).check(&store).instrument(tracing::debug_span!("run_all/3", file = file!(), line = line!())).await?));
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
     let _train_final_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
-        run_all_args.train_final_resource_config()).check(&store).await?));
+        run_all_args.train_final_resource_config()).check(&store).instrument(tracing::debug_span!("run_all/4", file = file!(), line = line!())).await?));
 
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
@@ -121,12 +122,12 @@ pub(crate) async fn run_all(
                             fixed_find_motifs_config,
                             ThoDevice::from(1),
                             init_ctx_find_motifs
-                        ).await?,
+                        ).instrument(tracing::debug_span!("run_all/5", file = file!(), line = line!())).await?,
                     ))
                 },
                 || root_ctx.branch(true),
                 "find motifs"
-            ).await?;
+            ).instrument(tracing::debug_span!("run_all/6", file = file!(), line = line!())).await?;
 
             info!("find motifs done, find_motif_run_config_ids={find_motifs_run_config_ids:?}");
 
@@ -172,11 +173,11 @@ pub(crate) async fn run_all(
                             vec![*find_motifs_run_config_id],
                             // #[cfg(test)]
                             None
-                        ).await?))
+                        ).instrument(tracing::debug_span!("run_all/7", file = file!(), line = line!())).await?))
                     },
                     || root_ctx.branch(true),
                     "find_motifs"
-                ).await?);
+                ).instrument(tracing::debug_span!("run_all/8", file = file!(), line = line!())).await?);
 
             }
 
@@ -202,14 +203,14 @@ pub(crate) async fn run_all(
                     )))
                 },
                 || root_ctx.branch(true),
-            ).await?;
+            ).instrument(tracing::debug_span!("run_all/9", file = file!(), line = line!())).await?;
 
             info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_config_ids={best_find_and_select_result_ids:?}");
             assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
 
             let select_motifs_run_config_ids = store
                 .list_input_run_config_ids(&best_find_and_select_result_ids)
-                .await?
+                .instrument(tracing::debug_span!("run_all/10", file = file!(), line = line!())).await?
                 .into_iter().map(
                 |opt_select_result_ids| opt_select_result_ids.1
             ).collect::<Vec<_>>();
@@ -223,7 +224,7 @@ pub(crate) async fn run_all(
 
     if run_all_args.with_plots {
         for select_motifs_run_config_id in &select_motifs_run_config_ids {
-            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false)).await?;
+            run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false)).instrument(tracing::debug_span!("run_all/11", file = file!(), line = line!())).await?;
         }
     }
 
@@ -249,7 +250,7 @@ pub(crate) async fn run_all(
             )?))
         },
         || root_ctx.branch(true),
-    ).await?;
+    ).instrument(tracing::debug_span!("run_all/12", file = file!(), line = line!())).await?;
 
     info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
 
@@ -276,7 +277,7 @@ pub(crate) async fn run_all(
                 run_all_args.motif_slices_step,
                 None,
                 false,
-            ).await?);
+            ).instrument(tracing::debug_span!("run_all/13", file = file!(), line = line!())).await?);
 
             new_train_label_nets(
                 train_motif_nets_run_config_ids.clone(),
@@ -287,10 +288,10 @@ pub(crate) async fn run_all(
                 &store_in_train_labels,
                 Arc::clone(&all_config.train_labels_opt_config),
                 labels_filter.clone(),
-            ).await.map(|v| Arc::new(v))
+            ).instrument(tracing::debug_span!("run_all/14", file = file!(), line = line!())).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(true),
-    ).await?;
+    ).instrument(tracing::debug_span!("run_all/15", file = file!(), line = line!())).await?;
 
     info!("train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
 
@@ -321,10 +322,10 @@ pub(crate) async fn run_all(
                 Arc::clone(&all_config.train_final_opt_config),
                 10, //TODO
                 run_all_args.selected_motif_nets_limit,
-            ).await.map(|v| Arc::new(v))
+            ).instrument(tracing::debug_span!("run_all/16", file = file!(), line = line!())).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(true),
-    ).await?;
+    ).instrument(tracing::debug_span!("run_all/17", file = file!(), line = line!())).await?;
     */
 
     Ok(())

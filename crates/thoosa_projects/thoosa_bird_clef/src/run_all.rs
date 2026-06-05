@@ -93,7 +93,7 @@ pub(crate) async fn run_all(
 
     // Navigation note: this is the project-level run-all workflow invoked from bird_clef::main via run_cli.
     // It fans out by label, then chains find/select motifs -> train motif nets -> train label nets.
-    let labels = store.list_labels(true).await?;
+    let labels = store.list_labels(true).instrument(tracing::debug_span!("run_all/1", file = file!(), line = line!())).await?;
     info!("run_all: labels={:?}", labels.len());
     debug!("run_all: labels={labels:?}");
     let labels_filter = run_all_args.labels_filter();
@@ -181,7 +181,7 @@ pub(crate) async fn run_all(
                             },
                             || label_ctx.branch(true),
                             &format!("find motifs for {label}")
-                        ).await?;
+                        ).instrument(tracing::debug_span!("run_all/2", file = file!(), line = line!())).await?;
 
                         info!("run_all: label={label} find_motifs_run_config_ids={find_motifs_run_config_ids:?}");
 
@@ -213,11 +213,11 @@ pub(crate) async fn run_all(
                                     find_motifs_run_config_ids_for_select_buckets,
                                     select_motifs_input_for_select_buckets,
                                     init_ctx_select_buckets,
-                                ).await?))
+                                ).instrument(tracing::debug_span!("run_all/3", file = file!(), line = line!())).await?))
                             },
                             || label_ctx.branch(true),
                             &format!("select motifs for {label}")
-                        ).await?;
+                        ).instrument(tracing::debug_span!("run_all/4", file = file!(), line = line!())).await?;
 
                         // select_all_motifs is a deliberate bypass: it creates selection runs that include every found motif without invoking SelectBucketsStage criteria.
                         // let select_motifs_run_config_ids = store.select_all_motifs(&find_motifs_run_config_ids).await?;
@@ -226,7 +226,7 @@ pub(crate) async fn run_all(
 
                         if run_all_args.with_plots {
                             for select_motifs_run_config_id in &select_motifs_run_config_ids {
-                                run_plot(&ws_plot, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, label_ctx.branch(false)).await?;
+                                run_plot(&ws_plot, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, label_ctx.branch(false)).instrument(tracing::debug_span!("run_all/5", file = file!(), line = line!())).await?;
                             }
                         }
 
@@ -249,7 +249,7 @@ pub(crate) async fn run_all(
                                 )?))
                             },
                             || label_ctx.branch(false),
-                        ).await?;
+                        ).instrument(tracing::debug_span!("run_all/6", file = file!(), line = line!())).await?;
 
                         info!("train motif nets done: label={label} train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}");
 
@@ -302,7 +302,7 @@ pub(crate) async fn run_all(
                                             run_all_args.motif_slices_step,
                                             None,
                                             false,
-                                        ).await?);
+                                        ).instrument(tracing::debug_span!("run_all/7", file = file!(), line = line!())).await?);
 
                                         new_train_label_nets(
                                             train_motif_net_run_config_ids_combo.clone(),
@@ -313,14 +313,14 @@ pub(crate) async fn run_all(
                                             &store_in_train_labels,
                                             train_labels_opt_config,
                                             Some(vec![label_for_opt.clone()]),
-                                        ).await.map(|v| Arc::new(v))
+                                        ).instrument(tracing::debug_span!("run_all/8", file = file!(), line = line!())).await.map(|v| Arc::new(v))
                                     },
                                     || label_ctx.branch(false),
                                 )
                             ) {
                                 Ok(train_label_nets_run_config_ids) => {
                                     info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
-                                    let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).await?
+                                    let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).instrument(tracing::debug_span!("run_all/9", file = file!(), line = line!())).await?
                                         .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                     if min_loss < *best_min_loss.read() {
@@ -358,7 +358,7 @@ pub(crate) async fn run_all(
             futures::stream::iter(futures)
             .buffer_unordered(2)
             .collect::<Vec<_>>()
-            .await;
+            .instrument(tracing::debug_span!("run_all/10", file = file!(), line = line!())).await;
 
             // let _ = collect_futures_with_progress(
             //     futures,
@@ -395,7 +395,7 @@ pub(crate) async fn run_all(
                 )));
 
                 async move {
-                    let train_motif_net_run_config_ids = store.list_run_config_ids_by_descr(label.clone(), TrainMotifNetRunConfig::type_name()).await?;
+                    let train_motif_net_run_config_ids = store.list_run_config_ids_by_descr(label.clone(), TrainMotifNetRunConfig::type_name()).instrument(tracing::debug_span!("run_all/11", file = file!(), line = line!())).await?;
                     if train_motif_net_run_config_ids.is_empty(){
                         return Ok(());
                     }
@@ -433,7 +433,7 @@ pub(crate) async fn run_all(
                                         run_all_args.motif_slices_step,
                                         None,
                                         false,
-                                    ).await?);
+                                    ).instrument(tracing::debug_span!("run_all/12", file = file!(), line = line!())).await?);
 
                                     new_train_label_nets(
                                         train_motif_net_run_config_ids.clone(),
@@ -444,14 +444,14 @@ pub(crate) async fn run_all(
                                         &store_in_train_labels,
                                         train_labels_opt_config,
                                         Some(vec![label.clone()]),
-                                    ).await.map(|v| Arc::new(v))
+                                    ).instrument(tracing::debug_span!("run_all/13", file = file!(), line = line!())).await.map(|v| Arc::new(v))
                                 },
                                 || label_ctx.branch(false),
                             )
                         ) {
                             Ok(train_label_nets_run_config_ids) => {
                                 info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
-                                let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).await?
+                                let min_loss = store.list_trained_nets(train_label_nets_run_config_ids, None, None).instrument(tracing::debug_span!("run_all/14", file = file!(), line = line!())).await?
                                     .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                 if min_loss < 0.1 {
@@ -482,7 +482,7 @@ pub(crate) async fn run_all(
                 16,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
-            ).await;
+            ).instrument(tracing::debug_span!("run_all/15", file = file!(), line = line!())).await;
 
             info!("Clef train labels done, run_id={:?}", run_id());
 

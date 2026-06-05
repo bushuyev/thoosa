@@ -70,8 +70,8 @@ where
     tokio::spawn(async move {
         futures_util::pin_mut!(source);
 
-        while let Some(item) = source.next().await {
-            if tx.send(item).await.is_err() {
+        while let Some(item) = source.next().instrument(tracing::debug_span!("preload_one/1", file = file!(), line = line!())).await {
+            if tx.send(item).instrument(tracing::debug_span!("preload_one/2", file = file!(), line = line!())).await.is_err() {
                 break;
             }
         }
@@ -102,11 +102,11 @@ where
 
     tokio::spawn(async move {
         for fut in futures {
-            let permit = match tx.reserve().await {
+            let permit = match tx.reserve().instrument(tracing::debug_span!("prefetch_next_batch_stream/1", file = file!(), line = line!())).await {
                 Ok(permit) => permit,
                 Err(_) => break,
             };
-            permit.send(fut.await);
+            permit.send(fut.instrument(tracing::debug_span!("prefetch_next_batch_stream/2", file = file!(), line = line!())).await);
         }
     }.instrument(tracing::info_span!(
         "batches::prefetch_next_batch_stream",

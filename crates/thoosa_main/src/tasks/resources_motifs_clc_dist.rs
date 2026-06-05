@@ -33,6 +33,7 @@ use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
+use tracing::Instrument;
 pub struct ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -473,11 +474,11 @@ impl ClcResourcesMotifsDistOutput {
             self.channel_masks_dists_ids.into_iter().map(|op| async move {
                 match op {
                     None => Ok::<_, ThoError>(None),
-                    Some((dists_mask, data_ids)) => Ok(Some((dists_mask.to_cpu().await?, data_ids))),
+                    Some((dists_mask, data_ids)) => Ok(Some((dists_mask.to_cpu().instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await?, data_ids))),
                 }
             }),
         )
-        .await?;
+        .instrument(tracing::debug_span!("to_cpu/2", file = file!(), line = line!())).await?;
 
         Ok(ClcResourcesMotifsDistOutput {
             id: self.id,
