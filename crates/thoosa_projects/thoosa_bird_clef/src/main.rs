@@ -79,12 +79,12 @@ fn main() -> Result<(), ThoError>{
     let mut task_ids_1 = Arc::clone(&task_ids);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
-            if tch::Cuda::is_available() {
-                //runs cuCtxSetCurrent
-                if let Err(err) = ThoCudaContext::new(0) {
-                    panic!("Failed to create context: {err:?}"); //TODO device
-                }
-            }
+            // if tch::Cuda::is_available() {
+            //     //runs cuCtxSetCurrent
+            //     if let Err(err) = ThoCudaContext::new(0) {
+            //         panic!("Failed to create context: {err:?}"); //TODO device
+            //     }
+            // }
         })
         .worker_threads(worker_threads.unwrap_or(cpu_num/2))
         .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
