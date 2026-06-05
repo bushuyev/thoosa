@@ -357,7 +357,15 @@ where
                     tokio::time::timeout(
                         Duration::from_secs(5),
                         tokio::task::spawn_blocking(move || {
-                            stream.synchronize();
+                            tracing::info_span!(
+                                "oom_handler::run_fast_path_sync",
+                                kind = "spawn_blocking",
+                                file = file!(),
+                                line = line!(),
+                                task = format!("synchronize fast-path stream for tho_device_idx={tho_device_idx}"),
+                            ).in_scope(|| {
+                                let _ = stream.synchronize();
+                            })
                         }),
                     ).await??;
                     out
@@ -418,7 +426,15 @@ where
                         tokio::time::timeout(
                             Duration::from_secs(5),
                             tokio::task::spawn_blocking(move || {
-                                stream.synchronize();
+                                tracing::info_span!(
+                                    "oom_handler::run_sync",
+                                    kind = "spawn_blocking",
+                                    file = file!(),
+                                    line = line!(),
+                                    task = format!("synchronize stage stream for tho_device_idx={tho_device_idx}"),
+                                ).in_scope(|| {
+                                    let _ = stream.synchronize();
+                                })
                             }),
                         ).await??;
 
@@ -469,7 +485,15 @@ where
                         tokio::time::timeout(
                             Duration::from_secs(5),
                             tokio::task::spawn_blocking(move || {
-                                stream.synchronize();
+                                tracing::info_span!(
+                                    "oom_handler::consume_sync",
+                                    kind = "spawn_blocking",
+                                    file = file!(),
+                                    line = line!(),
+                                    task = format!("synchronize consume stream for tho_device_idx={tho_device_idx}"),
+                                ).in_scope(|| {
+                                    let _ = stream.synchronize();
+                                })
                             }),
                         ).await??;
                         consume_result

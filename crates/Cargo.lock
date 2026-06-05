@@ -5445,6 +5445,7 @@ dependencies = [
  "thoosa_shared",
  "thoosa_store",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

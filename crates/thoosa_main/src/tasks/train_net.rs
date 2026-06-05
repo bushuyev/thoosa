@@ -23,6 +23,7 @@ use rand::random;
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
 use tch::Kind::Float;
+use tracing::Instrument;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
@@ -212,7 +213,9 @@ where
 
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
-            let (node, params) =  (self.net)(ctx.branch(false), &run_config, Arc::clone(&vs)).await?;
+            let (node, params) =  (self.net)(ctx.branch(false), &run_config, Arc::clone(&vs))
+                .instrument(tracing::debug_span!("run_inner/self.net", file = file!(),line = line!()))
+                .await?;
 
             let device = Device::from(ThoDevice::from(tho_device_idx));
             let epochs = (self.epochs)(&run_config);
@@ -234,7 +237,10 @@ where
 
 
 
-            let batch = (self.batch)(ctx.branch(false), &run_config).await?;
+            let batch = (self.batch)(ctx.branch(false), &run_config)
+                .instrument(tracing::debug_span!("run_inner/self.batch", file = file!(),line = line!()))
+                .await?;
+
             debug!("TrainNet::run_inner: descr={descr} device={:?} epochs={}", train_step.as_ref().device(), epochs);
 
             let oom_handler = OOMHandler::new(
@@ -268,7 +274,9 @@ where
 
                 // debug!("TrainNet::run_inner, train: descr={descr}  next={:?}", batches.next().await);
 
-                while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next().await {
+                while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next()
+                    .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
+                    .await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
@@ -285,7 +293,9 @@ where
                                 DumpToCpuContextImpl::new(&dump_to_cpu_exclude),
                             ),
                         ),
-                    ).await?;
+                    )
+                        .instrument(tracing::debug_span!("run_inner/oom_handler.run", file = file!(),line = line!()))
+                        .await?;
 
                     debug!("TrainNet::run_inner, train: descr={descr}  after oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
@@ -302,7 +312,10 @@ where
                     let mut valid_loss_sum = 0f32;
                     let mut valid_loss_count = 0u32;
 
-                    while let Some(Ok((x_t_0, mut lengths, y_t))) = batches.next().await {
+                    while let Some(Ok((x_t_0, mut lengths, y_t))) = batches.next()
+                        .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
+                        .await {
+
                         tch::no_grad(||{
 
                             let x_t = (train_step.as_ref().x_f())(x_t_0);

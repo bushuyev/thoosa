@@ -6,6 +6,7 @@ use std::future::Future;
 use std::sync::Arc;
 use log::debug;
 use crate::runner::common::RunCtx;
+use tracing::Instrument;
 use thoosa_shared::ThoError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,7 +75,13 @@ where
                 break;
             }
         }
-    });
+    }.instrument(tracing::info_span!(
+        "batches::preload_one",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "preload one batch ahead",
+    )));
 
     futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))
@@ -101,7 +108,13 @@ where
             };
             permit.send(fut.await);
         }
-    });
+    }.instrument(tracing::info_span!(
+        "batches::prefetch_next_batch_stream",
+        kind = "spawn",
+        file = file!(),
+        line = line!(),
+        task = "prefetch next batch",
+    )));
 
     futures_util::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))

@@ -137,6 +137,7 @@ pub(crate) async fn run_all(
                 let find_resources = find_resources.clone();
                 let select_motifs_run_config = Arc::clone(&select_motifs_run_config);
                 let label = label.clone();
+                let label_for_span = label.clone();
                 let ws = Arc::clone(&ws);
                 let ws_spawn = Arc::clone(&ws);
                 let store_spawn = Arc::clone(&store);
@@ -173,7 +174,9 @@ pub(crate) async fn run_all(
                                         fixed_find_motif_config,
                                         ThoDevice::from(1),
                                         init_ctx_find_motifs
-                                    ).await?,
+                                    )
+                                    .instrument(tracing::debug_span!("FindMotifsStage::new",file = file!(),line = line!()))
+                                    .await?,
                                 ))
                             },
                             || label_ctx.branch(true),
@@ -343,12 +346,13 @@ pub(crate) async fn run_all(
                         collect_eta_record_completion(labels_eta_guard_id);
                         Ok::<_, ThoError>(())
                     })
-                }).instrument(tracing::info_span!(
-                    "my_task",
+                }.instrument(tracing::info_span!(
+                    "bird_clef::run_label_workflow",
+                    kind = "spawn",
                     file = file!(),
                     line = line!(),
-                    task = "apply_label_nets",
-                ))
+                    task = format!("run workflow for label_{label_for_span}"),
+                )))
             });
 
             futures::stream::iter(futures)

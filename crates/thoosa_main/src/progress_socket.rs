@@ -12,6 +12,7 @@ use torch_sys::cuda::atc_cuda_device_count;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -74,7 +75,13 @@ impl CollectEtaProgressSocketServer {
                                     if let Err(err) = serve_one_client(stream, rx).await {
                                         debug!("collect ETA socket client disconnected: {err}");
                                     }
-                                });
+                                }.instrument(tracing::info_span!(
+                                    "progress_socket::client",
+                                    kind = "spawn",
+                                    file = file!(),
+                                    line = line!(),
+                                    task = "serve collect ETA progress socket client",
+                                )));
                             }
                             Err(err) => {
                                 warn!("collect ETA socket accept failed: {err}");
@@ -84,7 +91,13 @@ impl CollectEtaProgressSocketServer {
                     }
                 }
             }
-        });
+        }.instrument(tracing::info_span!(
+            "progress_socket::server",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = "accept collect ETA progress socket clients",
+        )));
 
         Ok(Self {
             name,
@@ -108,7 +121,13 @@ impl CollectEtaProgressSocketServer {
                     _ = tokio::time::sleep(Duration::from_secs(1)) => {}
                 }
             }
-        })
+        }.instrument(tracing::info_span!(
+            "progress_socket::device_stats",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = "publish device stats snapshots",
+        )))
     }
 
     #[cfg(test)]

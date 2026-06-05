@@ -290,8 +290,16 @@ where
                 let receiver_ctx = ctx.branch(false);
 
                 tokio::task::spawn_blocking(move || {
-                    receiver.consume(cross_clc_output, receiver_ctx);
-                    Ok::<_, ThoError>(())
+                    tracing::info_span!(
+                        "cross_loader::consume_cross_output",
+                        kind = "spawn_blocking",
+                        file = file!(),
+                        line = line!(),
+                        task = "consume cross calculation output",
+                    ).in_scope(|| {
+                        receiver.consume(cross_clc_output, receiver_ctx);
+                        Ok::<_, ThoError>(())
+                    })
                 }).await??;
             }
             Err(e) => {

@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use tch::Kind::Float;
 use tch::Tensor;
 use tokio::task::JoinHandle;
+use tracing::Instrument;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
@@ -593,24 +594,32 @@ where
                                 let motif_count = mask_dists_ids.1.len();
                                 let resources_slices_cloned = Arc::clone(&resources_slices);
                                 let matches_by_motif = tokio::task::spawn_blocking(move || {
-                                    use rayon::prelude::*;
-                                    rayon_pool().install(|| {
-                                        let mut match_indices = mask_dists.into_indices_iter()?;
-                                        let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| {
-                                            (mask_channel as usize, motif_idx as usize, slice_idx as usize)
-                                        }).collect::<Vec<_>>();
-                                        matches.par_sort_unstable_by(|l, r| l.1.cmp(&r.1).then(l.2.cmp(&r.2)));
+                                    tracing::info_span!(
+                                        "extend_motifs::group_mask_matches",
+                                        kind = "spawn_blocking",
+                                        file = file!(),
+                                        line = line!(),
+                                        task = format!("group mask matches for channel={channel} motif_count={motif_count}"),
+                                    ).in_scope(|| {
+                                        use rayon::prelude::*;
+                                        rayon_pool().install(|| {
+                                            let mut match_indices = mask_dists.into_indices_iter()?;
+                                            let mut matches = match_indices.par_bridge().map(|(mask_channel, motif_idx, slice_idx, _)| {
+                                                (mask_channel as usize, motif_idx as usize, slice_idx as usize)
+                                            }).collect::<Vec<_>>();
+                                            matches.par_sort_unstable_by(|l, r| l.1.cmp(&r.1).then(l.2.cmp(&r.2)));
 
-                                        let mut grouped_matches = vec![Vec::<IdSlice>::new(); motif_count];
-                                        for (mask_channel, motif_idx, slice_idx) in matches {
-                                            assert_eq!(mask_channel, 0, "SelectMotifsStage::run: expected single-channel mask index, got {mask_channel}");
-                                            assert!(motif_idx < motif_count, "SelectMotifsStage::run: motif index out of bounds motif_idx={motif_idx} motif_count={motif_count}");
-                                            assert!(slice_idx < resources_slices_cloned.len(), "SelectMotifsStage::run: resource slice index out of bounds slice_idx={slice_idx} resources_len={}", resources_slices_cloned.len());
-                                            let slice = resources_slices_cloned[slice_idx];
-                                            grouped_matches[motif_idx].push(IdSlice(0, slice.0, slice.1));
-                                        }
+                                            let mut grouped_matches = vec![Vec::<IdSlice>::new(); motif_count];
+                                            for (mask_channel, motif_idx, slice_idx) in matches {
+                                                assert_eq!(mask_channel, 0, "SelectMotifsStage::run: expected single-channel mask index, got {mask_channel}");
+                                                assert!(motif_idx < motif_count, "SelectMotifsStage::run: motif index out of bounds motif_idx={motif_idx} motif_count={motif_count}");
+                                                assert!(slice_idx < resources_slices_cloned.len(), "SelectMotifsStage::run: resource slice index out of bounds slice_idx={slice_idx} resources_len={}", resources_slices_cloned.len());
+                                                let slice = resources_slices_cloned[slice_idx];
+                                                grouped_matches[motif_idx].push(IdSlice(0, slice.0, slice.1));
+                                            }
 
-                                        Ok::<_, ThoError>(grouped_matches)
+                                            Ok::<_, ThoError>(grouped_matches)
+                                        })
                                     })
                                 }).await??;
 
@@ -903,7 +912,13 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
 
         self.output.push (tokio::spawn(async {
             o.to_cpu().await
-        }));
+        }.instrument(tracing::info_span!(
+            "extend_motifs::partial_output_to_cpu",
+            kind = "spawn",
+            file = file!(),
+            line = line!(),
+            task = "move partial extended motif output to CPU",
+        ))));
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
