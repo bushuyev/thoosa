@@ -117,13 +117,13 @@ impl GlobalCtx {
             GlobalCtx::global().drop_device(tho_device_idx, "drop").await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
-            GlobalCtx::global().copy_ctx_mut(tho_device_idx).await.cu_ctx.reset()?;
+            GlobalCtx::global().copy_ctx_mut(tho_device_idx).await.reset()?;
 
             // let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
             // cu_ctx.reset()?;//it only calls clearCublasWorkspaces and CUDACachingAllocator::emptyCache, see  tho_cu_reset crates/thoosa_shims/src-cpp/context.cpp:16
             info!("GlobalCtx::reset_cuda_context: cu_ctx.reset done");
 
-            *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
+            // *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
 
             info!("GlobalCtx::reset_cuda_context: all done");
             Ok(())
