@@ -138,7 +138,7 @@ where
     <<R as Stage>::In<'b> as Data>::Metrics: PartialOrd,
 {
     async fn add_partial_output(&mut self, o: R::Out){
-        track_await("add_partial_output/1", self.output_builder.add_partial_output(o)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
+        track_await("thoosa_common::runner::adjusters::splits::SplitsAdjusterContextImpl::InputContext<'a,R>::add_partial_output/1", self.output_builder.add_partial_output(o)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
 
         self.done_to += self.split_len.clone();
 
@@ -151,7 +151,7 @@ where
 
 
     async fn build_final_output(self) -> Result<R::Out, ThoError> {
-        track_await("build_final_output/1", self.output_builder.build()).instrument(tracing::debug_span!("build_final_output/1", file = file!(), line = line!())).await
+        track_await("thoosa_common::runner::adjusters::splits::SplitsAdjusterContextImpl::InputContext<'a,R>::build_final_output/1", self.output_builder.build()).instrument(tracing::debug_span!("build_final_output/1", file = file!(), line = line!())).await
     }
 }
 

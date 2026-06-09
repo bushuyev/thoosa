@@ -263,7 +263,7 @@ pub async fn copy_d2h<R: AsRef<Tensor>>(
     let src_ptr: usize = src_t.as_ref().data_ptr() as usize;
     let src_size = src_t.as_ref().size();
 
-    track_await("copy_d2h/1", copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).instrument(tracing::debug_span!("copy_d2h/1", file = file!(), line = line!())).await
+    track_await("thoosa_common::cuda_utils::copy_d2h/1", copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).instrument(tracing::debug_span!("copy_d2h/1", file = file!(), line = line!())).await
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="cuda_utils::move_d2h"))]
@@ -285,7 +285,7 @@ pub async fn move_d2h(
     let src_ptr: usize = src_t.data_ptr() as usize;
     let src_size = src_t.size();
 
-    let res = track_await("move_d2h/1", copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).instrument(tracing::debug_span!("move_d2h/1", file = file!(), line = line!())).await;
+    let res = track_await("thoosa_common::cuda_utils::move_d2h/1", copy_d2h_from_ptr(init_type, buf_size, &bufs_pool, src_ptr, &src_size)).instrument(tracing::debug_span!("move_d2h/1", file = file!(), line = line!())).await;
     drop(src_t); // keep source alive until the copy finishes
     res
 }
@@ -315,13 +315,13 @@ pub async fn copy_d2h_from_ptr(
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
 
-        track_await("copy_d2h_from_ptr/3", stream::iter(chunk_groups)
+        track_await("thoosa_common::cuda_utils::copy_d2h_from_ptr/3", stream::iter(chunk_groups)
             .map(|chunk_group| {
                 let pool = Arc::clone(&bufs_pool);
                 async move {
-                    let buf_stream = track_await("copy_d2h_from_ptr/1", pool.acquire()).instrument(tracing::debug_span!("copy_d2h_from_ptr/1", file = file!(), line = line!())).await;
+                    let buf_stream = track_await("thoosa_common::cuda_utils::copy_d2h_from_ptr/1", pool.acquire()).instrument(tracing::debug_span!("copy_d2h_from_ptr/1", file = file!(), line = line!())).await;
 
-                    track_await("copy_d2h_from_ptr/2", spawn_blocking(move || {
+                    track_await("thoosa_common::cuda_utils::copy_d2h_from_ptr/2", spawn_blocking(move || {
                         tracing::info_span!(
                             "cuda_utils::copy_d2h_from_ptr_chunk_group",
                             kind = "spawn_blocking",
@@ -402,7 +402,7 @@ pub async fn copy_h2d<R: AsRef<Tensor>>(
     let src_ptr = src_t.as_ref().data_ptr() as usize; // CPU mem
     let src_size = src_t.as_ref().size();
 
-    track_await("copy_h2d/1", copy_h2d_from_ptr(
+    track_await("thoosa_common::cuda_utils::copy_h2d/1", copy_h2d_from_ptr(
         init_type,
         buf_size,
         bufs_pool,
@@ -432,7 +432,7 @@ pub async fn move_h2d(
     let src_ptr = src_t.data_ptr() as usize; // CPU mem
     let src_size = src_t.size();
 
-    let res = track_await("move_h2d/1", copy_h2d_from_ptr(
+    let res = track_await("thoosa_common::cuda_utils::move_h2d/1", copy_h2d_from_ptr(
         init_type,
         buf_size,
         bufs_pool,
@@ -470,14 +470,14 @@ pub async fn copy_h2d_from_ptr(
         // CUdriver needs CUdeviceptr for the destination side
         let dst_base = dst_ptr as thoosa_shims::memcpy::CuDevicePtr;
 
-        track_await("copy_h2d_from_ptr/3", stream::iter(chunk_groups)
+        track_await("thoosa_common::cuda_utils::copy_h2d_from_ptr/3", stream::iter(chunk_groups)
             .map(|chunk_group| {
                 let pool = Arc::clone(bufs_pool);
 
                 async move {
-                    let buf_stream = track_await("copy_h2d_from_ptr/1", pool.acquire()).instrument(tracing::debug_span!("copy_h2d_from_ptr/1", file = file!(), line = line!())).await;
+                    let buf_stream = track_await("thoosa_common::cuda_utils::copy_h2d_from_ptr/1", pool.acquire()).instrument(tracing::debug_span!("copy_h2d_from_ptr/1", file = file!(), line = line!())).await;
 
-                    track_await("copy_h2d_from_ptr/2", spawn_blocking(move || {
+                    track_await("thoosa_common::cuda_utils::copy_h2d_from_ptr/2", spawn_blocking(move || {
                         tracing::info_span!(
                             "cuda_utils::copy_h2d_from_ptr_chunk_group",
                             kind = "spawn_blocking",
@@ -754,11 +754,11 @@ where
         return f(None);
     }
 
-    let stream = track_await("with_pooled_cuda_stream/2", track_await("with_pooled_cuda_stream/1", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("with_pooled_cuda_stream/1", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("with_pooled_cuda_stream/2", file = file!(), line = line!())).await;
+    let stream = track_await("thoosa_common::cuda_utils::with_pooled_cuda_stream/2", track_await("thoosa_common::cuda_utils::with_pooled_cuda_stream/1", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("with_pooled_cuda_stream/1", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("with_pooled_cuda_stream/2", file = file!(), line = line!())).await;
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
 
-    track_await("with_pooled_cuda_stream/3", tokio::time::timeout(
+    track_await("thoosa_common::cuda_utils::with_pooled_cuda_stream/3", tokio::time::timeout(
         Duration::from_secs(5),
         spawn_blocking(move || {
             tracing::info_span!(
