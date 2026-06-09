@@ -364,7 +364,8 @@ pub async fn copy_d2h_from_ptr(
 
                         })
                     })
-                    .instrument(tracing::debug_span!("copy_d2h_from_ptr/2", file = file!(), line = line!())).await
+                    .instrument(tracing::debug_span!("copy_d2h_from_ptr/2", file = file!(), line = line!()))
+                    .await
                     .map_err(join_error_to_tho_error)??;
 
                     Ok(())

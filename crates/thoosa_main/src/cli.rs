@@ -95,6 +95,7 @@ use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOM
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
+use thoosa_shared::tracked_await::TASKS;
 use thoosa_store::rusqlite::Transaction;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::ChannelsMotifsDists;
@@ -529,6 +530,8 @@ where
                             prev_park[w] = park;
                             prev_busy[w] = busy;
                     }
+                    info!("TASKS={:?}", TASKS);
+
                     debug!("run_cli: purge_cpu tick");
                     GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
                     debug!("run_cli: purge_cpu done");

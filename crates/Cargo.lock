@@ -5373,6 +5373,7 @@ dependencies = [
  "ogg",
  "once_cell",
  "parking_lot",
+ "pin-project",
  "plotters",
  "polars",
  "rand 0.10.0",
