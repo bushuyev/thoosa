@@ -361,6 +361,7 @@ pub async fn copy_d2h_from_ptr(
 
                             drop(buf_stream);
                             Ok::<(), ThoError>(())
+
                         })
                     })
                     .instrument(tracing::debug_span!("copy_d2h_from_ptr/2", file = file!(), line = line!())).await

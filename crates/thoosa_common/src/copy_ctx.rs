@@ -1,7 +1,7 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::ThoCudaStream;
-use log::debug;
+use log::{debug, info};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tch::Kind::Int64;
@@ -91,13 +91,22 @@ impl CopyCtx {
 
     //TODO these are 'exec' streams, not for copy
     pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
-        self.exec_stream_pool.acquire().instrument(tracing::debug_span!("acquire_exec_stream/1", file = file!(), line = line!())).await
+        self.exec_stream_pool
+            .acquire()
+            .instrument(tracing::debug_span!("acquire_exec_stream/1", file = file!(), line = line!()))
+            .await
     }
 
     pub fn reset(&mut self) -> Result<(), ThoError> {
         self.cu_ctx.reset()?;
+        info!("GlobalCtx::reset_cuda_context: cu_ctx.reset done");
+
         self.bufs_pool = Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize);
+        info!("GlobalCtx::reset_cuda_context: bufs_pool rebuilt");
+
         self.exec_stream_pool = Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cu_ctx.device, false).unwrap())));
+
+        info!("GlobalCtx::reset_cuda_context: exec_stream_pool rebuilt");
 
         Ok(())
     }

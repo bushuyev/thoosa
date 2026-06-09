@@ -104,9 +104,10 @@ opt-level = 0
 #opt-level = 2
 #debug = "full"
 #overflow-checks = true
-[profile.release]
+[profile.release-opt1]
+inherits = "release"
 debug = "full"
-opt-level = 3
+opt-level = 1
 strip = "none"
 lto = false
 panic = "unwind"

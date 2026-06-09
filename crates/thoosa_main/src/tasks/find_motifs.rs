@@ -492,7 +492,7 @@ where
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
-        let mut js: JoinSet<Result<Arc<DevicesWrap<()>>, ThoError>> = JoinSet::new();//TODO to stream + spawn
+
 
         let run_config_stages_len = self.run_config_stages.len();
         debug!("FindMotifsStage::run: run_config_stages.len={run_config_stages_len}");
