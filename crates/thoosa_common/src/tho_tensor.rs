@@ -306,7 +306,7 @@ where
             self.tho_device()
         };
 
-        let copy_ctx = track_await("copy_to_device/1", GlobalCtx::global().copy_ctx(ctx_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await;
+        let copy_ctx = track_await("thoosa_common::tho_tensor::ThoTensor::CopyToDevice::copy_to_device/1", GlobalCtx::global().copy_ctx(ctx_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await;
         let src = if self.t.is_contiguous() { None } else {
             info!("f_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguous");
             Some(self.t.f_contiguous()?)
@@ -314,7 +314,7 @@ where
         let src_ref = src.as_ref().unwrap_or(&self.t);
         debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
 
-        let copy = track_await("copy_to_device/2", copy_ctx
+        let copy = track_await("thoosa_common::tho_tensor::ThoTensor::CopyToDevice::copy_to_device/2", copy_ctx
             .copy_from_ptr(
                 src_ref.data_ptr() as usize,
                 &src_ref.size(),

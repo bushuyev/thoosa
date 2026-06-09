@@ -75,18 +75,18 @@ pub(crate) async fn run_all(
 ) -> Result<(), ThoError> {
 
     //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
-    let find_motifs_input = Arc::new(DevicesWrap::wrap(track_await("run_all/1", ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).instrument(tracing::debug_span!("run_all/1", file = file!(), line = line!())).await?));
+    let find_motifs_input = Arc::new(DevicesWrap::wrap(track_await("thoosa_hbac::run_all::run_all/1", ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).instrument(tracing::debug_span!("run_all/1", file = file!(), line = line!())).await?));
 
     //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
-    let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(track_await("run_all/2", ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).instrument(tracing::debug_span!("run_all/2", file = file!(), line = line!())).await?)));
+    let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(track_await("thoosa_hbac::run_all::run_all/2", ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).instrument(tracing::debug_span!("run_all/2", file = file!(), line = line!())).await?)));
 
     //gpt Build the input for label training: this is typically a labeled resource set.
-    let train_labels_input = Arc::new(DevicesWrap::wrap(track_await("run_all/3", ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
+    let train_labels_input = Arc::new(DevicesWrap::wrap(track_await("thoosa_hbac::run_all::run_all/3", ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
        run_all_args.train_resource_config()
     ).check(&store)).instrument(tracing::debug_span!("run_all/3", file = file!(), line = line!())).await?));
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
-    let _train_final_input = Arc::new(DevicesWrap::wrap(track_await("run_all/4", ResourcesConfigInput::new(
+    let _train_final_input = Arc::new(DevicesWrap::wrap(track_await("thoosa_hbac::run_all::run_all/4", ResourcesConfigInput::new(
         run_all_args.train_final_resource_config()).check(&store)).instrument(tracing::debug_span!("run_all/4", file = file!(), line = line!())).await?));
 
 
@@ -107,7 +107,7 @@ pub(crate) async fn run_all(
             info!("find and select motifs opt skipped: no opt params in run config, falling back to grid search");
 
             //gpt Run a grid over FindMotifs configs, constructing a stage per grid point and executing it.
-            let find_motifs_run_config_ids = track_await("run_all/6", run_grid::</*Simple,*/ _, _, _, _, _>(
+            let find_motifs_run_config_ids = track_await("thoosa_hbac::run_all::run_all/6", run_grid::</*Simple,*/ _, _, _, _, _>(
                 None,
                 find_motifs_run_config_range_or_value,
                 find_motifs_input,
@@ -115,7 +115,7 @@ pub(crate) async fn run_all(
                 &store,
                 async move |run_configs| {
                     Ok(Arc::new(
-                        track_await("run_all/5", tasks::find_motifs::FindMotifsStage::new(
+                        track_await("thoosa_hbac::run_all::run_all/5", tasks::find_motifs::FindMotifsStage::new(
                             &ws_in_find_motifs,
                             &store_in_find_motifs,
                             loader_in_find_motifs,
@@ -154,14 +154,14 @@ pub(crate) async fn run_all(
             //
 
             for find_motifs_run_config_id in &find_motifs_run_config_ids {
-                select_motifs_run_config_ids.extend( track_await("run_all/8", run_grid::</*Labeled,*/ _, _, _, _, _>(
+                select_motifs_run_config_ids.extend( track_await("thoosa_hbac::run_all::run_all/8", run_grid::</*Labeled,*/ _, _, _, _, _>(
                     Some(vec![*find_motifs_run_config_id]),
                     select_motifs_run_config.clone(),
                     select_motifs_input.clone(),
                     &ws,
                     &store,
                     async |run_configs| {
-                        Ok(Arc::new(track_await("run_all/7", SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                        Ok(Arc::new(track_await("thoosa_hbac::run_all::run_all/7", SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                             &ws,
                             &store,
                             Arc::clone(&loader),
@@ -187,7 +187,7 @@ pub(crate) async fn run_all(
             select_motifs_run_config_ids
         }
         FindAndSelect::WithOpt { find_and_select_run_config_range_or_value, fixed_find_motifs_config, find_and_select_motifs_opt_config } => {
-            let best_find_and_select_result_ids:Vec<RunConfigId>= track_await("run_all/9", run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
+            let best_find_and_select_result_ids:Vec<RunConfigId>= track_await("thoosa_hbac::run_all::run_all/9", run_opt::</*Simple,*/ _, _, FindAndSelectMotifsRunConfig, _, _>(
                 find_and_select_run_config_range_or_value,
                 find_and_select_input,
                 &ws,
@@ -209,7 +209,7 @@ pub(crate) async fn run_all(
             info!("opt FindAndSelectMotifsRunConfig done: find_and_select_run_config_ids={best_find_and_select_result_ids:?}");
             assert_eq!(best_find_and_select_result_ids.len(), 1); //should be one from run_opt
 
-            let select_motifs_run_config_ids = track_await("run_all/10", store
+            let select_motifs_run_config_ids = track_await("thoosa_hbac::run_all::run_all/10", store
                 .list_input_run_config_ids(&best_find_and_select_result_ids))
                 .instrument(tracing::debug_span!("run_all/10", file = file!(), line = line!())).await?
                 .into_iter().map(
@@ -225,7 +225,7 @@ pub(crate) async fn run_all(
 
     if run_all_args.with_plots {
         for select_motifs_run_config_id in &select_motifs_run_config_ids {
-            track_await("run_all/11", run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false))).instrument(tracing::debug_span!("run_all/11", file = file!(), line = line!())).await?;
+            track_await("thoosa_hbac::run_all::run_all/11", run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false))).instrument(tracing::debug_span!("run_all/11", file = file!(), line = line!())).await?;
         }
     }
 
@@ -235,7 +235,7 @@ pub(crate) async fn run_all(
     let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config))));
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
-    let train_motif_nets_run_config_ids = track_await("run_all/12", run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
+    let train_motif_nets_run_config_ids = track_await("thoosa_hbac::run_all::run_all/12", run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
         all_config.train_motif_nets_run_config_range_or_value,
         input_wrapper,
         &ws,
@@ -262,13 +262,13 @@ pub(crate) async fn run_all(
     let labels_filter = run_all_args.labels_filter();
 
     //gpt Run a grid over label-net training configs; consumes motif nets from previous stage.
-    let train_label_nets_run_config_ids = track_await("run_all/15", run_opt::< _, _, TrainLabelNetRunConfig, _, _>(
+    let train_label_nets_run_config_ids = track_await("thoosa_hbac::run_all::run_all/15", run_opt::< _, _, TrainLabelNetRunConfig, _, _>(
         all_config.train_label_nets_run_config_range_or_value,
         train_labels_input,
         &ws,
         &store,
         async move |run_configs| {
-            let apply_motif_nets = Arc::new(track_await("run_all/13", ApplyMotifNets::new(
+            let apply_motif_nets = Arc::new(track_await("thoosa_hbac::run_all::run_all/13", ApplyMotifNets::new(
                 &ws_in_train_labels,
                 &store_in_train_labels,
                 train_motif_nets_run_config_ids.clone(),
@@ -280,7 +280,7 @@ pub(crate) async fn run_all(
                 false,
             )).instrument(tracing::debug_span!("run_all/13", file = file!(), line = line!())).await?);
 
-            track_await("run_all/14", new_train_label_nets(
+            track_await("thoosa_hbac::run_all::run_all/14", new_train_label_nets(
                 train_motif_nets_run_config_ids.clone(),
                 Arc::clone(&loader),
                 apply_motif_nets,

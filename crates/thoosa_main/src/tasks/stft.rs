@@ -118,7 +118,7 @@ where
             ],
             None,
         );
-        let output = track_await("run/1", oom_handler
+        let output = track_await("thoosa_main::tasks::stft::Stft::AsyncStage::run/1", oom_handler
             .run(
                 &self.sync_stft,
                 input,

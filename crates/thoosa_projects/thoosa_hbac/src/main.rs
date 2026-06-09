@@ -58,7 +58,7 @@ fn main() -> Result<(), ThoError> {
 
 
     let run_result = rt.block_on(async move {
-        track_await("main/2", run_cli(
+        track_await("thoosa_hbac::main/2", run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
                 thoosa_main::data::parquet_to_tensor_by_path(
@@ -90,7 +90,7 @@ fn main() -> Result<(), ThoError> {
 
                 let all_configs = run_all_config_0(run_all_args);
 
-                track_await("main/1", run_all(ws, store, loader, root_ctx, run_all_args, all_configs)).instrument(tracing::debug_span!("main/1", file = file!(), line = line!())).await
+                track_await("thoosa_hbac::main/1", run_all(ws, store, loader, root_ctx, run_all_args, all_configs)).instrument(tracing::debug_span!("main/1", file = file!(), line = line!())).await
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,

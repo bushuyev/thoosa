@@ -344,7 +344,7 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
     {
-        async move { track_await("with_data_ref/1", self.with_calc_input(permits_ctx, do_run)).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await }
+        async move { track_await("thoosa_main::tasks::motif_stats::MotifStatsCalcInputWrapper::thoosa_common::runner::common::cachable::WithDataRef::with_data_ref/1", self.with_calc_input(permits_ctx, do_run)).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await }
     }
 
     fn mem_size(&self) -> u64 {
@@ -361,7 +361,7 @@ impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifSta
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
     {
-        async move { track_await("with_selected_data_ref/1", self.with_calc_input(permits_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
+        async move { track_await("thoosa_main::tasks::motif_stats::MotifStatsCalcInputWrapper::thoosa_common::runner::common::cachable::WithSelectDataRef<()>::with_selected_data_ref/1", self.with_calc_input(permits_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
     }
 }
 
@@ -428,7 +428,7 @@ impl CopyToDevice for MotifStatsLoadedChannelsInput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         let mut channels_motifs_slices = Vec::with_capacity(self.channels_motifs_slices.len());
         for channels in &self.channels_motifs_slices {
-            channels_motifs_slices.push(track_await("copy_to_device/1", channels.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?);
+            channels_motifs_slices.push(track_await("thoosa_main::tasks::motif_stats::MotifStatsLoadedChannelsInput::CopyToDevice::copy_to_device/1", channels.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?);
         }
         Ok(Self {
             id: self.id.clone(),
@@ -488,7 +488,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
                 quantiles,
             } = self;
 
-            let channels_motifs_slices = match track_await("consume/1", channels_motifs_slices.take_all_recovering(to_device_idx)).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await {
+            let channels_motifs_slices = match track_await("thoosa_main::tasks::motif_stats::MotifStatsTmpCachedChannelsInput::ConsumeData::consume/1", channels_motifs_slices.take_all_recovering(to_device_idx)).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await {
                 Ok(channels_motifs_slices) => channels_motifs_slices,
                 Err(err) => {
                     return ConsumeResult::Failed {
@@ -507,7 +507,7 @@ impl ConsumeData for MotifStatsTmpCachedChannelsInput {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStatsTmpCachedChannelsInput::burp"))]
     fn burp(o: Self::O) -> impl std::future::Future<Output = Self> + Send {
         async move {
-            let cache = track_await("burp/1", TmpCached::new("tmp_motif_stats_channels_burp")).instrument(tracing::debug_span!("burp/1", file = file!(), line = line!())).await;
+            let cache = track_await("thoosa_main::tasks::motif_stats::MotifStatsTmpCachedChannelsInput::ConsumeData::burp/1", TmpCached::new("tmp_motif_stats_channels_burp")).instrument(tracing::debug_span!("burp/1", file = file!(), line = line!())).await;
             for channels_motifs_slices in o.channels_motifs_slices {
                 cache.insert(channels_motifs_slices);
             }
@@ -947,7 +947,7 @@ where
         let stats = match source {
             MotifStatsSource::Motif(motif_loader_input) => {
                 debug!("MotifStats::run: motif_loader_input={motif_loader_input:?}");
-                let motif = track_await("run/1", Arc::clone(&self.motif_loader)
+                let motif = track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/1", Arc::clone(&self.motif_loader)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(motif_loader_input)),
                         ctx.branch(false),
@@ -964,7 +964,7 @@ where
                     ],
                     None,
                 );
-                track_await("run/2", oom_handler.run(
+                track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/2", oom_handler.run(
                     &self.clc_stats_run,
                     clc_input,
                     ctx.branch(false),
@@ -989,14 +989,14 @@ where
                 let mut motifs = Vec::with_capacity(motif_loader_inputs.len());
 
                 for (idx, motif_loader_input) in motif_loader_inputs.into_iter().enumerate() {
-                    let motif = track_await("run/3", Arc::clone(&self.motif_loader)
+                    let motif = track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/3", Arc::clone(&self.motif_loader)
                         .run_cached(
                             Arc::new(DevicesWrap::wrap(motif_loader_input)),
                             ctx.branch(false),
                         ))
                         .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
 
-                    let meta = track_await("run/4", motif.extra()).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
+                    let meta = track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/4", motif.extra()).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
                     debug!("MotifStats::run: merged motif idx={idx} channel={} window={} size={:?}", meta.channel, meta.window, motif.size());
 
                     match expected_channel {
@@ -1026,7 +1026,7 @@ where
                     ],
                     None,
                 );
-                track_await("run/5", oom_handler.run(
+                track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/5", oom_handler.run(
                     &self.clc_stats_run,
                     clc_input,
                     ctx.branch(false),
@@ -1051,16 +1051,16 @@ where
 
                 let find_motifs_run_config = FindMotifsRunConfig::from_properties_map_with_id(
                     find_motifs_run_config_id,
-                    &track_await("run/6", self.store.list_run_config_values(find_motifs_run_config_id)).instrument(tracing::debug_span!("run/6", file = file!(), line = line!())).await?,
+                    &track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/6", self.store.list_run_config_values(find_motifs_run_config_id)).instrument(tracing::debug_span!("run/6", file = file!(), line = line!())).await?,
                 )?;
                 let input_len_adjuster = find_motifs_run_config.input_len_adjuster();
                 let resources = match resources {
                     Some(resources) => resources,
-                    None => track_await("run/7", self.store.list_random_resources(None)).instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await?,
+                    None => track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/7", self.store.list_random_resources(None)).instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await?,
                 };
                 let (slices, resources_map) = random_non_overlapping_slices(&resources, max_slices, find_motifs_run_config.window, input_len_adjuster)?;
 
-                let (_window, channels_slices) = track_await("run/8", load_random_slices(
+                let (_window, channels_slices) = track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/8", load_random_slices(
                     find_motifs_run_config_id,
                     resources_map,
                     slices,
@@ -1084,7 +1084,7 @@ where
                     ],
                     None,
                 );
-                track_await("run/9", oom_handler.consume(
+                track_await("thoosa_main::tasks::motif_stats::MotifStats::AsyncStage::run/9", oom_handler.consume(
                     &self.clc_stats_consume,
                     clc_input,
                     ctx.branch(false),
