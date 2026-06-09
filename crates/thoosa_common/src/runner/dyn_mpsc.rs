@@ -1065,10 +1065,13 @@ impl DynamicTaskExecutor {
                                 async move {
                                     debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job job_id={job_id}");
 
-                                    job.run().instrument(tracing::debug_span!("try_spawn_ready_jobs/1", file = file!(), line = line!())).await
+                                    job.run()
+                                        .instrument(tracing::debug_span!("try_spawn_ready_jobs/1", file = file!(), line = line!()))
+                                        .await
                                 },
                             )
-                            .instrument(tracing::debug_span!("try_spawn_ready_jobs/2", file = file!(), line = line!())).await;
+                            .instrument(tracing::debug_span!("try_spawn_ready_jobs/2", file = file!(), line = line!()))
+                            .await;
 
                         match feedback {
                             JobFeedback::Oom => {

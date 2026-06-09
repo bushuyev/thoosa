@@ -115,16 +115,21 @@ impl GlobalCtx {
         async move {
             info!("GlobalCtx::reset_cuda_context: tho_device_idx={tho_device_idx}");
 
-            GlobalCtx::global().drop_device(tho_device_idx, "drop").instrument(tracing::debug_span!("reset_cuda_context/1", file = file!(), line = line!())).await?;
+            GlobalCtx::global()
+                .drop_device(tho_device_idx, "drop")
+                .instrument(tracing::debug_span!("reset_cuda_context/1", file = file!(), line = line!()))
+                .await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
-            GlobalCtx::global().copy_ctx_mut(tho_device_idx).instrument(tracing::debug_span!("reset_cuda_context/2", file = file!(), line = line!())).await.reset()?;
+            GlobalCtx::global()
+                .copy_ctx_mut(tho_device_idx)
+                .instrument(tracing::debug_span!("reset_cuda_context/2", file = file!(), line = line!()))
+                .await
+                .reset()?;
 
-            // let cu_ctx = ThoCudaContext::new((tho_device_idx - 1) as i32)?;
-            // cu_ctx.reset()?;//it only calls clearCublasWorkspaces and CUDACachingAllocator::emptyCache, see  tho_cu_reset crates/thoosa_shims/src-cpp/context.cpp:16
-            info!("GlobalCtx::reset_cuda_context: cu_ctx.reset done");
 
-            // *GLOBAL_CTX.get().expect("ups").copy_ctx[tho_device_idx - 1].write().await = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
+            info!("GlobalCtx::reset_cuda_context: copy_ctx.reset done");
+
 
             info!("GlobalCtx::reset_cuda_context: all done");
             Ok(())
@@ -615,14 +620,17 @@ mod tests {
     use std::collections::HashMap;
     use std::future;
     use std::sync::Arc;
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
     use futures_util::{StreamExt, TryStreamExt};
     use log::debug;
+    use parking_lot::{Condvar, Mutex};
     use rand::{rng, RngExt};
     use tch::Device::{Cpu, Cuda};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Kind::Float;
     use tch::Tensor;
+    use tokio::task::spawn_blocking;
+    use tracing::Instrument;
     use thoosa_shared::ThoError;
     use thoosa_shims::context::ThoCudaContext;
     use thoosa_with_data::with_data;
@@ -637,6 +645,83 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::tmp_cache::TmpCached;
     use crate::tho_tensor::ThoTensor;
+
+
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
+    fn test_0() -> Result<(), ThoError>{
+         fn test_xxx(gate:Arc<(Condvar, Mutex<bool>)>){
+            let (cvar, lock) = &*gate;
+            let mut released = lock.lock();
+
+            while !*released {
+                cvar.wait(&mut released);
+            }
+
+            debug!("test_0");
+        }
+
+        let gate = Arc::new((Condvar::new(), Mutex::new(false)));
+        let gate_0 = Arc::clone(&gate);
+        let gate_1 = Arc::clone(&gate);
+
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(2)
+            .enable_all()
+            .build()?;
+
+
+        // #[tracing::instrument(level = "debug")]
+        async fn zzzz() -> Result<(), ThoError>{
+            tokio::time::sleep(Duration::from_secs(600)).await;
+            Ok(())
+        }
+
+
+        rt.block_on(async {
+
+            tokio::task::spawn(async move {
+                debug!("spawn 0");
+                let x = zzzz()
+                    .instrument(tracing::debug_span!("zzzz", file = file!(), line = line!()))
+                    .await?;
+
+                Ok::<(), ThoError>(())
+            });
+
+            // spawn_blocking(move ||{
+            //     let i = test_xxx(gate_0)
+            //         .instrument(tracing::debug_span!("test_0/1", file = file!(), line = line!()));
+            //
+            //     debug!("spawn_blocking 0");
+            //     Ok::<_, ThoError>(i.into_inner())
+            // });
+            //
+            // spawn_blocking(move ||{
+            //     let i = test_xxx(gate_1)
+            //         .instrument(tracing::debug_span!("test_0/1", file = file!(), line = line!()));
+            //
+            //     debug!("spawn_blocking 1");
+            //     Ok::<_, ThoError>(i.into_inner())
+            // });
+            //
+            // spawn_blocking(move ||{
+            //
+            //     debug!("spawn_blocking 2");
+            //     Ok::<_, ThoError>(())
+            // })
+
+
+        });
+
+        let (cvar, lock) = &*gate;
+        *lock.lock() = true;
+
+
+        Ok(())
+    }
 
     // TODO
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
