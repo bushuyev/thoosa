@@ -324,7 +324,7 @@ where
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
         if run_context.tho_device_idx() == 0 {
-            return track_await("run/1", input
+            return track_await("thoosa_common::runner::oom_handler::OOMHandler::run/1", input
                 .with_data_ref(
                     0,
                     run_context,
@@ -341,11 +341,11 @@ where
             let fast_input = Arc::clone(&input);
             let fast_run_ctx = run_context.branch(false);
 
-            match track_await("run/6", oom_executor(tho_device_idx).submit(
+            match track_await("thoosa_common::runner::oom_handler::OOMHandler::run/6", oom_executor(tho_device_idx).submit(
                 fast_run_ctx.max_other_parallel().into(),
                 async move {
-                    let stream = track_await("run/3", track_await("run/2", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
-                    let out = track_await("run/4", fast_input
+                    let stream = track_await("thoosa_common::runner::oom_handler::OOMHandler::run/3", track_await("thoosa_common::runner::oom_handler::OOMHandler::run/2", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
+                    let out = track_await("thoosa_common::runner::oom_handler::OOMHandler::run/4", fast_input
                         .with_data_ref(
                             tho_device_idx,
                             fast_run_ctx,
@@ -356,7 +356,7 @@ where
                             },
                         ))
                         .instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await;
-                    track_await("run/5", tokio::time::timeout(
+                    track_await("thoosa_common::runner::oom_handler::OOMHandler::run/5", tokio::time::timeout(
                         Duration::from_secs(5),
                         tokio::task::spawn_blocking(move || {
                             tracing::info_span!(
@@ -386,7 +386,7 @@ where
             None
         };
 
-        track_await("run/13", run_with_runner(
+        track_await("thoosa_common::runner::oom_handler::OOMHandler::run/13", run_with_runner(
             &self.adjusters,
             Arc::clone(task),
             input,
@@ -395,12 +395,12 @@ where
             initial_error,
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
-                track_await("run/12", oom_executor(tho_device_idx).submit(
+                track_await("thoosa_common::runner::oom_handler::OOMHandler::run/12", oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
-                        let stream = track_await("run/8", track_await("run/7", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("run/8", file = file!(), line = line!())).await;
+                        let stream = track_await("thoosa_common::runner::oom_handler::OOMHandler::run/8", track_await("thoosa_common::runner::oom_handler::OOMHandler::run/7", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("run/8", file = file!(), line = line!())).await;
                         let out = if let Some(selector) = selector {
-                            track_await("run/9", input
+                            track_await("thoosa_common::runner::oom_handler::OOMHandler::run/9", input
                                 .with_selected_data_ref(
                                     tho_device_idx,
                                     run_ctx,
@@ -413,7 +413,7 @@ where
                                 ))
                                 .instrument(tracing::debug_span!("run/9", file = file!(), line = line!())).await
                         } else {
-                            track_await("run/10", input
+                            track_await("thoosa_common::runner::oom_handler::OOMHandler::run/10", input
                                 .with_data_ref(
                                     tho_device_idx,
                                     run_ctx,
@@ -425,7 +425,7 @@ where
                                 ))
                                 .instrument(tracing::debug_span!("run/10", file = file!(), line = line!())).await
                         };
-                        track_await("run/11", tokio::time::timeout(
+                        track_await("thoosa_common::runner::oom_handler::OOMHandler::run/11", tokio::time::timeout(
                             Duration::from_secs(5),
                             tokio::task::spawn_blocking(move || {
                                 tracing::info_span!(
@@ -464,7 +464,7 @@ where
     {
 
 
-        track_await("consume/7", run_with_runner_consume(
+        track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/7", run_with_runner_consume(
             &self.adjusters,
             Arc::clone(task),
             input,
@@ -473,18 +473,18 @@ where
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                track_await("consume/6", oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
+                track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/6", oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     let consume_result = if tho_device_idx == 0 {
-                        track_await("consume/1", input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await
+                        track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/1", input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await
                     } else {
-                        let stream = track_await("consume/3", track_await("consume/2", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("consume/2", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("consume/3", file = file!(), line = line!())).await;
-                        let consume_result = track_await("consume/4", input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
+                        let stream = track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/3", track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/2", GlobalCtx::global().copy_ctx(tho_device_idx)).instrument(tracing::debug_span!("consume/2", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("consume/3", file = file!(), line = line!())).await;
+                        let consume_result = track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/4", input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
                             match ThoStreamGuard::new(&stream) {
                                 Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
                                 Err(error) => ConsumeResult::Failed { input, error },
                             }
                         })).instrument(tracing::debug_span!("consume/4", file = file!(), line = line!())).await;
-                        track_await("consume/5", tokio::time::timeout(
+                        track_await("thoosa_common::runner::oom_handler::OOMHandler::consume/5", tokio::time::timeout(
                             Duration::from_secs(5),
                             tokio::task::spawn_blocking(move || {
                                 tracing::info_span!(
@@ -627,7 +627,7 @@ where
         let input = self.input.take().expect("ConsumeRunnerRetryAdapter::run: missing input");
         let runner = &self.runner;
 
-        let run_result = match track_await("run/1", futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({
+        let run_result = match track_await("thoosa_common::runner::oom_handler::ConsumeRunnerRetryAdapter::RunnerRetryAdapter<'z,R,S>::run/1", futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe({
             runner(task, input, selector, device_idx, run_ctx, job_id_to_rerun)
         })))
         .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await
@@ -639,7 +639,7 @@ where
         match run_result {
             ConsumeResult::Ok(output) => Ok(output),
             ConsumeResult::Failed { input, error } => {
-                self.input = Some(track_await("run/2", W::burp(input)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await);
+                self.input = Some(track_await("thoosa_common::runner::oom_handler::ConsumeRunnerRetryAdapter::RunnerRetryAdapter<'z,R,S>::run/2", W::burp(input)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await);
                 Err(error)
             }
         }
@@ -668,7 +668,7 @@ where
         Adjusters::Input(input_ad) => {
             let base_selector = input_select_adjusted.clone().unwrap_or_default();
 
-            match track_await("apply_adjuster/1", input_ad.adjust(base_selector, &mut contexts.input)).instrument(tracing::debug_span!("apply_adjuster/1", file = file!(), line = line!())).await {
+            match track_await("thoosa_common::runner::oom_handler::apply_adjuster/1", input_ad.adjust(base_selector, &mut contexts.input)).instrument(tracing::debug_span!("apply_adjuster/1", file = file!(), line = line!())).await {
                 Ok(v) => {
                     debug!("OOMHandler::run, error, input adjuster ok: {v:?}");
                     *input_select_adjusted = Some(v);
@@ -688,7 +688,7 @@ where
                 }
             }
         }
-        Adjusters::Task(task_ad) => match track_await("apply_adjuster/2", task_ad.adjust(task.take().expect("apply_adjuster: missing task"), &mut contexts.runnable)).instrument(tracing::debug_span!("apply_adjuster/2", file = file!(), line = line!())).await {
+        Adjusters::Task(task_ad) => match track_await("thoosa_common::runner::oom_handler::apply_adjuster/2", task_ad.adjust(task.take().expect("apply_adjuster: missing task"), &mut contexts.runnable)).instrument(tracing::debug_span!("apply_adjuster/2", file = file!(), line = line!())).await {
             Ok(v) => {
                 debug!("OOMHandler::run, error, task adjuster ok: {v:?}");
                 *task = Some(v);
@@ -708,7 +708,7 @@ where
             }
         },
         Adjusters::RunContext(context_ad) => {
-            match track_await("apply_adjuster/3", context_ad
+            match track_await("thoosa_common::runner::oom_handler::apply_adjuster/3", context_ad
                 .adjust(run_context.take().expect("apply_adjuster: missing run context"), &mut contexts.run_ctx))
                 .instrument(tracing::debug_span!("apply_adjuster/3", file = file!(), line = line!())).await
             {
@@ -767,7 +767,7 @@ where
 
     let initial_result = match initial_error {
         Some(err) => Err(err),
-        None => track_await("run_with_runner_impl/1", runner
+        None => track_await("thoosa_common::runner::oom_handler::run_with_runner_impl/1", runner
             .run(
                 Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
                 None,
@@ -801,7 +801,7 @@ where
 
                         debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
-                        let adjust_result = track_await("run_with_runner_impl/2", apply_adjuster(
+                        let adjust_result = track_await("thoosa_common::runner::oom_handler::run_with_runner_impl/2", apply_adjuster(
                             adjuster,
                             &mut task,
                             &mut run_context,
@@ -833,7 +833,7 @@ where
 
                         debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  1. input_select_adjusted={input_select_adjusted:?} acquired_permits={:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),run_context.as_ref().expect("run_with_runner_impl: missing run context").max_other_parallel(),);
 
-                        let run_result = track_await("run_with_runner_impl/3", runner
+                        let run_result = track_await("thoosa_common::runner::oom_handler::run_with_runner_impl/3", runner
                             .run(
                                 Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
                                 input_select_adjusted.clone(),
@@ -848,7 +848,7 @@ where
 
                         match run_result {
                             Ok(v) => {
-                                track_await("run_with_runner_impl/4", contexts.input.add_partial_output(v)).instrument(tracing::debug_span!("run_with_runner_impl/4", file = file!(), line = line!())).await;
+                                track_await("thoosa_common::runner::oom_handler::run_with_runner_impl/4", contexts.input.add_partial_output(v)).instrument(tracing::debug_span!("run_with_runner_impl/4", file = file!(), line = line!())).await;
 
                                 let all_done = contexts.input.all_done();
 
@@ -858,7 +858,7 @@ where
                                     collect_eta_record_oom_success();
 
                                     debug!("done in {i} steps");
-                                    return track_await("run_with_runner_impl/5", contexts.input.build_final_output()).instrument(tracing::debug_span!("run_with_runner_impl/5", file = file!(), line = line!())).await;
+                                    return track_await("thoosa_common::runner::oom_handler::run_with_runner_impl/5", contexts.input.build_final_output()).instrument(tracing::debug_span!("run_with_runner_impl/5", file = file!(), line = line!())).await;
                                 }
                             }
                             Err(te) => {
@@ -891,7 +891,7 @@ where
 
             warn!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} out_key={out_key:?} os_thread_id={} all failed", task.as_ref().expect("run_with_runner_impl: missing task"), os_thread_id());
             #[cfg(tho_debug)]
-            track_await("run_with_runner_impl/6", GlobalCtx::global().debug_caches(device_idx, "all_failed")).instrument(tracing::debug_span!("run_with_runner_impl/6", file = file!(), line = line!())).await;
+            track_await("thoosa_common::runner::oom_handler::run_with_runner_impl/6", GlobalCtx::global().debug_caches(device_idx, "all_failed")).instrument(tracing::debug_span!("run_with_runner_impl/6", file = file!(), line = line!())).await;
 
             Err(Cause::SomethingElse(format!("all_failed: task.out_key={out_key:?}")).into())
         }
@@ -927,7 +927,7 @@ where
 {
     let input_id_dbg = format!("{:?}", input.id());
 
-    track_await("run_with_runner/1", run_with_runner_impl(
+    track_await("thoosa_common::runner::oom_handler::run_with_runner/1", run_with_runner_impl(
         adjusters,
         task,
         input_id_dbg,
@@ -965,7 +965,7 @@ where
     let input_id_dbg = format!("{:?}", input.id());
 
 
-    track_await("run_with_runner_consume/1", run_with_runner_impl(
+    track_await("thoosa_common::runner::oom_handler::run_with_runner_consume/1", run_with_runner_impl(
         adjusters,
         task,
         input_id_dbg,

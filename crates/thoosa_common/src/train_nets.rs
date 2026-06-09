@@ -199,7 +199,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
 
-        let run_config_id = track_await("save/1", store.save_run_config(
+        let run_config_id = track_await("thoosa_common::train_nets::TrainLabelNetRunConfigResult::SavableResult::save/1", store.save_run_config(
             Some(p.train_motif_nets_run_config_ids), //it's used as input for TrainLabelNetsOutput
             &TrainLabelNetRunConfig::type_name(),
             "Label",
@@ -216,7 +216,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
         debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
-        track_await("save/2", store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
+        track_await("thoosa_common::train_nets::TrainLabelNetRunConfigResult::SavableResult::save/2", store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
 
         Ok(run_config_id)
     }
@@ -261,7 +261,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
-        let run_config_id = track_await("save/1", store.save_run_config(
+        let run_config_id = track_await("thoosa_common::train_nets::TrainFinalNetsRunConfigResult::SavableResult::save/1", store.save_run_config(
             Some(&self.train_label_nodes_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
@@ -271,7 +271,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         let path = ws.read()
             .save_final_net(run_config_id, &self.var_store, &self.final_node_params)?;
 
-        track_await("save/2", store.save_trained_net(run_config_id, path, self.loss, None)).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
+        track_await("thoosa_common::train_nets::TrainFinalNetsRunConfigResult::SavableResult::save/2", store.save_trained_net(run_config_id, path, self.loss, None)).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
 
         Ok(run_config_id)
     }
@@ -1905,7 +1905,7 @@ impl SavableResult for TrainMotifsNetsResult {
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
             result.push(
-            track_await("save/1", r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?
+            track_await("thoosa_common::train_nets::TrainMotifsNetsResult::SavableResult::save/1", r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?
             );
         }
 
@@ -1941,7 +1941,7 @@ impl SavableResult for TrainMotifNetResult {
 
         debug!("TrainMotifNetResult::save: self={:?}", self);
 
-        let train_motif_net_run_config_id = track_await("save/1", store.save_run_config(
+        let train_motif_net_run_config_id = track_await("thoosa_common::train_nets::TrainMotifNetResult::SavableResult::save/1", store.save_run_config(
             Some(p),
             &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
@@ -1956,7 +1956,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         ))?;
 
-        track_await("save/2", store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
+        track_await("thoosa_common::train_nets::TrainMotifNetResult::SavableResult::save/2", store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
 
         Ok(train_motif_net_run_config_id)
 
@@ -2130,7 +2130,7 @@ where
         );
         opt.enqueue_configs(reusable_configs);
         info!("opt_train: wait on optimize ");
-        let best_config = track_await("opt_train/1", opt.optimize()).instrument(tracing::debug_span!("opt_train/1", file = file!(), line = line!())).await;
+        let best_config = track_await("thoosa_common::train_nets::opt_train/1", opt.optimize()).instrument(tracing::debug_span!("opt_train/1", file = file!(), line = line!())).await;
 
         debug!("opt_train: best_config={:?}", best_config);
 

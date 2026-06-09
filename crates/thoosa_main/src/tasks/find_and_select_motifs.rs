@@ -135,7 +135,7 @@ impl SavableResult for FindAndSelectMotifsResult {
             .map(|v| v.select_motifs_run_config.id.expect("no select_motifs_run_config"))
             .collect::<Vec<_>>();
 
-        let id = track_await("save/1", store.save_run_config(
+        let id = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsResult::SavableResult::save/1", store.save_run_config(
             Some(&best_run_config_ids),
             FindAndSelectMotifsRunConfig::type_name(),
             "OptSelectMotifsRunConfig",
@@ -201,7 +201,7 @@ impl FindAndSelectMotifsStage {
     where
         R: RunConfig + ToHashmap,
     {
-        let run_config_id = track_await("save_run_config_with_input/1", store
+        let run_config_id = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::save_run_config_with_input/1", store
             .save_run_config(input_run_config_ids, R::type_name(), descr, run_config.to_properties_iter(None).collect()))
             .instrument(tracing::debug_span!("save_run_config_with_input/1", file = file!(), line = line!())).await?;
         run_config.set_id(run_config_id);
@@ -220,9 +220,9 @@ impl FindAndSelectMotifsStage {
         device_idx: usize,
         mut ctx: C
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
-        let find_input = Arc::new(DevicesWrap::wrap(track_await("run_find_and_select/1", ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).instrument(tracing::debug_span!("run_find_and_select/1", file = file!(), line = line!())).await?));
+        let find_input = Arc::new(DevicesWrap::wrap(track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/1", ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).instrument(tracing::debug_span!("run_find_and_select/1", file = file!(), line = line!())).await?));
         //code in FindMotifsStage and SelectMotifsStage expects pre saved run configurations
-        let find_run_config_id = track_await("run_find_and_select/2", Self::save_run_config_with_input(
+        let find_run_config_id = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/2", Self::save_run_config_with_input(
             store,
             None,
             &mut run_config.find_motifs_run_config,
@@ -230,7 +230,7 @@ impl FindAndSelectMotifsStage {
         )).instrument(tracing::debug_span!("run_find_and_select/2", file = file!(), line = line!())).await?;
 
         #[allow(unused_variables)]
-        let select_run_config_id = track_await("run_find_and_select/3", Self::save_run_config_with_input(
+        let select_run_config_id = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/3", Self::save_run_config_with_input(
             store,
             Some(&[find_run_config_id]),
             &mut run_config.select_motifs_run_config,
@@ -238,7 +238,7 @@ impl FindAndSelectMotifsStage {
         )).instrument(tracing::debug_span!("run_find_and_select/3", file = file!(), line = line!())).await?;
 
         let find_stage: Arc<FindMotifsStage<Simple, RawTensorLoader<C>, C>> = Arc::new(
-            track_await("run_find_and_select/4", FindMotifsStage::new(
+            track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/4", FindMotifsStage::new(
                 ws,
                 store,
                 Arc::clone(&loader),
@@ -248,16 +248,16 @@ impl FindAndSelectMotifsStage {
                 ctx.branch(true),
             )).instrument(tracing::debug_span!("run_find_and_select/4", file = file!(), line = line!())).await?,
         );
-        track_await("run_find_and_select/5", find_stage
+        track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/5", find_stage
             .run(find_input, ctx.branch(true)))
             .instrument(tracing::debug_span!("run_find_and_select/5", file = file!(), line = line!())).await?;
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        track_await("run_find_and_select/6", run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_config_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_config_ids: None }), Resolution::Normal, &Cpu, ctx.branch(false))).instrument(tracing::debug_span!("run_find_and_select/6", file = file!(), line = line!())).await?;
+        track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/6", run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::RunId{ find_motifs_run_config_ids: vec![run_config.find_motifs_run_config.id.unwrap()], select_motifs_run_config_ids: None }), Resolution::Normal, &Cpu, ctx.branch(false))).instrument(tracing::debug_span!("run_find_and_select/6", file = file!(), line = line!())).await?;
 
         let select_stage = Arc::new(
-            track_await("run_find_and_select/7", SelectMotifsStage::<
+            track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/7", SelectMotifsStage::<
                 RawTensorLoader<C>,
                 MotifLoader<RawTensorLoader<C>, C>,
                 C,
@@ -274,24 +274,24 @@ impl FindAndSelectMotifsStage {
             .instrument(tracing::debug_span!("run_find_and_select/7", file = file!(), line = line!())).await?,
         );
 
-        let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = track_await("run_find_and_select/9", Arc::clone(&select_stage)
+        let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/9", Arc::clone(&select_stage)
             .run(
-                Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(track_await("run_find_and_select/8", ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).instrument(tracing::debug_span!("run_find_and_select/8", file = file!(), line = line!())).await?))),
+                Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/8", ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).instrument(tracing::debug_span!("run_find_and_select/8", file = file!(), line = line!())).await?))),
                 ctx.branch(true)
             ))
             .instrument(tracing::debug_span!("run_find_and_select/9", file = file!(), line = line!())).await?;
 
-        let mut select_savable:SelectMotifsSavableResult = track_await("run_find_and_select/10", Arc::into_inner(select_stage_output)
+        let mut select_savable:SelectMotifsSavableResult = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/10", Arc::into_inner(select_stage_output)
             .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
             .take_data(device_idx))
             .instrument(tracing::debug_span!("run_find_and_select/10", file = file!(), line = line!())).await?;
         let score_sum = select_savable.score_sum();
-        track_await("run_find_and_select/11", select_savable.save(store, ws, ())).instrument(tracing::debug_span!("run_find_and_select/11", file = file!(), line = line!())).await?;
+        track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/11", select_savable.save(store, ws, ())).instrument(tracing::debug_span!("run_find_and_select/11", file = file!(), line = line!())).await?;
 
 
         #[allow(unexpected_cfgs)]
         #[cfg(tho_debug_plots)]
-        track_await("run_find_and_select/12", run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![select_run_config_id] }), Resolution::Normal, &Cpu, ctx.branch(false))).instrument(tracing::debug_span!("run_find_and_select/12", file = file!(), line = line!())).await?;
+        track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::run_find_and_select/12", run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![select_run_config_id] }), Resolution::Normal, &Cpu, ctx.branch(false))).instrument(tracing::debug_span!("run_find_and_select/12", file = file!(), line = line!())).await?;
 
         Ok(FindAndSelectEvalMetrics { score_sum })
     }
@@ -364,7 +364,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         input: Arc<DevicesWrap<Self::In<'static>>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let input = track_await("run/1", Arc::into_inner(input)
+        let input = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::AsyncStage::run/1", Arc::into_inner(input)
             .expect("FindAndSelectMotifsStage::run: input still shared")
             .take_data(ctx.tho_device_idx()))
             .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
@@ -405,7 +405,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                 async move {
                     let mut opt = AsyncTPEOptimizer::new(
                         async |opt_vals| {
-                            track_await("run/2", Self::eval_opt_config(
+                            track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::AsyncStage::run/2", Self::eval_opt_config(
                                 const_vals.as_slice(),
                                 grid_vals.as_slice(),
                                 opt_vals,
@@ -429,7 +429,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                         &format!("find_and_select_{}", grid_idx),
                     );
 
-                    track_await("run/3", opt.optimize()).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
+                    track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::AsyncStage::run/3", opt.optimize()).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
 
                     let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(min_loss));
 
@@ -444,7 +444,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
                     }
                 }
             });
-        let mut indexed_best_configs = track_await("run/4", collect_futures_with_progress(
+        let mut indexed_best_configs = track_await("thoosa_main::tasks::find_and_select_motifs::FindAndSelectMotifsStage::AsyncStage::run/4", collect_futures_with_progress(
             futures,
             grid_runs_len,
             crate::buffer_limits::FIND_AND_SELECT_MOTIFS_RUN_BUFFER_ORDERED_LIMIT,

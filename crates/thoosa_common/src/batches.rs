@@ -71,8 +71,8 @@ where
     tokio::spawn(async move {
         futures_util::pin_mut!(source);
 
-        while let Some(item) = track_await("preload_one/1", source.next()).instrument(tracing::debug_span!("preload_one/1", file = file!(), line = line!())).await {
-            if track_await("preload_one/2", tx.send(item)).instrument(tracing::debug_span!("preload_one/2", file = file!(), line = line!())).await.is_err() {
+        while let Some(item) = track_await("thoosa_common::batches::preload_one/1", source.next()).instrument(tracing::debug_span!("preload_one/1", file = file!(), line = line!())).await {
+            if track_await("thoosa_common::batches::preload_one/2", tx.send(item)).instrument(tracing::debug_span!("preload_one/2", file = file!(), line = line!())).await.is_err() {
                 break;
             }
         }
@@ -103,11 +103,11 @@ where
 
     tokio::spawn(async move {
         for fut in futures {
-            let permit = match track_await("prefetch_next_batch_stream/1", tx.reserve()).instrument(tracing::debug_span!("prefetch_next_batch_stream/1", file = file!(), line = line!())).await {
+            let permit = match track_await("thoosa_common::batches::prefetch_next_batch_stream/1", tx.reserve()).instrument(tracing::debug_span!("prefetch_next_batch_stream/1", file = file!(), line = line!())).await {
                 Ok(permit) => permit,
                 Err(_) => break,
             };
-            permit.send(track_await("prefetch_next_batch_stream/2", fut).instrument(tracing::debug_span!("prefetch_next_batch_stream/2", file = file!(), line = line!())).await);
+            permit.send(track_await("thoosa_common::batches::prefetch_next_batch_stream/2", fut).instrument(tracing::debug_span!("prefetch_next_batch_stream/2", file = file!(), line = line!())).await);
         }
     }.instrument(tracing::info_span!(
         "batches::prefetch_next_batch_stream",

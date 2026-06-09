@@ -276,7 +276,7 @@ where
         let target_precision = self.args.target_precision();
         let futures = entries.into_iter().map(move |entry| {
             async move {
-                track_await("run/1", tokio::task::spawn_blocking(move || {
+                track_await("thoosa_main::tasks::convert_precision::ConvertPrecisionStage::AsyncStage::run/1", tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "convert_precision::convert_entry",
                         kind = "spawn_blocking",
@@ -290,7 +290,7 @@ where
             }
         });
 
-        let converted = track_await("run/2", collect_futures_with_progress(
+        let converted = track_await("thoosa_main::tasks::convert_precision::ConvertPrecisionStage::AsyncStage::run/2", collect_futures_with_progress(
             futures,
             entries_len,
             CONVERT_PRECISION_BUFFER_LIMIT,

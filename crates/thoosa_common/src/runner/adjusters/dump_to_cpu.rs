@@ -93,10 +93,10 @@ where
         debug!("DumpToCpu::adjust: acquired 100 max_parallel, dumping");
 
         #[cfg(tho_debug)]
-        track_await("adjust/1", GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu")).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
+        track_await("thoosa_common::runner::adjusters::dump_to_cpu::DumpToCpu::Adjuster<C>::adjust/1", GlobalCtx::global().debug_caches(device_idx, "before dump_all_to_cpu")).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
 
 
-        track_await("adjust/2", GlobalCtx::global()
+        track_await("thoosa_common::runner::adjusters::dump_to_cpu::DumpToCpu::Adjuster<C>::adjust/2", GlobalCtx::global()
             .dump_all_to_cpu(ids_to_exclude, device_idx, &self.descr))
             .instrument(tracing::debug_span!("adjust/2", file = file!(), line = line!())).await.map_err(|e|{
             warn!("DumpToCpu::adjust: dump_all_to_cpu failed: {e:?}");
@@ -104,7 +104,7 @@ where
         })?;
 
         #[cfg(tho_debug)]
-        track_await("adjust/3", GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu")).instrument(tracing::debug_span!("adjust/3", file = file!(), line = line!())).await;
+        track_await("thoosa_common::runner::adjusters::dump_to_cpu::DumpToCpu::Adjuster<C>::adjust/3", GlobalCtx::global().debug_caches(device_idx, "after dump_all_to_cpu")).instrument(tracing::debug_span!("adjust/3", file = file!(), line = line!())).await;
 
 
         Ok(adjustable.branch(false))

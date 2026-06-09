@@ -1522,7 +1522,7 @@ impl SavableResult for SelectMotifsSavableResult {
     ) -> Result<u32, ThoError> {
 
         for run_result in &self.run_results {
-            track_await("save/1", store.save_selected_motifs(
+            track_await("thoosa_main::tasks::find_motifs_run_config::SelectMotifsSavableResult::SavableResult::save/1", store.save_selected_motifs(
                 run_result.run_config.id.expect("should be pre saved in run_grid"),
                 run_result.selected_motif_ids_scores.clone()
             )).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?;
