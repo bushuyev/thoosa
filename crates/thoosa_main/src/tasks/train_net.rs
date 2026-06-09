@@ -48,6 +48,7 @@ use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectE
 use thoosa_shared::comp_id::SynKey;
 use thoosa_properties_map::ToHashmap;
 use thoosa_shared::tmp_file::TmpFile;
+use thoosa_shared::tracked_await::track_await;
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
@@ -213,7 +214,7 @@ where
 
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
-            let (node, params) =  (self.net)(ctx.branch(false), &run_config, Arc::clone(&vs))
+            let (node, params) =  track_await("run_inner/self.net", (self.net)(ctx.branch(false), &run_config, Arc::clone(&vs)))
                 .instrument(tracing::debug_span!("run_inner/self.net", file = file!(),line = line!()))
                 .await?;
 
