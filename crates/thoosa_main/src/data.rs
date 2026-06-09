@@ -16,6 +16,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::resource::{Resource, ResourceId};
 use thoosa_store::Store;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Default)]
 pub enum Set {
@@ -132,8 +133,8 @@ pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<Box<dyn Store>>,
 ) -> Vec<(Resource, Vec<f32>)> {
-    store
-        .list_resource_random_in_group(group)
+    track_await("load_to_logits_tensors/1", store
+        .list_resource_random_in_group(group))
         .instrument(tracing::debug_span!("load_to_logits_tensors/1", file = file!(), line = line!())).await
         .expect("list_resource_random_in_group")
         .into_iter()

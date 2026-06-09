@@ -13,6 +13,7 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 type SocketResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -138,10 +139,10 @@ impl CollectEtaProgressSocketServer {
     pub(crate) async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.take() {
-            let _ = task.instrument(tracing::debug_span!("shutdown/1", file = file!(), line = line!())).await;
+            let _ = track_await("shutdown/1", task).instrument(tracing::debug_span!("shutdown/1", file = file!(), line = line!())).await;
         }
         if let Some(stats_task) = self.stats_task.take() {
-            let _ = stats_task.instrument(tracing::debug_span!("shutdown/2", file = file!(), line = line!())).await;
+            let _ = track_await("shutdown/2", stats_task).instrument(tracing::debug_span!("shutdown/2", file = file!(), line = line!())).await;
         }
     }
 }
@@ -203,15 +204,15 @@ async fn serve_one_client(
 ) -> SocketResult<()> {
     let mut writer = &stream;
     let first = rx.borrow_and_update().clone();
-    send_snapshot(&mut writer, &first).instrument(tracing::debug_span!("serve_one_client/1", file = file!(), line = line!())).await?;
+    track_await("serve_one_client/1", send_snapshot(&mut writer, &first)).instrument(tracing::debug_span!("serve_one_client/1", file = file!(), line = line!())).await?;
 
     loop {
-        if rx.changed().instrument(tracing::debug_span!("serve_one_client/2", file = file!(), line = line!())).await.is_err() {
+        if track_await("serve_one_client/2", rx.changed()).instrument(tracing::debug_span!("serve_one_client/2", file = file!(), line = line!())).await.is_err() {
             break;
         }
 
         let snapshot = rx.borrow_and_update().clone();
-        send_snapshot(&mut writer, &snapshot).instrument(tracing::debug_span!("serve_one_client/3", file = file!(), line = line!())).await?;
+        track_await("serve_one_client/3", send_snapshot(&mut writer, &snapshot)).instrument(tracing::debug_span!("serve_one_client/3", file = file!(), line = line!())).await?;
     }
 
     Ok(())
@@ -223,8 +224,8 @@ where
 {
     let mut bytes = serde_json::to_vec(snapshot)?;
     bytes.push(b'\n');
-    writer.write_all(&bytes).instrument(tracing::debug_span!("send_snapshot/1", file = file!(), line = line!())).await?;
-    writer.flush().instrument(tracing::debug_span!("send_snapshot/2", file = file!(), line = line!())).await?;
+    track_await("send_snapshot/1", writer.write_all(&bytes)).instrument(tracing::debug_span!("send_snapshot/1", file = file!(), line = line!())).await?;
+    track_await("send_snapshot/2", writer.flush()).instrument(tracing::debug_span!("send_snapshot/2", file = file!(), line = line!())).await?;
     Ok(())
 }
 

@@ -35,6 +35,7 @@ use crate::tasks::cross_dims::ChannelsData2Selector;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -417,7 +418,7 @@ impl OutputBuilder for FreqFilterOutputBuilder {
         let partial = if partial.device() == 0 {
             partial
         } else {
-            match partial.copy_to_device(0).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
+            match track_await("add_partial_output/1", partial.copy_to_device(0)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
                 Ok(partial) => partial,
                 Err(error) => {
                     self.error = Some(error);
@@ -579,7 +580,7 @@ where
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self)));
 
-        let filtered = OOMHandler::new(
+        let filtered = track_await("run/1", OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("freq_filter"))),
@@ -596,7 +597,7 @@ where
                 NoopRunnableContext {},
                 MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids)),
             ),
-        )
+        ))
         .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         debug!("FreqFilter::run: filtered={filtered:?} done");

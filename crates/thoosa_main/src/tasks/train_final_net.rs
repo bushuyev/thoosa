@@ -41,6 +41,7 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_w
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug)]
 pub struct TrainFinalNet<L, LL, C>
@@ -77,7 +78,7 @@ where
     R: RunCtx + Adjustable + 'static,
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(ApplyLabelNets::new(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step, 0, true).instrument(tracing::debug_span!("new_train_final_net/1", file = file!(), line = line!())).await?);
+    let apply_label_nets = Arc::new(track_await("new_train_final_net/1", ApplyLabelNets::new(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step, 0, true)).instrument(tracing::debug_span!("new_train_final_net/1", file = file!(), line = line!())).await?);
 
     let label_loader = Arc::new(ABStage::new(
         SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_config_ids:?}"), "train_label_nets_run_config_ids")]),
@@ -85,7 +86,7 @@ where
         Arc::clone(&apply_label_nets),
     ));
 
-    TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config).instrument(tracing::debug_span!("new_train_final_net/2", file = file!(), line = line!())).await
+    track_await("new_train_final_net/2", TrainFinalNet::new(train_label_nets_run_config_ids, label_loader, apply_label_nets.num_nets() as u32, run_configs, ws, store, opt_config)).instrument(tracing::debug_span!("new_train_final_net/2", file = file!(), line = line!())).await
 }
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
@@ -108,7 +109,7 @@ where
             let store_guard = store;
             let mut run_config_ids = HashSet::new();
             for run_config_id in &train_label_nets_run_config_ids {
-                run_config_ids.extend(store_guard.list_output_run_config_ids(*run_config_id).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?);
+                run_config_ids.extend(track_await("new/1", store_guard.list_output_run_config_ids(*run_config_id)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?);
             }
             let mut run_config_ids = run_config_ids.into_iter().collect::<Vec<_>>();
             run_config_ids.sort();
@@ -161,7 +162,7 @@ impl SavableResult for TrainFinalNetOutput {
     type R = Vec<u32>;
 
     async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Vec<u32>, ThoError> {
-        let _ = self.result.save(store, ws, ()).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await;
+        let _ = track_await("save/1", self.result.save(store, ws, ())).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await;
 
         Ok(vec![0])//TODO
     }
@@ -200,7 +201,7 @@ where
                 Ok::<_, ThoError>(input.resources_config().clone())
             })?;
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
-                resources_config.to_resources(&store).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+                track_await("run/1", resources_config.to_resources(&store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
             let labels_len = train_resources.first().ok_or_else(|| ThoError::new("TrainFinalNet::run: no train resources"))?.1.len();
             if labels_len == 0 {
@@ -244,11 +245,11 @@ where
                 "final".to_string(),
             ));
 
-            let result = Arc::into_inner(train_net.run(
+            let result = track_await("run/3", Arc::into_inner(track_await("run/2", train_net.run(
                 Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
-                ctx.branch(false)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?
+                ctx.branch(false))).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?
             ).unwrap()
-                .take_data(0)
+                .take_data(0))
                 .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
 
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_config_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
@@ -320,18 +321,18 @@ where
                     let ctx_for_loader = ctx_for_batch.branch(false);
 
                     async move {
-                        let out = Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource)), ctx_for_loader).instrument(tracing::debug_span!("build_batch_stream/1", file = file!(), line = line!())).await?;
+                        let out = track_await("build_batch_stream/1", Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource)), ctx_for_loader)).instrument(tracing::debug_span!("build_batch_stream/1", file = file!(), line = line!())).await?;
                         Ok::<_, ThoError>((out, labels))
                     }
                 });
 
-                let (outputs, labels) = collect_futures_with_progress(
+                let (outputs, labels) = track_await("build_batch_stream/2", collect_futures_with_progress(
                     futures,
                     batch_len,
                     crate::buffer_limits::LOGITS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
                     StreamBuffering::Ordered,
                     "LogitsResourcesBatch::build_batch_stream",
-                )
+                ))
                 .instrument(tracing::debug_span!("build_batch_stream/2", file = file!(), line = line!())).await
                 .into_iter()
                 .collect::<Vec<_>>()
