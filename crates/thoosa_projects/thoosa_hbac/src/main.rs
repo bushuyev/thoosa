@@ -22,6 +22,7 @@ use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0};
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 fn main() -> Result<(), ThoError> {
     kick_register_cuda_hooks();
@@ -57,7 +58,7 @@ fn main() -> Result<(), ThoError> {
 
 
     let run_result = rt.block_on(async move {
-        run_cli(
+        track_await("main/2", run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
                 thoosa_main::data::parquet_to_tensor_by_path(
@@ -89,7 +90,7 @@ fn main() -> Result<(), ThoError> {
 
                 let all_configs = run_all_config_0(run_all_args);
 
-                run_all(ws, store, loader, root_ctx, run_all_args, all_configs).instrument(tracing::debug_span!("main/1", file = file!(), line = line!())).await
+                track_await("main/1", run_all(ws, store, loader, root_ctx, run_all_args, all_configs)).instrument(tracing::debug_span!("main/1", file = file!(), line = line!())).await
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
             20,
@@ -99,7 +100,7 @@ fn main() -> Result<(), ThoError> {
                 debug!("bird_clef: infer");
                 todo!()
             }),
-        )
+        ))
         .instrument(tracing::debug_span!("main/2", file = file!(), line = line!())).await
     });
 

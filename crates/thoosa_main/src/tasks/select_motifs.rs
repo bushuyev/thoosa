@@ -71,6 +71,7 @@ pub use crate::tasks::resources_motifs_clc_dist::{fold_dists, fold_mask};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use crate::tasks::stage_ids::SELECT_MOTIFS;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 //The overall logic in Find and Select Motifs Stages is as following:
 // Find Motifs - either
 //  * accumulate distance statistics into threshold distance while iterating through slices
@@ -289,7 +290,7 @@ where
         //gpt Snapshot motif ids for each find_motifs_run_config_id; used later for criteria filtering.
         let mut find_motif_run_config_ids_motif_ids = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            find_motif_run_config_ids_motif_ids.insert(*find_motifs_run_config_id, store.list_motifs(*find_motifs_run_config_id).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?);
+            find_motif_run_config_ids_motif_ids.insert(*find_motifs_run_config_id, track_await("new/1", store.list_motifs(*find_motifs_run_config_id)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?);
         }
 
 
@@ -345,14 +346,14 @@ where
             let mut ctx = ctx.branch(false);
 
             async move {
-                let motif_stats_output = Arc::clone(&motif_stats)
+                let motif_stats_output = track_await("filter_motifs_by_criteria/1", Arc::clone(&motif_stats)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                             criteria_metrics.clone(),
                         ))),
                         ctx.branch(false),
-                    )
+                    ))
                     .instrument(tracing::debug_span!("filter_motifs_by_criteria/1", file = file!(), line = line!())).await?;
 
                 with_data!(ctx, motif_stats_output; |_ctx, motif_stats_output: &MotifStatsOutput| {
@@ -390,13 +391,13 @@ where
             }
         });
 
-        let run_results = collect_futures_with_progress(
+        let run_results = track_await("filter_motifs_by_criteria/2", collect_futures_with_progress(
             futures,
             motifs_len,
             crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
             StreamBuffering::Unordered,
             "filter_motifs_by_criteria",
-        ).instrument(tracing::debug_span!("filter_motifs_by_criteria/2", file = file!(), line = line!())).await
+        )).instrument(tracing::debug_span!("filter_motifs_by_criteria/2", file = file!(), line = line!())).await
         .into_iter().filter_map(|v| v).collect::<Vec<SelectedMotifEvaluation>>();
 
 
@@ -434,7 +435,7 @@ where
         let (resources_config, output_mode) = with_data!(ctx.branch(false), input; |_ctx, input: &SelectMotifsInput| {
             Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
         })?;
-        let resources = resources_config.to_resources(&self.store).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let resources = track_await("run/1", resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         debug!("SelectMotifsStage::run: resources={resources:?}");
         if resources.is_empty() {
@@ -456,9 +457,9 @@ where
             let self_for_futs = Arc::clone(&self);
 
             async move {
-                let selected_motifs = self_for_futs
+                let selected_motifs = track_await("run/2", self_for_futs
                     // TODO(perf): criteria filtering reloads metrics for each select config; keep a per-run motif metric cache when only thresholds differ.
-                    .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch(false))
+                    .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch(false)))
                     .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
 
                 let constraint_metrics = match output_mode {
@@ -473,13 +474,13 @@ where
             }
         });
 
-        let run_results = collect_futures_with_progress(
+        let run_results = track_await("run/3", collect_futures_with_progress(
             futures,
             run_configs_len,
             crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
             StreamBuffering::Unordered,
             "SelectMotifsStage::run",
-        ).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
+        )).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await;
 
 
         debug!("SelectMotifsStage::run: run_results={run_results:?}");

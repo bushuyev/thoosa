@@ -37,6 +37,7 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, Th
 use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 const SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT: usize = 16;
 
@@ -189,11 +190,11 @@ where
             Arc::clone(ws),
             Arc::clone(&motif_loader),
         ));
-        let (resources, output_mode) = Self::load_resources_for_selection(
+        let (resources, output_mode) = track_await("new/1", Self::load_resources_for_selection(
             &select_motifs_input,
             store,
             init_ctx.branch(false),
-        )
+        ))
         .instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
         if resources.is_empty() {
             return Err(ThoError::new(format!("SelectBucketsStage::new: no resources found in {select_motifs_input:?}")));
@@ -202,23 +203,23 @@ where
         let mut bucket_mean_energies = HashMap::new();
         let mut reference_mean_energies = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            let motif_ids = store.list_motifs(*find_motifs_run_config_id).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await?;
-            let energies = Self::preload_bucket_mean_energies(
+            let motif_ids = track_await("new/2", store.list_motifs(*find_motifs_run_config_id)).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await?;
+            let energies = track_await("new/3", Self::preload_bucket_mean_energies(
                 &motif_stats,
                 *find_motifs_run_config_id,
                 motif_ids,
                 init_ctx.branch(true),
-            )
+            ))
             .instrument(tracing::debug_span!("new/3", file = file!(), line = line!())).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = load_run_config(store, *find_motifs_run_config_id).instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await?;
-            let reference_energy = Self::reference_energy_for_find_run(
+            let find_motifs_run_config: FindMotifsRunConfig = track_await("new/4", load_run_config(store, *find_motifs_run_config_id)).instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await?;
+            let reference_energy = track_await("new/5", Self::reference_energy_for_find_run(
                 &motif_stats,
                 resources.as_ref(),
                 *find_motifs_run_config_id,
                 &find_motifs_run_config,
                 energies.len(),
                 init_ctx.branch(false),
-            )
+            ))
             .instrument(tracing::debug_span!("new/5", file = file!(), line = line!())).await?;
             debug!("SelectBucketsStage::new: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} energies_len={}", energies.len());
             bucket_mean_energies.insert(*find_motifs_run_config_id, energies);
@@ -252,23 +253,23 @@ where
             let mut ctx = ctx.branch(true);
 
             async move {
-                let stats = Arc::clone(&motif_stats)
+                let stats = track_await("preload_bucket_mean_energies/1", Arc::clone(&motif_stats)
                     .run(
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
                             vec![energy_metric.clone()],
                         ))),
                         ctx.branch(false),
-                    )
+                    ))
                     .instrument(tracing::debug_span!("preload_bucket_mean_energies/1", file = file!(), line = line!())).await?;
 
-                let energy = stats
+                let energy = track_await("preload_bucket_mean_energies/2", stats
                     .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
                         Ok::<_, ThoError>(BucketEnergy {
                             mean_energy: stats.channel_value(&energy_metric, 0)? as f64,
                             num_slices: stats.num_slices,
                         })
-                    })
+                    }))
                     .instrument(tracing::debug_span!("preload_bucket_mean_energies/2", file = file!(), line = line!())).await?;
 
                 debug!("SelectBucketsStage::preload_bucket_mean_energies: find_motifs_run_config_id={find_motifs_run_config_id} motif_id={motif_id} energy={energy:?}");
@@ -276,13 +277,13 @@ where
             }
         });
 
-        let energies = collect_futures_with_progress(
+        let energies = track_await("preload_bucket_mean_energies/3", collect_futures_with_progress(
             futures,
             motif_ids_len,
             4, //SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT,
             StreamBuffering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
-        )
+        ))
         .instrument(tracing::debug_span!("preload_bucket_mean_energies/3", file = file!(), line = line!())).await;
         if energies.len() != motif_ids_len {
             return Err(ThoError::new(format!("SelectBucketsStage::preload_bucket_mean_energies: preloaded {} of {motif_ids_len} motifs", energies.len())));
@@ -296,13 +297,13 @@ where
         store: &Arc<Box<dyn Store>>,
         mut ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
-        let (resources_config, output_mode) = input
+        let (resources_config, output_mode) = track_await("load_resources_for_selection/1", input
             .with_data_ref(0, ctx.branch(false), None, |input: &SelectMotifsInput, _ctx| {
                 Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
-            })
+            }))
             .instrument(tracing::debug_span!("load_resources_for_selection/1", file = file!(), line = line!())).await?;
 
-        Ok((Arc::new(resources_config.to_resources(store).instrument(tracing::debug_span!("load_resources_for_selection/2", file = file!(), line = line!())).await?.into_iter().collect::<Vec<_>>()), output_mode))
+        Ok((Arc::new(track_await("load_resources_for_selection/2", resources_config.to_resources(store)).instrument(tracing::debug_span!("load_resources_for_selection/2", file = file!(), line = line!())).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
     fn reference_random_slices(resources: &[Resource], find_motifs_run_config: &FindMotifsRunConfig, motif_count: usize) -> Result<u32, ThoError> {
@@ -333,7 +334,7 @@ where
     ) -> Result<f64, ThoError> {
         let max_slices = Self::reference_random_slices(resources, find_motifs_run_config, motif_count)?;
         let energy_metric = energy_metric();
-        let stats = Arc::clone(motif_stats)
+        let stats = track_await("reference_energy_for_find_run/1", Arc::clone(motif_stats)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random_resources(
                     max_slices,
@@ -342,17 +343,17 @@ where
                     vec![energy_metric.clone()],
                 ))),
                 ctx.branch(false),
-            )
+            ))
             .instrument(tracing::debug_span!("reference_energy_for_find_run/1", file = file!(), line = line!())).await?;
 
-        stats
+        track_await("reference_energy_for_find_run/2", stats
             .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
                 let values = stats.channels_values(&energy_metric)?;
                 if values.is_empty() {
                     return Err(ThoError::new("SelectBucketsStage::reference_energy_for_find_run: no channel energy values"));
                 }
                 Ok::<_, ThoError>(values.iter().map(|value| value.value() as f64).sum::<f64>() / values.len() as f64)
-            })
+            }))
             .instrument(tracing::debug_span!("reference_energy_for_find_run/2", file = file!(), line = line!())).await
     }
 
@@ -436,7 +437,7 @@ impl WithSelectDataRef<()> for SelectBucketsSyncInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
     {
-        async move { self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
+        async move { track_await("with_selected_data_ref/1", self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
     }
 }
 
@@ -587,7 +588,7 @@ where
                     None,
                 );
 
-                oom_handler
+                track_await("run/1", oom_handler
                     .run(
                         &sync_stage,
                         Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
@@ -600,18 +601,18 @@ where
                                 DumpToCpuContextImpl::new(&required_ids),
                             ),
                         ),
-                    )
+                    ))
                     .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await
             }
         });
 
-        let run_results = collect_futures_with_progress(
+        let run_results = track_await("run/2", collect_futures_with_progress(
             futures,
             run_configs_len,
             SELECT_MOTIFS_STAGE_RUN_CONFIGS,
             StreamBuffering::Unordered,
             "SelectBucketsStage::run",
-        )
+        ))
         .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
         if run_results.len() != run_configs_len {
             return Err(ThoError::new(format!("SelectBucketsStage::run: completed {} of {run_configs_len} run configs", run_results.len())));

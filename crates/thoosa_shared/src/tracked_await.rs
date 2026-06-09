@@ -176,14 +176,15 @@ fn mark_woken(id: u64) {
     }
 }
 
-pub async fn track_await<F>(
+#[track_caller]
+pub fn track_await<F>(
     name: &'static str,
     fut: F,
-) -> F::Output
+) -> Tracked<Pin<Box<F>>>
 where
     F: Future,
 {
-    Tracked::new_at(name, Location::caller(), fut).await
+    Tracked::new_at(name, Location::caller(), Box::pin(fut))
 }
 
 pub fn snapshot_not_ready() -> Vec<TaskInfo> {

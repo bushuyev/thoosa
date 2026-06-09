@@ -31,6 +31,7 @@ use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 pub type MotifNetsOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
 
@@ -79,7 +80,7 @@ where
         let motif_ws = Arc::clone(ws);
         let motif_store = Arc::clone(store);
 
-        Self::new_with_motif_nets_builder(
+        track_await("new/2", Self::new_with_motif_nets_builder(
             ws,
             store,
             train_label_nets_run_config_ids,
@@ -90,7 +91,7 @@ where
                 let store = Arc::clone(&motif_store);
 
                 async move {
-                    ApplyCosine2DMotifNets::from_trained_nets(
+                    track_await("new/1", ApplyCosine2DMotifNets::from_trained_nets(
                         &ws,
                         &store,
                         stage_ctx,
@@ -99,10 +100,10 @@ where
                         motif_nets,
                         false,
                         run_stft,
-                    ).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await
+                    )).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await
                 }
             },
-        ).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await
+        )).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await
     }
 }
 
@@ -124,7 +125,7 @@ where
         let motif_ws = Arc::clone(ws);
         let motif_store = Arc::clone(store);
 
-        Self::new_with_motif_nets_builder(
+        track_await("new_with_apply_motif_nets/2", Self::new_with_motif_nets_builder(
             ws,
             store,
             train_label_nets_run_config_ids,
@@ -135,7 +136,7 @@ where
                 let store = Arc::clone(&motif_store);
 
                 async move {
-                    ApplyMotifNets::from_trained_nets(
+                    track_await("new_with_apply_motif_nets/1", ApplyMotifNets::from_trained_nets(
                         &ws,
                         &store,
                         stage_ctx,
@@ -143,10 +144,10 @@ where
                         None,
                         motif_nets,
                         false,
-                    ).instrument(tracing::debug_span!("new_with_apply_motif_nets/1", file = file!(), line = line!())).await
+                    )).instrument(tracing::debug_span!("new_with_apply_motif_nets/1", file = file!(), line = line!())).await
                 }
             },
-        ).instrument(tracing::debug_span!("new_with_apply_motif_nets/2", file = file!(), line = line!())).await
+        )).instrument(tracing::debug_span!("new_with_apply_motif_nets/2", file = file!(), line = line!())).await
     }
 }
 
@@ -182,14 +183,14 @@ where
             debug!("ApplyLabelNets::new: label={label:?} nets.len={}", nets.len());
 
             for (train_label_net_run_config_id, label_net_params, net) in nets {
-                let label_nets = store.list_trained_nets(vec![train_label_net_run_config_id], None, None).instrument(tracing::debug_span!("new_with_motif_nets_builder/1", file = file!(), line = line!())).await?;
+                let label_nets = track_await("new_with_motif_nets_builder/1", store.list_trained_nets(vec![train_label_net_run_config_id], None, None)).instrument(tracing::debug_span!("new_with_motif_nets_builder/1", file = file!(), line = line!())).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} label_nets={label_nets:?}");
 
                 assert_eq!(label_nets.len(), 1); //for now there is always single net for run_config_id
                 let label_net = &label_nets[0];
 
-                let motif_net_run_config_ids = store.list_input_nets(label_net.id).instrument(tracing::debug_span!("new_with_motif_nets_builder/2", file = file!(), line = line!())).await?;
+                let motif_net_run_config_ids = track_await("new_with_motif_nets_builder/2", store.list_input_nets(label_net.id)).instrument(tracing::debug_span!("new_with_motif_nets_builder/2", file = file!(), line = line!())).await?;
 
                 debug!("ApplyLabelNets::new: label_net_id={}  motif_net_ids={motif_net_run_config_ids:?}", label_net.id);
 
@@ -198,12 +199,12 @@ where
                     continue//TODO, change to assert, just for tests
                 }
 
-                let motif_nets = store.list_trained_nets(motif_net_run_config_ids, None, None).instrument(tracing::debug_span!("new_with_motif_nets_builder/3", file = file!(), line = line!())).await?;
+                let motif_nets = track_await("new_with_motif_nets_builder/3", store.list_trained_nets(motif_net_run_config_ids, None, None)).instrument(tracing::debug_span!("new_with_motif_nets_builder/3", file = file!(), line = line!())).await?;
 
                 debug!("ApplyLabelNets::new: train_label_net_run_config_id={train_label_net_run_config_id} motif_nets={motif_nets:?}");
 
                 apply_nets.push(ApplyNets {
-                    apply_motif_nets: Arc::new(build_motif_nets(stage_ctx.branch(false), motif_nets).instrument(tracing::debug_span!("new_with_motif_nets_builder/4", file = file!(), line = line!())).await?),
+                    apply_motif_nets: Arc::new(track_await("new_with_motif_nets_builder/4", build_motif_nets(stage_ctx.branch(false), motif_nets)).instrument(tracing::debug_span!("new_with_motif_nets_builder/4", file = file!(), line = line!())).await?),
                     apply_label_net: Arc::new(ApplyLabelNet::new(label.clone(), train_label_net_run_config_id, net, batch_in_chunks)),
                 });
             }
