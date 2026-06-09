@@ -21,6 +21,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, StreamBuffering, ThoError};
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 const CONVERT_PRECISION_BUFFER_LIMIT: usize = 4;
 
@@ -275,7 +276,7 @@ where
         let target_precision = self.args.target_precision();
         let futures = entries.into_iter().map(move |entry| {
             async move {
-                tokio::task::spawn_blocking(move || {
+                track_await("run/1", tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "convert_precision::convert_entry",
                         kind = "spawn_blocking",
@@ -283,19 +284,19 @@ where
                         line = line!(),
                         task = format!("convert net entry to {target_precision:?}"),
                     ).in_scope(|| convert_entry(entry, target_precision))
-                })
+                }))
                     .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await
                     .map_err(|e| ThoError::from_error("join convert precision worker", e))?
             }
         });
 
-        let converted = collect_futures_with_progress(
+        let converted = track_await("run/2", collect_futures_with_progress(
             futures,
             entries_len,
             CONVERT_PRECISION_BUFFER_LIMIT,
             StreamBuffering::Unordered,
             "ConvertPrecisionStage::run",
-        )
+        ))
         .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
 
         if converted.len() != entries_len {

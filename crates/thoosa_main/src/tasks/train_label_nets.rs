@@ -57,6 +57,7 @@ use thoosa_shared::comp_id::SynKey;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, LM, C>
@@ -148,7 +149,7 @@ where
         apply_motif_nets
     ));
 
-    TrainLabelNets::new(
+    track_await("new_train_label_nets/1", TrainLabelNets::new(
         train_motif_net_run_config_ids,
         motif_nets_ids,
         applied_motif_loader,
@@ -158,7 +159,7 @@ where
         store,
         opt_config,
         labels,
-    ).instrument(tracing::debug_span!("new_train_label_nets/1", file = file!(), line = line!())).await
+    )).instrument(tracing::debug_span!("new_train_label_nets/1", file = file!(), line = line!())).await
 }
 
 impl <L, LM, C> TrainLabelNets<L, LM, C>
@@ -293,10 +294,10 @@ impl SavableResult for TrainLabelNetsOutput {
         for result in &mut self.results {
 
             run_config_ids.push(
-                result.save(store, ws, TrainLabelNetRunConfigResultParams {
+                track_await("save/1", result.save(store, ws, TrainLabelNetRunConfigResultParams {
                     train_motif_nets_run_config_ids:&self.train_motif_nets_run_config_ids,
                     motif_nets_ids:&self.motif_nets_ids
-                }).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?
+                })).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?
             );
         }
 
@@ -344,7 +345,7 @@ where
             let resources_config = with_data!(ctx.branch(false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Labeled>>|{
                 Ok::<_, ThoError>(input.resources_config().clone())
             })?;
-            let (train_labels_resource_keys, valid_label_resource_keys) = resources_config.to_resources(&self.store).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+            let (train_labels_resource_keys, valid_label_resource_keys) = track_await("run/1", resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
             let train_labels_resource_keys =  train_labels_resource_keys.into_iter().filter(|(label, resources)|{
                 let is_empty = resources.is_empty();
@@ -514,13 +515,13 @@ where
                         format!("label_{label}")
                     ));
 
-                    let result = train_net.run(
+                    let result = track_await("run/2", train_net.run(
                         Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
                         ctx_for_task
-                    ).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
+                    )).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
 
 
-                    let result = Arc::into_inner(result).expect("can't get result from train_net").take_data(0).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
+                    let result = track_await("run/3", Arc::into_inner(result).expect("can't get result from train_net").take_data(0)).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
                     debug!("TrainLabelNets::run, done: label={label} min_loss={:?}", result.min_loss);
 
                     Ok::<_, ThoError>(
@@ -537,13 +538,13 @@ where
 
             });
 
-            let results = collect_futures_with_progress(
+            let results = track_await("run/4", collect_futures_with_progress(
                 futures,
                 labels_train_and_valid_sets_len,
                 crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
                 StreamBuffering::Unordered,
                 "train labels",
-            ).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await;
+            )).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await;
 
             Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results))))
         }
@@ -723,9 +724,9 @@ where
                     }
                 });
 
-                let (x_1_wrapped, x_0_wrapped) = futures::stream::iter(futures)
+                let (x_1_wrapped, x_0_wrapped) = track_await("build_batch_stream/1", futures::stream::iter(futures)
                     .buffered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)
-                    .try_collect::<Vec<_>>()
+                    .try_collect::<Vec<_>>())
                     .instrument(tracing::debug_span!("build_batch_stream/1", file = file!(), line = line!())).await?
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
@@ -751,7 +752,7 @@ where
                 //         a
                 //     });
                 //
-                let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn).instrument(tracing::debug_span!("build_batch_stream/2", file = file!(), line = line!())).await;
+                let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = track_await("build_batch_stream/2", build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn)).instrument(tracing::debug_span!("build_batch_stream/2", file = file!(), line = line!())).await;
 
                 debug!("ResourcesBatch::build_batch_stream: batch_i={i} r={r:?}");
 

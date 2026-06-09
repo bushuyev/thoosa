@@ -15,6 +15,7 @@ use thoosa_shared::{CopyToDevice, ThoError, ThoosaError};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Named)]
 pub struct ABStage<A, B, C>//TODO rename to Pair/Chained
@@ -140,11 +141,11 @@ where
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
-        let output_a = Arc::clone(&self.stage_a).run_cached(input, ctx.branch(false)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let output_a = track_await("run/1", Arc::clone(&self.stage_a).run_cached(input, ctx.branch(false))).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         debug!("ABStage::run: input.id={input_id:?} a done");
 
-        let output_b = Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch(false)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
+        let output_b = track_await("run/2", Arc::clone(&self.stage_b).run_cached(output_a, ctx.branch(false))).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
 
         debug!("ABStage::run: input.id={input_id:?} b done");
 
@@ -184,8 +185,8 @@ where
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input_a: Arc<DevicesWrap<A::In<'static>>> = input;
         let mut ctx_c: C = ctx;
-        let output_a: Arc<DevicesWrap<A::Out>> = Arc::clone(&self.stage_a).run_cached(input_a, ctx_c.branch(false)).instrument(tracing::debug_span!("run_cached/1", file = file!(), line = line!())).await?;
-        let output_b: Arc<DevicesWrap<B::Out>> = Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false)).instrument(tracing::debug_span!("run_cached/2", file = file!(), line = line!())).await?;
+        let output_a: Arc<DevicesWrap<A::Out>> = track_await("run_cached/1", Arc::clone(&self.stage_a).run_cached(input_a, ctx_c.branch(false))).instrument(tracing::debug_span!("run_cached/1", file = file!(), line = line!())).await?;
+        let output_b: Arc<DevicesWrap<B::Out>> = track_await("run_cached/2", Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).instrument(tracing::debug_span!("run_cached/2", file = file!(), line = line!())).await?;
         let output: Arc<DevicesWrap<Self::Out>> = output_b;
         Ok(output)
     }
@@ -260,8 +261,8 @@ where
         ctx: <A as Stage>::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         match &*self {
-            StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input, ctx).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await,
-            StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input, ctx).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await,
+            StageChainOption::Single(stage) => track_await("run/1", Arc::clone(stage).run_cached(input, ctx)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await,
+            StageChainOption::Chained(stage) => track_await("run/2", Arc::clone(stage).run_cached(input, ctx)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await,
         }
     }
 }
@@ -320,8 +321,8 @@ where
         let ctx_a: <A as Stage>::Ctx = ctx;
 
         let output_a: Arc<DevicesWrap<<A as Stage>::Out>> = match &*self {
-            StageChainOption::Single(stage) => Arc::clone(stage).run_cached(input_a, ctx_a).instrument(tracing::debug_span!("run_cached/1", file = file!(), line = line!())).await?,
-            StageChainOption::Chained(stage) => Arc::clone(stage).run_cached(input_a, ctx_a).instrument(tracing::debug_span!("run_cached/2", file = file!(), line = line!())).await?,
+            StageChainOption::Single(stage) => track_await("run_cached/1", Arc::clone(stage).run_cached(input_a, ctx_a)).instrument(tracing::debug_span!("run_cached/1", file = file!(), line = line!())).await?,
+            StageChainOption::Chained(stage) => track_await("run_cached/2", Arc::clone(stage).run_cached(input_a, ctx_a)).instrument(tracing::debug_span!("run_cached/2", file = file!(), line = line!())).await?,
         };
 
         let output: Arc<DevicesWrap<Self::Out>> = output_a;

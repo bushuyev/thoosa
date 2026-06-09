@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing::Instrument;
 use thoosa_shared::{panic_to_err_async, ThoError};
+use thoosa_shared::tracked_await::track_await;
 
 
 
@@ -33,7 +34,7 @@ impl Purger {
         let worker = tokio::spawn(async move {
             loop {
 
-                match rx_arc.write().instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await.recv().instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await {
+                match track_await("new/2", track_await("new/1", rx_arc.write()).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await.recv()).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await {
                     Some(PurgeCmd::Gpu { closures }) => {
                         debug!("Purger::new, loop, got cmd: closures.len={}", closures.len());
 

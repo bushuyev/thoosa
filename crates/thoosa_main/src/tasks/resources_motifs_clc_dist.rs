@@ -34,6 +34,7 @@ use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 pub struct ClcResourcesMotifsDist<C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -470,14 +471,14 @@ impl ClcResourcesMotifsDistOutput {
     }
 
     pub async fn to_cpu(self) -> Result<ClcResourcesMotifsDistOutput, ThoError> {
-        let channel_masks_dists_ids = futures::future::try_join_all(
+        let channel_masks_dists_ids = track_await("to_cpu/2", futures::future::try_join_all(
             self.channel_masks_dists_ids.into_iter().map(|op| async move {
                 match op {
                     None => Ok::<_, ThoError>(None),
-                    Some((dists_mask, data_ids)) => Ok(Some((dists_mask.to_cpu().instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await?, data_ids))),
+                    Some((dists_mask, data_ids)) => Ok(Some((track_await("to_cpu/1", dists_mask.to_cpu()).instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await?, data_ids))),
                 }
             }),
-        )
+        ))
         .instrument(tracing::debug_span!("to_cpu/2", file = file!(), line = line!())).await?;
 
         Ok(ClcResourcesMotifsDistOutput {

@@ -58,6 +58,7 @@ use thoosa_with_data::with_data;
 use crate::buffer_limits::{CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
@@ -133,12 +134,12 @@ where
 
     pub async fn run(&self, input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>, mut ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
         match self {
-            Self::CrossLoader { cross_loader, .. } => Arc::clone(cross_loader).run(input, ctx).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await,
+            Self::CrossLoader { cross_loader, .. } => track_await("run/1", Arc::clone(cross_loader).run(input, ctx)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await,
             Self::Bucketing { bucketing_stage, .. } => {
                 let input = with_data!(ctx.branch(false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
                     Ok::<_, ThoError>(BucketingInput::new(input.resources_config().clone()))
                 })?;
-                Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
+                track_await("run/2", Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
                 Ok(Arc::new(DevicesWrap::wrap(())))
             }
         }
@@ -288,7 +289,7 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats = motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
+                                    let motif_stats = track_await("new/1", motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true))).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
@@ -421,12 +422,12 @@ where
                                     },
                                     fixed_config.max_chunk_size as usize,
                                     |batch| {
-                                        async { batch.to_cpu().instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await }.boxed()
+                                        async { track_await("new/2", batch.to_cpu()).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await }.boxed()
                                     },
                                     |receiver| {
                                         let dists_tracker = Arc::clone(receiver);
                                         async move {
-                                            dists_tracker.build_groups().instrument(tracing::debug_span!("new/3", file = file!(), line = line!())).await
+                                            track_await("new/3", dists_tracker.build_groups()).instrument(tracing::debug_span!("new/3", file = file!(), line = line!())).await
                                         }
                                             .boxed()
                                     },
@@ -441,13 +442,13 @@ where
             });
         debug!("FindMotifsStage::new: fixed_config={fixed_config:?} futures_done");
 
-        let cross_loaders = collect_futures_with_progress(
+        let cross_loaders = track_await("new/4", collect_futures_with_progress(
             futures,
             run_configs_len,
             CROSS_LOADERS_LIMIT,//TODO config
             StreamBuffering::Unordered,
             "FindMotifsStage::new",
-        )
+        ))
         .instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await
         .into_iter()
         .collect::<Vec<_>>();
@@ -510,13 +511,13 @@ where
                 stage.run(Arc::clone(&input), ctx_for_stage)
             });
 
-        let _/*cross loader's out is ()*/ = collect_futures_with_progress(
+        let _/*cross loader's out is ()*/ = track_await("run/1", collect_futures_with_progress(
             futures,
             run_config_stages_len,
             FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "FindMotifsStage::run",
-        )
+        ))
         .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await;
 
 

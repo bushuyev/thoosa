@@ -25,6 +25,7 @@ use thoosa_shared::{mono_key, ThoError};
 
 use crate::tasks::stage_ids::STFT;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "Stft"]
@@ -117,7 +118,7 @@ where
             ],
             None,
         );
-        let output = oom_handler
+        let output = track_await("run/1", oom_handler
             .run(
                 &self.sync_stft,
                 input,
@@ -130,7 +131,7 @@ where
                         DumpToCpuContextImpl::new(&required_ids),
                     ),
                 ),
-            )
+            ))
             .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
         Ok(Arc::new(DevicesWrap::wrap(output)))
     }

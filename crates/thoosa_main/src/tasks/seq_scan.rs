@@ -31,6 +31,7 @@ use thoosa_with_data::with_data;
 use thoosa_common::runs::SavableResult;
 use async_trait::async_trait;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
@@ -209,7 +210,7 @@ where
         let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ResourcesConfigInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
-        let resources = resources_config.to_resources(&self.store).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let resources = track_await("run/1", resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         for configured_stage in &self.run_config_stages {
             let mut buckets: SeqScanBucketsByChannel = Vec::new();
@@ -218,22 +219,22 @@ where
             let mut batch_len = 0i64;
 
             for resource in &resources {
-                let loaded = Arc::clone(&configured_stage.configured_loader)
+                let loaded = track_await("run/2", Arc::clone(&configured_stage.configured_loader)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(resource.clone())),
                         ctx.branch(false),
-                    )
+                    ))
                     .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
                 let resource_len = loaded.size().dim_1();
 
                 if resource_len > max_chunk_len {
-                    flush_batch_to_buckets(
+                    track_await("run/3", flush_batch_to_buckets(
                         &batch_resources,
                         batch_tensors.clone(),
                         &configured_stage.run_config,
                         &mut buckets,
                         ctx.branch(false),
-                    ).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
+                    )).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
                     batch_resources.clear();
                     batch_tensors.clear();
                     batch_len = 0;
@@ -252,25 +253,25 @@ where
                     continue;
                 }
 
-                flush_batch_to_buckets(
+                track_await("run/4", flush_batch_to_buckets(
                     &batch_resources,
                     batch_tensors.clone(),
                     &configured_stage.run_config,
                     &mut buckets,
                     ctx.branch(false),
-                ).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
+                )).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
                 batch_resources.clear();
                 batch_tensors.clear();
                 batch_len = 0;
             }
 
-            flush_batch_to_buckets(
+            track_await("run/5", flush_batch_to_buckets(
                 &batch_resources,
                 batch_tensors,
                 &configured_stage.run_config,
                 &mut buckets,
                 ctx.branch(false),
-            ).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
+            )).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
 
             info!(
                 "SeqScanStage::run: run_config_id={:?} metric={:?} chunk_size={} channel_bucket_sizes={:?}",

@@ -50,6 +50,7 @@ use thoosa_with_data::with_data;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrossUnfoldClcOutputMergeMode {
@@ -96,7 +97,7 @@ where
                 let iter_1 = o.iter_1();
                 let clc_result = o.clc_result();
                 // Copy packed masks to CPU before any merge to avoid GPU OOM.
-                match clc_result.to_cpu().instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
+                match track_await("add_partial_output/1", clc_result.to_cpu()).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
                     Ok(clc_result) => {
                         self.partials
                             .push(CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, mono_key!("CrossUnfoldClcOutput", "stage").into()));
@@ -263,7 +264,7 @@ where
             CacheArea::default()
         );
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        match OOMHandler::new(
+        match track_await("run_loaded_batch/1", OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
                     MAX_PARALLEL,
@@ -285,12 +286,12 @@ where
                     DumpToCpuContextImpl::new(&required_ids),
                 ),
             ),
-        ).instrument(tracing::debug_span!("run_loaded_batch/1", file = file!(), line = line!())).await {
+        )).instrument(tracing::debug_span!("run_loaded_batch/1", file = file!(), line = line!())).await {
             Ok(mut cross_clc_output) => {
-                let cross_clc_output = cross_clc_output.replace_clc_result(&self.on_batch_done).instrument(tracing::debug_span!("run_loaded_batch/2", file = file!(), line = line!())).await?;
+                let cross_clc_output = track_await("run_loaded_batch/2", cross_clc_output.replace_clc_result(&self.on_batch_done)).instrument(tracing::debug_span!("run_loaded_batch/2", file = file!(), line = line!())).await?;
                 let receiver_ctx = ctx.branch(false);
 
-                tokio::task::spawn_blocking(move || {
+                track_await("run_loaded_batch/3", tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "cross_loader::consume_cross_output",
                         kind = "spawn_blocking",
@@ -301,7 +302,7 @@ where
                         receiver.consume(cross_clc_output, receiver_ctx);
                         Ok::<_, ThoError>(())
                     })
-                }).instrument(tracing::debug_span!("run_loaded_batch/3", file = file!(), line = line!())).await??;
+                })).instrument(tracing::debug_span!("run_loaded_batch/3", file = file!(), line = line!())).await??;
             }
             Err(e) => {
                 warn!("CrossLoader::run: got error  find_motifs_run_config_id={} {e:?}", self.find_motifs_run_config_id);
@@ -328,33 +329,33 @@ where
         let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
         for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
-            let t_1 = Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(false))
+            let t_1 = track_await("run_inner_batches/1", Arc::clone(&self.configured_loader)
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(false)))
                 .instrument(tracing::debug_span!("run_inner_batches/1", file = file!(), line = line!())).await?;
             let t_1_len = t_1.size().dim_1();
 
             if t_1_len > max_batch {
                 if !t_1_batch.is_empty() {
-                    self.run_loaded_batch(
+                    track_await("run_inner_batches/2", self.run_loaded_batch(
                         t_0_batch.clone(),
                         t_0_batch_resources.clone(),
                         std::mem::take(&mut t_1_batch),
                         std::mem::take(&mut t_1_batch_resources),
                         ctx.branch(false),
                         Arc::clone(&receiver),
-                    ).instrument(tracing::debug_span!("run_inner_batches/2", file = file!(), line = line!())).await?;
+                    )).instrument(tracing::debug_span!("run_inner_batches/2", file = file!(), line = line!())).await?;
                     t_1_batch_len = 0;
                     collect_eta_record_completion(cross_loader_inner.id());
                 }
 
-                self.run_loaded_batch(
+                track_await("run_inner_batches/3", self.run_loaded_batch(
                     t_0_batch.clone(),
                     t_0_batch_resources.clone(),
                     vec![t_1],
                     vec![Arc::clone(resource_1)],
                     ctx.branch(false),
                     Arc::clone(&receiver),
-                ).instrument(tracing::debug_span!("run_inner_batches/3", file = file!(), line = line!())).await?;
+                )).instrument(tracing::debug_span!("run_inner_batches/3", file = file!(), line = line!())).await?;
                 collect_eta_record_completion(cross_loader_inner.id());
                 continue;
             }
@@ -367,14 +368,14 @@ where
                 continue;
             }
 
-            self.run_loaded_batch(
+            track_await("run_inner_batches/4", self.run_loaded_batch(
                 t_0_batch.clone(),
                 t_0_batch_resources.clone(),
                 std::mem::take(&mut t_1_batch),
                 std::mem::take(&mut t_1_batch_resources),
                 ctx.branch(false),
                 Arc::clone(&receiver),
-            ).instrument(tracing::debug_span!("run_inner_batches/4", file = file!(), line = line!())).await?;
+            )).instrument(tracing::debug_span!("run_inner_batches/4", file = file!(), line = line!())).await?;
             t_1_batch_len = 0;
             collect_eta_record_completion(cross_loader_inner.id());
         }
@@ -392,7 +393,7 @@ pub struct ResourcesConfigInput<RC: ResourcesConfig + Debug + Send + Sync + Clon
 
 impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> ResourcesConfigInput<RC> {
     pub async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
-        self.resources_config.check(store).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?;
+        track_await("check/1", self.resources_config.check(store)).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?;
 
         Ok(self)
     }
@@ -463,13 +464,13 @@ where
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
 
-        let resources_config = input
+        let resources_config = track_await("run/1", input
             .with_data_ref(0, ctx.branch(false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
                 Ok(input.resources_config.clone())
-            })
+            }))
             .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
-        let resources = resources_config
-            .to_resources(&self.store)
+        let resources = track_await("run/2", resources_config
+            .to_resources(&self.store))
             .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?
             .into_iter()
             .filter(|r| r.length() > self.step)
@@ -491,15 +492,15 @@ where
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
-            let t_0 = Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(false))
+            let t_0 = track_await("run/3", Arc::clone(&self.configured_loader)
+                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(false)))
                 .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
             let t_0_len = t_0.size().dim_1();
 
             if t_0_len > max_batch {
                 if !t_0_batch.is_empty() {
                     let pending_last_i = t_0_batch_last_i.expect("CrossLoader::run: missing t_0_batch_last_i for pending batch");
-                    self.run_inner_batches(
+                    track_await("run/4", self.run_inner_batches(
                         resources.as_slice(),
                         std::mem::take(&mut t_0_batch),
                         std::mem::take(&mut t_0_batch_resources),
@@ -508,14 +509,14 @@ where
                         max_batch,
                         Arc::clone(&receiver),
                         ctx.branch(false),
-                    ).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
+                    )).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
                     skip_0_i = pending_last_i;
                     t_0_batch_len = 0;
                     t_0_batch_last_i = None;
                     collect_eta_record_completion(cross_loader_outer.id());
                 }
 
-                self.run_inner_batches(
+                track_await("run/5", self.run_inner_batches(
                     resources.as_slice(),
                     vec![t_0],
                     vec![Arc::clone(resource_0)],
@@ -524,7 +525,7 @@ where
                     max_batch,
                     Arc::clone(&receiver),
                     ctx.branch(false),
-                ).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
+                )).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
                 skip_0_i = i_0;
                 collect_eta_record_completion(cross_loader_outer.id());
                 continue;
@@ -539,7 +540,7 @@ where
                 continue;
             }
 
-            self.run_inner_batches(
+            track_await("run/6", self.run_inner_batches(
                 resources.as_slice(),
                 std::mem::take(&mut t_0_batch),
                 std::mem::take(&mut t_0_batch_resources),
@@ -548,7 +549,7 @@ where
                 max_batch,
                 Arc::clone(&receiver),
                 ctx.branch(false),
-            ).instrument(tracing::debug_span!("run/6", file = file!(), line = line!())).await?;
+            )).instrument(tracing::debug_span!("run/6", file = file!(), line = line!())).await?;
 
             skip_0_i = i_0;
             t_0_batch_len = 0;
@@ -557,7 +558,7 @@ where
             collect_eta_record_completion(cross_loader_outer.id());
         }
 
-        (self.on_all_done)(&receiver).instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await?;
+        track_await("run/7", (self.on_all_done)(&receiver)).instrument(tracing::debug_span!("run/7", file = file!(), line = line!())).await?;
 
         Ok(Arc::new(DevicesWrap::wrap(())))
     }
@@ -643,7 +644,7 @@ where
 
         match adjust_context.batch_1_mode {
             Batch1SplitMode::Range => {
-                let result = self.batch_1_adjuster.adjust(0i64..0, adjust_context).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
+                let result = track_await("adjust/1", self.batch_1_adjuster.adjust(0i64..0, adjust_context)).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
                 debug!("CrossLoaderAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {
@@ -657,7 +658,7 @@ where
                 }
             }
             Batch1SplitMode::Slice => {
-                let result = self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx).instrument(tracing::debug_span!("adjust/2", file = file!(), line = line!())).await;
+                let result = track_await("adjust/2", self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).instrument(tracing::debug_span!("adjust/2", file = file!(), line = line!())).await;
                 debug!("CrossLoaderAdjuster::adjust: slice adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {
@@ -865,7 +866,7 @@ where
 {
     async fn add_partial_output(&mut self, out: ST::Out) {
         debug!("CrossSplitterContext::add_partial_output: out={out:?}");
-        self.output_builder.add_partial_output(out).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
+        track_await("add_partial_output/1", self.output_builder.add_partial_output(out)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
         match self.batch_1_mode {
             Batch1SplitMode::Range => {
                 self.done_to += self.split_len;
@@ -884,7 +885,7 @@ where
     }
 
     async fn build_final_output(self) -> Result<ST::Out, ThoError> {
-        self.output_builder.build().instrument(tracing::debug_span!("build_final_output/1", file = file!(), line = line!())).await
+        track_await("build_final_output/1", self.output_builder.build()).instrument(tracing::debug_span!("build_final_output/1", file = file!(), line = line!())).await
     }
 }
 
@@ -995,8 +996,8 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
             debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
 
-            let t_0_batch = selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(false)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await?;
-            let t_1_batch = selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(false)).instrument(tracing::debug_span!("with_selected_data_ref/2", file = file!(), line = line!())).await?;
+            let t_0_batch = track_await("with_selected_data_ref/1", selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(false))).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await?;
+            let t_1_batch = track_await("with_selected_data_ref/2", selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(false))).instrument(tracing::debug_span!("with_selected_data_ref/2", file = file!(), line = line!())).await?;
 
             //TODO move to RangeOrSlice::select
             let resources_0 = match &selector.batch_0_selector {

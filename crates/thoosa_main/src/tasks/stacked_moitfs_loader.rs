@@ -32,6 +32,7 @@ use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
 use tracing::Instrument;
+use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, DummyData)]
 pub struct StackedMotifsInput {
@@ -94,7 +95,7 @@ impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(StackedMotifsOutput {
             id:self.id.clone(),
-            motifs: self.motifs.copy_to_device(dst_device).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
+            motifs: track_await("copy_to_device/1", self.motifs.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
         })
 
     }
@@ -204,9 +205,9 @@ where
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let find_motifs_run_config_id = find_motifs_run_config_id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
-        let motif_ids = self
+        let motif_ids = track_await("run/1", self
             .store
-            .list_motifs(find_motifs_run_config_id)
+            .list_motifs(find_motifs_run_config_id))
             .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
@@ -226,9 +227,9 @@ where
                 async move {
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
 
-                    match motif_loader_clone.run_cached(
+                    match track_await("run/2", motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(false)
-                    ).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await {
+                    )).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await {
                         Ok(motif) => {
                             debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
                             Ok::<_, ThoError>(Some(motif))
@@ -241,13 +242,13 @@ where
                 }
             });
 
-        let loaded_motifs = collect_futures_with_progress(
+        let loaded_motifs = track_await("run/3", collect_futures_with_progress(
             futures,
             motif_ids_len,
             STACKED_MOTIFS_LOADER_RUN,
             StreamBuffering::Ordered,
             "StackedMotifsLoader::run",
-        )
+        ))
         .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await
         .into_iter()
         .flatten()
