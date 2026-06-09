@@ -65,6 +65,7 @@ polars = { workspace = true, optional = true }
 lewton = { version = "0.10", optional = true }
 ogg = { version = "0.8", optional = true }
 hound = { version = "3.5", optional = true }
+pin-project = "1"
 
 [dev-dependencies]
 rustfft = "6"
