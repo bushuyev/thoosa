@@ -55,7 +55,7 @@ use crate::tasks::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_with_data::with_data;
-use crate::buffer_limits::{CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
+use crate::buffer_limits::{BUFFER_LIMITS, CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use thoosa_shared::tracked_await::track_await;
 
@@ -528,6 +528,8 @@ where
 
                 async move { stage.run(input, ctx_for_stage).await }
             });
+
+        BUFFER_LIMITS.get().find_motifs_stages_buffer_unordered_limit_tx();//TODO pas to collect_futures_with_progress
 
         let _/*cross loader's out is ()*/ = track_await(collect_futures_with_progress(
             futures,
