@@ -23,6 +23,7 @@ use rand::random;
 use tch::nn::{Optimizer, VarStore};
 use tch::Device;
 use tch::Kind::Float;
+use tokio::task::coop::cooperative;
 use tracing::Instrument;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::tho_device::ThoDevice;
@@ -274,7 +275,7 @@ where
 
                 // debug!("TrainNet::run_inner, train: descr={descr}  next={:?}", batches.next().await);
 
-                while let Some(Ok((x_t_0, lengths, expected_y))) = batches.next()
+                while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
                     let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y));
