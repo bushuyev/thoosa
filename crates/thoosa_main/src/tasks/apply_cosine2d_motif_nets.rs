@@ -108,13 +108,13 @@ where
 
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
-        let motif_nets = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::new/1", store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
+        let motif_nets = track_await(store.list_trained_nets(train_motif_net_run_config_ids.clone(), max_loss, trained_nets_limit)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
 
         if motif_nets.is_empty() {
             return  Err(ThoError::new(format!("No selected nets for train_motif_nets_run_config_ids={train_motif_net_run_config_ids:?}")));
         };
 
-        track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::new/2", Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize, true)).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await
+        track_await(Self::from_trained_nets(&ws, &store, stage_ctx, slice_step, fail_if_size_bigger_than, motif_nets, quantize, true)).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await
     }
 
     pub async fn from_trained_nets<R>(
@@ -136,7 +136,7 @@ where
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
 
 
-        let tmp_cache = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/1", TmpCached::new("tmp_apply_cosine2d_motif_nets")).instrument(tracing::debug_span!("from_trained_nets/1", file = file!(), line = line!())).await;
+        let tmp_cache = track_await(TmpCached::new("tmp_apply_cosine2d_motif_nets")).instrument(tracing::debug_span!("from_trained_nets/1", file = file!(), line = line!())).await;
         let tmp_cache_name = tmp_cache.registered_name();
         let tmp_cache: Arc<Mutex<TmpCached<CosineConv2dTensorPart>>> = Arc::new(Mutex::new(tmp_cache));
 
@@ -160,7 +160,7 @@ where
 
                 async move {
                     // let train_motif_net_run_config: TrainMotifNetRunConfig = load_run_config(&store, train_motif_net_run_config_id).await?;
-                    let train_motif_net_run_config: TrainMotifNetRunConfig = TrainMotifNetRunConfig::from_properties_map(None, &track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/2", store.list_run_config_values(train_motif_net_run_config_id)).instrument(tracing::debug_span!("from_trained_nets/2", file = file!(), line = line!())).await?)?;
+                    let train_motif_net_run_config: TrainMotifNetRunConfig = TrainMotifNetRunConfig::from_properties_map(None, &track_await(store.list_run_config_values(train_motif_net_run_config_id)).instrument(tracing::debug_span!("from_trained_nets/2", file = file!(), line = line!())).await?)?;
 
                     debug!("ApplyMotifNets::new: train_motif_net_run_config={train_motif_net_run_config:?}");
 
@@ -170,11 +170,11 @@ where
                         return Ok(None);
                     };
 
-                    match track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/3", load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx)).instrument(tracing::debug_span!("from_trained_nets/3", file = file!(), line = line!())).await {
+                    match track_await(load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx)).instrument(tracing::debug_span!("from_trained_nets/3", file = file!(), line = line!())).await {
                         Ok(net) => {
 
 
-                            let (hash_value, config) = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/4", net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, _ctx|{
+                            let (hash_value, config) = track_await(net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, _ctx|{
                                 let channel = module_with_store.extra().channel();
                                 let motif_width = module_with_store.extra().motif_net_params.num_features();
 
@@ -199,7 +199,7 @@ where
                 }
             });
 
-        let stft_run_configs: HashMap<u64, StftRunConfig> = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/5", collect_futures_with_progress(
+        let stft_run_configs: HashMap<u64, StftRunConfig> = track_await(collect_futures_with_progress(
             futures,
             trained_nets_len,
             crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
@@ -226,7 +226,7 @@ where
             ],
             None,
         );
-        let raw_conv2d_tensors = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/6", oom_handler
+        let raw_conv2d_tensors = track_await(oom_handler
             .consume(
                 &batch_cosine_conv2d_tensors,
                 batch_input,
@@ -241,7 +241,7 @@ where
                 ),
             ))
             .instrument(tracing::debug_span!("from_trained_nets/6", file = file!(), line = line!())).await?;
-        let conv2d_tensors = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::from_trained_nets/7", move_cosine_conv2d_tensors_to_cpu(raw_conv2d_tensors.conv2d_tensors)).instrument(tracing::debug_span!("from_trained_nets/7", file = file!(), line = line!())).await?;
+        let conv2d_tensors = track_await(move_cosine_conv2d_tensors_to_cpu(raw_conv2d_tensors.conv2d_tensors)).instrument(tracing::debug_span!("from_trained_nets/7", file = file!(), line = line!())).await?;
 
         debug!("ApplyMotifNets::new: stft_run_configs={stft_run_configs:?} conv2d_tensors={conv2d_tensors:?} trained_net_ids={trained_net_ids:?}");
 
@@ -279,7 +279,7 @@ where
             let kernels = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.kernels)).collect::<Vec<_>>();
             let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
             let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
-            let stream = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::AsyncStage::run/2", track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::AsyncStage::run/1", GlobalCtx::global().copy_ctx(ctx.tho_device_idx())).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
+            let stream = track_await(track_await(GlobalCtx::global().copy_ctx(ctx.tho_device_idx())).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await.acquire_exec_stream()).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
             let res = with_data!(ctx.branch(false), input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");
                 let _guard = ThoStreamGuard::new(&stream)?;
@@ -356,7 +356,7 @@ where
                 Ok(motifs_applied)
             })?;
 
-            track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets::AsyncStage::run/3", tokio::time::timeout(
+            track_await(tokio::time::timeout(
                 Duration::from_secs(5),
                 spawn_blocking(move || {
                     tracing::info_span!(
@@ -546,7 +546,7 @@ impl CopyToDevice for CosineConv2dTensorPart {
             stft_hash_value: self.stft_hash_value,
             trained_net_order: self.trained_net_order,
             kind: self.kind,
-            tensor: track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::CosineConv2dTensorPart::CopyToDevice::copy_to_device/1", self.tensor.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
+            tensor: track_await(self.tensor.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
         })
     }
 }
@@ -630,7 +630,7 @@ impl ConsumeData for BatchCosineConv2dTensorsInputWrapper {
     {
         async move {
             let BatchCosineConv2dTensorsInputWrapper { id, tmp_cache } = self;
-            match track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::BatchCosineConv2dTensorsInputWrapper::ConsumeData::consume/1", tmp_cache.take_all_recovering(to_device_idx)).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await {
+            match track_await(tmp_cache.take_all_recovering(to_device_idx)).instrument(tracing::debug_span!("consume/1", file = file!(), line = line!())).await {
                 Ok(parts) => do_run(BatchCosineConv2dTensorsInput::new(id, parts, to_device_idx), ctx),
                 Err(err) => ConsumeResult::Failed { input: BatchCosineConv2dTensorsInput::new(id, err.data, to_device_idx), error: err.error },
             }
@@ -639,7 +639,7 @@ impl ConsumeData for BatchCosineConv2dTensorsInputWrapper {
 
     fn burp(o: Self::O) -> impl Future<Output = Self> + Send {
         async move {
-            let cache = track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::BatchCosineConv2dTensorsInputWrapper::ConsumeData::burp/1", TmpCached::new("tmp_apply_cosine2d_motif_nets_burp")).instrument(tracing::debug_span!("burp/1", file = file!(), line = line!())).await;
+            let cache = track_await(TmpCached::new("tmp_apply_cosine2d_motif_nets_burp")).instrument(tracing::debug_span!("burp/1", file = file!(), line = line!())).await;
             for part in o.parts {
                 cache.insert(part);
             }
@@ -806,9 +806,9 @@ async fn move_cosine_conv2d_tensors_to_cpu(raw_tensors: Vec<RawMyCosineConv2dTen
             channel: raw.channel,
             motif_width: raw.motif_width,
             stft_hash_value: raw.stft_hash_value,
-            kernels: track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::move_cosine_conv2d_tensors_to_cpu/1", move_cosine_tensor_to_cpu(raw.kernels)).instrument(tracing::debug_span!("move_cosine_conv2d_tensors_to_cpu/1", file = file!(), line = line!())).await?,
-            a: track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::move_cosine_conv2d_tensors_to_cpu/2", move_cosine_tensor_to_cpu(raw.a)).instrument(tracing::debug_span!("move_cosine_conv2d_tensors_to_cpu/2", file = file!(), line = line!())).await?,
-            b: track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::move_cosine_conv2d_tensors_to_cpu/3", move_cosine_tensor_to_cpu(raw.b)).instrument(tracing::debug_span!("move_cosine_conv2d_tensors_to_cpu/3", file = file!(), line = line!())).await?,
+            kernels: track_await(move_cosine_tensor_to_cpu(raw.kernels)).instrument(tracing::debug_span!("move_cosine_conv2d_tensors_to_cpu/1", file = file!(), line = line!())).await?,
+            a: track_await(move_cosine_tensor_to_cpu(raw.a)).instrument(tracing::debug_span!("move_cosine_conv2d_tensors_to_cpu/2", file = file!(), line = line!())).await?,
+            b: track_await(move_cosine_tensor_to_cpu(raw.b)).instrument(tracing::debug_span!("move_cosine_conv2d_tensors_to_cpu/3", file = file!(), line = line!())).await?,
             num_nets: raw.num_nets,
         });
     }
@@ -824,7 +824,7 @@ async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<Dev
         let mask = if mask.is_contiguous() { mask } else { mask.f_contiguous()? };
         let device = ThoDevice::from(mask.device());
         let kind = mask.kind();
-        track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::move_cosine_tensor_to_cpu/2", track_await("thoosa_main::tasks::apply_cosine2d_motif_nets::move_cosine_tensor_to_cpu/1", GlobalCtx::global().copy_ctx(device)).instrument(tracing::debug_span!("move_cosine_tensor_to_cpu/1", file = file!(), line = line!())).await.move_t(mask, 0, kind)).instrument(tracing::debug_span!("move_cosine_tensor_to_cpu/2", file = file!(), line = line!())).await?
+        track_await(track_await(GlobalCtx::global().copy_ctx(device)).instrument(tracing::debug_span!("move_cosine_tensor_to_cpu/1", file = file!(), line = line!())).await.move_t(mask, 0, kind)).instrument(tracing::debug_span!("move_cosine_tensor_to_cpu/2", file = file!(), line = line!())).await?
     };
     Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, mask)?)))
 }

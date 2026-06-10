@@ -210,7 +210,7 @@ where
         let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ResourcesConfigInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
-        let resources = track_await("thoosa_main::tasks::seq_scan::SeqScanStage::AsyncStage::run/1", resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let resources = track_await(resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         for configured_stage in &self.run_config_stages {
             let mut buckets: SeqScanBucketsByChannel = Vec::new();
@@ -219,7 +219,7 @@ where
             let mut batch_len = 0i64;
 
             for resource in &resources {
-                let loaded = track_await("thoosa_main::tasks::seq_scan::SeqScanStage::AsyncStage::run/2", Arc::clone(&configured_stage.configured_loader)
+                let loaded = track_await(Arc::clone(&configured_stage.configured_loader)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(resource.clone())),
                         ctx.branch(false),
@@ -228,7 +228,7 @@ where
                 let resource_len = loaded.size().dim_1();
 
                 if resource_len > max_chunk_len {
-                    track_await("thoosa_main::tasks::seq_scan::SeqScanStage::AsyncStage::run/3", flush_batch_to_buckets(
+                    track_await(flush_batch_to_buckets(
                         &batch_resources,
                         batch_tensors.clone(),
                         &configured_stage.run_config,
@@ -253,7 +253,7 @@ where
                     continue;
                 }
 
-                track_await("thoosa_main::tasks::seq_scan::SeqScanStage::AsyncStage::run/4", flush_batch_to_buckets(
+                track_await(flush_batch_to_buckets(
                     &batch_resources,
                     batch_tensors.clone(),
                     &configured_stage.run_config,
@@ -265,7 +265,7 @@ where
                 batch_len = 0;
             }
 
-            track_await("thoosa_main::tasks::seq_scan::SeqScanStage::AsyncStage::run/5", flush_batch_to_buckets(
+            track_await(flush_batch_to_buckets(
                 &batch_resources,
                 batch_tensors,
                 &configured_stage.run_config,

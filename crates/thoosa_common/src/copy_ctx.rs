@@ -92,7 +92,7 @@ impl CopyCtx {
 
     //TODO these are 'exec' streams, not for copy
     pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
-        track_await("thoosa_common::copy_ctx::CopyCtx::acquire_exec_stream/1", self.exec_stream_pool
+        track_await(self.exec_stream_pool
             .acquire())
             .instrument(tracing::debug_span!("acquire_exec_stream/1", file = file!(), line = line!()))
             .await
@@ -140,17 +140,17 @@ impl CopyCtx {
 
     pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_device == 0 {
-            track_await("thoosa_common::copy_ctx::CopyCtx::move_t/1", move_d2h(kind, src_t, self.buf_size, &self.bufs_pool)).instrument(tracing::debug_span!("move_t/1", file = file!(), line = line!())).await
+            track_await(move_d2h(kind, src_t, self.buf_size, &self.bufs_pool)).instrument(tracing::debug_span!("move_t/1", file = file!(), line = line!())).await
         } else {
-            track_await("thoosa_common::copy_ctx::CopyCtx::move_t/2", move_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_device)).instrument(tracing::debug_span!("move_t/2", file = file!(), line = line!())).await
+            track_await(move_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_device)).instrument(tracing::debug_span!("move_t/2", file = file!(), line = line!())).await
         }
     }
 
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_tho_device == 0 {
-            track_await("thoosa_common::copy_ctx::CopyCtx::copy/1", copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool)).instrument(tracing::debug_span!("copy/1", file = file!(), line = line!())).await
+            track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool)).instrument(tracing::debug_span!("copy/1", file = file!(), line = line!())).await
         } else {
-            track_await("thoosa_common::copy_ctx::CopyCtx::copy/2", copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_tho_device)).instrument(tracing::debug_span!("copy/2", file = file!(), line = line!())).await
+            track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_tho_device)).instrument(tracing::debug_span!("copy/2", file = file!(), line = line!())).await
         }
     }
     
@@ -162,9 +162,9 @@ impl CopyCtx {
         kind: Kind,
     ) -> Result<Tensor, ThoError> {
         let t = if dst_device == 0 {
-            track_await("thoosa_common::copy_ctx::CopyCtx::copy_from_ptr/1", copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size)).instrument(tracing::debug_span!("copy_from_ptr/1", file = file!(), line = line!())).await
+            track_await(copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size)).instrument(tracing::debug_span!("copy_from_ptr/1", file = file!(), line = line!())).await
         } else {
-            track_await("thoosa_common::copy_ctx::CopyCtx::copy_from_ptr/2", copy_h2d_from_ptr(
+            track_await(copy_h2d_from_ptr(
                 kind,
                 self.buf_size,
                 &self.bufs_pool,

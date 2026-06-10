@@ -39,24 +39,24 @@ where
     M: FuturesRunnerMapPurger + Debug + Sync + Send + 'static,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        track_await("thoosa_common::runner::purge::StaticMapPurger::FuturesRunnerMapPurger::has_gpu_data/1", self.map.has_gpu_data(device_idx)).instrument(tracing::debug_span!("has_gpu_data/1", file = file!(), line = line!())).await
+        track_await(self.map.has_gpu_data(device_idx)).instrument(tracing::debug_span!("has_gpu_data/1", file = file!(), line = line!())).await
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        track_await("thoosa_common::runner::purge::StaticMapPurger::FuturesRunnerMapPurger::purge_gpu/1", self.map.purge_gpu(ids_to_keep, device_idx, name)).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await
+        track_await(self.map.purge_gpu(ids_to_keep, device_idx, name)).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        track_await("thoosa_common::runner::purge::StaticMapPurger::FuturesRunnerMapPurger::drop_gpu/1", self.map.drop_gpu(device_idx, name)).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await
+        track_await(self.map.drop_gpu(device_idx, name)).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await
     }
 
     #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
-        track_await("thoosa_common::runner::purge::StaticMapPurger::FuturesRunnerMapPurger::debug_gpu/1", self.map.debug_gpu(device_idx)).instrument(tracing::debug_span!("debug_gpu/1", file = file!(), line = line!())).await
+        track_await(self.map.debug_gpu(device_idx)).instrument(tracing::debug_span!("debug_gpu/1", file = file!(), line = line!())).await
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
-        track_await("thoosa_common::runner::purge::StaticMapPurger::FuturesRunnerMapPurger::purge_cpu/1", self.map.purge_cpu(purge_until)).instrument(tracing::debug_span!("purge_cpu/1", file = file!(), line = line!())).await
+        track_await(self.map.purge_cpu(purge_until)).instrument(tracing::debug_span!("purge_cpu/1", file = file!(), line = line!())).await
     }
 }
 
@@ -78,21 +78,21 @@ where
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self.map.upgrade() {
-            Some(map) => track_await("thoosa_common::runner::purge::WeakMapPurger::FuturesRunnerMapPurger::has_gpu_data/1", map.has_gpu_data(device_idx)).instrument(tracing::debug_span!("has_gpu_data/1", file = file!(), line = line!())).await,
+            Some(map) => track_await(map.has_gpu_data(device_idx)).instrument(tracing::debug_span!("has_gpu_data/1", file = file!(), line = line!())).await,
             None => false,
         }
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self.map.upgrade() {
-            Some(map) => track_await("thoosa_common::runner::purge::WeakMapPurger::FuturesRunnerMapPurger::purge_gpu/1", map.purge_gpu(ids_to_keep, device_idx, name)).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await,
+            Some(map) => track_await(map.purge_gpu(ids_to_keep, device_idx, name)).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await,
             None => Ok(()),
         }
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         match self.map.upgrade() {
-            Some(map) => track_await("thoosa_common::runner::purge::WeakMapPurger::FuturesRunnerMapPurger::drop_gpu/1", map.drop_gpu(device_idx, name)).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await,
+            Some(map) => track_await(map.drop_gpu(device_idx, name)).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await,
             None => Ok(()),
         }
     }
@@ -100,14 +100,14 @@ where
     #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
         match self.map.upgrade() {
-            Some(map) => track_await("thoosa_common::runner::purge::WeakMapPurger::FuturesRunnerMapPurger::debug_gpu/1", map.debug_gpu(device_idx)).instrument(tracing::debug_span!("debug_gpu/1", file = file!(), line = line!())).await,
+            Some(map) => track_await(map.debug_gpu(device_idx)).instrument(tracing::debug_span!("debug_gpu/1", file = file!(), line = line!())).await,
             None => Ok(0),
         }
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
         match self.map.upgrade() {
-            Some(map) => track_await("thoosa_common::runner::purge::WeakMapPurger::FuturesRunnerMapPurger::purge_cpu/1", map.purge_cpu(purge_until)).instrument(tracing::debug_span!("purge_cpu/1", file = file!(), line = line!())).await,
+            Some(map) => track_await(map.purge_cpu(purge_until)).instrument(tracing::debug_span!("purge_cpu/1", file = file!(), line = line!())).await,
             None => 0,
         }
     }
@@ -214,12 +214,12 @@ where
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("purge_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
-        track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::purge_gpu/3", stream::iter(items)
+        track_await(stream::iter(items)
 
             .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
-                match track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::purge_gpu/1", fut).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await {
+                match track_await(fut).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await {
                     Ok(v) => {
-                        if let Err(e) = track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::purge_gpu/2", v.dump_to_cpu(device_idx)).instrument(tracing::debug_span!("purge_gpu/2", file = file!(), line = line!())).await {
+                        if let Err(e) = track_await(v.dump_to_cpu(device_idx)).instrument(tracing::debug_span!("purge_gpu/2", file = file!(), line = line!())).await {
                             warn!("purge_gpu failed: key={key:?} err={e:?}");
                         } else {
                             debug!("purge_gpu ok: key={key:?}");
@@ -255,7 +255,7 @@ where
 
         let mut gpu_size = 0;
         for (key, wrapper) in items {
-            if !track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::debug_gpu/1", wrapper.is_all_on_cpu()).instrument(tracing::debug_span!("debug_gpu/1", file = file!(), line = line!())).await {
+            if !track_await(wrapper.is_all_on_cpu()).instrument(tracing::debug_span!("debug_gpu/1", file = file!(), line = line!())).await {
                 let size = wrapper.mem_size();
                 trace!("key={key:?} size={size:?}");
                 gpu_size += size;
@@ -277,12 +277,12 @@ where
 
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_gpu_{:?}", name), self.len(), 1);
         let dump_eta_guard_id = dump_eta_guard.id();
-        track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::drop_gpu/3", stream::iter(items)
+        track_await(stream::iter(items)
 
             .for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
-                match track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::drop_gpu/1", fut).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await {
+                match track_await(fut).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await {
                     Ok(v) => {
-                        if let Err(e) = track_await("thoosa_common::runner::purge::DashMap::FuturesRunnerMapPurger::drop_gpu/2", v.drop_device(device_idx)).instrument(tracing::debug_span!("drop_gpu/2", file = file!(), line = line!())).await {
+                        if let Err(e) = track_await(v.drop_device(device_idx)).instrument(tracing::debug_span!("drop_gpu/2", file = file!(), line = line!())).await {
                             warn!("drop_gpu failed: key={key:?} err={e:?}");
                         } else {
                             debug!("drop_gpu ok: key={key:?}");
