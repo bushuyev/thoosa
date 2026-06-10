@@ -424,7 +424,7 @@ impl DynamicTaskExecutor {
 
             debug!("DynamicTaskExecutor::submit: job_id={job_id} accepted");
 
-            let permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
+            let send_permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
                     error!("DynamicTaskExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
@@ -443,7 +443,7 @@ impl DynamicTaskExecutor {
             };
 
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
-                drop(permit);
+                drop(send_permit);
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
                 }
@@ -457,7 +457,7 @@ impl DynamicTaskExecutor {
 
             let mut suspend_guard = ParentSuspendGuard::new(parent.clone());
             if let Err(e) = track_await(suspend_guard.maybe_suspend()).await {
-                drop(permit);
+                drop(send_permit);
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
                 }
@@ -465,7 +465,7 @@ impl DynamicTaskExecutor {
             }
 
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
-                drop(permit);
+                drop(send_permit);
                 let _ = track_await(suspend_guard.resume()).await;
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
@@ -483,7 +483,7 @@ impl DynamicTaskExecutor {
             let accept_guard = match self.accept_gate.try_read() {
                 Ok(guard) => guard,
                 Err(_) => {
-                    drop(permit);
+                    drop(send_permit);
                     let _ = track_await(suspend_guard.resume()).await;
                     if let Some(job_id) = job_id_to_rerun {
                         self.clear_exclusive_job_id(job_id);
@@ -499,7 +499,7 @@ impl DynamicTaskExecutor {
 
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(accept_guard);
-                drop(permit);
+                drop(send_permit);
                 let _ = track_await(suspend_guard.resume()).await;
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
@@ -604,7 +604,7 @@ impl DynamicTaskExecutor {
                 }
             };
 
-            permit.send(Job::new(job_id, max_other_parallel, wrapped));
+            send_permit.send(Job::new(job_id, max_other_parallel, wrapped));
             drop(accept_guard);
 
             debug!("DynamicTaskExecutor::submit: job_id={job_id} submitted job_id={job_id}");

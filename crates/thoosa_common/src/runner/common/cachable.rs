@@ -842,11 +842,11 @@ where
     }
 
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError> {
-        track_await(O::M::dump_to_cpu(self, device_idx)).await
+        O::M::dump_to_cpu(self, device_idx).await
     }
 
     pub async fn drop_device(&self, device_idx: usize) -> Result<(), ThoError> {
-        track_await(O::M::drop_device(self, device_idx)).await
+        O::M::drop_device(self, device_idx).await
     }
 
     pub async fn with_selected_data<S, R, P>(
