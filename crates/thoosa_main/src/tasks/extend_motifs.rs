@@ -612,7 +612,7 @@ where
                                 })).await??;
 
 
-                                let mut motif_added_slices_guard = async_perf_log!(async_write_lock!(channels_motifs_added_slices[channel]));
+                                let mut motif_added_slices_guard = track_await(channels_motifs_added_slices[channel].write()).await;
 
                                 for (motif_id, matched_slices) in mask_dists_ids.1.into_iter().zip(matches_by_motif.into_iter()) {
 
