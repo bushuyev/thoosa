@@ -20,10 +20,7 @@ use crate as thoosa_common;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
-
-const COPY_CONCURRENCY: usize = 8;
-
-
+use crate::buffer_limits::buffer_limits;
 
 // One contiguous byte range in the source/destination tensor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -57,54 +54,6 @@ fn copy_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) -> Result<V
             len: last,
         }))
         .collect())
-}
-
-// Group adjacent chunks so one blocking task can reuse the same pinned buffer and CUDA stream before returning them to the pool.
-//
-// tensor fits into buffs case:
-//tensor size = 20 * buf_size_bytes
-// COPY_CONCURRENCY = 32
-//
-// chunks.len() = 20
-// group_count = 20
-//
-// groups:
-//   [chunk 0]
-//   [chunk 1]
-//   ...
-//   [chunk 19]
-//
-//
-// tensor does not fit into buffs case:
-// tensor size = 100 * buf_size_bytes
-// COPY_CONCURRENCY = 32
-//
-// groups:
-//   [0, 1, 2, 3]
-//   [4, 5, 6, 7]
-//   [8, 9, 10, 11]
-//   ...
-
-fn copy_chunk_groups(chunks: Vec<CopyChunk>) -> Vec<Vec<CopyChunk>> {
-    if chunks.is_empty() {
-        return Vec::new();
-    }
-
-    let group_count = chunks.len().min(COPY_CONCURRENCY);
-    let base_len = chunks.len() / group_count;
-    let extra = chunks.len() % group_count;
-    let mut start = 0;
-
-    // Give the remainder to the earliest groups so all available copy workers stay active when there are more chunks than streams.
-    (0..group_count)
-        .map(|group_idx| {
-            let len = base_len + usize::from(group_idx < extra);
-            let end = start + len;
-            let group = chunks[start..end].to_vec();
-            start = end;
-            group
-        })
-        .collect()
 }
 
 // Preserve the existing ThoError shape when a blocking copy task panics or is cancelled.
@@ -303,7 +252,8 @@ pub async fn copy_d2h_from_ptr(
     //     ensure_copy_d2h_source_is_device_memory(src_ptr)?;
     // }
 
-    let chunk_groups = copy_chunk_groups(copy_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_from_ptr")?);
+    // Keep one future per chunk so a limit increase can start more copy work immediately.
+    let chunk_groups = copy_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
     let chunk_groups_len = chunk_groups.len();
     let chunks = chunk_groups.iter().map(Vec::len).sum::<usize>();
 
@@ -369,7 +319,7 @@ pub async fn copy_d2h_from_ptr(
                 }
             }),
             chunk_groups_len,
-            COPY_CONCURRENCY,
+            buffer_limits().copy_concurrency.receiver(),
             StreamBuffering::Unordered,
             "cuda_utils::copy_d2h_from_ptr",
         )).await
@@ -454,7 +404,8 @@ pub async fn copy_h2d_from_ptr(
     let tensor_mem_size = tensor_mem_size(init_type, &size);
     debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
-    let chunk_groups = copy_chunk_groups(copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?);
+    // Keep one future per chunk so a limit increase can start more copy work immediately.
+    let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
     let chunk_groups_len = chunk_groups.len();
 
     // destination tensor lives on GPU 0
@@ -523,7 +474,7 @@ pub async fn copy_h2d_from_ptr(
                 }
             }),
             chunk_groups_len,
-            COPY_CONCURRENCY,
+            buffer_limits().copy_concurrency.receiver(),
             StreamBuffering::Unordered,
             "cuda_utils::copy_h2d_from_ptr",
         )).await
@@ -826,24 +777,6 @@ mod tests {
     #[test]
     fn copy_chunks_rejects_zero_buffer_for_nonempty_copy() {
         assert!(super::copy_chunks(1, 0, "test").is_err());
-    }
-
-    #[test]
-    fn copy_chunk_groups_keep_adjacent_chunks_on_same_worker() {
-        let chunks = super::copy_chunks(super::COPY_CONCURRENCY * 4, 1, "test").unwrap();
-        let groups = super::copy_chunk_groups(chunks);
-        assert_eq!(groups.len(), super::COPY_CONCURRENCY);
-        assert_eq!(groups[0].iter().map(|chunk| chunk.offset).collect::<Vec<_>>(), vec![0, 1, 2, 3]);
-        assert_eq!(groups[super::COPY_CONCURRENCY - 1][0].offset, (super::COPY_CONCURRENCY - 1) * 4);
-    }
-
-    #[test]
-    fn copy_chunk_groups_keeps_max_concurrency_for_one_extra_chunk() {
-        let chunks = super::copy_chunks(super::COPY_CONCURRENCY + 1, 1, "test").unwrap();
-        let groups = super::copy_chunk_groups(chunks);
-        assert_eq!(groups.len(), super::COPY_CONCURRENCY);
-        assert_eq!(groups[0].len(), 2);
-        assert_eq!(groups[1].len(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]

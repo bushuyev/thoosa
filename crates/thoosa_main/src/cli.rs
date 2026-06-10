@@ -1486,7 +1486,7 @@ where
     let _ = track_await(collect_futures_with_progress(
         futures,
         motifs_len,
-        crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
+        crate::buffer_limits::buffer_limits().cli_run_plot_motif_slices_buffer_unordered_limit.receiver(),
         StreamBuffering::Unordered,
         &format!("plot_found_motifs_for_run_config_id_{find_motifs_run_config_id}"),
     )).await;
@@ -1556,7 +1556,7 @@ where
     let _ = track_await(collect_futures_with_progress(
         futures,
         motifs_len,
-        crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
+        crate::buffer_limits::buffer_limits().cli_run_plot_motif_slices_buffer_unordered_limit.receiver(),
         StreamBuffering::Unordered,
         &format!("plot_selected_motifs_for_run_config_id_{select_motifs_run_config_id}"),
     )).await;
