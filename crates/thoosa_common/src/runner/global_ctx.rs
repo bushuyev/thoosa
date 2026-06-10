@@ -297,10 +297,11 @@ impl GlobalCtx {
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
         debug!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr}");
-        // let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
-        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), self.caches.len(), 1);
+        let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
+        // let caches_lock = perf_log!(sync_read_lock!(self.caches));
+        let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
 
-        for (type_name, entry) in self.caches.iter() {
+        for (type_name, entry) in maps.iter() {
             let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::drop_device: timed out waiting for cache gate read lock")).await;
             debug!("GlobalCtx::drop_device: type_name={type_name}");
             track_await(entry.purger.drop_gpu(tho_device_idx, type_name)).await?;
