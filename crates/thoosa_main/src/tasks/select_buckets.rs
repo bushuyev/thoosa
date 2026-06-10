@@ -36,7 +36,6 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 const SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT: usize = 16;
@@ -194,8 +193,7 @@ where
             &select_motifs_input,
             store,
             init_ctx.branch(false),
-        ))
-        .instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
+        )).await?;
         if resources.is_empty() {
             return Err(ThoError::new(format!("SelectBucketsStage::new: no resources found in {select_motifs_input:?}")));
         }
@@ -203,15 +201,14 @@ where
         let mut bucket_mean_energies = HashMap::new();
         let mut reference_mean_energies = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            let motif_ids = track_await(store.list_motifs(*find_motifs_run_config_id)).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await?;
+            let motif_ids = track_await(store.list_motifs(*find_motifs_run_config_id)).await?;
             let energies = track_await(Self::preload_bucket_mean_energies(
                 &motif_stats,
                 *find_motifs_run_config_id,
                 motif_ids,
                 init_ctx.branch(true),
-            ))
-            .instrument(tracing::debug_span!("new/3", file = file!(), line = line!())).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, *find_motifs_run_config_id)).instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await?;
+            )).await?;
+            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, *find_motifs_run_config_id)).await?;
             let reference_energy = track_await(Self::reference_energy_for_find_run(
                 &motif_stats,
                 resources.as_ref(),
@@ -219,8 +216,7 @@ where
                 &find_motifs_run_config,
                 energies.len(),
                 init_ctx.branch(false),
-            ))
-            .instrument(tracing::debug_span!("new/5", file = file!(), line = line!())).await?;
+            )).await?;
             debug!("SelectBucketsStage::new: find_motifs_run_config_id={find_motifs_run_config_id} reference_energy={reference_energy} energies_len={}", energies.len());
             bucket_mean_energies.insert(*find_motifs_run_config_id, energies);
             reference_mean_energies.insert(*find_motifs_run_config_id, reference_energy);
@@ -260,8 +256,7 @@ where
                             vec![energy_metric.clone()],
                         ))),
                         ctx.branch(false),
-                    ))
-                    .instrument(tracing::debug_span!("preload_bucket_mean_energies/1", file = file!(), line = line!())).await?;
+                    )).await?;
 
                 let energy = track_await(stats
                     .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
@@ -269,8 +264,7 @@ where
                             mean_energy: stats.channel_value(&energy_metric, 0)? as f64,
                             num_slices: stats.num_slices,
                         })
-                    }))
-                    .instrument(tracing::debug_span!("preload_bucket_mean_energies/2", file = file!(), line = line!())).await?;
+                    })).await?;
 
                 debug!("SelectBucketsStage::preload_bucket_mean_energies: find_motifs_run_config_id={find_motifs_run_config_id} motif_id={motif_id} energy={energy:?}");
                 Ok::<_, ThoError>((motif_id, energy))
@@ -283,8 +277,7 @@ where
             4, //SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT,
             StreamBuffering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
-        ))
-        .instrument(tracing::debug_span!("preload_bucket_mean_energies/3", file = file!(), line = line!())).await;
+        )).await;
         if energies.len() != motif_ids_len {
             return Err(ThoError::new(format!("SelectBucketsStage::preload_bucket_mean_energies: preloaded {} of {motif_ids_len} motifs", energies.len())));
         }
@@ -300,10 +293,9 @@ where
         let (resources_config, output_mode) = track_await(input
             .with_data_ref(0, ctx.branch(false), None, |input: &SelectMotifsInput, _ctx| {
                 Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
-            }))
-            .instrument(tracing::debug_span!("load_resources_for_selection/1", file = file!(), line = line!())).await?;
+            })).await?;
 
-        Ok((Arc::new(track_await(resources_config.to_resources(store)).instrument(tracing::debug_span!("load_resources_for_selection/2", file = file!(), line = line!())).await?.into_iter().collect::<Vec<_>>()), output_mode))
+        Ok((Arc::new(track_await(resources_config.to_resources(store)).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
     fn reference_random_slices(resources: &[Resource], find_motifs_run_config: &FindMotifsRunConfig, motif_count: usize) -> Result<u32, ThoError> {
@@ -343,8 +335,7 @@ where
                     vec![energy_metric.clone()],
                 ))),
                 ctx.branch(false),
-            ))
-            .instrument(tracing::debug_span!("reference_energy_for_find_run/1", file = file!(), line = line!())).await?;
+            )).await?;
 
         track_await(stats
             .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
@@ -353,8 +344,7 @@ where
                     return Err(ThoError::new("SelectBucketsStage::reference_energy_for_find_run: no channel energy values"));
                 }
                 Ok::<_, ThoError>(values.iter().map(|value| value.value() as f64).sum::<f64>() / values.len() as f64)
-            }))
-            .instrument(tracing::debug_span!("reference_energy_for_find_run/2", file = file!(), line = line!())).await
+            })).await
     }
 
 }
@@ -437,7 +427,7 @@ impl WithSelectDataRef<()> for SelectBucketsSyncInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
     {
-        async move { track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
+        async move { track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).await }
     }
 }
 
@@ -601,8 +591,7 @@ where
                                 DumpToCpuContextImpl::new(&required_ids),
                             ),
                         ),
-                    ))
-                    .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await
+                    )).await
             }
         });
 
@@ -612,8 +601,7 @@ where
             SELECT_MOTIFS_STAGE_RUN_CONFIGS,
             StreamBuffering::Unordered,
             "SelectBucketsStage::run",
-        ))
-        .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
+        )).await;
         if run_results.len() != run_configs_len {
             return Err(ThoError::new(format!("SelectBucketsStage::run: completed {} of {run_configs_len} run configs", run_results.len())));
         }

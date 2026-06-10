@@ -139,10 +139,10 @@ impl CollectEtaProgressSocketServer {
     pub(crate) async fn shutdown(mut self) {
         let _ = self.shutdown_tx.send(true);
         if let Some(task) = self.task.take() {
-            let _ = track_await(task).instrument(tracing::debug_span!("shutdown/1", file = file!(), line = line!())).await;
+            let _ = track_await(task).await;
         }
         if let Some(stats_task) = self.stats_task.take() {
-            let _ = track_await(stats_task).instrument(tracing::debug_span!("shutdown/2", file = file!(), line = line!())).await;
+            let _ = track_await(stats_task).await;
         }
     }
 }
@@ -204,15 +204,15 @@ async fn serve_one_client(
 ) -> SocketResult<()> {
     let mut writer = &stream;
     let first = rx.borrow_and_update().clone();
-    track_await(send_snapshot(&mut writer, &first)).instrument(tracing::debug_span!("serve_one_client/1", file = file!(), line = line!())).await?;
+    track_await(send_snapshot(&mut writer, &first)).await?;
 
     loop {
-        if track_await(rx.changed()).instrument(tracing::debug_span!("serve_one_client/2", file = file!(), line = line!())).await.is_err() {
+        if track_await(rx.changed()).await.is_err() {
             break;
         }
 
         let snapshot = rx.borrow_and_update().clone();
-        track_await(send_snapshot(&mut writer, &snapshot)).instrument(tracing::debug_span!("serve_one_client/3", file = file!(), line = line!())).await?;
+        track_await(send_snapshot(&mut writer, &snapshot)).await?;
     }
 
     Ok(())
@@ -224,8 +224,8 @@ where
 {
     let mut bytes = serde_json::to_vec(snapshot)?;
     bytes.push(b'\n');
-    track_await(writer.write_all(&bytes)).instrument(tracing::debug_span!("send_snapshot/1", file = file!(), line = line!())).await?;
-    track_await(writer.flush()).instrument(tracing::debug_span!("send_snapshot/2", file = file!(), line = line!())).await?;
+    track_await(writer.write_all(&bytes)).await?;
+    track_await(writer.flush()).await?;
     Ok(())
 }
 

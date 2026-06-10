@@ -12,7 +12,6 @@ use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectE
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::val::{NamedVal, Val};
 use crate::train_nets::OptConfig;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone)]
@@ -647,7 +646,7 @@ where
                 .collect::<Vec<_>>();
 
             debug!("AsyncTPEOptimizerImpl::optimize:sample about to call obj_func  i={i} ");
-            let results = track_await(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).instrument(tracing::debug_span!("optimize/1", file = file!(), line = line!())).await;
+            let results = track_await(self.obj_func.async_call_mut((&eval_config_named.as_slice(),))).await;
             debug!("AsyncTPEOptimizerImpl::optimize:sample got results from obj_func results={results:?} i={i} ");
 
             let loss = results.loss();
@@ -763,7 +762,7 @@ where
     }
 
     pub async fn optimize(&mut self) -> Vec<Val> {
-        track_await(self.inner.optimize()).instrument(tracing::debug_span!("optimize/1", file = file!(), line = line!())).await
+        track_await(self.inner.optimize()).await
     }
 
     pub fn enqueue_configs<I>(&mut self, configs: I)
@@ -808,7 +807,7 @@ where
     }
 
     pub async fn optimize(&mut self) -> Vec<Val> {
-        track_await(self.inner.optimize()).instrument(tracing::debug_span!("optimize/1", file = file!(), line = line!())).await
+        track_await(self.inner.optimize()).await
     }
 
     pub fn enqueue_configs<I>(&mut self, configs: I)

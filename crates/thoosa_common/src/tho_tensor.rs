@@ -15,7 +15,6 @@ use mockall_double::double;
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -306,7 +305,7 @@ where
             self.tho_device()
         };
 
-        let copy_ctx = track_await(GlobalCtx::global().copy_ctx(ctx_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await;
+        let copy_ctx = track_await(GlobalCtx::global().copy_ctx(ctx_device)).await;
         let src = if self.t.is_contiguous() { None } else {
             info!("f_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguous");
             Some(self.t.f_contiguous()?)
@@ -320,7 +319,7 @@ where
                 &src_ref.size(),
                 dst_device.ordinal(),
                 src_ref.kind(),
-            )).instrument(tracing::debug_span!("copy_to_device/2", file = file!(), line = line!())).await?;
+            )).await?;
 
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device:?} copy.device={:?}",self.id,  self.t.size(), self.t.device(), copy.device());
         trace!("CopyToDevice for ThoTensor: self.id={:?} self.t=\n{} copy=\n{copy}", self.id, self.t);

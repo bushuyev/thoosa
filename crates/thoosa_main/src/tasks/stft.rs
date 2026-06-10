@@ -24,7 +24,6 @@ use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_shared::{mono_key, ThoError};
 
 use crate::tasks::stage_ids::STFT;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, cached_derive::Cached, Named)]
@@ -131,8 +130,7 @@ where
                         DumpToCpuContextImpl::new(&required_ids),
                     ),
                 ),
-            ))
-            .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+            )).await?;
         Ok(Arc::new(DevicesWrap::wrap(output)))
     }
 }
