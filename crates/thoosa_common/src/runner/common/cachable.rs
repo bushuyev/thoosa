@@ -1035,7 +1035,11 @@ where
 
             if let Some(n) = maybe_notify {
                 // follower: wait until the leader finishes, then try fast path again
-                track_await("thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/1", n.notified()).instrument(tracing::debug_span!("ensure_copied/1", file = file!(), line = line!())).await;
+                track_await(
+                    "thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/1",
+                    n.notified()
+                ).instrument(tracing::debug_span!("ensure_copied/1", file = file!(), line = line!()))
+                .await;
                 continue;
             }
 
