@@ -164,6 +164,17 @@ impl std::fmt::Display for SetLimitError {
 
 impl std::error::Error for SetLimitError {}
 
+/// Temporarily removes a parent job from the manager's active-capacity accounting
+/// while that job awaits a nested `submit`.
+///
+/// The parent Tokio task is not paused: it is already blocked waiting for its child.
+/// Without removing it from `active_count`/`active_caps`, an exclusive parent (or a
+/// parent whose cap is already full) can prevent the child from ever starting. The
+/// parent would then wait for the child while the child waits for the parent's slot.
+///
+/// `resume` waits for the manager to count the parent as active again before the
+/// nested `submit` returns. `Drop` provides a best-effort asynchronous resume when
+/// the nested submission unwinds or is cancelled after suspension was acknowledged.
 struct ParentSuspendGuard {
     parent: Option<CurrentJob>,
     suspended: bool,
@@ -191,6 +202,8 @@ impl ParentSuspendGuard {
             })
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
+        // The flag is set only after the manager has applied the suspension. Cancellation
+        // between sending Suspend and receiving this acknowledgement is not covered by Drop.
         track_await(ack_rx).await
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
@@ -235,6 +248,8 @@ impl Drop for ParentSuspendGuard {
             return;
         };
 
+        // Drop cannot await the manager acknowledgement, so cancellation/panic recovery
+        // has to spawn a best-effort resume task on the current Tokio runtime.
         if let Ok(handle) = Handle::try_current() {
             handle.spawn(async move {
                 let (ack_tx, ack_rx) = oneshot::channel();
@@ -413,6 +428,7 @@ impl DynamicTaskExecutor {
         F: Future<Output = Result<T, ThoError>> + Send + 'static,
         T: Send + Debug + 'static,
     {
+        //currently jobs can only be submitted from OOMHandler::run and ::consume and are never nested (i.e. parent is always None)
         let parent = CURRENT_JOB.try_with(|job| job.clone()).ok();
         let job_id = job_id_to_rerun.unwrap_or_else(|| NEXT_JOB_ID.fetch_add(1, Ordering::Relaxed));
 
@@ -423,6 +439,16 @@ impl DynamicTaskExecutor {
             track_await(self.wait_until_accepting(parent.as_ref())).await?;
 
             debug!("DynamicTaskExecutor::submit: job_id={job_id} accepted");
+
+            // Reserve queue capacity before suspending a parent. Otherwise a nested submit
+            // could remove its parent from active accounting while still waiting for space
+            // in the input channel, with no child yet queued to make progress.
+            //
+            //   1. submit() calls suspend_guard.maybe_suspend().
+            //   2. It sends ManagerCmd::Suspend at thoosa_common/src/runner/dyn_mpsc.rs:199.
+            //   3. The manager handles it through handle_suspend().
+            //   4. handle_suspend() sets job.active = false and calls remove_active() at thoosa_common/src/runner/dyn_mpsc.rs:1218.
+            //
 
             let send_permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
                 Ok(Ok(permit)) => permit,
@@ -442,6 +468,8 @@ impl DynamicTaskExecutor {
                 }
             };
 
+            // Reset may have started while reserve() was awaiting channel capacity. The
+            // permit alone does not authorize enqueueing, so recheck before suspension.
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(send_permit);
                 if let Some(job_id) = job_id_to_rerun {
@@ -455,6 +483,8 @@ impl DynamicTaskExecutor {
                 continue;
             }
 
+            // A nested submit must stop counting its blocked parent as active before the
+            // child is enqueued, or the parent's own parallelism cap can block the child.
             let mut suspend_guard = ParentSuspendGuard::new(parent.clone());
             if let Err(e) = track_await(suspend_guard.maybe_suspend()).await {
                 drop(send_permit);
@@ -464,6 +494,8 @@ impl DynamicTaskExecutor {
                 return Err(e);
             }
 
+            // Suspension waits for a manager acknowledgement, during which reset may begin.
+            // Back out and resume the parent rather than enqueueing a child into a paused executor.
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(send_permit);
                 let _ = track_await(suspend_guard.resume()).await;
