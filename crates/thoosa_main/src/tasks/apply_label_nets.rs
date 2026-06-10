@@ -258,6 +258,8 @@ where
             .iter()
             .map(|apply_net| {
                 let input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = Arc::clone(&input);
+                let apply_motif_nets = Arc::clone(&apply_net.apply_motif_nets);
+                let apply_label_net = Arc::clone(&apply_net.apply_label_net);
                 let mut ctx = ctx.branch(false);
                 async move {
 
@@ -269,7 +271,7 @@ where
                     }
 
                     //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
-                    let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = Arc::clone(&apply_net.apply_motif_nets)
+                    let motif_probs: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>> = apply_motif_nets
                         .run(input, ctx.branch(false))
                         .await?;
 
@@ -282,7 +284,7 @@ where
                     }
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
-                    let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = Arc::clone(&apply_net.apply_label_net).run(motif_probs, ctx.branch(false)).await?;
+                    let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = apply_label_net.run(motif_probs, ctx.branch(false)).await?;
 
                     #[cfg(test)]{
                         with_data!(ctx.branch(false), result; |ctx, result:&ThoTensor<LabelProbability, SynKey>|{

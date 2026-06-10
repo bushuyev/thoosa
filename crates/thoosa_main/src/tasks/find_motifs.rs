@@ -91,6 +91,20 @@ where
     },
 }
 
+impl<RC, L, C> Clone for FindMotifsStages<RC, L, C>
+where
+    RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    C: RunCtx + Adjustable + 'static,
+{
+    fn clone(&self) -> Self {
+        match self {
+            Self::CrossLoader { id, cross_loader } => Self::CrossLoader { id: *id, cross_loader: Arc::clone(cross_loader) },
+            Self::Bucketing { id, bucketing_stage } => Self::Bucketing { id: *id, bucketing_stage: Arc::clone(bucketing_stage) },
+        }
+    }
+}
+
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
@@ -235,12 +249,16 @@ where
 
         //gpt Build per-run-config loaders in parallel; each run_config becomes its own CrossLoader pipeline.
         let run_configs_len = run_configs.len();
+        let ws = Arc::clone(ws);
+        let store = Arc::clone(store);
         let futures = run_configs
             .into_iter()
             .map( |run_config| {
                 let fixed_config = fixed_config.clone();
                 let loader = Arc::clone(&loader);
                 let motif_stats = Arc::clone(&motif_stats);
+                let ws = Arc::clone(&ws);
+                let store = Arc::clone(&store);
                 let run_config_id = run_config.id.expect("should be pre saved");
                 let mut ctx = init_ctx.branch(false);
 
@@ -248,7 +266,7 @@ where
                     let ctx_id = ctx.id().clone();
                     debug!("FindMotifsStage::new: run_config={run_config:?} ctx.id={:?}", ctx.id());
                     let find_motifs_run_config_id = run_config.id.expect("find motif run config without id");
-                    let configured_loader = config_to_stage(&loader, &run_config, ws)?;
+                    let configured_loader = config_to_stage(&loader, &run_config, &ws)?;
 
                      Ok(match &run_config.finder_kind {
                         FinderKind::Bucket(bucket_run_config) => {
@@ -259,7 +277,7 @@ where
                             FindMotifsStages::new_bucketing(
                                 find_motifs_run_config_id,
                                 Arc::new(BucketingStage::new(
-                                    ws,
+                                    &ws,
                                     &store,
                                     configured_loader,
                                     bucket_run_config,
@@ -399,8 +417,8 @@ where
                                     &store,
                                     Arc::clone(&cross_unfold_clc),
                                     {
-                                        let ws = Arc::clone(ws);
-                                        let store = Arc::clone(store);
+                                        let ws = Arc::clone(&ws);
+                                        let store = Arc::clone(&store);
                                         let run_config = run_config_clone.clone();
                                         let fixed_config = fixed_config.clone();
                                         move |resources: &[Arc<Resource>]| {
@@ -501,12 +519,14 @@ where
         let futures = self
             .run_config_stages
             .iter()
+            .cloned()
             .map(|stage|{
                 info!("running find motifs on run config {:?}", stage.id());
 
                 let ctx_for_stage = ctx.branch(true);
+                let input = Arc::clone(&input);
 
-                stage.run(Arc::clone(&input), ctx_for_stage)
+                async move { stage.run(input, ctx_for_stage).await }
             });
 
         let _/*cross loader's out is ()*/ = track_await(collect_futures_with_progress(

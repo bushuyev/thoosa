@@ -372,12 +372,19 @@ pub(crate) async fn run_all(
         }   
         RunMode::RunLabels { train_label_nets_run_config_range_or_value, train_labels_opt_config } => {
             let train_label_nets_run_config_range_or_value = Arc::new(train_label_nets_run_config_range_or_value);
+            let labels_len = labels.len();
+            let labels_filter = labels_filter.clone();
+            let ws = Arc::clone(ws);
+            let store = Arc::clone(store);
+            let loader = Arc::clone(loader);
+            let run_all_args = run_all_args.clone();
 
 
 
-            let futures = labels.iter().filter(|label|
+            let futures = labels.into_iter().filter(move |label|
                 {
-                    labels_filter_ref
+                    labels_filter
+                        .as_ref()
                         .map(|labels| labels.iter().any(|filter_label| filter_label.eq_ignore_ascii_case(label)))
                         .unwrap_or(true)
                 }
@@ -387,6 +394,10 @@ pub(crate) async fn run_all(
                 let mut init_ctx_train_labels = label_ctx.branch(false);
 
                 let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
+                let ws = Arc::clone(&ws);
+                let store = Arc::clone(&store);
+                let loader = Arc::clone(&loader);
+                let run_all_args = run_all_args.clone();
                 let ws_in_train_labels = Arc::clone(&ws);
                 let store_in_train_labels = Arc::clone(&store);
                 let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
@@ -416,6 +427,9 @@ pub(crate) async fn run_all(
                         let mut init_ctx_train_labels = init_ctx_train_labels.branch(false);
                         let mut label_ctx = label_ctx.branch(false);
                         let train_labels_opt_config = Arc::clone(&train_labels_opt_config);
+                        let loader = Arc::clone(&loader);
+                        let run_all_args = run_all_args.clone();
+                        let label_for_run = label.clone();
                         match panic_to_err_async!(
                               run_opt::<_, _, TrainLabelNetRunConfig, _, _>(
                                 train_label_nets_run_config_range_or_value,
@@ -443,7 +457,7 @@ pub(crate) async fn run_all(
                                         &ws_in_train_labels,
                                         &store_in_train_labels,
                                         train_labels_opt_config,
-                                        Some(vec![label.clone()]),
+                                        Some(vec![label_for_run]),
                                     ).instrument(tracing::debug_span!("run_all/13", file = file!(), line = line!())).await.map(|v| Arc::new(v))
                                 },
                                 || label_ctx.branch(false),
@@ -478,7 +492,7 @@ pub(crate) async fn run_all(
             //
             let _ = track_await(collect_futures_with_progress(
                 futures,
-                labels.len(),
+                labels_len,
                 16,
                 StreamBuffering::Unordered,
                 "bird_clef_labels",

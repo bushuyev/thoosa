@@ -392,11 +392,10 @@ where
         let channels_motifs_added_slices: Arc<Vec<tokio::sync::RwLock<HashMap<SynKey, HashSet<IdSlice>>>>> =
             Arc::new((0..num_channels).map(|_| tokio::sync::RwLock::new(HashMap::new())).collect());
 
-        let run_configs__stacked_motifs_dbg = &run_configs__stacked_motifs;
+        let run_configs__stacked_motifs_dbg = Arc::new(run_configs__stacked_motifs.clone());
         let run_configs__stacked_motifs_len = run_configs__stacked_motifs.len();
         let futures = run_configs__stacked_motifs
-            .iter()
-            .cloned()
+            .into_iter()
             .map(|(find_motifs_run_config, motif_data)| {
                 let resources = Arc::clone(&resources);
                 let find_motifs_run_config = Arc::clone(&find_motifs_run_config);
@@ -408,7 +407,7 @@ where
                 let mut ctx_to_move = ctx.branch(true);
                 let clc_dist = Arc::clone(&self.motif_stats);
                 let slices_selector_metric = slices_selector_metric.clone();
-                let run_configs__stacked_motifs_dbg = run_configs__stacked_motifs_dbg;
+                let run_configs__stacked_motifs_dbg = Arc::clone(&run_configs__stacked_motifs_dbg);
 
                 async move {
                     match track_await(async {
@@ -695,13 +694,14 @@ where
         let num_channels = perf_log!(sync_read_lock!(self.ws)).channels() as usize;
         let total_size = resources.iter().map(|resource| resource.length() as usize).sum::<usize>();
         let run_configs_len = self.run_configs.len();
-        let futures = self.run_configs.iter().map(|extend_motifs_run_config| {
+        let run_configs = self.run_configs.clone();
+        let futures = run_configs.into_iter().map(|extend_motifs_run_config| {
             let self_for_fut = Arc::clone(&self);
             let resources_for_fut = Arc::clone(&resources);
             let mut ctx_for_fut = ctx.branch(false);
             async move {
                 let channels_motifs_added_slices = track_await(self_for_fut.extend_motifs_for_run_config(
-                    extend_motifs_run_config,
+                    &extend_motifs_run_config,
                     resources_for_fut,
                     num_channels,
                     total_size,

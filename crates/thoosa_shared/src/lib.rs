@@ -8,13 +8,12 @@
 extern crate self as thoosa_shared;
 
 use crate::hyperparameter::{FieldName, Hyperparameter};
-use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard, COLLECT_ETA_LOG_INTERVAL};
 use crate::resource::ResourceId;
 use crate::val::{GridValueSet, NamedRange, NamedVal, PendingOptField, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
-use log::{debug, error, trace, warn};
+use log::{debug, trace, warn};
 use num_traits::PrimInt;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -36,7 +35,6 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::{fmt, fs};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use futures::stream::StreamExt;
 use async_trait::async_trait;
 use ambassador::delegatable_trait;
 use mockall::automock;
@@ -71,6 +69,7 @@ pub mod macros;
 pub mod rayon_pool;
 pub mod tracked_await;
 pub mod collect_futures_with_progress;
+pub use collect_futures_with_progress::collect_futures_with_progress;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,
@@ -301,68 +300,6 @@ pub fn cuda_activity_gate() -> &'static CudaActivityGate {
     &CUDA_ACTIVITY_GATE
 }
 
-async fn collect_stream_with_progress<T, S>(
-    mut stream: S,
-    results: &mut Vec<T>,
-    ok: &mut usize,
-    err: &mut usize,
-    total: usize,
-    descr: &str,
-    invocation_id: Option<u64>,
-) where
-    T:Debug,
-    S: futures::stream::Stream<Item = Result<T, ThoError>> + Unpin,
-{
-
-    let mut eta_tick = tokio::time::interval(COLLECT_ETA_LOG_INTERVAL);
-    eta_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let _ = eta_tick.tick().await;
-
-
-    loop {
-        cuda_activity_gate().wait_if_paused().await;
-
-        tokio::select! {
-            biased;
-            _ = cuda_activity_gate().wait_until_paused(), if !cuda_activity_gate().is_paused() => {
-                cuda_activity_gate().wait_if_paused().await;
-            }
-            _ = eta_tick.tick() => {
-                collect_eta_maybe_log(false);
-            }
-            next = stream.next() => {
-                let Some(r) = next else {
-                    trace!("collect_stream_with_progress: {descr}: next={next:?}");
-
-                    break;
-                };
-
-                if let Some(invocation_id) = invocation_id {
-                    collect_eta_record_completion(invocation_id);
-                }
-
-                match r {
-                    Ok(item) => {
-                        *ok += 1;
-                        debug!("collect_stream_with_progress: {descr} done {} ({}/{}) out of {}", *ok + *err, *ok, *err, total);
-                        results.push(item);
-                    }
-                    Err(e) => {
-                        *err += 1;
-                        if e.is_oom() {
-                            warn!("collect_stream_with_progress: {descr}: got oom {e:?}");
-                        } else {
-                            error!("collect_stream_with_progress: {descr}: {e:?}");
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    debug!("collect_stream_with_progress: {descr} all done ");
-}
-
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
 // pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(240);//TODO should depend on future
 
@@ -396,74 +333,6 @@ where
     trace!("with_async_perf_log: descr={descr} done");
 
     r
-}
-
-pub async fn collect_futures_with_progress<T, F>(
-    futures: impl Iterator<Item=F>,
-    len:usize,
-    buffer_limit: usize,
-    buffering: StreamBuffering,
-    descr: &str,
-) -> Vec<T>
-where
-    T:Debug,
-    F: Future<Output = Result<T, ThoError>>,
-{
-    debug!("collect_futures_with_progress: descr={descr} len={len}");
-
-    let mut results = Vec::with_capacity(len);
-    let (mut ok, mut err) = (0usize, 0usize);
-    let total = len;
-    let eta_concurrency = buffer_limit.max(1).min(total.max(1));
-    let eta_guard = (total > 0).then(|| CollectEtaInvocationGuard::new(descr, total, eta_concurrency));
-    let eta_invocation_id = eta_guard.as_ref().map(CollectEtaInvocationGuard::id);
-
-
-    match buffering {
-        StreamBuffering::Unordered => {
-            let mut stream = futures::stream::iter(futures)
-            // .map(|fut| async move {
-            //     tokio::time::timeout(FUTURES_TIMEOUT, fut).await? //TODO add param
-            // })
-            .buffer_unordered(buffer_limit);
-
-            collect_stream_with_progress(
-                &mut stream,
-                &mut results,
-                &mut ok,
-                &mut err,
-                total,
-                descr,
-                eta_invocation_id,
-            )
-            .await;
-        }
-        StreamBuffering::Ordered => {
-            let mut stream = futures::stream::iter(futures)
-                // .map(|fut| async move {
-                //     tokio::time::timeout(FUTURES_TIMEOUT, fut).await?
-                // })
-                .buffered(buffer_limit);
-
-            collect_stream_with_progress(
-                &mut stream,
-                &mut results,
-                &mut ok,
-                &mut err,
-                total,
-                descr,
-                eta_invocation_id,
-            )
-            .await;
-        }
-    }
-
-    drop(eta_guard);
-    if eta_invocation_id.is_some() {
-        collect_eta_maybe_log(true);
-    }
-
-    results
 }
 
 #[repr(C)]
