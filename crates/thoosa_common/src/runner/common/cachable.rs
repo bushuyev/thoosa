@@ -233,7 +233,7 @@ where
         Self: Sized
     {
         let lock = &wrap.cached_data[0];
-        let read_guard = async_perf_log!(async_read_lock!(lock));
+        let read_guard = track_await(lock.read()).await;
 
         if read_guard.is_some() {
             Ok(tokio::sync::RwLockReadGuard::map(
@@ -337,7 +337,7 @@ where
         Self: Sized
     {
         let lock = &wrap.cached_data[0];
-        Ok(async_perf_log!(async_write_lock!(lock)).take().expect(&format!("no cpu data {:?}", wrap.id)))
+        Ok(track_await(lock.write()).await.take().expect(&format!("no cpu data {:?}", wrap.id)))
     }
 
     async fn is_all_on_cpu(_wrap: &DevicesWrap<O>) -> bool {
@@ -410,7 +410,7 @@ where
         //reference to the cached object. And in the latter case it can indeed happen so that read_guard at thoosa_common/src/runner/common/cachable.rs:416  is obtained when device data is dropped at thoosa_common/src/runner/common/cachable.rs:590 but then it will be copied back from CPU (0 device) in cycle at thoosa_common/src/runner/common/cachable.rs:429
         if wrap.is_resident_on_device(to_tho_device_idx) {
             let lock = &wrap.cached_data[to_tho_device_idx];
-            let read_guard = async_perf_log!(async_read_lock!(lock));
+            let read_guard = track_await(lock.read()).await;
             if read_guard.is_some() {
                 return Ok(tokio::sync::RwLockReadGuard::map(
                     read_guard,
@@ -428,7 +428,7 @@ where
                 continue;
             }
 
-            let source_read_guard = async_perf_log!(async_read_lock!(op));
+            let source_read_guard = track_await(op.read()).await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 return track_await(wrap.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
@@ -471,7 +471,7 @@ where
 
             if wrap.is_resident_on_device(to_tho_device_idx) {
                 let lock = &wrap.cached_data[to_tho_device_idx];
-                let read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(lock));
+                let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
                 if read_guard.is_some() {
                     let base: &O = read_guard
                         .as_ref()
@@ -489,7 +489,7 @@ where
                     continue;
                 }
 
-                let source_read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(op));
+                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
 
                 if let Some(src) = source_read_guard.as_ref() {
                     let sub_t: O = src.subview(selector.clone())?;
@@ -520,7 +520,7 @@ where
 
         if wrap.is_resident_on_device(to_device_idx) {
             let lock = &wrap.cached_data[to_device_idx];
-            let read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(lock));
+            let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
             if read_guard.is_some() {
                 let data = read_guard
                     .as_ref()
@@ -538,7 +538,7 @@ where
                 continue;
             }
 
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = async_perf_log!(async_read_lock!(op));
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
 
             if let Some(src) = source_read_guard.as_ref() {
                 let sub_t = src.subview(selector.clone())?;
@@ -577,7 +577,7 @@ where
 
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
 
-                if async_perf_log!(async_read_lock!(&wrap.cached_data[0])).is_none() {
+                if track_await(wrap.cached_data[0].read()).await.is_none() {
                     if let Some(data) = lock.as_ref() {
                         track_await(wrap.ensure_copied(0, data, false)).await?;
                     }
@@ -931,7 +931,7 @@ where
     pub async fn clone_from_cpu(&self) -> Result<O, ThoError>
     where O: Clone {
         let lock = &self.cached_data[0];
-        Ok(async_perf_log!(async_read_lock!(lock)).clone().expect("no data in cpu"))
+        Ok(track_await(lock.read()).await.clone().expect("no data in cpu"))
     }
 
 
@@ -1015,7 +1015,7 @@ where
         loop {
             if self.is_resident_on_device(dst_idx) {
                 let lock = &self.cached_data[dst_idx];
-                let dst_read = async_perf_log!(async_read_lock!(lock));
+                let dst_read = track_await(lock.read()).await;
                 // ---- Fast path
                 if dst_read.is_some() {
                     debug!("DevicesWrap::ensure_copied: self.id={:?} fast path", self.id);
@@ -1053,7 +1053,7 @@ where
             // Double-check: maybe dst was filled after we dropped the read lock
             if self.is_resident_on_device(dst_idx) {
                 let lock = &self.cached_data[dst_idx];
-                let dst_read = async_perf_log!(async_read_lock!(lock));
+                let dst_read = track_await(lock.read()).await;
                 if dst_read.is_some() {
                     inflight_guard.clear();
                     continue;
@@ -1079,7 +1079,7 @@ where
                 debug!("DevicesWrap::ensure_copied: self.id={:?} install copied to dst_idx={dst_idx} produced.device={:?}", self.id, produced.device());
 
                 let lock = &self.cached_data[dst_idx];
-                let mut w = async_perf_log!(async_write_lock!(lock));
+                let mut w = track_await(lock.write()).await;
                 if w.is_none() {
                     *w = Some(produced);
                     self.mark_resident_on_device(dst_idx);
@@ -1210,7 +1210,7 @@ where
         // A concurrent dump_to_cpu can move data from a device slot to CPU while this method is scanning slots; the second pass avoids a false NotFound after waiting on the old device slot.
         for _attempt in 0..2 {
             for op in self.cached_data.iter() {
-                let source_read_guard = async_perf_log!(async_read_lock!(op));
+                let source_read_guard = track_await(op.read()).await;
 
                 if let Some(data_with_extra) = source_read_guard.as_ref() {
                     return Ok(data_with_extra.extra().clone());
@@ -1233,6 +1233,7 @@ mod tests {
     use tokio::time::timeout;
     use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock};
     use thoosa_shared::copy_mode::CpuOrGpu;
+    use thoosa_shared::tracked_await::track_await;
     use thoosa_shared::traits::{DummyCachableId, WithId};
     use crate::runner::global_ctx::MockGlobalCtx;
     use thoosa_with_data::with_data;
@@ -1456,7 +1457,7 @@ mod tests {
         let tested = DevicesWrap::wrap(data);
         assert!(tested.is_all_on_cpu().await);
         let lock = &tested.cached_data[1];
-        assert!(async_perf_log!(async_read_lock!(lock)).is_none());
+        assert!(track_await(lock.read()).await.is_none());
 
         let ctx_for_data = mock_run_ctx::default(1);
         tested
@@ -1469,12 +1470,12 @@ mod tests {
             .await?;
 
         let lock = &tested.cached_data[1];
-        assert!(async_perf_log!(async_read_lock!(lock)).is_some());
+        assert!(track_await(lock.read()).await.is_some());
         assert!(!tested.is_all_on_cpu().await);
 
         tested.dump_to_cpu(1).await?;
         let lock = &tested.cached_data[1];
-        assert!(async_perf_log!(async_read_lock!(lock)).is_none());
+        assert!(track_await(lock.read()).await.is_none());
         assert!(tested.is_all_on_cpu().await);
         assert!(tested.is_on_cpu_before(0));
 
