@@ -107,7 +107,7 @@ where
     true
 }
 
-async fn collect_joinset_unordered<T, F, I>(
+pub async fn collect_joinset_unordered<T, F, I>(
     set: &mut JoinSet<(usize, Result<T, ThoError>)>,
     futures: &mut I,
     results: &mut Vec<T>,

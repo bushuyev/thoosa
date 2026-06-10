@@ -699,7 +699,7 @@ impl DynamicTaskExecutor {
         if tho_device_idx > 0 {
             debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
 
-
+            log::logger().flush();
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
             if let Err(e) = track_await(reset_fn(tho_device_idx)).await {

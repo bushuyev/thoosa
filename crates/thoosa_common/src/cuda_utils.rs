@@ -3,13 +3,12 @@ use std::ops::Add;
 use std::sync::Arc;
 use std::time::Duration;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use futures_util::{stream, StreamExt};
 use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use tch::nn::VarStore;
 use tokio::task::{spawn_blocking, JoinError};
-use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::{collect_futures_with_progress, Cause, StreamBuffering, ThoError};
 use tokio_utils::Pool;
 use torch_sys::at_grad_set_enabled;
 use tub::Guard;
@@ -305,6 +304,7 @@ pub async fn copy_d2h_from_ptr(
     // }
 
     let chunk_groups = copy_chunk_groups(copy_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_from_ptr")?);
+    let chunk_groups_len = chunk_groups.len();
     let chunks = chunk_groups.iter().map(Vec::len).sum::<usize>();
 
     let dst_t = Tensor::f_empty(src_size, (init_type, Cpu))?;
@@ -314,13 +314,13 @@ pub async fn copy_d2h_from_ptr(
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
 
-        track_await(stream::iter(chunk_groups)
-            .map(|chunk_group| {
+        track_await(collect_futures_with_progress(
+            chunk_groups.into_iter().map(|chunk_group| {
                 let pool = Arc::clone(&bufs_pool);
                 async move {
                     let buf_stream = track_await(pool.acquire()).await;
 
-                    track_await(spawn_blocking(move || {
+                    let result = track_await(spawn_blocking(move || {
                         tracing::info_span!(
                             "cuda_utils::copy_d2h_from_ptr_chunk_group",
                             kind = "spawn_blocking",
@@ -363,15 +363,16 @@ pub async fn copy_d2h_from_ptr(
                             Ok::<(), ThoError>(())
 
                         })
-                    }))
-                    .await
-                    .map_err(join_error_to_tho_error)??;
+                    })).await.map_err(join_error_to_tho_error).and_then(|result| result);
 
-                    Ok(())
+                    Ok::<_, ThoError>(result)
                 }
-            })
-            .buffer_unordered(COPY_CONCURRENCY)
-            .collect::<Vec<_>>()).await
+            }),
+            chunk_groups_len,
+            COPY_CONCURRENCY,
+            StreamBuffering::Unordered,
+            "cuda_utils::copy_d2h_from_ptr",
+        )).await
             .into_iter()
             .collect::<Result<(), ThoError>>()?;
     }
@@ -454,6 +455,7 @@ pub async fn copy_h2d_from_ptr(
     debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
     let chunk_groups = copy_chunk_groups(copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?);
+    let chunk_groups_len = chunk_groups.len();
 
     // destination tensor lives on GPU 0
     let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_device_idx - 1)))?;
@@ -465,14 +467,14 @@ pub async fn copy_h2d_from_ptr(
         // CUdriver needs CUdeviceptr for the destination side
         let dst_base = dst_ptr as thoosa_shims::memcpy::CuDevicePtr;
 
-        track_await(stream::iter(chunk_groups)
-            .map(|chunk_group| {
+        track_await(collect_futures_with_progress(
+            chunk_groups.into_iter().map(|chunk_group| {
                 let pool = Arc::clone(bufs_pool);
 
                 async move {
                     let buf_stream = track_await(pool.acquire()).await;
 
-                    track_await(spawn_blocking(move || {
+                    let result = track_await(spawn_blocking(move || {
                         tracing::info_span!(
                             "cuda_utils::copy_h2d_from_ptr_chunk_group",
                             kind = "spawn_blocking",
@@ -515,13 +517,16 @@ pub async fn copy_h2d_from_ptr(
                             Ok::<(), ThoError>(())
                         })
 
-                    })).await.map_err(join_error_to_tho_error)??;
+                    })).await.map_err(join_error_to_tho_error).and_then(|result| result);
 
-                    Ok(())
+                    Ok::<_, ThoError>(result)
                 }
-            })
-            .buffer_unordered(COPY_CONCURRENCY)
-            .collect::<Vec<_>>()).await
+            }),
+            chunk_groups_len,
+            COPY_CONCURRENCY,
+            StreamBuffering::Unordered,
+            "cuda_utils::copy_h2d_from_ptr",
+        )).await
             .into_iter()
             .collect::<Result<(), ThoError>>()?;
     }
