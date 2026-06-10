@@ -87,7 +87,7 @@ impl Job {
         let job_id = self.id;
         debug!("DynamicTaskExecutor, Job::run: running job {self:?}");
 
-        let r = track_await(self.fut).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await;
+        let r = track_await(self.fut).await;
 
         debug!("DynamicTaskExecutor, Job::run: done job {job_id:?}");
 
@@ -191,8 +191,7 @@ impl ParentSuspendGuard {
             })
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
-        track_await(ack_rx)
-            .instrument(tracing::debug_span!("maybe_suspend/1", file = file!(), line = line!())).await
+        track_await(ack_rx).await
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
         self.suspended = true;
@@ -218,8 +217,7 @@ impl ParentSuspendGuard {
             })
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
-        track_await(ack_rx)
-            .instrument(tracing::debug_span!("resume/1", file = file!(), line = line!())).await
+        track_await(ack_rx).await
             .map_err(|_| ThoError::new_with_cause("executor is closed", Cause::SubmitErrorClosed))?;
 
         self.suspended = false;
@@ -248,7 +246,7 @@ impl Drop for ParentSuspendGuard {
                     })
                     .is_ok()
                 {
-                    let _ = track_await(ack_rx).instrument(tracing::debug_span!("drop/1", file = file!(), line = line!())).await;
+                    let _ = track_await(ack_rx).await;
                 }
             }.instrument(tracing::info_span!(
                 "dyn_mpsc::parent_suspend_guard",
@@ -344,7 +342,7 @@ impl DynamicTaskExecutor {
                 accept_gate_for_manager,
                 tho_device_idx,
                 reset_fn_for_manager,
-            )).instrument(tracing::debug_span!("new_inner/1", file = file!(), line = line!())).await;
+            )).await;
         }.instrument(tracing::info_span!(
             "dyn_mpsc::manager",
             kind = "spawn",
@@ -385,7 +383,7 @@ impl DynamicTaskExecutor {
                 if parent.is_some() {
                     return Err(Self::resetting_submit_error());
                 }
-                track_await(cuda_activity_gate().wait_if_paused()).instrument(tracing::debug_span!("wait_until_accepting/1", file = file!(), line = line!())).await;
+                track_await(cuda_activity_gate().wait_if_paused()).await;
                 continue;
             }
 
@@ -400,8 +398,7 @@ impl DynamicTaskExecutor {
             }
 
             track_await(accepting_rx
-                .changed())
-                .instrument(tracing::debug_span!("wait_until_accepting/2", file = file!(), line = line!())).await
+                .changed()).await
                 .map_err(|_| Self::closed_error("Can't submit job: executor is closed"))?;
         }
     }
@@ -423,11 +420,11 @@ impl DynamicTaskExecutor {
         debug!("DynamicTaskExecutor::submit: job_id={job_id} max_other_parallel={max_other_parallel:?} parent={parent:?}");
 
         loop {
-            track_await(self.wait_until_accepting(parent.as_ref())).instrument(tracing::debug_span!("submit/1", file = file!(), line = line!())).await?;
+            track_await(self.wait_until_accepting(parent.as_ref())).await?;
 
             debug!("DynamicTaskExecutor::submit: job_id={job_id} accepted");
 
-            let permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).instrument(tracing::debug_span!("submit/2", file = file!(), line = line!())).await {
+            let permit = match track_await(tokio::time::timeout(LOCK_TIMEOUT, self.tx.reserve())).await {
                 Ok(Ok(permit)) => permit,
                 Ok(Err(e)) => {
                     error!("DynamicTaskExecutor::submit: reserve job_id={job_id} failed: e={e:?}");
@@ -459,7 +456,7 @@ impl DynamicTaskExecutor {
             }
 
             let mut suspend_guard = ParentSuspendGuard::new(parent.clone());
-            if let Err(e) = track_await(suspend_guard.maybe_suspend()).instrument(tracing::debug_span!("submit/3", file = file!(), line = line!())).await {
+            if let Err(e) = track_await(suspend_guard.maybe_suspend()).await {
                 drop(permit);
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
@@ -469,7 +466,7 @@ impl DynamicTaskExecutor {
 
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(permit);
-                let _ = track_await(suspend_guard.resume()).instrument(tracing::debug_span!("submit/4", file = file!(), line = line!())).await;
+                let _ = track_await(suspend_guard.resume()).await;
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
                 }
@@ -487,7 +484,7 @@ impl DynamicTaskExecutor {
                 Ok(guard) => guard,
                 Err(_) => {
                     drop(permit);
-                    let _ = track_await(suspend_guard.resume()).instrument(tracing::debug_span!("submit/5", file = file!(), line = line!())).await;
+                    let _ = track_await(suspend_guard.resume()).await;
                     if let Some(job_id) = job_id_to_rerun {
                         self.clear_exclusive_job_id(job_id);
                     }
@@ -503,7 +500,7 @@ impl DynamicTaskExecutor {
             if !*self.accepting_tx.borrow() || cuda_activity_gate().is_paused() {
                 drop(accept_guard);
                 drop(permit);
-                let _ = track_await(suspend_guard.resume()).instrument(tracing::debug_span!("submit/6", file = file!(), line = line!())).await;
+                let _ = track_await(suspend_guard.resume()).await;
                 if let Some(job_id) = job_id_to_rerun {
                     self.clear_exclusive_job_id(job_id);
                 }
@@ -526,7 +523,7 @@ impl DynamicTaskExecutor {
 
             let wrapped = async move {
                 debug!("DynamicTaskExecutor::submit: job_id={job_id} waiting on wrapped fut");
-                let result = track_await(fut).instrument(tracing::debug_span!("submit/7", file = file!(), line = line!())).await;
+                let result = track_await(fut).await;
                 debug!("DynamicTaskExecutor::submit: job_id={job_id} got result.needs_cuda_ctx_reset={} wrapped fut", result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()));
 
                 if result.as_ref().is_err_and(|e| e.needs_cuda_ctx_reset()) {
@@ -614,13 +611,13 @@ impl DynamicTaskExecutor {
 
             // Always try to resume the parent before returning, even if the job panicked
             // and closed result_tx without sending a value.
-            let result = track_await(result_rx).instrument(tracing::debug_span!("submit/8", file = file!(), line = line!())).await.map_err(|_| {
+            let result = track_await(result_rx).await.map_err(|_| {
                 ThoError::new_with_cause(
                     "job was cancelled before producing a result",
                     Cause::SubmitErrorCancelled,
                 )
             })?;
-            track_await(suspend_guard.resume()).instrument(tracing::debug_span!("submit/9", file = file!(), line = line!())).await?;
+            track_await(suspend_guard.resume()).await?;
 
             return result;
         }
@@ -667,10 +664,10 @@ impl DynamicTaskExecutor {
             // Hold the write side while resetting so new submissions cannot pass the
             // read-side accept gate in the window between accepting=false and the shared
             // activity gate becoming visible to all tasks.
-            let _accept_guard = track_await(Arc::clone(&accept_gate).write_owned()).instrument(tracing::debug_span!("spawn_cuda_reset_task/1", file = file!(), line = line!())).await;
+            let _accept_guard = track_await(Arc::clone(&accept_gate).write_owned()).await;
 
             if tho_device_idx > 0 {
-                if let Err(e) = track_await(reset_fn(tho_device_idx)).instrument(tracing::debug_span!("spawn_cuda_reset_task/2", file = file!(), line = line!())).await {
+                if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
                     error!("DynamicTaskExecutor::spawn_cuda_reset_task: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
                 } else {
                     info!("DynamicTaskExecutor::spawn_cuda_reset_task: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
@@ -720,7 +717,7 @@ impl DynamicTaskExecutor {
         drop(self.tx);
         drop(self.limit_tx);
         drop(self.cmd_tx);
-        let _ = track_await(self.worker).instrument(tracing::debug_span!("shutdown/1", file = file!(), line = line!())).await;
+        let _ = track_await(self.worker).await;
     }
 
     async fn run_manager(
@@ -888,7 +885,7 @@ impl DynamicTaskExecutor {
             }
         }
 
-        while let Some(res) = track_await(running.join_next()).instrument(tracing::debug_span!("run_manager/1", file = file!(), line = line!())).await {
+        while let Some(res) = track_await(running.join_next()).await {
             if let Err(err) = res {
                 error!("job failed during shutdown: {err}");
             }
@@ -1067,11 +1064,9 @@ impl DynamicTaskExecutor {
                                     debug!("DynamicTaskExecutor::try_spawn_ready_jobs: running job job_id={job_id}");
 
                                     track_await(job.run())
-                                        .instrument(tracing::debug_span!("try_spawn_ready_jobs/1", file = file!(), line = line!()))
                                         .await
                                 },
                             ))
-                            .instrument(tracing::debug_span!("try_spawn_ready_jobs/2", file = file!(), line = line!()))
                             .await;
 
                         match feedback {

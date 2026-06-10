@@ -31,7 +31,6 @@ use crate::tasks::cross_dims::ChannelsMotifsSlices;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, DummyData)]
@@ -95,7 +94,7 @@ impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(StackedMotifsOutput {
             id:self.id.clone(),
-            motifs: track_await(self.motifs.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
+            motifs: track_await(self.motifs.copy_to_device(dst_device)).await?,
         })
 
     }
@@ -207,8 +206,7 @@ where
         let find_motifs_run_config_id = find_motifs_run_config_id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
         let motif_ids = track_await(self
             .store
-            .list_motifs(find_motifs_run_config_id))
-            .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+            .list_motifs(find_motifs_run_config_id)).await?;
         debug!("StackedMotifsLoader::run: motif_ids={motif_ids:?}");
 
         if motif_ids.is_empty() {
@@ -229,7 +227,7 @@ where
 
                     match track_await(motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(false)
-                    )).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await {
+                    )).await {
                         Ok(motif) => {
                             debug!("StackedMotifsLoader::run: find_motifs_run_config_id={:?} motif={motif:?}", find_motifs_run_config_id);
                             Ok::<_, ThoError>(Some(motif))
@@ -248,8 +246,7 @@ where
             STACKED_MOTIFS_LOADER_RUN,
             StreamBuffering::Ordered,
             "StackedMotifsLoader::run",
-        ))
-        .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await
+        )).await
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();

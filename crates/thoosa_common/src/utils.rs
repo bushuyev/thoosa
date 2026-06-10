@@ -44,15 +44,15 @@ pub async fn load_run_config<FH>(store: &Arc<Box<dyn Store>>, find_motifs_id: Ru
 where
     FH: FromHashmap + RunConfig + Debug
 {
-    let real_find_motifs_run_config_id = if track_await(store.run_config_descr(find_motifs_id)).instrument(tracing::debug_span!("load_run_config/1", file = file!(), line = line!())).await?.r#type == "FindMotifsRunConfig" {
+    let real_find_motifs_run_config_id = if track_await(store.run_config_descr(find_motifs_id)).await?.r#type == "FindMotifsRunConfig" {
         find_motifs_id
     } else {
-        let find_motifs_run_config_ids = track_await(store.get_input_run_config_ids(find_motifs_id, Some("FindMotifsRunConfig"))).instrument(tracing::debug_span!("load_run_config/2", file = file!(), line = line!())).await?;
+        let find_motifs_run_config_ids = track_await(store.get_input_run_config_ids(find_motifs_id, Some("FindMotifsRunConfig"))).await?;
         *find_motifs_run_config_ids.first().ok_or_else(|| ThoError::new(format!("load_run_config: no FindMotifsRunConfig input for find_motifs_run_config_id={find_motifs_id}")))?
     };
 
 
-    let map = track_await(store.list_run_config_values(real_find_motifs_run_config_id)).instrument(tracing::debug_span!("load_run_config/3", file = file!(), line = line!())).await?;
+    let map = track_await(store.list_run_config_values(real_find_motifs_run_config_id)).await?;
     let mut find_motifs_run_config = FH::from_properties_map(None, &map)?;
 
     debug!("FindMotifsRunConfig::from_properties_map_with_id: find_motifs_run_config={find_motifs_run_config:?}");
@@ -1286,7 +1286,6 @@ pub fn lin_iter(n: u32) -> Map<Range<u32>, fn(u32) -> f32> {
 }
 
 use crate::train_nets::ThoModuleWithStore;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 

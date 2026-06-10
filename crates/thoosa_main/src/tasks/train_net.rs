@@ -215,7 +215,6 @@ where
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
             let (node, params) =  track_await((self.net)(ctx.branch(false), &run_config, Arc::clone(&vs)))
-                .instrument(tracing::debug_span!("run_inner/self.net", file = file!(),line = line!()))
                 .await?;
 
             let device = Device::from(ThoDevice::from(tho_device_idx));
@@ -450,7 +449,7 @@ where
                 ThoDevice::from(device_idx).into(),
                 &self.descr,
                 reusable_completed_trials,
-            )).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
@@ -530,9 +529,9 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
     {
         Ok(TrainStepInput {
             id: self.id.clone(),
-            x: track_await(self.x.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
+            x: track_await(self.x.copy_to_device(dst_device)).await?,
             lengths: self.lengths.clone(),
-            expected_y: track_await(self.expected_y.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/2", file = file!(), line = line!())).await?,
+            expected_y: track_await(self.expected_y.copy_to_device(dst_device)).await?,
             cache_area: self.cache_area.clone(),
         })
     }
@@ -553,11 +552,11 @@ impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
             } else {
 
                 let (x, lengths) = (
-                    track_await(self.x.copy_to_device(to_device_idx)).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await?,
+                    track_await(self.x.copy_to_device(to_device_idx)).await?,
                     self.lengths.clone(),
                 );
 
-                let expected_y = track_await(self.expected_y.copy_to_device(to_device_idx)).instrument(tracing::debug_span!("with_data_ref/2", file = file!(), line = line!())).await?;
+                let expected_y = track_await(self.expected_y.copy_to_device(to_device_idx)).await?;
 
                 let input = TrainStepInput::new(x, lengths, expected_y);
                 do_run(&input, &permits_ctx)

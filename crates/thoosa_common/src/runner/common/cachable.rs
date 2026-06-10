@@ -29,7 +29,6 @@ use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -69,7 +68,7 @@ where
         // #[cfg(any(test, feature = "mock_global_ctx"))]
         // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
 
-        let cache = track_await(Self::cache()).instrument(tracing::debug_span!("run_cached/1", file = file!(), line = line!())).await;
+        let cache = track_await(Self::cache()).await;
         let key_for_purger = key.clone();
 
         ctx.add_purge_gpu_closure(
@@ -79,7 +78,7 @@ where
                 trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
 
                 async move {
-                    let Some(shared_fut) = track_await(Self::cache()).instrument(tracing::debug_span!("run_cached/2", file = file!(), line = line!())).await.get(&key_for_purger) else {
+                    let Some(shared_fut) = track_await(Self::cache()).await.get(&key_for_purger) else {
                         debug!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
                         return Ok(());
                     };
@@ -92,7 +91,7 @@ where
                         .map(Arc::clone) {
                         debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} Arc::strong_count={:?}", Arc::strong_count(&data));
                         if Arc::strong_count(&data) == 1 {
-                            track_await(data.dump_to_cpu(device_idx)).instrument(tracing::debug_span!("run_cached/3", file = file!(), line = line!())).await?;
+                            track_await(data.dump_to_cpu(device_idx)).await?;
 
                             debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                         }
@@ -124,8 +123,7 @@ where
                             // data.add_cache_area(cache_area);
                         }
                         res
-                    }))
-                    .instrument(tracing::debug_span!("run_cached/4", file = file!(), line = line!())).await
+                    })).await
             }
             Entry::Vacant(slot) => {
                 let fut = Arc::clone(&self)
@@ -135,7 +133,7 @@ where
 
                 slot.insert(fut.clone()); //slot consumed, fut.await doesn't block it
 
-                track_await(fut).instrument(tracing::debug_span!("run_cached/5", file = file!(), line = line!())).await.map(|v| {
+                track_await(fut).await.map(|v| {
                     #[cfg(any(debug_assertions, tho_debug))]
                     debug!("Cachable::run_cached, Entry::Vacant: key={debug_key:?}");
 
@@ -254,7 +252,7 @@ where
             P: RunCtx + 'a
     {
         Box::pin(async move {
-            match track_await(wrap.load_from_any_device_(to_device_idx)).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await {
+            match track_await(wrap.load_from_any_device_(to_device_idx)).await {
                 Ok(v) => {
                     let data = v.deref();
                     do_run(data, &permits_ctx)
@@ -272,7 +270,7 @@ where
         P: RunCtx + 'a
     {
         Box::pin(async move {
-            match track_await(wrap.load_from_any_device_(to_device_idx)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await {
+            match track_await(wrap.load_from_any_device_(to_device_idx)).await {
                 Ok(v) => {
                     let data = v.deref();
                     let sub = data.subview(selector)?;
@@ -291,7 +289,7 @@ where
         P:RunCtx,
         Self: Sized
     {
-        match track_await(wrap.load_from_any_device_(to_device_idx)).instrument(tracing::debug_span!("with_selected_data/1", file = file!(), line = line!())).await {
+        match track_await(wrap.load_from_any_device_(to_device_idx)).await {
             Ok(v) => {
                 let data = v.deref();
                 do_run(data.subview(selector)?, &permits_ctx)
@@ -433,7 +431,7 @@ where
             let source_read_guard = async_perf_log!(async_read_lock!(op));
 
             if let Some(src) = source_read_guard.as_ref() {
-                return track_await(wrap.ensure_copied(to_tho_device_idx, src, true)).instrument(tracing::debug_span!("load_from_any_device_/1", file = file!(), line = line!())).await.map(|v| v.expect("no value returned"));
+                return track_await(wrap.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
             }
             drop(source_read_guard);
             wrap.mark_not_resident_on_device(source_device_idx);
@@ -450,7 +448,7 @@ where
     {
         Box::pin(async move {
 
-            match track_await(wrap.load_from_any_device_(to_tho_device_idx)).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await {
+            match track_await(wrap.load_from_any_device_(to_tho_device_idx)).await {
                 Ok(v) => {
                     let data = v.deref();
                     DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
@@ -498,7 +496,7 @@ where
 
                     debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
 
-                    let data = track_await(sub_t.copy_to_device(to_tho_device_idx)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await?;
+                    let data = track_await(sub_t.copy_to_device(to_tho_device_idx)).await?;
                     return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                 }
                 drop(source_read_guard);
@@ -546,7 +544,7 @@ where
                 let sub_t = src.subview(selector.clone())?;
                 debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
 
-                let data = track_await(sub_t.copy_to_device(to_device_idx)).instrument(tracing::debug_span!("with_selected_data/1", file = file!(), line = line!())).await?;
+                let data = track_await(sub_t.copy_to_device(to_device_idx)).await?;
                 return do_run(data, &permits_ctx);
             }
             drop(source_read_guard);
@@ -581,7 +579,7 @@ where
 
                 if async_perf_log!(async_read_lock!(&wrap.cached_data[0])).is_none() {
                     if let Some(data) = lock.as_ref() {
-                        track_await(wrap.ensure_copied(0, data, false)).instrument(tracing::debug_span!("dump_to_cpu/1", file = file!(), line = line!())).await?;
+                        track_await(wrap.ensure_copied(0, data, false)).await?;
                     }
                     drop(lock.take());
                     wrap.mark_not_resident_on_device(device_idx);
@@ -621,7 +619,7 @@ where
     {
         async move {
             assert!(device_idx > 0, "can't drop cpu");
-            drop(track_await(wrap.cached_data[device_idx].write()).instrument(tracing::debug_span!("drop_device/1", file = file!(), line = line!())).await.take());
+            drop(track_await(wrap.cached_data[device_idx].write()).await.take());
             wrap.mark_not_resident_on_device(device_idx);
 
             Ok(())
@@ -648,7 +646,7 @@ where
     where
         Self: Sized
     {
-        let _ = track_await(wrap.load_from_any_device_(to_device_idx)).instrument(tracing::debug_span!("take_data/1", file = file!(), line = line!())).await?;
+        let _ = track_await(wrap.load_from_any_device_(to_device_idx)).await?;
 
         let mut v = wrap.cached_data.into_vec();
         let lock = v.remove(to_device_idx);
@@ -844,11 +842,11 @@ where
     }
 
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError> {
-        track_await(O::M::dump_to_cpu(self, device_idx)).instrument(tracing::debug_span!("dump_to_cpu/1", file = file!(), line = line!())).await
+        track_await(O::M::dump_to_cpu(self, device_idx)).await
     }
 
     pub async fn drop_device(&self, device_idx: usize) -> Result<(), ThoError> {
-        track_await(O::M::drop_device(self, device_idx)).instrument(tracing::debug_span!("drop_device/1", file = file!(), line = line!())).await
+        track_await(O::M::drop_device(self, device_idx)).await
     }
 
     pub async fn with_selected_data<S, R, P>(
@@ -864,7 +862,7 @@ where
         P:RunCtx,
         S: Clone,
     {
-        track_await(O::M::with_selected_data(self, to_device_idx, permits_ctx, selector, do_run)).instrument(tracing::debug_span!("with_selected_data/1", file = file!(), line = line!())).await
+        track_await(O::M::with_selected_data(self, to_device_idx, permits_ctx, selector, do_run)).await
     }
 
     pub fn is_on_cpu_before(&self, threshold_age: u64) -> bool {
@@ -875,15 +873,14 @@ where
         self,
         to_device_idx: usize,
     ) -> Result<O, ThoError> {
-        track_await(O::M::take_data(self, to_device_idx)).instrument(tracing::debug_span!("take_data/1", file = file!(), line = line!())).await
+        track_await(O::M::take_data(self, to_device_idx)).await
     }
 
     pub async fn load_from_any_device_(
         &self,
         to_tho_device_idx: usize,
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError> {
-        track_await(O::M::load_from_any_device_(self, to_tho_device_idx))
-            .instrument(tracing::debug_span!("load_from_any_device_/1", file = file!(), line = line!())).await
+        track_await(O::M::load_from_any_device_(self, to_tho_device_idx)).await
     }
 
     pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
@@ -1040,7 +1037,7 @@ where
             let leader_notify = match join_or_start_inflight(&self.inflights[dst_idx]) {
                 InflightRole::Follower(notified) => {
                     // follower: wait until the leader finishes, then try fast path again
-                    track_await(notified).instrument(tracing::debug_span!("ensure_copied/1", file = file!(), line = line!()))
+                    track_await(notified)
                     .await;
                     continue;
                 }
@@ -1066,7 +1063,7 @@ where
             }
 
             debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
-            let produced = track_await(src.copy_to_device(dst_idx)).instrument(tracing::debug_span!("ensure_copied/2", file = file!(), line = line!())).await;
+            let produced = track_await(src.copy_to_device(dst_idx)).await;
 
             let produced = match produced {
                 Ok(v) => v,

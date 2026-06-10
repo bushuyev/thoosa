@@ -54,7 +54,6 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::my_tch::MotifInitModeRangeOrValue;
 use crate::my_tch::MotifInitModeFields;
 use crate::my_tch::MotifInitModeBuilder;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Args, Debug, Clone)]
@@ -204,7 +203,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
             &TrainLabelNetRunConfig::type_name(),
             "Label",
             self.train_label_nets_run_config.to_properties_iter(None).collect(),
-        )).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?;
+        )).await?;
 
         let path = panic_to_err!(ws.read()
             .save_label_net(
@@ -216,7 +215,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
         debug!("TrainLabelNetRunConfigResult::save: self.motif_nets_ids={:?}", self.motif_nets_ids);
 
-        track_await(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
+        track_await(store.save_trained_net(run_config_id, path, self.loss, Some(p.motif_nets_ids.clone()))).await?;
 
         Ok(run_config_id)
     }
@@ -266,12 +265,12 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
             &TrainFinalNetRunConfig::type_name(),
             "Final",
             self.train_final_net_run_config.to_properties_iter(None).collect(),
-        )).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?;
+        )).await?;
 
         let path = ws.read()
             .save_final_net(run_config_id, &self.var_store, &self.final_node_params)?;
 
-        track_await(store.save_trained_net(run_config_id, path, self.loss, None)).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
+        track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
         Ok(run_config_id)
     }
@@ -1905,7 +1904,7 @@ impl SavableResult for TrainMotifsNetsResult {
         let mut result = Vec::with_capacity(self.train_motif_nets_results.len());
         for r in self.train_motif_nets_results.iter_mut() {
             result.push(
-            track_await(r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?
+            track_await(r.save(store, ws, self.select_motifs_run_config_ids.as_slice())).await?
             );
         }
 
@@ -1946,7 +1945,7 @@ impl SavableResult for TrainMotifNetResult {
             &TrainMotifNetRunConfig::type_name(), //TODO separate type for TrainMotifNetResult?
             self.descr.as_ref().map(|v|v.as_str()).unwrap_or("TrainMotifNetResult"),
             self.run_config_values.to_properties_iter(None).collect(),
-        )).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?;
+        )).await?;
 
         let path = panic_to_err!(ws.read().save_motif_net(
             &self.channel,
@@ -1956,7 +1955,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.params,
         ))?;
 
-        track_await(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).instrument(tracing::debug_span!("save/2", file = file!(), line = line!())).await?;
+        track_await(store.save_trained_net(train_motif_net_run_config_id, path, self.loss, None)).await?;
 
         Ok(train_motif_net_run_config_id)
 
@@ -2130,7 +2129,7 @@ where
         );
         opt.enqueue_configs(reusable_configs);
         info!("opt_train: wait on optimize ");
-        let best_config = track_await(opt.optimize()).instrument(tracing::debug_span!("opt_train/1", file = file!(), line = line!())).await;
+        let best_config = track_await(opt.optimize()).await;
 
         debug!("opt_train: best_config={:?}", best_config);
 

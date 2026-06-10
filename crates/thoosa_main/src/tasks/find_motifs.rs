@@ -57,7 +57,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_with_data::with_data;
 use crate::buffer_limits::{CROSS_LOADERS_LIMIT, FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
@@ -134,12 +133,12 @@ where
 
     pub async fn run(&self, input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>, mut ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
         match self {
-            Self::CrossLoader { cross_loader, .. } => track_await(Arc::clone(cross_loader).run(input, ctx)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await,
+            Self::CrossLoader { cross_loader, .. } => track_await(Arc::clone(cross_loader).run(input, ctx)).await,
             Self::Bucketing { bucketing_stage, .. } => {
                 let input = with_data!(ctx.branch(false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
                     Ok::<_, ThoError>(BucketingInput::new(input.resources_config().clone()))
                 })?;
-                track_await(Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx)).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
+                track_await(Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx)).await?;
                 Ok(Arc::new(DevicesWrap::wrap(())))
             }
         }
@@ -289,7 +288,7 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats = track_await(motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true))).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await?;
+                                    let motif_stats = track_await(motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true))).await?;
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
@@ -422,12 +421,12 @@ where
                                     },
                                     fixed_config.max_chunk_size as usize,
                                     |batch| {
-                                        async { track_await(batch.to_cpu()).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await }.boxed()
+                                        async { track_await(batch.to_cpu()).await }.boxed()
                                     },
                                     |receiver| {
                                         let dists_tracker = Arc::clone(receiver);
                                         async move {
-                                            track_await(dists_tracker.build_groups()).instrument(tracing::debug_span!("new/3", file = file!(), line = line!())).await
+                                            track_await(dists_tracker.build_groups()).await
                                         }
                                             .boxed()
                                     },
@@ -448,8 +447,7 @@ where
             CROSS_LOADERS_LIMIT,//TODO config
             StreamBuffering::Unordered,
             "FindMotifsStage::new",
-        ))
-        .instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await
+        )).await
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -517,8 +515,7 @@ where
             FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT,
             StreamBuffering::Unordered,
             "FindMotifsStage::run",
-        ))
-        .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await;
+        )).await;
 
 
         //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.

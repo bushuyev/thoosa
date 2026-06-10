@@ -40,7 +40,6 @@ use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use crate::buffer_limits::{BUCKETING_LIMIT, STACKED_MOTIFS_LOADER_RUN};
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
@@ -62,7 +61,7 @@ where
     }
 
     pub async fn check(self, store: &Arc<Box<dyn Store>>) -> Result<Self, ThoError> {
-        track_await(self.resources_config.check(store)).instrument(tracing::debug_span!("check/1", file = file!(), line = line!())).await?;
+        track_await(self.resources_config.check(store)).await?;
         Ok(self)
     }
 
@@ -423,7 +422,7 @@ where
             track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
                 let input = BucketingSyncInput::new(resource_id, tensor, 0);
                 do_run(&input, ctx)
-            })).instrument(tracing::debug_span!("with_data_ref/1", file = file!(), line = line!())).await
+            })).await
         }
     }
 }
@@ -458,7 +457,7 @@ where
         P: RunCtx + 'a,
     {
         async move {
-            track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await
+            track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).await
         }
     }
 }
@@ -490,7 +489,7 @@ where
                 let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
                 let input = BucketingSyncInput::new(resource_id, &selected_tensor, sample_range.start);
                 do_run(&input, ctx)
-            })).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await
+            })).await
         }
     }
 }
@@ -575,7 +574,7 @@ where
     type A = SelectBucketsInputSelector;
 
     async fn adjust(&self, adjustable: Self::A, adjust_context: &mut SelectBucketsSplitterContext<'a, ST>) -> Result<Self::A, AdjusterError<Self::A>> {
-        let result = track_await(self.bucket_slice_adjuster.adjust(adjustable, adjust_context)).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
+        let result = track_await(self.bucket_slice_adjuster.adjust(adjustable, adjust_context)).await;
         debug!("SelectBucketsAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
         result
     }
@@ -951,7 +950,7 @@ where
         let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &BucketingInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
-        let resources = track_await(resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
         debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
 
@@ -969,8 +968,7 @@ where
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(resource.clone())),
                         sync_bucketing_ctx.branch(false),
-                    ))
-                    .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
+                    )).await?;
 
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                 let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
@@ -996,8 +994,7 @@ where
                                 DumpToCpuContextImpl::new(&required_ids),
                             ),
                         ),
-                    ))
-                    .instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await
+                    )).await
                 {
                     Ok(_) => {}
                     Err(e) => {
@@ -1014,8 +1011,7 @@ where
             BUCKETING_LIMIT,
             StreamBuffering::Unordered,
             "BucketingStage/resources",
-        ))
-        .instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await
+        )).await
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -1043,7 +1039,7 @@ where
 
         for (channel, groups) in groups_by_channel.into_iter().enumerate() {
             let groups = filter_mel_patch_groups(groups, self.run_config.min_slices_usize(), self.run_config.max_slices_usize());
-            let group_motif_ids = track_await(self.store.save_groups_as_motifs(run_config_id, channel as i64, groups)).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
+            let group_motif_ids = track_await(self.store.save_groups_as_motifs(run_config_id, channel as i64, groups)).await?;
             motif_ids.extend(group_motif_ids);
         }
 

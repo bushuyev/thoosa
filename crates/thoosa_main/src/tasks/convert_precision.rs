@@ -20,7 +20,6 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, StreamBuffering, ThoError};
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 const CONVERT_PRECISION_BUFFER_LIMIT: usize = 4;
@@ -284,8 +283,7 @@ where
                         line = line!(),
                         task = format!("convert net entry to {target_precision:?}"),
                     ).in_scope(|| convert_entry(entry, target_precision))
-                }))
-                    .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await
+                })).await
                     .map_err(|e| ThoError::from_error("join convert precision worker", e))?
             }
         });
@@ -296,8 +294,7 @@ where
             CONVERT_PRECISION_BUFFER_LIMIT,
             StreamBuffering::Unordered,
             "ConvertPrecisionStage::run",
-        ))
-        .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await;
+        )).await;
 
         if converted.len() != entries_len {
             return Err(ThoError::new(format!("ConvertPrecisionStage::run: converted {} of {entries_len} nets", converted.len())));
