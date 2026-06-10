@@ -89,7 +89,7 @@ impl GlobalCtx {
         Self {
             num_devices,
             executors: (0..num_devices).map(|tho_device_idx| {
-                DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(16).unwrap(), tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+                DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(32).unwrap(), tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             })
             .collect(),
 
@@ -128,9 +128,6 @@ impl GlobalCtx {
                 .copy_ctx_mut(tho_device_idx))
                 .await
                 .reset()?;
-
-
-            info!("GlobalCtx::reset_cuda_context: copy_ctx.reset done");
 
 
             info!("GlobalCtx::reset_cuda_context: all done");
@@ -374,7 +371,7 @@ impl GlobalCtx {
     pub async fn copy_ctx_mut<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockWriteGuard<'_, CopyCtx> {
         let device:ThoDevice = device.into();
         let gpu_device_ordinal = device.gpu_ordinal();
-        track_await(self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).write()).await
+        self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).try_write().expect("Should be able to write copy ctx")
     }
 
 }
