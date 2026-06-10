@@ -125,7 +125,7 @@ where
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
-        let input = track_await("thoosa_main::tasks::load_motif_net::LoadMotifNet::AsyncStage::run/1", input.load_from_any_device_(0)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;//TODO clone_from_cpu
+        let input = track_await(input.load_from_any_device_(0)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;//TODO clone_from_cpu
 
 
         let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into(), input.quantize)?;

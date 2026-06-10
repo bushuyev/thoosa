@@ -258,7 +258,7 @@ where
             ModelRoots::from_ws(ws_guard.as_ref())
         };
         let purge_mode = self.args.purge_mode();
-        let entries = track_await("thoosa_main::tasks::purge_models::PurgeModelsStage::AsyncStage::run/1", selected_purge_entries(&roots, &self.store, purge_mode)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let entries = track_await(selected_purge_entries(&roots, &self.store, purge_mode)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
 
         let entries_len = entries.len();
         if entries_len == 0 {
@@ -273,7 +273,7 @@ where
             .collect::<Vec<_>>();
         let futures = entries.into_iter().map(|entry| {
             async move {
-                track_await("thoosa_main::tasks::purge_models::PurgeModelsStage::AsyncStage::run/2", tokio::task::spawn_blocking(move || {
+                track_await(tokio::task::spawn_blocking(move || {
                     tracing::info_span!(
                         "purge_models::purge_entry",
                         kind = "spawn_blocking",
@@ -287,7 +287,7 @@ where
             }
         });
 
-        let purged = track_await("thoosa_main::tasks::purge_models::PurgeModelsStage::AsyncStage::run/3", collect_futures_with_progress(
+        let purged = track_await(collect_futures_with_progress(
             futures,
             entries_len,
             PURGE_MODELS_BUFFER_LIMIT,
@@ -301,7 +301,7 @@ where
         }
 
         if !ids_to_delete.is_empty() {
-            track_await("thoosa_main::tasks::purge_models::PurgeModelsStage::AsyncStage::run/4", self.store.delete_trained_nets(ids_to_delete)).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
+            track_await(self.store.delete_trained_nets(ids_to_delete)).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
         }
 
         info!("PurgeModelsStage::run: purged {} models for {:?}", purged.len(), self.args.purge_mode());
@@ -345,16 +345,16 @@ struct PurgeEntry {
 
 async fn selected_purge_entries(roots: &ModelRoots, store: &Arc<Box<dyn Store>>, purge_mode: PurgeMode) -> Result<Vec<PurgeEntry>, ThoError> {
     match purge_mode {
-        PurgeMode::PurgeLost => purge_lost_entries(roots, track_await("thoosa_main::tasks::purge_models::selected_purge_entries/1", store.list_trained_net_entries()).instrument(tracing::debug_span!("selected_purge_entries/1", file = file!(), line = line!())).await?),
+        PurgeMode::PurgeLost => purge_lost_entries(roots, track_await(store.list_trained_net_entries()).instrument(tracing::debug_span!("selected_purge_entries/1", file = file!(), line = line!())).await?),
         PurgeMode::PurgeLabelModels(by) => {
             let rows = match by {
-                PurgeLabelModelsBy::Date(date) => track_await("thoosa_main::tasks::purge_models::selected_purge_entries/2", store.list_label_trained_nets_before(date.as_str().to_string())).instrument(tracing::debug_span!("selected_purge_entries/2", file = file!(), line = line!())).await?,
-                PurgeLabelModelsBy::Loss(loss) => track_await("thoosa_main::tasks::purge_models::selected_purge_entries/3", store.list_label_trained_nets_loss_gt(loss)).instrument(tracing::debug_span!("selected_purge_entries/3", file = file!(), line = line!())).await?,
+                PurgeLabelModelsBy::Date(date) => track_await(store.list_label_trained_nets_before(date.as_str().to_string())).instrument(tracing::debug_span!("selected_purge_entries/2", file = file!(), line = line!())).await?,
+                PurgeLabelModelsBy::Loss(loss) => track_await(store.list_label_trained_nets_loss_gt(loss)).instrument(tracing::debug_span!("selected_purge_entries/3", file = file!(), line = line!())).await?,
             };
             Ok(rows_to_purge_entries(roots, PurgeModelType::Labels, rows))
         }
         PurgeMode::PurgeUnusedMotifModels => {
-            let rows = track_await("thoosa_main::tasks::purge_models::selected_purge_entries/4", store.list_unused_motif_trained_nets()).instrument(tracing::debug_span!("selected_purge_entries/4", file = file!(), line = line!())).await?;
+            let rows = track_await(store.list_unused_motif_trained_nets()).instrument(tracing::debug_span!("selected_purge_entries/4", file = file!(), line = line!())).await?;
             Ok(rows_to_purge_entries(roots, PurgeModelType::Motifs, rows))
         }
     }

@@ -418,7 +418,7 @@ impl OutputBuilder for FreqFilterOutputBuilder {
         let partial = if partial.device() == 0 {
             partial
         } else {
-            match track_await("thoosa_main::tasks::transforms::freq_filter::FreqFilterOutputBuilder::OutputBuilder::add_partial_output/1", partial.copy_to_device(0)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
+            match track_await(partial.copy_to_device(0)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await {
                 Ok(partial) => partial,
                 Err(error) => {
                     self.error = Some(error);
@@ -580,7 +580,7 @@ where
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self)));
 
-        let filtered = track_await("thoosa_main::tasks::transforms::freq_filter::FreqFilter::AsyncStage::run/1", OOMHandler::new(
+        let filtered = track_await(OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("freq_filter"))),

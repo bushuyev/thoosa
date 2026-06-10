@@ -94,7 +94,7 @@ pub(crate) async fn run_all(
 
     // Navigation note: this is the project-level run-all workflow invoked from bird_clef::main via run_cli.
     // It fans out by label, then chains find/select motifs -> train motif nets -> train label nets.
-    let labels = track_await("thoosa_bird_clef::run_all::run_all/1", store.list_labels(true)).instrument(tracing::debug_span!("run_all/1", file = file!(), line = line!())).await?;
+    let labels = track_await(store.list_labels(true)).instrument(tracing::debug_span!("run_all/1", file = file!(), line = line!())).await?;
     info!("run_all: labels={:?}", labels.len());
     debug!("run_all: labels={labels:?}");
     let labels_filter = run_all_args.labels_filter();
@@ -356,7 +356,7 @@ pub(crate) async fn run_all(
                 )))
             });
 
-            track_await("thoosa_bird_clef::run_all::run_all/10", futures::stream::iter(futures)
+            track_await(futures::stream::iter(futures)
             .buffer_unordered(2)
             .collect::<Vec<_>>())
             .instrument(tracing::debug_span!("run_all/10", file = file!(), line = line!())).await;
@@ -396,7 +396,7 @@ pub(crate) async fn run_all(
                 )));
 
                 async move {
-                    let train_motif_net_run_config_ids = track_await("thoosa_bird_clef::run_all::run_all/11", store.list_run_config_ids_by_descr(label.clone(), TrainMotifNetRunConfig::type_name())).instrument(tracing::debug_span!("run_all/11", file = file!(), line = line!())).await?;
+                    let train_motif_net_run_config_ids = track_await(store.list_run_config_ids_by_descr(label.clone(), TrainMotifNetRunConfig::type_name())).instrument(tracing::debug_span!("run_all/11", file = file!(), line = line!())).await?;
                     if train_motif_net_run_config_ids.is_empty(){
                         return Ok(());
                     }
@@ -452,7 +452,7 @@ pub(crate) async fn run_all(
                         ) {
                             Ok(train_label_nets_run_config_ids) => {
                                 info!("train label nets done: label={label} run_config_ids={train_label_nets_run_config_ids:?}");
-                                let min_loss = track_await("thoosa_bird_clef::run_all::run_all/14", store.list_trained_nets(train_label_nets_run_config_ids, None, None)).instrument(tracing::debug_span!("run_all/14", file = file!(), line = line!())).await?
+                                let min_loss = track_await(store.list_trained_nets(train_label_nets_run_config_ids, None, None)).instrument(tracing::debug_span!("run_all/14", file = file!(), line = line!())).await?
                                     .into_iter().map(|net| net.loss).reduce(f32::min).unwrap_or(f32::MAX);
 
                                 if min_loss < 0.1 {
@@ -477,7 +477,7 @@ pub(crate) async fn run_all(
             });
 
             //
-            let _ = track_await("thoosa_bird_clef::run_all::run_all/15", collect_futures_with_progress(
+            let _ = track_await(collect_futures_with_progress(
                 futures,
                 labels.len(),
                 16,

@@ -190,7 +190,7 @@ where
             Arc::clone(ws),
             Arc::clone(&motif_loader),
         ));
-        let (resources, output_mode) = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::new/1", Self::load_resources_for_selection(
+        let (resources, output_mode) = track_await(Self::load_resources_for_selection(
             &select_motifs_input,
             store,
             init_ctx.branch(false),
@@ -203,16 +203,16 @@ where
         let mut bucket_mean_energies = HashMap::new();
         let mut reference_mean_energies = HashMap::new();
         for find_motifs_run_config_id in &find_motifs_run_config_ids {
-            let motif_ids = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::new/2", store.list_motifs(*find_motifs_run_config_id)).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await?;
-            let energies = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::new/3", Self::preload_bucket_mean_energies(
+            let motif_ids = track_await(store.list_motifs(*find_motifs_run_config_id)).instrument(tracing::debug_span!("new/2", file = file!(), line = line!())).await?;
+            let energies = track_await(Self::preload_bucket_mean_energies(
                 &motif_stats,
                 *find_motifs_run_config_id,
                 motif_ids,
                 init_ctx.branch(true),
             ))
             .instrument(tracing::debug_span!("new/3", file = file!(), line = line!())).await?;
-            let find_motifs_run_config: FindMotifsRunConfig = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::new/4", load_run_config(store, *find_motifs_run_config_id)).instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await?;
-            let reference_energy = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::new/5", Self::reference_energy_for_find_run(
+            let find_motifs_run_config: FindMotifsRunConfig = track_await(load_run_config(store, *find_motifs_run_config_id)).instrument(tracing::debug_span!("new/4", file = file!(), line = line!())).await?;
+            let reference_energy = track_await(Self::reference_energy_for_find_run(
                 &motif_stats,
                 resources.as_ref(),
                 *find_motifs_run_config_id,
@@ -253,7 +253,7 @@ where
             let mut ctx = ctx.branch(true);
 
             async move {
-                let stats = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::preload_bucket_mean_energies/1", Arc::clone(&motif_stats)
+                let stats = track_await(Arc::clone(&motif_stats)
                     .run(
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
@@ -263,7 +263,7 @@ where
                     ))
                     .instrument(tracing::debug_span!("preload_bucket_mean_energies/1", file = file!(), line = line!())).await?;
 
-                let energy = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::preload_bucket_mean_energies/2", stats
+                let energy = track_await(stats
                     .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
                         Ok::<_, ThoError>(BucketEnergy {
                             mean_energy: stats.channel_value(&energy_metric, 0)? as f64,
@@ -277,7 +277,7 @@ where
             }
         });
 
-        let energies = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::preload_bucket_mean_energies/3", collect_futures_with_progress(
+        let energies = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
             4, //SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT,
@@ -297,13 +297,13 @@ where
         store: &Arc<Box<dyn Store>>,
         mut ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
-        let (resources_config, output_mode) = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::load_resources_for_selection/1", input
+        let (resources_config, output_mode) = track_await(input
             .with_data_ref(0, ctx.branch(false), None, |input: &SelectMotifsInput, _ctx| {
                 Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
             }))
             .instrument(tracing::debug_span!("load_resources_for_selection/1", file = file!(), line = line!())).await?;
 
-        Ok((Arc::new(track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::load_resources_for_selection/2", resources_config.to_resources(store)).instrument(tracing::debug_span!("load_resources_for_selection/2", file = file!(), line = line!())).await?.into_iter().collect::<Vec<_>>()), output_mode))
+        Ok((Arc::new(track_await(resources_config.to_resources(store)).instrument(tracing::debug_span!("load_resources_for_selection/2", file = file!(), line = line!())).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
 
     fn reference_random_slices(resources: &[Resource], find_motifs_run_config: &FindMotifsRunConfig, motif_count: usize) -> Result<u32, ThoError> {
@@ -334,7 +334,7 @@ where
     ) -> Result<f64, ThoError> {
         let max_slices = Self::reference_random_slices(resources, find_motifs_run_config, motif_count)?;
         let energy_metric = energy_metric();
-        let stats = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::reference_energy_for_find_run/1", Arc::clone(motif_stats)
+        let stats = track_await(Arc::clone(motif_stats)
             .run_cached(
                 Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random_resources(
                     max_slices,
@@ -346,7 +346,7 @@ where
             ))
             .instrument(tracing::debug_span!("reference_energy_for_find_run/1", file = file!(), line = line!())).await?;
 
-        track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::reference_energy_for_find_run/2", stats
+        track_await(stats
             .with_data_ref(0, ctx.branch(false), None, |stats: &MotifStatsOutput, _ctx| {
                 let values = stats.channels_values(&energy_metric)?;
                 if values.is_empty() {
@@ -437,7 +437,7 @@ impl WithSelectDataRef<()> for SelectBucketsSyncInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
     {
-        async move { track_await("thoosa_main::tasks::select_buckets::SelectBucketsSyncInputWrapper::WithSelectDataRef<()>::with_selected_data_ref/1", self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
+        async move { track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await }
     }
 }
 
@@ -588,7 +588,7 @@ where
                     None,
                 );
 
-                track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::AsyncStage::run/1", oom_handler
+                track_await(oom_handler
                     .run(
                         &sync_stage,
                         Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
@@ -606,7 +606,7 @@ where
             }
         });
 
-        let run_results = track_await("thoosa_main::tasks::select_buckets::SelectBucketsStage::AsyncStage::run/2", collect_futures_with_progress(
+        let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
             SELECT_MOTIFS_STAGE_RUN_CONFIGS,
