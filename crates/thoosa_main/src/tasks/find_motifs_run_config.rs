@@ -31,7 +31,6 @@ use thoosa_motifs::distance::SimilarityMetricBuilder;
 use crate::tasks::bucketing::BucketRunConfigRangeOrValue;
 use crate::tasks::bucketing::BucketRunConfigFields;
 use crate::tasks::bucketing::BucketRunConfigBuilder;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 //TODO move to find, + nets move out of common
@@ -1525,7 +1524,7 @@ impl SavableResult for SelectMotifsSavableResult {
             track_await(store.save_selected_motifs(
                 run_result.run_config.id.expect("should be pre saved in run_grid"),
                 run_result.selected_motif_ids_scores.clone()
-            )).instrument(tracing::debug_span!("save/1", file = file!(), line = line!())).await?;
+            )).await?;
         }
 
         //RunConfig is pre saved in run_grid

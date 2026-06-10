@@ -452,7 +452,7 @@ where
         }
     };
      */
-    let store = Arc::new(track_await(SqlStore::from_path(ws.read().store_path())).instrument(tracing::debug_span!("run_cli/1", file = file!(), line = line!())).await?);
+    let store = Arc::new(track_await(SqlStore::from_path(ws.read().store_path())).await?);
 
     RUN_ID.set(match cli.run_id{
         None => {
@@ -460,7 +460,7 @@ where
             if let Some(Infer(_) | Export(_)) = &cli.command {
                 panic!("No run_id")
             }
-            track_await(store.save_run(format!("{cli:?}"))).instrument(tracing::debug_span!("run_cli/2", file = file!(), line = line!())).await?
+            track_await(store.save_run(format!("{cli:?}"))).await?
         }
         Some(run_id) => run_id
     }).expect("can't set run_id");
@@ -499,7 +499,7 @@ where
 
     let purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));
-        track_await(ticker.tick()).instrument(tracing::debug_span!("run_cli/3", file = file!(), line = line!())).await; //
+        track_await(ticker.tick()).await; //
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             select! {
@@ -600,7 +600,7 @@ where
                 freq_filter,
                 true,
                 init_data
-            )).instrument(tracing::debug_span!("run_cli/5", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!("ImportResources done");
         }
@@ -636,13 +636,12 @@ where
                             find_motifs_args.fixed_config.clone(), //FixedFindMotifsConfig::new(None, 10_000, false, None),
                             ThoDevice::from(1),
                             init_ctx
-                        ))
-                        .instrument(tracing::debug_span!("run_cli/6", file = file!(), line = line!())).await?,
+                        )).await?,
                     ))
                 },
                 || root_ctx.branch(true),
                 "find motifs",
-            )).instrument(tracing::debug_span!("run_cli/7", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!("FindMotifs done, run_config_ids={run_config_ids:?}");
 
@@ -672,7 +671,7 @@ where
                     )?))
                 },
                 || root_ctx.branch(true), "find motifs",
-            )).instrument(tracing::debug_span!("run_cli/8", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!("SeqScan done, run_config_ids={run_config_ids:?}");
         }
@@ -707,10 +706,10 @@ where
                         select_motifs_args.find_motifs_run_config_ids.clone(), //TODO config
                         // #[cfg(test)]
                         None
-                    )).instrument(tracing::debug_span!("run_cli/9", file = file!(), line = line!())).await?))
+                    )).await?))
                 },
                 || root_ctx.branch(true), "find motifs",
-            )).instrument(tracing::debug_span!("run_cli/10", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!("SelectMotifs done, run_config_ids={run_config_ids:?}");
         }
@@ -731,9 +730,9 @@ where
             let output_wrap = track_await(Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
                 Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone()))),
                 root_ctx.branch(true)
-            )).instrument(tracing::debug_span!("run_cli/11", file = file!(), line = line!())).await?;
+            )).await?;
 
-            let output  = track_await(Arc::into_inner(output_wrap).unwrap().take_data(0)).instrument(tracing::debug_span!("run_cli/12", file = file!(), line = line!())).await?;
+            let output  = track_await(Arc::into_inner(output_wrap).unwrap().take_data(0)).await?;
 
             info!("MergeSelectedMotifs done, output={output:?}");
         }
@@ -763,7 +762,7 @@ where
                     )?))
                 },
                 || root_ctx.branch(true),
-            )).instrument(tracing::debug_span!("run_cli/13", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!("TrainMotifsNets: run_config_ids={run_config_ids:?}");
         }
@@ -795,7 +794,7 @@ where
                         train_label_nets_args.motif_slices_step.unwrap(), //TODO or take from find motifs
                         None,
                         false,
-                    )).instrument(tracing::debug_span!("run_cli/14", file = file!(), line = line!())).await?);
+                    )).await?);
 
                     track_await(new_train_label_nets(
                         train_label_nets_args.train_motif_nets_run_config_ids.clone(),
@@ -806,10 +805,10 @@ where
                         &store,
                         opt_config,
                         labels_filter.clone(),
-                    )).instrument(tracing::debug_span!("run_cli/15", file = file!(), line = line!())).await.map(|v|Arc::new(v))
+                    )).await.map(|v|Arc::new(v))
                 },
                 ||root_ctx.branch(true),
-            )).instrument(tracing::debug_span!("run_cli/16", file = file!(), line = line!())).await?;
+            )).await?;
 
 
 
@@ -842,11 +841,11 @@ where
                         opt_config,
                         10,//TODO
                         train_final_net_args.selected_motif_nets_limit,
-                    )).instrument(tracing::debug_span!("run_cli/17", file = file!(), line = line!())).await.map(|v|Arc::new(v))
+                    )).await.map(|v|Arc::new(v))
 
                 },
                 || root_ctx.branch(true),
-            )).instrument(tracing::debug_span!("run_cli/18", file = file!(), line = line!())).await?;
+            )).await?;
 
 
             info!("TrainFinalNet done");
@@ -858,9 +857,8 @@ where
                 .run(
                     Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
                     root_ctx.branch(true),
-                ))
-                .instrument(tracing::debug_span!("run_cli/19", file = file!(), line = line!())).await?;
-            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/20", file = file!(), line = line!())).await?;
+                )).await?;
+            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).await?;
             info!("ConvertPrecision done, converted={}", output.converted().len());
         }
 
@@ -870,9 +868,8 @@ where
                 .run(
                     Arc::new(DevicesWrap::wrap(ExportInput::new())),
                     root_ctx.branch(true),
-                ))
-                .instrument(tracing::debug_span!("run_cli/21", file = file!(), line = line!())).await?;
-            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/22", file = file!(), line = line!())).await?;
+                )).await?;
+            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).await?;
             info!("Export done, target_dir={:?} label_nets={} motif_nets={} copied_models={} converted={}", output.target_dir(), output.label_net_run_config_ids().len(), output.motif_net_run_config_ids().len(), output.copied_models().len(), output.converted().len());
         }
 
@@ -882,9 +879,8 @@ where
                 .run(
                     Arc::new(DevicesWrap::wrap(PurgeModelsInput::new())),
                     root_ctx.branch(true),
-                ))
-                .instrument(tracing::debug_span!("run_cli/23", file = file!(), line = line!())).await?;
-            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/24", file = file!(), line = line!())).await?;
+                )).await?;
+            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).await?;
             info!("PurgeModels done, purged={}", output.purged().len());
         }
 
@@ -898,13 +894,13 @@ where
                 &loader,
                 root_ctx,
                 run_all_args,
-            )).instrument(tracing::debug_span!("run_cli/25", file = file!(), line = line!())).await?;
+            )).await?;
 
         }
 
         Some(Infer(infer_params)) => {
             if let Some(infer) = infer {
-                track_await(infer(infer_params, &ws, &store)).instrument(tracing::debug_span!("run_cli/26", file = file!(), line = line!())).await?;
+                track_await(infer(infer_params, &ws, &store)).await?;
             }
             // block_on(run_infer(
             //     &ws,
@@ -923,7 +919,7 @@ where
         }
 
         Some(PlotData(plot_slices_params)) => {
-            track_await(run_plot(&ws, &store, &loader, &plot_slices_params, plot_slices_params.resolution(), &devices[0], root_ctx)).instrument(tracing::debug_span!("run_cli/27", file = file!(), line = line!())).await?;
+            track_await(run_plot(&ws, &store, &loader, &plot_slices_params, plot_slices_params.resolution(), &devices[0], root_ctx)).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -965,10 +961,10 @@ where
 
     info!("\n{}", format_perf_map(&PERF));
 
-    track_await(GlobalCtx::global().shutdown()).instrument(tracing::debug_span!("run_cli/28", file = file!(), line = line!())).await;
+    track_await(GlobalCtx::global().shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);
-    let _ = track_await(purge_cpu_worker).instrument(tracing::debug_span!("run_cli/29", file = file!(), line = line!())).await;
+    let _ = track_await(purge_cpu_worker).await;
 
 
     info!("run_id {} done", run_id());
@@ -1102,8 +1098,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
                 &<R>::type_name(),
                 descr,
                 run_config.to_properties_iter(None).collect(),
-            ))
-            .instrument(tracing::debug_span!("save_run_configs/1", file = file!(), line = line!())).await?;
+            )).await?;
         run_config.set_id(run_config_id);
         run_config_ids.push(run_config_id);
     }
@@ -1258,18 +1253,18 @@ where
     match plot_params.data_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
             debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            track_await(plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx, "")).instrument(tracing::debug_span!("run_plot/1", file = file!(), line = line!())).await?;
+            track_await(plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx, "")).await?;
             return Ok(());
         }
         DataBy::MotifNetApplied { resource_id, net_path } => {
             debug!("run_plot: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
-            track_await(plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, print_to_stdout, ctx)).instrument(tracing::debug_span!("run_plot/2", file = file!(), line = line!())).await?;
+            track_await(plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, print_to_stdout, ctx)).await?;
             return Ok(());
         }
         DataBy::MotifId(motif_ids) => {
             debug!("run_plot: MotifsBy::MotifId motif_ids={motif_ids:?}");
             for motif_id in motif_ids {
-                track_await(plot_motif(&ws, ctx.branch(true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout)).instrument(tracing::debug_span!("run_plot/3", file = file!(), line = line!())).await?;
+                track_await(plot_motif(&ws, ctx.branch(true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout)).await?;
             }
         }
         DataBy::RunId {
@@ -1289,8 +1284,7 @@ where
                     resolution,
                     print_to_stdout,
                     ctx.branch(true),
-                ))
-                .instrument(tracing::debug_span!("run_plot/4", file = file!(), line = line!())).await?;
+                )).await?;
             }
         }
 
@@ -1305,8 +1299,7 @@ where
                     resolution,
                     print_to_stdout,
                     ctx.branch(true),
-                ))
-                .instrument(tracing::debug_span!("run_plot/5", file = file!(), line = line!())).await?;
+                )).await?;
             }
         }
 
@@ -1457,7 +1450,7 @@ async fn plot_found_motifs<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let motifs = track_await(store.list_motifs(find_motifs_run_config_id)).instrument(tracing::debug_span!("plot_found_motifs/1", file = file!(), line = line!())).await?;
+    let motifs = track_await(store.list_motifs(find_motifs_run_config_id)).await?;
     let motifs_len = motifs.len();
     let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -1472,10 +1465,10 @@ where
             async move {
                 debug!("run_plot: motif_id={motif_id}");
 
-                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).instrument(tracing::debug_span!("plot_found_motifs/2", file = file!(), line = line!())).await {
+                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
-                track_await(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).instrument(tracing::debug_span!("plot_found_motifs/3", file = file!(), line = line!())).await.clear();
+                track_await(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 32 == 0 {
@@ -1492,8 +1485,7 @@ where
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
         StreamBuffering::Unordered,
         &format!("plot_found_motifs_for_run_config_id_{find_motifs_run_config_id}"),
-    ))
-    .instrument(tracing::debug_span!("plot_found_motifs/4", file = file!(), line = line!())).await;
+    )).await;
 
     Ok(())
 }
@@ -1515,8 +1507,7 @@ where
     debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
 
     let motifs = track_await(store
-        .list_selected_motifs(select_motifs_run_config_id, channels))
-        .instrument(tracing::debug_span!("plot_selected_motifs/1", file = file!(), line = line!())).await?;
+        .list_selected_motifs(select_motifs_run_config_id, channels)).await?;
 
     debug!("plot_selected_motifs: motifs={motifs:?}");
 
@@ -1544,7 +1535,7 @@ where
             let ctx = ctx.branch(true);
             async move {
                 debug!("plot_selected_motifs: motif_id={motif_id}");
-                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout)).instrument(tracing::debug_span!("plot_selected_motifs/2", file = file!(), line = line!())).await {
+                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout)).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 //MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
@@ -1564,8 +1555,7 @@ where
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
         StreamBuffering::Unordered,
         &format!("plot_selected_motifs_for_run_config_id_{select_motifs_run_config_id}"),
-    ))
-    .instrument(tracing::debug_span!("plot_selected_motifs/3", file = file!(), line = line!())).await;
+    )).await;
 
     Ok(())
 }
@@ -1580,8 +1570,7 @@ where
     C: RunCtx + Adjustable,
 {
     let resource = track_await(store
-        .list_resources_by_ids(&vec![resource_id]))
-        .instrument(tracing::debug_span!("load_resource_tensor_for_plot/1", file = file!(), line = line!())).await?
+        .list_resources_by_ids(&vec![resource_id])).await?
         .into_iter()
         .next()
         .ok_or_else(|| ThoError::new(format!("resource_id={resource_id} not found")))?;
@@ -1590,8 +1579,7 @@ where
         .run_cached(
             Arc::new(DevicesWrap::wrap(resource)),
             ctx.branch(false),
-        ))
-        .instrument(tracing::debug_span!("load_resource_tensor_for_plot/2", file = file!(), line = line!())).await
+        )).await
 }
 
 fn sanitize_plot_path_segment(v: &str) -> String {
@@ -1695,14 +1683,14 @@ pub async fn plot_resource<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).instrument(tracing::debug_span!("plot_resource/1", file = file!(), line = line!())).await?;
+    let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).await?;
 
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
     track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
-    })).instrument(tracing::debug_span!("plot_resource/2", file = file!(), line = line!())).await?;
+    })).await?;
 
     if let Some(freq_filters) = freq_filters {
         let filter_frag = sanitize_plot_path_segment(&freq_filters.iter().map(|f|format!("{:?}", f)).collect::<String>());//TODO remove "*Params"
@@ -1710,13 +1698,12 @@ where
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
-            ))
-            .instrument(tracing::debug_span!("plot_resource/3", file = file!(), line = line!())).await?;
+            )).await?;
 
         let filtered_channels = channels.clone();
         track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
-        })).instrument(tracing::debug_span!("plot_resource/4", file = file!(), line = line!())).await?;
+        })).await?;
     }
 
     Ok(())
@@ -1735,16 +1722,16 @@ async fn plot_motif_net_applied<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).instrument(tracing::debug_span!("plot_motif_net_applied/1", file = file!(), line = line!())).await?;
+    let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).await?;
 
     // raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
     //     plot_resource_channels::<C>(ws, resource_id, "raw_all_channels", &format!("Resource {resource_id} raw (all channels)"), tensor, None)
     // }).await?;
 
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
-    let (store_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).instrument(tracing::debug_span!("plot_motif_net_applied/2", file = file!(), line = line!())).await?;
+    let (store_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).await?;
 
-    let find_motifs_run_config:FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).instrument(tracing::debug_span!("plot_motif_net_applied/3", file = file!(), line = line!())).await?;
+    let find_motifs_run_config:FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).await?;
 
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
@@ -1755,7 +1742,7 @@ where
 
     track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
-    })).instrument(tracing::debug_span!("plot_motif_net_applied/4", file = file!(), line = line!())).await?;
+    })).await?;
 
 
 
@@ -1764,13 +1751,12 @@ where
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
-            ))
-            .instrument(tracing::debug_span!("plot_motif_net_applied/5", file = file!(), line = line!())).await?;
+            )).await?;
 
         let channel_only_filtered = vec![channel];
         track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
-        })).instrument(tracing::debug_span!("plot_motif_net_applied/6", file = file!(), line = line!())).await?;
+        })).await?;
 
         filtered
     } else {
@@ -1806,7 +1792,7 @@ where
 
             Ok(())
         }
-    })).instrument(tracing::debug_span!("plot_motif_net_applied/7", file = file!(), line = line!())).await?;
+    })).await?;
 
     Ok(())
 }
@@ -1832,12 +1818,10 @@ where
     let motif = track_await(Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
         ctx.branch(false),
-    ))
-    .instrument(tracing::debug_span!("plot_motif/1", file = file!(), line = line!())).await?;
+    )).await?;
 
     let metrics_for_plot: Vec<(String, f32)> = track_await(track_await(motif_stats
-        .run/*_cached*/(clc_input, ctx.branch(false)))
-        .instrument(tracing::debug_span!("plot_motif/2", file = file!(), line = line!())).await?
+        .run/*_cached*/(clc_input, ctx.branch(false))).await?
         .with_data_ref(
             0,
             ctx.branch(false),
@@ -1848,8 +1832,7 @@ where
                     .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
                     .collect::<Result<Vec<_>, ThoError>>()
             },
-        ))
-        .instrument(tracing::debug_span!("plot_motif/3", file = file!(), line = line!())).await.unwrap_or(vec![]);
+        )).await.unwrap_or(vec![]);
 
     let metrics_for_plot = Arc::new(metrics_for_plot);
 
@@ -1923,7 +1906,7 @@ where
 
 
         Ok(true)
-    })).instrument(tracing::debug_span!("plot_motif/4", file = file!(), line = line!())).await?;
+    })).await?;
     Ok(())
 }
 
@@ -1964,17 +1947,17 @@ where
         &store,
         &mut run_configs,
         descr,
-    )).instrument(tracing::debug_span!("run_grid/1", file = file!(), line = line!())).await?;
+    )).await?;
 
-    let stage = track_await(f(run_configs)).instrument(tracing::debug_span!("run_grid/2", file = file!(), line = line!())).await?;
+    let stage = track_await(f(run_configs)).await?;
 
     debug!("run_grid: stage={stage:?}");
 
-    let mut savable = track_await(Arc::into_inner(track_await(stage.run(input, ctx_f())).instrument(tracing::debug_span!("run_grid/3", file = file!(), line = line!())).await?).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_grid/4", file = file!(), line = line!())).await?;
+    let mut savable = track_await(Arc::into_inner(track_await(stage.run(input, ctx_f())).await?).expect("top level stage should not have more than one reference").take_data(0)).await?;
 
     debug!("run_grid: savable={savable:?}");
 
-    track_await(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default())).instrument(tracing::debug_span!("run_grid/5", file = file!(), line = line!())).await?;
+    track_await(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default())).await?;
 
 
     Ok(run_config_ids)
@@ -2009,9 +1992,9 @@ where
     let opt_run_configs = rcrv.opt_run_configs()?;
     debug!("run_all_grid_step: run_opt={opt_run_configs:?}");
 
-    let stage = track_await(init_stage(opt_run_configs)).instrument(tracing::debug_span!("run_opt/1", file = file!(), line = line!())).await?;
+    let stage = track_await(init_stage(opt_run_configs)).await?;
 
-    let mut savable = track_await(Arc::into_inner(track_await(stage.run(input, ctx_f())).instrument(tracing::debug_span!("run_opt/2", file = file!(), line = line!())).await?).expect("").take_data(0)).instrument(tracing::debug_span!("run_opt/3", file = file!(), line = line!())).await?;
+    let mut savable = track_await(Arc::into_inner(track_await(stage.run(input, ctx_f())).await?).expect("").take_data(0)).await?;
 
     let run_config_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
 
@@ -2022,18 +2005,18 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> Result<u128, ThoError> {
         let mut tensors = Vec::with_capacity(num_tensors);
 
-        let ctx = track_await(thoosa_common::runner::global_ctx::GlobalCtx::global().copy_ctx(Cuda(0))).instrument(tracing::debug_span!("load_tensors/1", file = file!(), line = line!())).await;
+        let ctx = track_await(thoosa_common::runner::global_ctx::GlobalCtx::global().copy_ctx(Cuda(0))).await;
 
         let t_0 = Instant::now();
         for i in 0..num_tensors {
 
 
             let t = Tensor::f_stack(&[
-                track_await(make_t(&dim_1, &(i as i64), 0.1, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/2", file = file!(), line = line!())).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.2, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/3", file = file!(), line = line!())).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.3, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/4", file = file!(), line = line!())).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.4, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/5", file = file!(), line = line!())).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.5, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/6", file = file!(), line = line!())).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.1, &ctx, cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.2, &ctx, cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.3, &ctx, cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.4, &ctx, cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.5, &ctx, cuda_first)).await?,
             ], 0)?
                 .f_unfold(1, 1000, 100)?;
 
@@ -2042,7 +2025,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
         let batch = Tensor::f_concat(tensors.as_slice(), 1)?;
         let batch= if !cuda_first {
-            track_await(ctx.copy(&batch, 1, Float)).instrument(tracing::debug_span!("load_tensors/7", file = file!(), line = line!())).await?
+            track_await(ctx.copy(&batch, 1, Float)).await?
         } else {
             batch
         };
@@ -2056,7 +2039,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
 
         if cuda_first {
-            track_await(copy_ctx.copy(&t, 1, Float)).instrument(tracing::debug_span!("make_t/1", file = file!(), line = line!())).await
+            track_await(copy_ctx.copy(&t, 1, Float)).await
         } else {
             Ok(t)
         }
@@ -2074,9 +2057,9 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
     for r in 0..rounds*2 {
         if r % 2 == 0 {
-            cuda_first_time += track_await(load_tensors(&100_000, num_tensors, true)).instrument(tracing::debug_span!("perf_unfold_concat_cuda_vs_cpu/1", file = file!(), line = line!())).await?;
+            cuda_first_time += track_await(load_tensors(&100_000, num_tensors, true)).await?;
         } else {
-            cpu_first_time += track_await(load_tensors(&100_000, num_tensors, false)).instrument(tracing::debug_span!("perf_unfold_concat_cuda_vs_cpu/2", file = file!(), line = line!())).await?;
+            cpu_first_time += track_await(load_tensors(&100_000, num_tensors, false)).await?;
         }
 
     }

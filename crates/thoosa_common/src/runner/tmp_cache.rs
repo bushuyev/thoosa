@@ -7,7 +7,6 @@ use dashmap::DashMap;
 use rand::distr::{Alphanumeric, SampleString};
 use log::{debug, error, warn};
 use mockall_double::double;
-use tracing::Instrument;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
@@ -50,7 +49,7 @@ where
     async fn unregister_cache(&mut self) -> Option<tokio::sync::OwnedRwLockWriteGuard<()>> {
         if let Some(cache) = self.registered_cache.take() {
             GlobalCtx::global().remove_cache(cache.name());
-            Some(track_await(cache.lock_exclusive()).instrument(tracing::debug_span!("unregister_cache/1", file = file!(), line = line!())).await)
+            Some(track_await(cache.lock_exclusive()).await)
         } else {
             None
         }
@@ -106,13 +105,13 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all"))]
     pub async fn take_all(self, device:usize) -> Result<Vec<D>, ThoError> {//TODO it can have only one device set when created
-        track_await(self.take_all_recovering(device)).instrument(tracing::debug_span!("take_all/1", file = file!(), line = line!())).await.map_err(|err| err.error)
+        track_await(self.take_all_recovering(device)).await.map_err(|err| err.error)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TmpCached::take_all_recovering"))]
     pub async fn take_all_recovering(mut self, tho_device_idx:usize) -> Result<Vec<D>, TmpCacheTakeAllError<D>> {//TODO it can have only one device set when created
         debug!("TmpCached::take_all: name={}", self.name);
-        let _cache_guard = track_await(self.unregister_cache()).instrument(tracing::debug_span!("take_all_recovering/1", file = file!(), line = line!())).await;
+        let _cache_guard = track_await(self.unregister_cache()).await;
 
         let mut res = vec![];
         let map = Arc::into_inner(mem::take(&mut self.map)).expect("TmpCached::take_all: map still in use after unregister_cache");
@@ -123,7 +122,7 @@ where
                 continue;
             };
 
-            match track_await(devices_wrap.load_from_any_device_(tho_device_idx)).instrument(tracing::debug_span!("take_all_recovering/2", file = file!(), line = line!())).await.map(|guard| drop(guard)) {
+            match track_await(devices_wrap.load_from_any_device_(tho_device_idx)).await.map(|guard| drop(guard)) {
                 Ok(()) => match devices_wrap.take_data_prefer_device_or_any(tho_device_idx) {
                     Ok(value) => res.push(value),
                     Err(err) => {
@@ -196,7 +195,7 @@ where
         for (key, val) in keys_vals {
             debug!("TmpCached::purge_gpu: key={key:?}");
 
-            if let Err(err) = track_await(val.dump_to_cpu(device_idx)).instrument(tracing::debug_span!("purge_gpu/1", file = file!(), line = line!())).await {
+            if let Err(err) = track_await(val.dump_to_cpu(device_idx)).await {
                 debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu err={err:?}");
             } else {
                 debug!("TmpCached::purge_gpu: key={key:?} dump_to_cpu ok");
@@ -216,7 +215,7 @@ where
         for (key, val) in keys_vals {
             debug!("TmpCached::drop_gpu: key={key:?}");
 
-            if let Err(err) = track_await(val.drop_device(device_idx)).instrument(tracing::debug_span!("drop_gpu/1", file = file!(), line = line!())).await {
+            if let Err(err) = track_await(val.drop_device(device_idx)).await {
                 debug!("TmpCached::drop_gpu: key={key:?} dump_to_cpu err={err:?}");
             } else {
                 debug!("TmpCached::drop_gpu: key={key:?} dump_to_cpu ok");
@@ -264,7 +263,6 @@ mod tests {
     // use crate::common::Data;
     use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::RegisteredCacheHandle;
-use tracing::Instrument;
     use crate::runner::tmp_cache::TmpCached;
 
     #[tokio::test]

@@ -30,7 +30,6 @@ use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_common::runs::SavableResult;
 use async_trait::async_trait;
-use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, DummyData)]
@@ -210,7 +209,7 @@ where
         let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ResourcesConfigInput<RC>| {
             Ok::<_, ThoError>(input.resources_config().clone())
         })?;
-        let resources = track_await(resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
         for configured_stage in &self.run_config_stages {
             let mut buckets: SeqScanBucketsByChannel = Vec::new();
@@ -223,8 +222,7 @@ where
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(resource.clone())),
                         ctx.branch(false),
-                    ))
-                    .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
+                    )).await?;
                 let resource_len = loaded.size().dim_1();
 
                 if resource_len > max_chunk_len {
@@ -234,7 +232,7 @@ where
                         &configured_stage.run_config,
                         &mut buckets,
                         ctx.branch(false),
-                    )).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?;
+                    )).await?;
                     batch_resources.clear();
                     batch_tensors.clear();
                     batch_len = 0;
@@ -259,7 +257,7 @@ where
                     &configured_stage.run_config,
                     &mut buckets,
                     ctx.branch(false),
-                )).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await?;
+                )).await?;
                 batch_resources.clear();
                 batch_tensors.clear();
                 batch_len = 0;
@@ -271,7 +269,7 @@ where
                 &configured_stage.run_config,
                 &mut buckets,
                 ctx.branch(false),
-            )).instrument(tracing::debug_span!("run/5", file = file!(), line = line!())).await?;
+            )).await?;
 
             info!(
                 "SeqScanStage::run: run_config_id={:?} metric={:?} chunk_size={} channel_bucket_sizes={:?}",
