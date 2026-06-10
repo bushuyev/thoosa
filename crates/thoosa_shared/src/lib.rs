@@ -363,7 +363,7 @@ async fn collect_stream_with_progress<T, S>(
 }
 
 pub const LOCK_TIMEOUT: Duration = Duration::from_mins(1);
-pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(240);//TODO should depend on future
+// pub const FUTURES_TIMEOUT: Duration = Duration::from_hours(240);//TODO should depend on future
 
 
 
@@ -421,9 +421,9 @@ where
     match buffering {
         StreamBuffering::Unordered => {
             let mut stream = futures::stream::iter(futures)
-            .map(|fut| async move {
-                tokio::time::timeout(FUTURES_TIMEOUT, fut).await? //TODO add param
-            })
+            // .map(|fut| async move {
+            //     tokio::time::timeout(FUTURES_TIMEOUT, fut).await? //TODO add param
+            // })
             .buffer_unordered(buffer_limit);
 
             collect_stream_with_progress(
@@ -439,9 +439,9 @@ where
         }
         StreamBuffering::Ordered => {
             let mut stream = futures::stream::iter(futures)
-                .map(|fut| async move {
-                    tokio::time::timeout(FUTURES_TIMEOUT, fut).await?
-                })
+                // .map(|fut| async move {
+                //     tokio::time::timeout(FUTURES_TIMEOUT, fut).await?
+                // })
                 .buffered(buffer_limit);
 
             collect_stream_with_progress(
