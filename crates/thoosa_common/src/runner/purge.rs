@@ -266,6 +266,7 @@ where
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?}");
 
         //because of "implementation of `dashmap::Map` is not general enough"
         let items: Vec<(
@@ -287,25 +288,25 @@ where
                     if let Err(e) = track_await(v.drop_device(device_idx)).await {
                         warn!("drop_gpu failed: key={key:?} err={e:?}");
                     } else {
-                        debug!("drop_gpu ok: key={key:?} dropped");
+                        trace!("drop_gpu ok: key={key:?} dropped");
                     }
                 }
                 Err(e) => {
                     if e.is_oom() {
-                        debug!("drop_gpu: Err key={key:?} err={e:?}")
+                        trace!("drop_gpu: Err key={key:?} err={e:?}")
                     } else {
                         warn!("drop_gpu: Err key={key:?} err={e:?}")
                     }
                 },
             }
-                collect_eta_record_completion(dump_eta_guard_id);
+            collect_eta_record_completion(dump_eta_guard_id);
         })).await;
 
         self.retain(|k, v| {
-            debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
+            trace!("FuturesRunnerMapPurger::drop_gpu: key={k:?}");
             if v.peek()
                 .and_then(|v| v.as_ref().map(|r| {
-                   r.is_on_device(0)//TODO check if on other devices
+                   r.is_on_device(0)// it's assumed that there are just two devices - CPU (tho_device_idx=0) and Cuda(0) (tho_device_idx=1). TODO check if on other devices.
                 }).ok())
                 .unwrap_or(false)
             {
@@ -316,6 +317,7 @@ where
             }
         });
 
+        debug!("FuturesRunnerMapPurger::drop_gpu: name={name:?} done");
 
         Ok(())
     }
