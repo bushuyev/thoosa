@@ -133,6 +133,7 @@ where
         let trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
         let trained_nets_len = trained_nets.len();
         let id = mono_key!(APPLY_MOTIF_NETS, "ApplyMotifNets") + &SynKey::new(trained_nets.iter().map(|net| mono_key!(net.id, format!("trained_net_id_{}", net.id))).collect::<Vec<_>>());
+        let store = Arc::clone(store);
 
 
         let tmp_cache = track_await(TmpCached::new("tmp_apply_cosine2d_motif_nets")).await;
@@ -151,6 +152,7 @@ where
                 let train_motif_net_run_config_id = trained_net.run_config_id;
                 let path = trained_net.net_path;
                 let ws = Arc::clone(&ws);
+                let store = Arc::clone(&store);
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(false);
                 let load_ctx_2 = stage_ctx.branch(false);

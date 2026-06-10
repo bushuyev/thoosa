@@ -329,7 +329,7 @@ where
             }).collect::<Vec<_>>());
         }
 
-        let motif_ids = self.find_motif_run_config_ids_motif_ids.values().flat_map(|motifs| motifs.iter()).collect::<Vec<_>>();
+        let motif_ids = self.find_motif_run_config_ids_motif_ids.values().flat_map(|motifs| motifs.iter().copied()).collect::<Vec<_>>();
 
         let select_motifs_run_config_id = select_motifs_run_config.id.expect("no select_motifs_run_config");
         let criteria_metrics = criteria_constraints.iter().map(|constraint| constraint.metric.clone()).collect::<Vec<_>>();
@@ -348,7 +348,7 @@ where
                 let motif_stats_output = track_await(Arc::clone(&motif_stats)
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
-                            MotifLoaderInput::new((*motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
+                            MotifLoaderInput::new((motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                             criteria_metrics.clone(),
                         ))),
                         ctx.branch(false),
@@ -380,7 +380,7 @@ where
                     let k = hump(motif_stats_output.num_slices as f64, 20., 0.1, 5.0);//TODO config
                     let weighted_criterion_scores = criterion_scores.iter().map(|(key, score)| (*key, score*k)).collect::<Vec<_>>();
                     Ok::<Option<SelectedMotifEvaluation>, ThoError>(satisfies_constraints.then_some(SelectedMotifEvaluation {
-                        motif_id: *motif_id,
+                        motif_id,
                         criterion_scores,
                         weighted_criterion_scores,
                     }))
@@ -450,18 +450,19 @@ where
         let eta_guard = CollectEtaInvocationGuard::new("SelectMotifsStage::run", run_configs_len, 1);
 
 
-        let futures = self.run_configs.iter().map(|select_motifs_run_config|{
+        let run_configs = self.run_configs.clone();
+        let futures = run_configs.into_iter().map(|select_motifs_run_config|{
             let mut ctx_for_futs = ctx.branch(false);
             let self_for_futs = Arc::clone(&self);
 
             async move {
                 let selected_motifs = track_await(self_for_futs
                     // TODO(perf): criteria filtering reloads metrics for each select config; keep a per-run motif metric cache when only thresholds differ.
-                    .filter_motifs_by_criteria(select_motifs_run_config, ctx_for_futs.branch(false))).await?;
+                    .filter_motifs_by_criteria(&select_motifs_run_config, ctx_for_futs.branch(false))).await?;
 
                 let constraint_metrics = match output_mode {
                     SelectMotifsOutputMode::Standalone => None,
-                    SelectMotifsOutputMode::WithConstraintMetrics => Some(Self::clc_constraint_metrics(select_motifs_run_config, selected_motifs.as_slice())),
+                    SelectMotifsOutputMode::WithConstraintMetrics => Some(Self::clc_constraint_metrics(&select_motifs_run_config, selected_motifs.as_slice())),
                 };
                 let selected_motif_ids_scores = selected_motifs.iter().map(SelectedMotifEvaluation::to_savable_score).collect::<Vec<_>>();
 

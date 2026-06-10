@@ -1455,11 +1455,13 @@ where
     let motifs = track_await(store.list_motifs(find_motifs_run_config_id)).await?;
     let motifs_len = motifs.len();
     let done_cnt = Arc::new(AtomicU32::new(0));
+    let ws = Arc::clone(ws);
 
     let futures = motifs
         .into_iter()
         .map(|motif_id| {
             let done_cnt = Arc::clone(&done_cnt);
+            let ws = Arc::clone(&ws);
             let clc_dist = Arc::clone(clc_dist);
             let motif_loader_impl = Arc::clone(motif_loader_impl);
             let ctx = ctx.branch(true);
