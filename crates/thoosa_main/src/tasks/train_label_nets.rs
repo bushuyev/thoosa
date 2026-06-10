@@ -380,7 +380,7 @@ where
 
             let labels_train_and_valid_sets_len = self.labels.as_ref().map(|filtered_labels|filtered_labels.len()).unwrap_or(labels_train_and_valid_sets.len());
             let labels_filter = self.labels.clone();
-            let futures = labels_train_and_valid_sets.iter()
+            let futures = labels_train_and_valid_sets.into_iter()
             .filter(|(label, _)|{
                 labels_filter
                     .as_ref()
@@ -403,7 +403,7 @@ where
                 async move {
                     debug!("TrainLabelNets::run: label={label} resources={resources_1:?}");
 
-                    let resources_0 = labels_others_train_valid_resources.get(label).expect(&format!("no resources not belonging to {label}"));
+                    let resources_0 = labels_others_train_valid_resources.get(&label).expect(&format!("no resources not belonging to {label}"));
                     info!("TrainLabelNets::run: label={label} resources_x={resources_0:?}");
 
                     let resources_1_train = Arc::new(resources_1.0.clone());

@@ -956,7 +956,8 @@ where
 
 
         let eta_guard = CollectEtaInvocationGuard::new("BucketingStage/resources", resources.len(), 1);
-        let futures = resources.iter().map(|resource|{
+        let resources_len = resources.len();
+        let futures = resources.into_iter().map(|resource|{
             let mut sync_bucketing_ctx = ctx.branch(false);
             let loader = Arc::clone(&self.loader);
             let sync_stage = Arc::clone(&self.sync_bucketing_stage);
@@ -1007,7 +1008,7 @@ where
 
         let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
-            resources.len(),
+            resources_len,
             BUCKETING_LIMIT,
             StreamBuffering::Unordered,
             "BucketingStage/resources",
@@ -1043,7 +1044,7 @@ where
             motif_ids.extend(group_motif_ids);
         }
 
-        debug!("BucketingStage::run: run_config_id={run_config_id} resources={} motif_ids={motif_ids:?}", resources.len());
+        debug!("BucketingStage::run: run_config_id={run_config_id} resources={resources_len} motif_ids={motif_ids:?}");
 
 
         info!("BucketingStage::run: run_config_id={run_config_id:?} done");

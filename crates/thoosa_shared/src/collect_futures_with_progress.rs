@@ -6,10 +6,10 @@ use std::{
 
 use tokio::task::{JoinError, JoinSet};
 use tracing::{debug, error};
-use crate::{StreamBuffering, ThoError};
-use crate::collect_futures_eta::{collect_eta_maybe_log, CollectEtaInvocationGuard};
+use crate::{cuda_activity_gate, StreamBuffering, ThoError};
+use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard};
 
-pub async fn collect_futures_with_progress_tokio<T, F>(
+pub async fn collect_futures_with_progress<T, F>(
     futures: impl Iterator<Item = F>,
     len: usize,
     buffer_limit: usize,
@@ -21,12 +21,9 @@ where
     F: Future<Output = Result<T, ThoError>> + Send + 'static,
     ThoError: Send + 'static,
 {
-    debug!("collect_futures_with_progress_tokio: descr={descr} len={len}");
+    debug!("collect_futures_with_progress: descr={descr} len={len}");
 
-    assert!(
-        buffer_limit > 0,
-        "buffer_limit must be > 0; JoinSet version cannot make progress with 0"
-    );
+    assert!(buffer_limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
 
     let mut results = Vec::with_capacity(len);
     let (mut ok, mut err) = (0usize, 0usize);
@@ -103,6 +100,7 @@ where
     };
 
     set.spawn(async move {
+        cuda_activity_gate().wait_if_paused().await;
         (idx, fut.await)
     });
 
@@ -221,17 +219,17 @@ where
 
         Err(e) => {
             *err += 1;
-            error!(
-                "collect_futures_with_progress: descr={descr} error={e:?}"
-            );
+            error!("collect_futures_with_progress: descr={descr} error={e:?}");
         }
     }
 
     let done = *ok + *err;
 
-    debug!(
-        "collect_futures_with_progress: descr={descr} progress={done}/{total} ok={ok} err={err}"
-    );
+    if let Some(invocation_id) = eta_invocation_id {
+        collect_eta_record_completion(invocation_id);
+    }
+
+    debug!("collect_futures_with_progress: descr={descr} progress={done}/{total} ok={ok} err={err}");
 
     if eta_invocation_id.is_some() {
         collect_eta_maybe_log(false);
