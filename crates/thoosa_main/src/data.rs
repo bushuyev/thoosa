@@ -133,7 +133,7 @@ pub async fn load_to_logits_tensors(
     group: &str,
     store: Arc<Box<dyn Store>>,
 ) -> Vec<(Resource, Vec<f32>)> {
-    track_await("thoosa_main::data::load_to_logits_tensors/1", store
+    track_await(store
         .list_resource_random_in_group(group))
         .instrument(tracing::debug_span!("load_to_logits_tensors/1", file = file!(), line = line!())).await
         .expect("list_resource_random_in_group")

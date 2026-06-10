@@ -220,7 +220,7 @@ where
 
 
         for find_motifs_run_config_id in find_motifs_run_config_ids {
-            find_motifs_run_configs.push(Arc::new(track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::load_stacked_motifs/1", load_run_config(store, *find_motifs_run_config_id)).instrument(tracing::debug_span!("load_stacked_motifs/1", file = file!(), line = line!())).await?));
+            find_motifs_run_configs.push(Arc::new(track_await(load_run_config(store, *find_motifs_run_config_id)).instrument(tracing::debug_span!("load_stacked_motifs/1", file = file!(), line = line!())).await?));
         }
         let find_motifs_run_configs_len = find_motifs_run_configs.len();
 
@@ -234,7 +234,7 @@ where
                 async move {
                     let stacked_motifs_input = Arc::new(DevicesWrap::wrap(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?));
 
-                    match track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::load_stacked_motifs/2", stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).instrument(tracing::debug_span!("load_stacked_motifs/2", file = file!(), line = line!())).await {
+                    match track_await(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).instrument(tracing::debug_span!("load_stacked_motifs/2", file = file!(), line = line!())).await {
                         Ok(motif_data) => Ok::<_, ThoError>(Some((find_motifs_run_config, motif_data))),
                         Err(e) => {
                             //TODO switch to CPU if OOM ctx.to_cpu...
@@ -245,7 +245,7 @@ where
                 }
             });
 
-        let run_configs__stacked_motifs = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::load_stacked_motifs/3", collect_futures_with_progress(
+        let run_configs__stacked_motifs = track_await(collect_futures_with_progress(
             futures,
             find_motifs_run_configs_len,
             LOAD_STACKED_MOTIFS_LIMIT,
@@ -292,10 +292,10 @@ where
                 let slices_selector_metric = slices_selector_metric.clone();
                 let mut ctx_for_motif = ctx.branch(false);
                 async move {
-                    let result = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::clc_stacked_motifs_statistics/3", async {
+                    let result = track_await(async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
                         let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()])));
-                        let motif_stat: f32 = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::clc_stacked_motifs_statistics/2", track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::clc_stacked_motifs_statistics/1", load_and_clc_dist
+                        let motif_stat: f32 = track_await(track_await(load_and_clc_dist
                             .run(clc_input, ctx_for_motif.branch(false)))
                             .instrument(tracing::debug_span!("clc_stacked_motifs_statistics/1", file = file!(), line = line!())).await?
                             .with_data_ref(
@@ -312,7 +312,7 @@ where
                 }
             });
 
-        let motif_stats = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::clc_stacked_motifs_statistics/4", collect_futures_with_progress(
+        let motif_stats = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
             crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN,
@@ -387,7 +387,7 @@ where
         // This stays inside the run-config loop.
         // Stacked motifs are cached by find_motifs_run_config_id, while stats depend on metric/aggr (including floats in aggr).
         // Stats must be computed separately so motifs and statistics can be cached independently.
-        let run_configs__stacked_motifs = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_motifs_for_run_config/1", Self::load_stacked_motifs(
+        let run_configs__stacked_motifs = track_await(Self::load_stacked_motifs(
             &self.store,
             &self.stacked_motifs_loader,
             ctx.branch(true),
@@ -417,15 +417,15 @@ where
                 let run_configs__stacked_motifs_dbg = run_configs__stacked_motifs_dbg;
 
                 async move {
-                    match track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_motifs_for_run_config/4", async {
-                        let motifs_stats = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_motifs_for_run_config/2", Self::clc_stacked_motifs_statistics(
+                    match track_await(async {
+                        let motifs_stats = track_await(Self::clc_stacked_motifs_statistics(
                             clc_dist,
                             Arc::clone(&motif_data),
                             slices_selector_metric.clone(),
                             ctx_to_move.branch(false),
                         ))
                             .instrument(tracing::debug_span!("extend_motifs_for_run_config/2", file = file!(), line = line!())).await?;
-                        track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_motifs_for_run_config/3", Self::extend_with_one_find_run(
+                        track_await(Self::extend_with_one_find_run(
                             loader,
                             ws,
                             clc_resources_motifs_dist,
@@ -451,7 +451,7 @@ where
                 }
             });
 
-        let _ = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_motifs_for_run_config/5", collect_futures_with_progress(
+        let _ = track_await(collect_futures_with_progress(
             futures,
             run_configs__stacked_motifs_len,
             crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
@@ -492,7 +492,7 @@ where
             debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
             let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws)?;
 
-            let t_0 = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/1", Arc::clone(&configured_loader)
+            let t_0 = track_await(Arc::clone(&configured_loader)
                 .run_cached(Arc::new(DevicesWrap::wrap(resource_0.clone())), ctx.branch(false)))
                 .instrument(tracing::debug_span!("extend_with_one_find_run/1", file = file!(), line = line!())).await?;
 
@@ -533,7 +533,7 @@ where
                 channel_masks_dists_ids,
                 resources_iter,
                 ..
-            } = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/3", OOMHandler::new(
+            } = track_await(OOMHandler::new(
                 vec![
                     Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                     Adjusters::RunContext(Box::new(DumpToCpu::new("clc_resources_motifs_dist"))),
@@ -549,7 +549,7 @@ where
                         SelectMotifsSplitterContext::new(
                             t_1_batch_len as i64,
                             batch_1_slice_lengths,
-                            track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/2", SelectMotifsClcOutputBuilder::new(
+                            track_await(SelectMotifsClcOutputBuilder::new(
                                 StackedMotifsOutputId::new(find_motifs_run_config.id.expect("find_motifs_run_config"), vec![]),
                                 channels,
                                 find_motifs_run_config.step as usize,
@@ -582,10 +582,10 @@ where
                     let resources_slices = Arc::clone(&resources_slices);
                     let channels_motifs_added_slices = Arc::clone(&channels_motifs_added_slices);
                     async move {
-                        let result = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/6", async {
+                        let result = track_await(async {
                             if let Some(mask_dists_ids) = channel_mask_dists_ids {
                                 debug!("SelectMotifsStage::run: channel={channel} mask_dists_ids={:?}", mask_dists_ids.1);
-                                let mask_dists = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/4", mask_dists_ids.0.to_cpu()).instrument(tracing::debug_span!("extend_with_one_find_run/4", file = file!(), line = line!())).await?;
+                                let mask_dists = track_await(mask_dists_ids.0.to_cpu()).instrument(tracing::debug_span!("extend_with_one_find_run/4", file = file!(), line = line!())).await?;
                                 let mask_size = mask_dists.mask_size_hint()?;
                                 assert_eq!(mask_size.len(), 3, "SelectMotifsStage::run: expected 3D mask, got {mask_size:?}");
                                 assert_eq!(mask_size[0], 1, "SelectMotifsStage::run: expected single-channel mask, got {mask_size:?}");
@@ -594,7 +594,7 @@ where
 
                                 let motif_count = mask_dists_ids.1.len();
                                 let resources_slices_cloned = Arc::clone(&resources_slices);
-                                let matches_by_motif = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/5", tokio::task::spawn_blocking(move || {
+                                let matches_by_motif = track_await(tokio::task::spawn_blocking(move || {
                                     tracing::info_span!(
                                         "extend_motifs::group_mask_matches",
                                         kind = "spawn_blocking",
@@ -652,7 +652,7 @@ where
                     }
                 });
 
-            track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::extend_with_one_find_run/7", collect_futures_with_progress(
+            track_await(collect_futures_with_progress(
                 futures,
                 channel_masks_dists_ids_len,
                 crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
@@ -701,7 +701,7 @@ where
         let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ExtendMotifsInput| {
             Ok::<_, ThoError>(input.resources_input().resources_config().clone())
         })?;
-        let resources = Arc::new(track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::AsyncStage::run/1", resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?);
+        let resources = Arc::new(track_await(resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?);
         if resources.is_empty() {
             warn!("ExtendMotifsStage::run: no labels resources");
             return Err(ThoError::new(format!("no resources found in {input:?}")))
@@ -714,7 +714,7 @@ where
             let resources_for_fut = Arc::clone(&resources);
             let mut ctx_for_fut = ctx.branch(false);
             async move {
-                let channels_motifs_added_slices = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::AsyncStage::run/2", self_for_fut.extend_motifs_for_run_config(
+                let channels_motifs_added_slices = track_await(self_for_fut.extend_motifs_for_run_config(
                     extend_motifs_run_config,
                     resources_for_fut,
                     num_channels,
@@ -726,13 +726,13 @@ where
                 for (channel, motif_slices) in channels_motifs_added_slices.into_iter().enumerate() {
                     for (motif_id, slices) in motif_slices {
                         debug!("ExtendMotifsStage::run: motif_id={motif_id} slices.len={} channel={channel}", slices.len());
-                        track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::AsyncStage::run/3", self_for_fut.store.add_slices_to_motif(extend_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices)).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?
+                        track_await(self_for_fut.store.add_slices_to_motif(extend_motifs_run_config_id, motif_id.vals[0].to_data_id().0, channel as i64, slices)).instrument(tracing::debug_span!("run/3", file = file!(), line = line!())).await?
                     }
                 }
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await("thoosa_main::tasks::extend_motifs::ExtendMotifsStage::AsyncStage::run/4", collect_futures_with_progress(futures, run_configs_len, crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS, StreamBuffering::Unordered, "ExtendMotifsStage::run")).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await;
+        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS, StreamBuffering::Unordered, "ExtendMotifsStage::run")).instrument(tracing::debug_span!("run/4", file = file!(), line = line!())).await;
         Ok(Arc::new(DevicesWrap::wrap(ExtendMotifsSavableResult::new())))
     }
 }
@@ -851,7 +851,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                     let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
                     let channels = t.size().dim_0();
                     let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                    let selected = Arc::new(DevicesWrap::wrap(track_await("thoosa_main::tasks::extend_motifs::SelectMotifsInputSelectorWrap::WithSelectDataRef<SelectMotifsInputSelector>::with_selected_data_ref/1", t.with_selected_data(ctx.tho_device_idx(), ctx.branch(false), selector, |data, _ctx| {
+                    let selected = Arc::new(DevicesWrap::wrap(track_await(t.with_selected_data(ctx.tho_device_idx(), ctx.branch(false), selector, |data, _ctx| {
                         Ok(data)
                     })).instrument(tracing::debug_span!("with_selected_data_ref/1", file = file!(), line = line!())).await?));
                     let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
@@ -912,7 +912,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         debug!("SelectMotifsSavableResultBuilder::add_partial_output: o={o:?}");
 
         self.output.push (tokio::spawn(async {
-            track_await("thoosa_main::tasks::extend_motifs::SelectMotifsSavableResultBuilder::OutputBuilder::add_partial_output/1", o.to_cpu()).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await
+            track_await(o.to_cpu()).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await
         }.instrument(tracing::info_span!(
             "extend_motifs::partial_output_to_cpu",
             kind = "spawn",
@@ -927,7 +927,7 @@ impl OutputBuilder for SelectMotifsSavableResultBuilder {
         let mut resource_ids_sizes: Vec<ResourceSlices> = vec![];
 
 
-        let output:Vec<ClcResourcesMotifsDistOutput> = track_await("thoosa_main::tasks::extend_motifs::SelectMotifsSavableResultBuilder::OutputBuilder::build/1", futures::future::try_join_all(self.output)).instrument(tracing::debug_span!("build/1", file = file!(), line = line!())).await?
+        let output:Vec<ClcResourcesMotifsDistOutput> = track_await(futures::future::try_join_all(self.output)).instrument(tracing::debug_span!("build/1", file = file!(), line = line!())).await?
             .into_iter()
             .collect::<Result<Vec<_>, ThoError>>()?;
 
@@ -1006,7 +1006,7 @@ struct SelectMotifsClcOutputBuilder {
 impl SelectMotifsClcOutputBuilder {
     pub async fn new(id: StackedMotifsOutputId, channels: u32, step: usize) -> Self {
         Self {
-            inner: track_await("thoosa_main::tasks::extend_motifs::SelectMotifsClcOutputBuilder::new/1", SelectMotifsSavableResultBuilder::new(id, channels, step)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await,
+            inner: track_await(SelectMotifsSavableResultBuilder::new(id, channels, step)).instrument(tracing::debug_span!("new/1", file = file!(), line = line!())).await,
         }
     }
 }
@@ -1015,11 +1015,11 @@ impl OutputBuilder for SelectMotifsClcOutputBuilder {
     type O = ClcResourcesMotifsDistOutput;
 
     async fn add_partial_output(&mut self, o: Self::O) {
-        track_await("thoosa_main::tasks::extend_motifs::SelectMotifsClcOutputBuilder::OutputBuilder::add_partial_output/1", self.inner.add_partial_output(o)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
+        track_await(self.inner.add_partial_output(o)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
     }
 
     async fn build(self) -> Result<Self::O, ThoError> {
-        track_await("thoosa_main::tasks::extend_motifs::SelectMotifsClcOutputBuilder::OutputBuilder::build/1", self.inner.build()).instrument(tracing::debug_span!("build/1", file = file!(), line = line!())).await
+        track_await(self.inner.build()).instrument(tracing::debug_span!("build/1", file = file!(), line = line!())).await
     }
 }
 
@@ -1188,7 +1188,7 @@ where
 {
     async fn add_partial_output(&mut self, out: ST::Out) {
         debug!("SelectMotifsSplitterContext::add_partial_output: out={out:?}");
-        track_await("thoosa_main::tasks::extend_motifs::SelectMotifsSplitterContext::InputContext<'a,ST>::add_partial_output/1", self.output_builder.add_partial_output(out)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
+        track_await(self.output_builder.add_partial_output(out)).instrument(tracing::debug_span!("add_partial_output/1", file = file!(), line = line!())).await;
         match self.batch_1_mode {
             Batch1SplitMode::Range => {
                 self.done_to += self.split_len;
@@ -1207,7 +1207,7 @@ where
     }
 
     async fn build_final_output(self) -> Result<ST::Out, ThoError> {
-        track_await("thoosa_main::tasks::extend_motifs::SelectMotifsSplitterContext::InputContext<'a,ST>::build_final_output/1", self.output_builder.build()).instrument(tracing::debug_span!("build_final_output/1", file = file!(), line = line!())).await
+        track_await(self.output_builder.build()).instrument(tracing::debug_span!("build_final_output/1", file = file!(), line = line!())).await
     }
 }
 
@@ -1237,7 +1237,7 @@ where
     async fn adjust(&self, mut adjustable: Self::A, adjust_context: &mut SelectMotifsSplitterContext<'a, ST>) -> Result<Self::A, AdjusterError<Self::A>> {
         match adjust_context.batch_1_mode {
             Batch1SplitMode::Range => {
-                let result = track_await("thoosa_main::tasks::extend_motifs::SelectMotifsAdjuster::Adjuster<SelectMotifsSplitterContext<'a,ST>>::adjust/1", self.batch_1_adjuster.adjust(0i64..0, adjust_context)).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
+                let result = track_await(self.batch_1_adjuster.adjust(0i64..0, adjust_context)).instrument(tracing::debug_span!("adjust/1", file = file!(), line = line!())).await;
                 debug!("SelectMotifsAdjuster::adjust: adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {
@@ -1248,7 +1248,7 @@ where
                 }
             }
             Batch1SplitMode::Slice => {
-                let result = track_await("thoosa_main::tasks::extend_motifs::SelectMotifsAdjuster::Adjuster<SelectMotifsSplitterContext<'a,ST>>::adjust/2", self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).instrument(tracing::debug_span!("adjust/2", file = file!(), line = line!())).await;
+                let result = track_await(self.batch_1_slice_adjuster.adjust(0i64..0, &mut adjust_context.slice_ctx)).instrument(tracing::debug_span!("adjust/2", file = file!(), line = line!())).await;
                 debug!("SelectMotifsAdjuster::adjust: slice adjust_context={adjust_context:?} result={result:?}");
                 match result {
                     Ok(range) => {

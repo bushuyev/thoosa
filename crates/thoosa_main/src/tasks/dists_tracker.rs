@@ -603,7 +603,7 @@ impl DistsMask {
                     };
                     let device = ThoDevice::from(mask.device());
                     let kind = mask.kind();
-                    track_await("thoosa_main::tasks::dists_tracker::DistsMask::to_cpu/2", track_await("thoosa_main::tasks::dists_tracker::DistsMask::to_cpu/1", GlobalCtx::global().copy_ctx(device)).instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await.move_t(mask, 0, kind)).instrument(tracing::debug_span!("to_cpu/2", file = file!(), line = line!())).await?
+                    track_await(track_await(GlobalCtx::global().copy_ctx(device)).instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await.move_t(mask, 0, kind)).instrument(tracing::debug_span!("to_cpu/2", file = file!(), line = line!())).await?
                 };
                 let dists = match self.dists {
                     Some(dists) if dists.device().eq(&Cpu) => Some(dists),
@@ -615,7 +615,7 @@ impl DistsMask {
                         };
                         let kind = dists.kind();
                         let dists_device = ThoDevice::from(dists.device());
-                        Some(track_await("thoosa_main::tasks::dists_tracker::DistsMask::to_cpu/4", track_await("thoosa_main::tasks::dists_tracker::DistsMask::to_cpu/3", GlobalCtx::global().copy_ctx(dists_device)).instrument(tracing::debug_span!("to_cpu/3", file = file!(), line = line!())).await.move_t(dists, 0, kind)).instrument(tracing::debug_span!("to_cpu/4", file = file!(), line = line!())).await?)
+                        Some(track_await(track_await(GlobalCtx::global().copy_ctx(dists_device)).instrument(tracing::debug_span!("to_cpu/3", file = file!(), line = line!())).await.move_t(dists, 0, kind)).instrument(tracing::debug_span!("to_cpu/4", file = file!(), line = line!())).await?)
                     }
                     None => None,
                 };
@@ -862,7 +862,7 @@ fn gather_dists_for_indices(
 impl CrossClcResultMerge for DistsMask {
 
     fn to_cpu(self) -> BoxFuture<'static, Result<Self, ThoError>> {
-        async move { track_await("thoosa_main::tasks::dists_tracker::DistsMask::CrossClcResultMerge::to_cpu/1", DistsMask::to_cpu(self)).instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await }.boxed()
+        async move { track_await(DistsMask::to_cpu(self)).instrument(tracing::debug_span!("to_cpu/1", file = file!(), line = line!())).await }.boxed()
     }
 
     //gpt generated
@@ -1505,7 +1505,7 @@ where
                 let mut tracker = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(mt));
                 (tracker.take_dumper()?, tracker.max_slices_counts())
             };
-            let groups_inserted = track_await("thoosa_main::tasks::dists_tracker::DistsTracker::build_groups/1", dumper.load_slices_into_groups(&self.store, max_slices_counts)).instrument(tracing::debug_span!("build_groups/1", file = file!(), line = line!())).await?;
+            let groups_inserted = track_await(dumper.load_slices_into_groups(&self.store, max_slices_counts)).instrument(tracing::debug_span!("build_groups/1", file = file!(), line = line!())).await?;
             channels_groups.push((channel, groups_inserted));
         }
 

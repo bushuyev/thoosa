@@ -1,5 +1,6 @@
 use std::{
     any::type_name,
+    fmt::{Display, Formatter},
     future::Future,
     panic::Location,
     sync::{
@@ -27,7 +28,6 @@ pub enum TaskState {
 #[derive(Debug, Clone)]
 pub struct TaskInfo {
     pub id: u64,
-    pub name: &'static str,
     pub ty: &'static str,
     pub spawn_location: &'static Location<'static>,
     pub state: TaskState,
@@ -35,6 +35,35 @@ pub struct TaskInfo {
     pub wake_count: u64,
     pub last_change: Instant,
     pub last_pending: Option<Instant>,
+}
+
+impl Display for TaskInfo {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let state = match self.state {
+            TaskState::Polling => "polling",
+            TaskState::Pending => "pending",
+            TaskState::Woken => "woken",
+        };
+        let location = self.spawn_location;
+
+        write!(
+            f,
+            "task #{} {state} at {}:{}:{} polls={} wakes={} state_for={:?}",
+            self.id,
+            location.file(),
+            location.line(),
+            location.column(),
+            self.poll_count,
+            self.wake_count,
+            self.last_change.elapsed(),
+        )?;
+
+        if let Some(last_pending) = self.last_pending {
+            write!(f, " pending_for={:?}", last_pending.elapsed())?;
+        }
+
+        write!(f, " future={}", self.ty)
+    }
 }
 
 #[pin_project(PinnedDrop)]
@@ -55,7 +84,6 @@ impl<F> PinnedDrop for Tracked<F> {
 
 impl<F> Tracked<F> {
     pub fn new_at(
-        name: &'static str,
         spawn_location: &'static Location<'static>,
         inner: F,
     ) -> Self {
@@ -63,7 +91,6 @@ impl<F> Tracked<F> {
 
         TASKS.insert(id, TaskInfo {
             id,
-            name,
             ty: type_name::<F>(),
             spawn_location,
             state: TaskState::Pending,
@@ -79,7 +106,6 @@ impl<F> Tracked<F> {
 
 #[track_caller]
 pub fn spawn_tracked<F>(
-    name: &'static str,
     fut: F,
 ) -> tokio::task::JoinHandle<F::Output>
 where
@@ -87,7 +113,7 @@ where
     F::Output: Send + 'static,
 {
     let loc = Location::caller();
-    tokio::spawn(Tracked::new_at(name, loc, fut))
+    tokio::spawn(Tracked::new_at(loc, fut))
 }
 
 impl<F: Future> Future for Tracked<F> {
@@ -178,13 +204,12 @@ fn mark_woken(id: u64) {
 
 #[track_caller]
 pub fn track_await<F>(
-    name: &'static str,
     fut: F,
 ) -> Tracked<Pin<Box<F>>>
 where
     F: Future,
 {
-    Tracked::new_at(name, Location::caller(), Box::pin(fut))
+    Tracked::new_at(Location::caller(), Box::pin(fut))
 }
 
 pub fn snapshot_not_ready() -> Vec<TaskInfo> {

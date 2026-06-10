@@ -95,7 +95,7 @@ impl CopyToDevice for StackedMotifsOutput {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         Ok(StackedMotifsOutput {
             id:self.id.clone(),
-            motifs: track_await("thoosa_main::tasks::stacked_moitfs_loader::StackedMotifsOutput::CopyToDevice::copy_to_device/1", self.motifs.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
+            motifs: track_await(self.motifs.copy_to_device(dst_device)).instrument(tracing::debug_span!("copy_to_device/1", file = file!(), line = line!())).await?,
         })
 
     }
@@ -205,7 +205,7 @@ where
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let find_motifs_run_config_id = find_motifs_run_config_id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
-        let motif_ids = track_await("thoosa_main::tasks::stacked_moitfs_loader::StackedMotifsLoader::AsyncStage::run/1", self
+        let motif_ids = track_await(self
             .store
             .list_motifs(find_motifs_run_config_id))
             .instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
@@ -227,7 +227,7 @@ where
                 async move {
                     let motif_id_wrap = Arc::new(DevicesWrap::wrap(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
 
-                    match track_await("thoosa_main::tasks::stacked_moitfs_loader::StackedMotifsLoader::AsyncStage::run/2", motif_loader_clone.run_cached(
+                    match track_await(motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(false)
                     )).instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await {
                         Ok(motif) => {
@@ -242,7 +242,7 @@ where
                 }
             });
 
-        let loaded_motifs = track_await("thoosa_main::tasks::stacked_moitfs_loader::StackedMotifsLoader::AsyncStage::run/3", collect_futures_with_progress(
+        let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
             STACKED_MOTIFS_LOADER_RUN,

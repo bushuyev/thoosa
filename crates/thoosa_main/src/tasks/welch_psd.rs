@@ -252,9 +252,9 @@ where
 
     async fn load_resources_for_input(&self, resources_config: Option<RC>) -> Result<Vec<Resource>, ThoError> {
         match resources_config {
-            Some(resources_config) => track_await("thoosa_main::tasks::welch_psd::WelchPSD::load_resources_for_input/1", resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("load_resources_for_input/1", file = file!(), line = line!())).await,
+            Some(resources_config) => track_await(resources_config.to_resources(&self.store)).instrument(tracing::debug_span!("load_resources_for_input/1", file = file!(), line = line!())).await,
             None => {
-                let resources = track_await("thoosa_main::tasks::welch_psd::WelchPSD::load_resources_for_input/2", self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX)).instrument(tracing::debug_span!("load_resources_for_input/2", file = file!(), line = line!())).await?;
+                let resources = track_await(self.store.list_resources_not_in_group(RANDOM_STATS_GROUP, u32::MAX)).instrument(tracing::debug_span!("load_resources_for_input/2", file = file!(), line = line!())).await?;
                 if resources.is_empty() {
                     warn!("WelchPSD::load_resources_for_input: no resources found outside group={RANDOM_STATS_GROUP}");
                 }
@@ -320,7 +320,7 @@ where
         let sample_rate = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .sample_rate() as f64;
 
-        let resources = track_await("thoosa_main::tasks::welch_psd::WelchPSD::AsyncStage::run/1", self.load_resources_for_input(resources_config)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
+        let resources = track_await(self.load_resources_for_input(resources_config)).instrument(tracing::debug_span!("run/1", file = file!(), line = line!())).await?;
         if resources.is_empty() {
             return Err(ThoError::new("WelchPSD: no resources to process"));
         }
@@ -337,14 +337,14 @@ where
                 )));
             }
 
-            let loaded = track_await("thoosa_main::tasks::welch_psd::WelchPSD::AsyncStage::run/2", Arc::clone(&self.loader)
+            let loaded = track_await(Arc::clone(&self.loader)
                 .run_cached(
                     Arc::new(DevicesWrap::wrap(resource.clone())),
                     ctx.branch(false),
                 ))
                 .instrument(tracing::debug_span!("run/2", file = file!(), line = line!())).await?;
 
-            let welch_input = track_await("thoosa_main::tasks::welch_psd::WelchPSD::AsyncStage::run/3", loaded
+            let welch_input = track_await(loaded
                 .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 }))
@@ -357,7 +357,7 @@ where
 
             debug!("WelchPSD::run: resource_id={} welch_input_size={welch_input_size:?} nperseg={nperseg} noverlap={noverlap}", resource.id());
 
-            let resource_psd = track_await("thoosa_main::tasks::welch_psd::WelchPSD::AsyncStage::run/4", OOMHandler::new(
+            let resource_psd = track_await(OOMHandler::new(
                 vec![Adjusters::Input(Box::new(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))],
                 None,
             )

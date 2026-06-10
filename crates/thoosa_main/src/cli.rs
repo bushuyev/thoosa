@@ -95,7 +95,7 @@ use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, OOM
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::test_utils::maybe_init_perf_tracing_stdout;
-use thoosa_shared::tracked_await::TASKS;
+use thoosa_shared::tracked_await::snapshot_not_ready;
 use thoosa_store::rusqlite::Transaction;
 use crate::tasks::slices_stats::{Aggr, Metrics};
 use crate::tasks::cross_dims::ChannelsMotifsDists;
@@ -452,7 +452,7 @@ where
         }
     };
      */
-    let store = Arc::new(track_await("thoosa_main::cli::run_cli/1", SqlStore::from_path(ws.read().store_path())).instrument(tracing::debug_span!("run_cli/1", file = file!(), line = line!())).await?);
+    let store = Arc::new(track_await(SqlStore::from_path(ws.read().store_path())).instrument(tracing::debug_span!("run_cli/1", file = file!(), line = line!())).await?);
 
     RUN_ID.set(match cli.run_id{
         None => {
@@ -460,7 +460,7 @@ where
             if let Some(Infer(_) | Export(_)) = &cli.command {
                 panic!("No run_id")
             }
-            track_await("thoosa_main::cli::run_cli/2", store.save_run(format!("{cli:?}"))).instrument(tracing::debug_span!("run_cli/2", file = file!(), line = line!())).await?
+            track_await(store.save_run(format!("{cli:?}"))).instrument(tracing::debug_span!("run_cli/2", file = file!(), line = line!())).await?
         }
         Some(run_id) => run_id
     }).expect("can't set run_id");
@@ -499,7 +499,7 @@ where
 
     let purge_cpu_worker = tokio::spawn(async move {
         let mut ticker = time::interval(Duration::from_secs(60));
-        track_await("thoosa_main::cli::run_cli/3", ticker.tick()).instrument(tracing::debug_span!("run_cli/3", file = file!(), line = line!())).await; //
+        track_await(ticker.tick()).instrument(tracing::debug_span!("run_cli/3", file = file!(), line = line!())).await; //
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             select! {
@@ -531,7 +531,11 @@ where
                             prev_park[w] = park;
                             prev_busy[w] = busy;
                     }
-                    info!("TASKS={:?}", TASKS);
+                    let tasks = snapshot_not_ready();
+                    info!("TASKS pending={}", tasks.len());
+                    for task in tasks {
+                        info!("  {task}");
+                    }
 
                     debug!("run_cli: purge_cpu tick");
                     GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
@@ -585,7 +589,7 @@ where
                     0,
                 )?))
             };
-            track_await("thoosa_main::cli::run_cli/5", import_resources(
+            track_await(import_resources(
                 &ws,
                 &store,
                 labels,
@@ -616,7 +620,7 @@ where
             let init_loader = Arc::clone(&loader);
             let init_ws = Arc::clone(&ws);
             let init_store = Arc::clone(&store);
-            let run_config_ids = track_await("thoosa_main::cli::run_cli/7", run_grid (
+            let run_config_ids = track_await(run_grid (
                 None,
                 find_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -624,7 +628,7 @@ where
                 &store,
                 async move |run_configs| {
                     Ok(Arc::new(
-                        track_await("thoosa_main::cli::run_cli/6", crate::tasks::find_motifs::FindMotifsStage::new(
+                        track_await(crate::tasks::find_motifs::FindMotifsStage::new(
                             &init_ws,
                             &init_store,
                             init_loader,
@@ -652,7 +656,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(seq_scan_args.resource_config())));
 
-            let run_config_ids = track_await("thoosa_main::cli::run_cli/8", run_grid(
+            let run_config_ids = track_await(run_grid(
                 None,
                 seq_scan_run_config_range_or_value,
                 input_wrapper,
@@ -686,7 +690,7 @@ where
                 &ws
             ));
 
-            let run_config_ids = track_await("thoosa_main::cli::run_cli/10", run_grid::</*Labeled,*/ _, _, _, _, _>(
+            let run_config_ids = track_await(run_grid::</*Labeled,*/ _, _, _, _, _>(
                 None,
                 select_motifs_run_config_range_or_value,
                 input_wrapper,
@@ -694,7 +698,7 @@ where
                 &store,
                 |run_configs| async {
 
-                    Ok(Arc::new(track_await("thoosa_main::cli::run_cli/9", SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
+                    Ok(Arc::new(track_await(SelectMotifsStage::<RawTensorLoader<RunCtxImpl>, MotifLoader<RawTensorLoader<RunCtxImpl>, RunCtxImpl>, RunCtxImpl>::new(
                         &ws,
                         &store,
                         loader,
@@ -724,12 +728,12 @@ where
                 ))
             ));
 
-            let output_wrap = track_await("thoosa_main::cli::run_cli/11", Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
+            let output_wrap = track_await(Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
                 Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone()))),
                 root_ctx.branch(true)
             )).instrument(tracing::debug_span!("run_cli/11", file = file!(), line = line!())).await?;
 
-            let output  = track_await("thoosa_main::cli::run_cli/12", Arc::into_inner(output_wrap).unwrap().take_data(0)).instrument(tracing::debug_span!("run_cli/12", file = file!(), line = line!())).await?;
+            let output  = track_await(Arc::into_inner(output_wrap).unwrap().take_data(0)).instrument(tracing::debug_span!("run_cli/12", file = file!(), line = line!())).await?;
 
             info!("MergeSelectedMotifs done, output={output:?}");
         }
@@ -742,7 +746,7 @@ where
 
             let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()))));
 
-            let run_config_ids = track_await("thoosa_main::cli::run_cli/13", run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
+            let run_config_ids = track_await(run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
                 &ws,
@@ -775,13 +779,13 @@ where
             let mut init_ctx = root_ctx.branch(true);
             let labels_filter = train_label_nets_args.labels_filter();
 
-            let run_config_ids = track_await("thoosa_main::cli::run_cli/16", run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
+            let run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainLabelNetRunConfig, _, _>(
                 train_motif_nets_run_config_range_or_value,
                 input_wrapper,
                 &ws,
                 &store,
                 async |run_configs| {
-                    let apply_motif_nets = Arc::new(track_await("thoosa_main::cli::run_cli/14", ApplyMotifNets::new(
+                    let apply_motif_nets = Arc::new(track_await(ApplyMotifNets::new(
                         &ws,
                         &store,
                         train_label_nets_args.train_motif_nets_run_config_ids.clone(),
@@ -793,7 +797,7 @@ where
                         false,
                     )).instrument(tracing::debug_span!("run_cli/14", file = file!(), line = line!())).await?);
 
-                    track_await("thoosa_main::cli::run_cli/15", new_train_label_nets(
+                    track_await(new_train_label_nets(
                         train_label_nets_args.train_motif_nets_run_config_ids.clone(),
                         loader,
                         apply_motif_nets,
@@ -821,14 +825,14 @@ where
 
             let opt_config = Arc::new(train_final_net_args.opt_config.clone());
             let init_ctx = root_ctx.branch(true);
-            let run_config_ids = track_await("thoosa_main::cli::run_cli/18", run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
+            let run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
                 train_final_net_run_config_range_or_value,
                 input_wrapper,
                 &ws,
                 &store,
                 async |run_configs| {
 
-                    track_await("thoosa_main::cli::run_cli/17", new_train_final_net(
+                    track_await(new_train_final_net(
                         train_final_net_args.train_label_nets_run_config_ids.clone(),
                         loader,
                         run_configs,
@@ -850,37 +854,37 @@ where
 
         Some(ConvertPrecision(convert_precision_args)) => {
             debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
-            let output = track_await("thoosa_main::cli::run_cli/19", Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
+            let output = track_await(Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
                 .run(
                     Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
                     root_ctx.branch(true),
                 ))
                 .instrument(tracing::debug_span!("run_cli/19", file = file!(), line = line!())).await?;
-            let output = track_await("thoosa_main::cli::run_cli/20", Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/20", file = file!(), line = line!())).await?;
+            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/20", file = file!(), line = line!())).await?;
             info!("ConvertPrecision done, converted={}", output.converted().len());
         }
 
         Some(Export(export_args)) => {
             debug!("Export: export_args={export_args:?}");
-            let output = track_await("thoosa_main::cli::run_cli/21", Arc::new(ExportStage::<RunCtxImpl>::new(&ws, &store, export_args.clone()))
+            let output = track_await(Arc::new(ExportStage::<RunCtxImpl>::new(&ws, &store, export_args.clone()))
                 .run(
                     Arc::new(DevicesWrap::wrap(ExportInput::new())),
                     root_ctx.branch(true),
                 ))
                 .instrument(tracing::debug_span!("run_cli/21", file = file!(), line = line!())).await?;
-            let output = track_await("thoosa_main::cli::run_cli/22", Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/22", file = file!(), line = line!())).await?;
+            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/22", file = file!(), line = line!())).await?;
             info!("Export done, target_dir={:?} label_nets={} motif_nets={} copied_models={} converted={}", output.target_dir(), output.label_net_run_config_ids().len(), output.motif_net_run_config_ids().len(), output.copied_models().len(), output.converted().len());
         }
 
         Some(PurgeModels(purge_models_args)) => {
             debug!("PurgeModels: purge_models_args={purge_models_args:?}");
-            let output = track_await("thoosa_main::cli::run_cli/23", Arc::new(PurgeModelsStage::<RunCtxImpl>::new(&ws, &store, purge_models_args.clone()))
+            let output = track_await(Arc::new(PurgeModelsStage::<RunCtxImpl>::new(&ws, &store, purge_models_args.clone()))
                 .run(
                     Arc::new(DevicesWrap::wrap(PurgeModelsInput::new())),
                     root_ctx.branch(true),
                 ))
                 .instrument(tracing::debug_span!("run_cli/23", file = file!(), line = line!())).await?;
-            let output = track_await("thoosa_main::cli::run_cli/24", Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/24", file = file!(), line = line!())).await?;
+            let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_cli/24", file = file!(), line = line!())).await?;
             info!("PurgeModels done, purged={}", output.purged().len());
         }
 
@@ -888,7 +892,7 @@ where
             debug!("RunAll: run_all_params={:?}", run_all_args);
 
             // Project-specific callback supplied by thoosa_projects/thoosa_bird_clef/src/main.rs.
-            track_await("thoosa_main::cli::run_cli/25", run_all(
+            track_await(run_all(
                 &ws,
                 &store,
                 &loader,
@@ -900,7 +904,7 @@ where
 
         Some(Infer(infer_params)) => {
             if let Some(infer) = infer {
-                track_await("thoosa_main::cli::run_cli/26", infer(infer_params, &ws, &store)).instrument(tracing::debug_span!("run_cli/26", file = file!(), line = line!())).await?;
+                track_await(infer(infer_params, &ws, &store)).instrument(tracing::debug_span!("run_cli/26", file = file!(), line = line!())).await?;
             }
             // block_on(run_infer(
             //     &ws,
@@ -919,7 +923,7 @@ where
         }
 
         Some(PlotData(plot_slices_params)) => {
-            track_await("thoosa_main::cli::run_cli/27", run_plot(&ws, &store, &loader, &plot_slices_params, plot_slices_params.resolution(), &devices[0], root_ctx)).instrument(tracing::debug_span!("run_cli/27", file = file!(), line = line!())).await?;
+            track_await(run_plot(&ws, &store, &loader, &plot_slices_params, plot_slices_params.resolution(), &devices[0], root_ctx)).instrument(tracing::debug_span!("run_cli/27", file = file!(), line = line!())).await?;
         }
 
         Some(MotifsToTensor(choose_fragments_params)) => {
@@ -961,10 +965,10 @@ where
 
     info!("\n{}", format_perf_map(&PERF));
 
-    track_await("thoosa_main::cli::run_cli/28", GlobalCtx::global().shutdown()).instrument(tracing::debug_span!("run_cli/28", file = file!(), line = line!())).await;
+    track_await(GlobalCtx::global().shutdown()).instrument(tracing::debug_span!("run_cli/28", file = file!(), line = line!())).await;
 
     let _ = stop_cpu_purge_tx.send(true);
-    let _ = track_await("thoosa_main::cli::run_cli/29", purge_cpu_worker).instrument(tracing::debug_span!("run_cli/29", file = file!(), line = line!())).await;
+    let _ = track_await(purge_cpu_worker).instrument(tracing::debug_span!("run_cli/29", file = file!(), line = line!())).await;
 
 
     info!("run_id {} done", run_id());
@@ -1092,7 +1096,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
 ) -> Result<Vec<RunConfigId>, ThoError> {
     let mut run_config_ids = Vec::with_capacity(run_configs.len());
     for run_config in run_configs.iter_mut() {
-        let run_config_id = track_await("thoosa_main::cli::save_run_configs/1", store
+        let run_config_id = track_await(store
             .save_run_config(
                 input_run_config_ids,
                 &<R>::type_name(),
@@ -1254,18 +1258,18 @@ where
     match plot_params.data_by() {
         DataBy::Resource { resource_id, channels, freq_filters } => {
             debug!("run_plot: MotifsBy::Resource resource_id={resource_id} channels={channels:?} freq_filters={freq_filters:?}");
-            track_await("thoosa_main::cli::run_plot/1", plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx, "")).instrument(tracing::debug_span!("run_plot/1", file = file!(), line = line!())).await?;
+            track_await(plot_resource(ws, store, loader, resource_id, channels, freq_filters, resolution, print_to_stdout, ctx, "")).instrument(tracing::debug_span!("run_plot/1", file = file!(), line = line!())).await?;
             return Ok(());
         }
         DataBy::MotifNetApplied { resource_id, net_path } => {
             debug!("run_plot: MotifsBy::MotifNetApplied resource_id={resource_id} net_path={net_path:?}");
-            track_await("thoosa_main::cli::run_plot/2", plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, print_to_stdout, ctx)).instrument(tracing::debug_span!("run_plot/2", file = file!(), line = line!())).await?;
+            track_await(plot_motif_net_applied(ws, store, loader, resource_id, net_path, resolution, print_to_stdout, ctx)).instrument(tracing::debug_span!("run_plot/2", file = file!(), line = line!())).await?;
             return Ok(());
         }
         DataBy::MotifId(motif_ids) => {
             debug!("run_plot: MotifsBy::MotifId motif_ids={motif_ids:?}");
             for motif_id in motif_ids {
-                track_await("thoosa_main::cli::run_plot/3", plot_motif(&ws, ctx.branch(true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout)).instrument(tracing::debug_span!("run_plot/3", file = file!(), line = line!())).await?;
+                track_await(plot_motif(&ws, ctx.branch(true), motif_id, &motif_loader_impl, Arc::clone(&clc_dist), None, resolution, print_to_stdout)).instrument(tracing::debug_span!("run_plot/3", file = file!(), line = line!())).await?;
             }
         }
         DataBy::RunId {
@@ -1275,7 +1279,7 @@ where
 
             debug!("run_plot: MotifsBy::RunId find_run_config_ids={find_motifs_run_config_ids:?} select_run_config_ids={select_motifs_run_config_ids:?}");
             for find_motifs_run_config_id in find_motifs_run_config_ids {
-                track_await("thoosa_main::cli::run_plot/4", plot_found_motifs(
+                track_await(plot_found_motifs(
                     ws,
                     store,
                     find_motifs_run_config_id,
@@ -1292,7 +1296,7 @@ where
 
         DataBy::SelectedMotifs { select_motifs_run_config_ids } => {
             for select_motifs_run_config_id in select_motifs_run_config_ids {
-                track_await("thoosa_main::cli::run_plot/5", plot_selected_motifs(
+                track_await(plot_selected_motifs(
                     ws,
                     store,
                     select_motifs_run_config_id,
@@ -1453,7 +1457,7 @@ async fn plot_found_motifs<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let motifs = track_await("thoosa_main::cli::plot_found_motifs/1", store.list_motifs(find_motifs_run_config_id)).instrument(tracing::debug_span!("plot_found_motifs/1", file = file!(), line = line!())).await?;
+    let motifs = track_await(store.list_motifs(find_motifs_run_config_id)).instrument(tracing::debug_span!("plot_found_motifs/1", file = file!(), line = line!())).await?;
     let motifs_len = motifs.len();
     let done_cnt = Arc::new(AtomicU32::new(0));
 
@@ -1468,10 +1472,10 @@ where
             async move {
                 debug!("run_plot: motif_id={motif_id}");
 
-                if let Err(e) = track_await("thoosa_main::cli::plot_found_motifs/2", plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).instrument(tracing::debug_span!("plot_found_motifs/2", file = file!(), line = line!())).await {
+                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id as usize, &motif_loader_impl, clc_dist, select_motifs_run_config_ids, resolution, print_to_stdout)).instrument(tracing::debug_span!("plot_found_motifs/2", file = file!(), line = line!())).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
-                track_await("thoosa_main::cli::plot_found_motifs/3", MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).instrument(tracing::debug_span!("plot_found_motifs/3", file = file!(), line = line!())).await.clear();
+                track_await(MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache()).instrument(tracing::debug_span!("plot_found_motifs/3", file = file!(), line = line!())).await.clear();
 
                 let done = done_cnt.fetch_add(1, Relaxed);
                 if done % 32 == 0 {
@@ -1482,7 +1486,7 @@ where
             }
         });
 
-    let _ = track_await("thoosa_main::cli::plot_found_motifs/4", collect_futures_with_progress(
+    let _ = track_await(collect_futures_with_progress(
         futures,
         motifs_len,
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
@@ -1510,7 +1514,7 @@ where
     let channels = ws.read().channels();
     debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
 
-    let motifs = track_await("thoosa_main::cli::plot_selected_motifs/1", store
+    let motifs = track_await(store
         .list_selected_motifs(select_motifs_run_config_id, channels))
         .instrument(tracing::debug_span!("plot_selected_motifs/1", file = file!(), line = line!())).await?;
 
@@ -1540,7 +1544,7 @@ where
             let ctx = ctx.branch(true);
             async move {
                 debug!("plot_selected_motifs: motif_id={motif_id}");
-                if let Err(e) = track_await("thoosa_main::cli::plot_selected_motifs/2", plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout)).instrument(tracing::debug_span!("plot_selected_motifs/2", file = file!(), line = line!())).await {
+                if let Err(e) = track_await(plot_motif(&ws, ctx, motif_id, &motif_loader_impl, clc_dist, suffix, resolution, print_to_stdout)).instrument(tracing::debug_span!("plot_selected_motifs/2", file = file!(), line = line!())).await {
                     error!("motif {motif_id} failed: e={e:?}");
                 };
                 //MotifLoader::<RawTensorLoader<RunCtxImpl>, RunCtxImpl>::cache().await.clear();
@@ -1554,7 +1558,7 @@ where
             }
         });
 
-    let _ = track_await("thoosa_main::cli::plot_selected_motifs/3", collect_futures_with_progress(
+    let _ = track_await(collect_futures_with_progress(
         futures,
         motifs_len,
         crate::buffer_limits::CLI_RUN_PLOT_MOTIF_SLICES_BUFFER_UNORDERED_LIMIT,
@@ -1575,14 +1579,14 @@ async fn load_resource_tensor_for_plot<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let resource = track_await("thoosa_main::cli::load_resource_tensor_for_plot/1", store
+    let resource = track_await(store
         .list_resources_by_ids(&vec![resource_id]))
         .instrument(tracing::debug_span!("load_resource_tensor_for_plot/1", file = file!(), line = line!())).await?
         .into_iter()
         .next()
         .ok_or_else(|| ThoError::new(format!("resource_id={resource_id} not found")))?;
 
-    track_await("thoosa_main::cli::load_resource_tensor_for_plot/2", Arc::clone(loader)
+    track_await(Arc::clone(loader)
         .run_cached(
             Arc::new(DevicesWrap::wrap(resource)),
             ctx.branch(false),
@@ -1691,18 +1695,18 @@ pub async fn plot_resource<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let raw = track_await("thoosa_main::cli::plot_resource/1", load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).instrument(tracing::debug_span!("plot_resource/1", file = file!(), line = line!())).await?;
+    let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).instrument(tracing::debug_span!("plot_resource/1", file = file!(), line = line!())).await?;
 
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    track_await("thoosa_main::cli::plot_resource/2", raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+    track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
     })).instrument(tracing::debug_span!("plot_resource/2", file = file!(), line = line!())).await?;
 
     if let Some(freq_filters) = freq_filters {
         let filter_frag = sanitize_plot_path_segment(&freq_filters.iter().map(|f|format!("{:?}", f)).collect::<String>());//TODO remove "*Params"
-        let filtered = track_await("thoosa_main::cli::plot_resource/3", Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id)?)
+        let filtered = track_await(Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, resource_id)?)
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
@@ -1710,7 +1714,7 @@ where
             .instrument(tracing::debug_span!("plot_resource/3", file = file!(), line = line!())).await?;
 
         let filtered_channels = channels.clone();
-        track_await("thoosa_main::cli::plot_resource/4", filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+        track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
         })).instrument(tracing::debug_span!("plot_resource/4", file = file!(), line = line!())).await?;
     }
@@ -1731,16 +1735,16 @@ async fn plot_motif_net_applied<C>(
 where
     C: RunCtx + Adjustable,
 {
-    let raw = track_await("thoosa_main::cli::plot_motif_net_applied/1", load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).instrument(tracing::debug_span!("plot_motif_net_applied/1", file = file!(), line = line!())).await?;
+    let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).instrument(tracing::debug_span!("plot_motif_net_applied/1", file = file!(), line = line!())).await?;
 
     // raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData2, SynKey>, _ctx| {
     //     plot_resource_channels::<C>(ws, resource_id, "raw_all_channels", &format!("Resource {resource_id} raw (all channels)"), tensor, None)
     // }).await?;
 
     let (path_channel, motif_id) = FsWorkspace::parse_motif_path(&net_path)?;
-    let (store_channel, find_motifs_run_config_id) = track_await("thoosa_main::cli::plot_motif_net_applied/2", store.get_motif_meta(motif_id)).instrument(tracing::debug_span!("plot_motif_net_applied/2", file = file!(), line = line!())).await?;
+    let (store_channel, find_motifs_run_config_id) = track_await(store.get_motif_meta(motif_id)).instrument(tracing::debug_span!("plot_motif_net_applied/2", file = file!(), line = line!())).await?;
 
-    let find_motifs_run_config:FindMotifsRunConfig = track_await("thoosa_main::cli::plot_motif_net_applied/3", load_run_config(store, find_motifs_run_config_id)).instrument(tracing::debug_span!("plot_motif_net_applied/3", file = file!(), line = line!())).await?;
+    let find_motifs_run_config:FindMotifsRunConfig = track_await(load_run_config(store, find_motifs_run_config_id)).instrument(tracing::debug_span!("plot_motif_net_applied/3", file = file!(), line = line!())).await?;
 
     if path_channel as usize != store_channel {
         warn!("plot_motif_net_applied_variant: channel mismatch path_channel={path_channel} store_channel={store_channel} motif_id={motif_id} net_path={net_path:?}");
@@ -1749,14 +1753,14 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    track_await("thoosa_main::cli::plot_motif_net_applied/4", raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+    track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
         plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
     })).instrument(tracing::debug_span!("plot_motif_net_applied/4", file = file!(), line = line!())).await?;
 
 
 
     let filtered_or_raw = if let Some(freq_filters) = find_motifs_run_config.freq_filter.clone() {
-        let filtered = track_await("thoosa_main::cli::plot_motif_net_applied/5", Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id)?)
+        let filtered = track_await(Arc::new(FreqFilter::<C>::new(freq_filters.as_slice(), ws, find_motifs_run_config_id)?)
             .run(
                 Arc::clone(&raw),
                 ctx.branch(false),
@@ -1764,7 +1768,7 @@ where
             .instrument(tracing::debug_span!("plot_motif_net_applied/5", file = file!(), line = line!())).await?;
 
         let channel_only_filtered = vec![channel];
-        track_await("thoosa_main::cli::plot_motif_net_applied/6", filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+        track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
         })).instrument(tracing::debug_span!("plot_motif_net_applied/6", file = file!(), line = line!())).await?;
 
@@ -1780,7 +1784,7 @@ where
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
     let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
-    track_await("thoosa_main::cli::plot_motif_net_applied/7", filtered_or_raw.with_data_ref(0, ctx.branch(false), None, {
+    track_await(filtered_or_raw.with_data_ref(0, ctx.branch(false), None, {
         let motif_net = Arc::clone(&motif_net);
         move |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
             let out = apply_motif_net_forward(
@@ -1825,13 +1829,13 @@ where
     let metrics = Metrics::all();
     let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone())));
 
-    let motif = track_await("thoosa_main::cli::plot_motif/1", Arc::clone(&motif_loader_impl).run_cached(
+    let motif = track_await(Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),
         ctx.branch(false),
     ))
     .instrument(tracing::debug_span!("plot_motif/1", file = file!(), line = line!())).await?;
 
-    let metrics_for_plot: Vec<(String, f32)> = track_await("thoosa_main::cli::plot_motif/3", track_await("thoosa_main::cli::plot_motif/2", motif_stats
+    let metrics_for_plot: Vec<(String, f32)> = track_await(track_await(motif_stats
         .run/*_cached*/(clc_input, ctx.branch(false)))
         .instrument(tracing::debug_span!("plot_motif/2", file = file!(), line = line!())).await?
         .with_data_ref(
@@ -1851,7 +1855,7 @@ where
 
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
-    let r = track_await("thoosa_main::cli::plot_motif/4", motif.with_data_ref(ctx.tho_device_idx(), ctx.branch(false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
+    let r = track_await(motif.with_data_ref(ctx.tho_device_idx(), ctx.branch(false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
         let run_config_id = motif.extra().find_motifs_run_config_id;
         let channel = motif.extra().channel;
 
@@ -1955,22 +1959,22 @@ where
     info!("run_grid: run_configs.len={} ", run_configs.len());
     debug!("run_grid: run_configs={run_configs:?}");
 
-    let mut run_config_ids = track_await("thoosa_main::cli::run_grid/1", save_run_configs(
+    let mut run_config_ids = track_await(save_run_configs(
         input_run_config_ids.as_ref().map(|v| v.as_slice()),
         &store,
         &mut run_configs,
         descr,
     )).instrument(tracing::debug_span!("run_grid/1", file = file!(), line = line!())).await?;
 
-    let stage = track_await("thoosa_main::cli::run_grid/2", f(run_configs)).instrument(tracing::debug_span!("run_grid/2", file = file!(), line = line!())).await?;
+    let stage = track_await(f(run_configs)).instrument(tracing::debug_span!("run_grid/2", file = file!(), line = line!())).await?;
 
     debug!("run_grid: stage={stage:?}");
 
-    let mut savable = track_await("thoosa_main::cli::run_grid/4", Arc::into_inner(track_await("thoosa_main::cli::run_grid/3", stage.run(input, ctx_f())).instrument(tracing::debug_span!("run_grid/3", file = file!(), line = line!())).await?).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_grid/4", file = file!(), line = line!())).await?;
+    let mut savable = track_await(Arc::into_inner(track_await(stage.run(input, ctx_f())).instrument(tracing::debug_span!("run_grid/3", file = file!(), line = line!())).await?).expect("top level stage should not have more than one reference").take_data(0)).instrument(tracing::debug_span!("run_grid/4", file = file!(), line = line!())).await?;
 
     debug!("run_grid: savable={savable:?}");
 
-    track_await("thoosa_main::cli::run_grid/5", savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default())).instrument(tracing::debug_span!("run_grid/5", file = file!(), line = line!())).await?;
+    track_await(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default())).instrument(tracing::debug_span!("run_grid/5", file = file!(), line = line!())).await?;
 
 
     Ok(run_config_ids)
@@ -2005,9 +2009,9 @@ where
     let opt_run_configs = rcrv.opt_run_configs()?;
     debug!("run_all_grid_step: run_opt={opt_run_configs:?}");
 
-    let stage = track_await("thoosa_main::cli::run_opt/1", init_stage(opt_run_configs)).instrument(tracing::debug_span!("run_opt/1", file = file!(), line = line!())).await?;
+    let stage = track_await(init_stage(opt_run_configs)).instrument(tracing::debug_span!("run_opt/1", file = file!(), line = line!())).await?;
 
-    let mut savable = track_await("thoosa_main::cli::run_opt/3", Arc::into_inner(track_await("thoosa_main::cli::run_opt/2", stage.run(input, ctx_f())).instrument(tracing::debug_span!("run_opt/2", file = file!(), line = line!())).await?).expect("").take_data(0)).instrument(tracing::debug_span!("run_opt/3", file = file!(), line = line!())).await?;
+    let mut savable = track_await(Arc::into_inner(track_await(stage.run(input, ctx_f())).instrument(tracing::debug_span!("run_opt/2", file = file!(), line = line!())).await?).expect("").take_data(0)).instrument(tracing::debug_span!("run_opt/3", file = file!(), line = line!())).await?;
 
     let run_config_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
 
@@ -2018,18 +2022,18 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> Result<u128, ThoError> {
         let mut tensors = Vec::with_capacity(num_tensors);
 
-        let ctx = track_await("thoosa_main::cli::load_tensors/1", thoosa_common::runner::global_ctx::GlobalCtx::global().copy_ctx(Cuda(0))).instrument(tracing::debug_span!("load_tensors/1", file = file!(), line = line!())).await;
+        let ctx = track_await(thoosa_common::runner::global_ctx::GlobalCtx::global().copy_ctx(Cuda(0))).instrument(tracing::debug_span!("load_tensors/1", file = file!(), line = line!())).await;
 
         let t_0 = Instant::now();
         for i in 0..num_tensors {
 
 
             let t = Tensor::f_stack(&[
-                track_await("thoosa_main::cli::load_tensors/2", make_t(&dim_1, &(i as i64), 0.1, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/2", file = file!(), line = line!())).await?,
-                track_await("thoosa_main::cli::load_tensors/3", make_t(&dim_1, &(i as i64), 0.2, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/3", file = file!(), line = line!())).await?,
-                track_await("thoosa_main::cli::load_tensors/4", make_t(&dim_1, &(i as i64), 0.3, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/4", file = file!(), line = line!())).await?,
-                track_await("thoosa_main::cli::load_tensors/5", make_t(&dim_1, &(i as i64), 0.4, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/5", file = file!(), line = line!())).await?,
-                track_await("thoosa_main::cli::load_tensors/6", make_t(&dim_1, &(i as i64), 0.5, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/6", file = file!(), line = line!())).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.1, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/2", file = file!(), line = line!())).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.2, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/3", file = file!(), line = line!())).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.3, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/4", file = file!(), line = line!())).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.4, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/5", file = file!(), line = line!())).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.5, &ctx, cuda_first)).instrument(tracing::debug_span!("load_tensors/6", file = file!(), line = line!())).await?,
             ], 0)?
                 .f_unfold(1, 1000, 100)?;
 
@@ -2038,7 +2042,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
         let batch = Tensor::f_concat(tensors.as_slice(), 1)?;
         let batch= if !cuda_first {
-            track_await("thoosa_main::cli::load_tensors/7", ctx.copy(&batch, 1, Float)).instrument(tracing::debug_span!("load_tensors/7", file = file!(), line = line!())).await?
+            track_await(ctx.copy(&batch, 1, Float)).instrument(tracing::debug_span!("load_tensors/7", file = file!(), line = line!())).await?
         } else {
             batch
         };
@@ -2052,7 +2056,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
 
         if cuda_first {
-            track_await("thoosa_main::cli::make_t/1", copy_ctx.copy(&t, 1, Float)).instrument(tracing::debug_span!("make_t/1", file = file!(), line = line!())).await
+            track_await(copy_ctx.copy(&t, 1, Float)).instrument(tracing::debug_span!("make_t/1", file = file!(), line = line!())).await
         } else {
             Ok(t)
         }
@@ -2070,9 +2074,9 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
     for r in 0..rounds*2 {
         if r % 2 == 0 {
-            cuda_first_time += track_await("thoosa_main::cli::perf_unfold_concat_cuda_vs_cpu/1", load_tensors(&100_000, num_tensors, true)).instrument(tracing::debug_span!("perf_unfold_concat_cuda_vs_cpu/1", file = file!(), line = line!())).await?;
+            cuda_first_time += track_await(load_tensors(&100_000, num_tensors, true)).instrument(tracing::debug_span!("perf_unfold_concat_cuda_vs_cpu/1", file = file!(), line = line!())).await?;
         } else {
-            cpu_first_time += track_await("thoosa_main::cli::perf_unfold_concat_cuda_vs_cpu/2", load_tensors(&100_000, num_tensors, false)).instrument(tracing::debug_span!("perf_unfold_concat_cuda_vs_cpu/2", file = file!(), line = line!())).await?;
+            cpu_first_time += track_await(load_tensors(&100_000, num_tensors, false)).instrument(tracing::debug_span!("perf_unfold_concat_cuda_vs_cpu/2", file = file!(), line = line!())).await?;
         }
 
     }
