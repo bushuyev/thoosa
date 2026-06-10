@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
-use tokio::sync::{Notify, RwLockReadGuard};
+use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
 use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
@@ -408,6 +408,8 @@ where
         trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
         assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
 
+        //dump_to_cpu can only be executed either from DumpToCpu::adjust, but it's running with set_max_other_parallel(0) so nobody should be loading anything at the momemnt, or from run_cached clean-up at thoosa_common/src/runner/common/cachable.rs:95 when the context being dropped is the last one holding
+        //reference to the cached object. And in the latter case it can indeed happen so that read_guard at thoosa_common/src/runner/common/cachable.rs:416  is obtained when device data is dropped at thoosa_common/src/runner/common/cachable.rs:590 but then it will be copied back from CPU (0 device) in cycle at thoosa_common/src/runner/common/cachable.rs:429
         if wrap.is_resident_on_device(to_tho_device_idx) {
             let lock = &wrap.cached_data[to_tho_device_idx];
             let read_guard = async_perf_log!(async_read_lock!(lock));
@@ -430,13 +432,13 @@ where
 
             let source_read_guard = async_perf_log!(async_read_lock!(op));
 
-            if source_read_guard.is_some() {
-                drop(source_read_guard);
-                return track_await("thoosa_common::runner::common::cachable::CpuOrGpu::DevicesWrapCopyMode<O>::load_from_any_device_/1", wrap.copy_and_get(source_device_idx, to_tho_device_idx)).instrument(tracing::debug_span!("load_from_any_device_/1", file = file!(), line = line!())).await;
+            if let Some(src) = source_read_guard.as_ref() {
+                return track_await("thoosa_common::runner::common::cachable::CpuOrGpu::DevicesWrapCopyMode<O>::load_from_any_device_/1", wrap.ensure_copied(to_tho_device_idx, src, true)).instrument(tracing::debug_span!("load_from_any_device_/1", file = file!(), line = line!())).await.map(|v| v.expect("no value returned"));
             }
             drop(source_read_guard);
             wrap.mark_not_resident_on_device(source_device_idx);
         }
+
 
         Err(Cause::NotFound.into())
     }
@@ -578,13 +580,14 @@ where
             if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
 
                 if async_perf_log!(async_read_lock!(&wrap.cached_data[0])).is_none() {
-                    let data = lock.take();
-                    wrap.mark_not_resident_on_device(device_idx);
-                    debug!("DataCacheWrapper::dump_to_cpu: 1.0. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
-
-                    if data.is_some() {
-                        track_await("thoosa_common::runner::common::cachable::CpuOrGpu::DevicesWrapCopyMode<O>::dump_to_cpu/1", wrap.ensure_copied(device_idx, 0, data.as_ref(), false)).instrument(tracing::debug_span!("dump_to_cpu/1", file = file!(), line = line!())).await?;
+                    if let Some(data) = lock.as_ref() {
+                        track_await(
+                            "thoosa_common::runner::common::cachable::CpuOrGpu::DevicesWrapCopyMode<O>::dump_to_cpu/1",
+                            wrap.ensure_copied(0, data, false)
+                        ).instrument(tracing::debug_span!("dump_to_cpu/1", file = file!(), line = line!())).await?;
                     }
+                    drop(lock.take());
+                    wrap.mark_not_resident_on_device(device_idx);
 
                     debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
                 } else {
@@ -683,6 +686,24 @@ where
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was on the cpu
     on_cpu_since: parking_lot::RwLock<Option<u64>>,
     pd: PhantomData<O>,
+}
+
+enum InflightRole {
+    Leader(Arc<Notify>),
+    Follower(OwnedNotified),
+}
+
+fn join_or_start_inflight(inflight: &Mutex<Option<Arc<Notify>>>) -> InflightRole {
+    let mut guard = perf_log!(sync_mutex_lock!(inflight));
+    if let Some(notify) = guard.as_ref() {
+        // Create the future while holding the mutex. notify_waiters remembers notifications
+        // sent after future creation, even if the future has not been polled yet.
+        InflightRole::Follower(notify.clone().notified_owned())
+    } else {
+        let notify = Arc::new(Notify::new());
+        *guard = Some(notify.clone());
+        InflightRole::Leader(notify)
+    }
 }
 
 fn initial_residency(num_devices: usize, resident_device_idx: usize) -> (Box<[AtomicBool]>, AtomicUsize) {
@@ -864,7 +885,8 @@ where
         &self,
         to_tho_device_idx: usize,
     ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError> {
-        track_await("thoosa_common::runner::common::cachable::DevicesWrap::load_from_any_device_/1", O::M::load_from_any_device_(self, to_tho_device_idx)).instrument(tracing::debug_span!("load_from_any_device_/1", file = file!(), line = line!())).await
+        track_await("thoosa_common::runner::common::cachable::DevicesWrap::load_from_any_device_/1", O::M::load_from_any_device_(self, to_tho_device_idx))
+            .instrument(tracing::debug_span!("load_from_any_device_/1", file = file!(), line = line!())).await
     }
 
     pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
@@ -948,11 +970,10 @@ where
     }
 
     //to avoid write lock on dst device while copy is in progress use inflights
-    async fn ensure_copied<'a>(
+    async fn ensure_copied(
         &self,
-        src_idx: usize,
         dst_idx: usize,
-        src: Option<&O>,
+        src: &O,
         do_return: bool,
     ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError> {
         // Ensures inflight slot is cleared and waiters are notified even if the leader is canceled or panics.
@@ -995,7 +1016,7 @@ where
             }
         }
 
-        debug!("DevicesWrap::ensure_copied: self.id={:?} src_idx={src_idx} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
+        debug!("DevicesWrap::ensure_copied: self.id={:?} dst_idx={dst_idx} do_return={do_return} src={src:?}", self.id);
 
         loop {
             if self.is_resident_on_device(dst_idx) {
@@ -1019,34 +1040,23 @@ where
 
             // ---- Try to join or become the leader
             // (Do not hold this lock while awaiting other locks, except briefly to set or read the notify)
-            let (maybe_notify, leader_notify) = {
-                let lock = &self.inflights[dst_idx];
-                let mut g = perf_log!(sync_mutex_lock!(lock));
-                if let Some(n) = &*g {
-                    // someone is already copying → wait on their notify
-                    (Some(n.clone()), None)
-                } else {
-                    // become the leader: install a notify and proceed
-                    let n = Arc::new(Notify::new());
-                    *g = Some(n.clone());
-                    (None, Some(n))
+            let leader_notify = match join_or_start_inflight(&self.inflights[dst_idx]) {
+                InflightRole::Follower(notified) => {
+                    // follower: wait until the leader finishes, then try fast path again
+                    track_await(
+                        "thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/1",
+                        notified
+                    ).instrument(tracing::debug_span!("ensure_copied/1", file = file!(), line = line!()))
+                    .await;
+                    continue;
                 }
+                InflightRole::Leader(notify) => notify,
             };
-
-            if let Some(n) = maybe_notify {
-                // follower: wait until the leader finishes, then try fast path again
-                track_await(
-                    "thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/1",
-                    n.notified()
-                ).instrument(tracing::debug_span!("ensure_copied/1", file = file!(), line = line!()))
-                .await;
-                continue;
-            }
 
             // ---- Leader path
             let mut inflight_guard = InflightGuard::new(
                 &self.inflights[dst_idx],
-                leader_notify.expect("leader notify"),
+                leader_notify,
             );
 
             // Double-check: maybe dst was filled after we dropped the read lock
@@ -1061,24 +1071,13 @@ where
                 self.mark_not_resident_on_device(dst_idx);
             }
 
-            // Read source value without holding dst locks
-            let produced = match src {
-                None => {
-                    debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from cached_data", self.id);
-                    let lock = &self.cached_data[src_idx];
-                    let src_read_guard = async_perf_log!(async_read_lock!(lock));
-                    track_await("thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/2", src_read_guard.as_ref().expect("src missing unexpectedly").copy_to_device(dst_idx)).instrument(tracing::debug_span!("ensure_copied/2", file = file!(), line = line!())).await
-                }
-                Some(v) => {
-                    debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
-
-                    track_await("thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/3", v.copy_to_device(dst_idx)).instrument(tracing::debug_span!("ensure_copied/3", file = file!(), line = line!())).await
-                }
-            };
+            debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
+            let produced = track_await("thoosa_common::runner::common::cachable::DevicesWrap::ensure_copied/2", src.copy_to_device(dst_idx)).instrument(tracing::debug_span!("ensure_copied/2", file = file!(), line = line!())).await;
 
             let produced = match produced {
                 Ok(v) => v,
                 Err(e) => {
+                    inflight_guard.clear();//TODO not needed, called from Drop?
                     return Err(e);
                 }
             };
@@ -1097,18 +1096,8 @@ where
             }
 
             // Clear inflight and wake followers
-            inflight_guard.clear();
+            inflight_guard.clear();//TODO not needed, called from Drop?
         }
-    }
-
-    async fn copy_and_get(
-        &self,
-        src_idx: usize,
-        dst_idx: usize,
-    ) -> Result<RwLockReadGuard<'_, O>, ThoError> {
-        track_await("thoosa_common::runner::common::cachable::DevicesWrap::copy_and_get/1", self.ensure_copied(src_idx, dst_idx, None, true))
-            .instrument(tracing::debug_span!("copy_and_get/1", file = file!(), line = line!())).await
-            .map(|v| v.expect("no value returned"))
     }
 
     #[cfg(test)]
@@ -1245,7 +1234,15 @@ where
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-    use thoosa_shared::{async_perf_log, async_read_lock};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use async_trait::async_trait;
+    use parking_lot::Mutex;
+    use tokio::sync::{Notify, Semaphore};
+    use tokio::time::timeout;
+    use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock};
+    use thoosa_shared::copy_mode::CpuOrGpu;
+    use thoosa_shared::traits::{DummyCachableId, WithId};
     use crate::runner::global_ctx::MockGlobalCtx;
     use thoosa_with_data::with_data;
     extern crate self as caching_runner;
@@ -1253,11 +1250,210 @@ mod tests {
     use crate::runner::cache_areas::CacheArea;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx;
-    use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use crate::runner::common::cachable::{DevicesWrap, InflightRole, WithDataRef, join_or_start_inflight};
     use crate::runner::common::mock_run_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;
     use crate as thoosa_common;
+
+    #[derive(Clone, Copy, Debug)]
+    enum CopyBehavior {
+        BlockFirst,
+        FailFirst,
+        FailAlways,
+    }
+
+    #[derive(Debug)]
+    struct ControlledCopyState {
+        behavior: CopyBehavior,
+        calls: AtomicUsize,
+        entered: Semaphore,
+        release: Semaphore,
+    }
+
+    impl ControlledCopyState {
+        fn new(behavior: CopyBehavior) -> Arc<Self> {
+            Arc::new(Self {
+                behavior,
+                calls: AtomicUsize::new(0),
+                entered: Semaphore::new(0),
+                release: Semaphore::new(0),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct ControlledCopyData {
+        id: DummyCachableId,
+        device: usize,
+        state: Arc<ControlledCopyState>,
+    }
+
+    impl ControlledCopyData {
+        fn new(device: usize, behavior: CopyBehavior) -> (Self, Arc<ControlledCopyState>) {
+            let state = ControlledCopyState::new(behavior);
+            (
+                Self {
+                    id: DummyCachableId("controlled-copy"),
+                    device,
+                    state: state.clone(),
+                },
+                state,
+            )
+        }
+
+        fn device(&self) -> usize {
+            self.device
+        }
+    }
+
+    impl WithId for ControlledCopyData {
+        type ID = DummyCachableId;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+    impl thoosa_shared::traits::Data for ControlledCopyData {
+        type Metrics = [usize; 1];
+        type M = CpuOrGpu<Self>;
+
+        fn size(&self) -> Self::Metrics {
+            [0]
+        }
+
+        fn device(&self) -> usize {
+            self.device
+        }
+
+        fn mem_size(&self) -> u64 {
+            0
+        }
+    }
+
+    #[async_trait]
+    impl CopyToDevice for ControlledCopyData {
+        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
+            let call = self.state.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 && matches!(self.state.behavior, CopyBehavior::BlockFirst | CopyBehavior::FailFirst) {
+                self.state.entered.add_permits(1);
+                self.state.release.acquire().await.expect("release semaphore closed").forget();
+            }
+            if matches!(self.state.behavior, CopyBehavior::FailAlways) || call == 0 && matches!(self.state.behavior, CopyBehavior::FailFirst) {
+                return Err(ThoError::new("controlled copy failure"));
+            }
+
+            Ok(Self {
+                id: self.id.clone(),
+                device: dst_device,
+                state: self.state.clone(),
+            })
+        }
+    }
+
+    async fn wait_for_inflight_participants(wrap: &DevicesWrap<ControlledCopyData>, device_idx: usize, expected: usize) {
+        timeout(Duration::from_secs(5), async {
+            loop {
+                let participants = wrap.inflights[device_idx].lock().as_ref().map(Arc::strong_count).unwrap_or(0);
+                if participants >= expected {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await.expect("timed out waiting for inflight participants");
+    }
+
+    #[tokio::test]
+    async fn inflight_follower_observes_notify_before_first_poll() {
+        let notify = Arc::new(Notify::new());
+        let inflight = Mutex::new(Some(notify.clone()));
+        let follower = match join_or_start_inflight(&inflight) {
+            InflightRole::Follower(follower) => follower,
+            InflightRole::Leader(_) => panic!("expected follower"),
+        };
+
+        notify.notify_waiters();
+        timeout(Duration::from_secs(5), follower).await.expect("follower missed notification");
+    }
+
+    #[tokio::test]
+    async fn ensure_copied_error_wakes_follower() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let (data, state) = ControlledCopyData::new(0, CopyBehavior::FailFirst);
+        let tested = Arc::new(DevicesWrap::wrap(data));
+
+        let leader = tokio::spawn({
+            let tested = tested.clone();
+            async move {
+                let data = tested.load_from_any_device_(1).await?;
+                Ok::<usize, ThoError>(data.device())
+            }
+        });
+        state.entered.acquire().await.expect("entered semaphore closed").forget();
+
+        let follower = tokio::spawn({
+            let tested = tested.clone();
+            async move {
+                let data = tested.load_from_any_device_(1).await?;
+                Ok::<usize, ThoError>(data.device())
+            }
+        });
+        wait_for_inflight_participants(&tested, 1, 3).await;
+        state.release.add_permits(1);
+
+        assert!(leader.await.expect("leader task panicked").is_err());
+        assert_eq!(timeout(Duration::from_secs(5), follower).await.expect("follower timed out").expect("follower task panicked")?, 1);
+        assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+        assert!(tested.inflights[1].lock().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ensure_copied_cancellation_wakes_follower() -> Result<(), ThoError> {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let (data, state) = ControlledCopyData::new(0, CopyBehavior::BlockFirst);
+        let tested = Arc::new(DevicesWrap::wrap(data));
+
+        let leader = tokio::spawn({
+            let tested = tested.clone();
+            async move {
+                let data = tested.load_from_any_device_(1).await?;
+                Ok::<usize, ThoError>(data.device())
+            }
+        });
+        state.entered.acquire().await.expect("entered semaphore closed").forget();
+
+        let follower = tokio::spawn({
+            let tested = tested.clone();
+            async move {
+                let data = tested.load_from_any_device_(1).await?;
+                Ok::<usize, ThoError>(data.device())
+            }
+        });
+        wait_for_inflight_participants(&tested, 1, 3).await;
+        leader.abort();
+        assert!(leader.await.expect_err("leader was not cancelled").is_cancelled());
+
+        assert_eq!(timeout(Duration::from_secs(5), follower).await.expect("follower timed out").expect("follower task panicked")?, 1);
+        assert_eq!(state.calls.load(Ordering::SeqCst), 2);
+        assert!(tested.inflights[1].lock().is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dump_to_cpu_error_preserves_source_data() {
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let (data, state) = ControlledCopyData::new(1, CopyBehavior::FailAlways);
+        let tested = DevicesWrap::wrap(data);
+
+        assert!(tested.dump_to_cpu(1).await.is_err());
+        assert!(tested.cached_data[0].read().await.is_none());
+        assert!(tested.cached_data[1].read().await.is_some());
+        assert!(tested.is_on_device(1));
+        assert_eq!(state.calls.load(Ordering::SeqCst), 1);
+        assert!(tested.inflights[0].lock().is_none());
+    }
 
 
     #[tokio::test]
