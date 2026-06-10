@@ -906,8 +906,8 @@ where
         O::M::is_all_on_cpu(self)
     }
 
-    pub fn is_on_device(&self, device_idx: usize) -> bool {
-        self.resident_devices.get(device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
+    pub fn is_on_device(&self, tho_device_idx: usize) -> bool {
+        self.resident_devices.get(tho_device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
     }
 }
 

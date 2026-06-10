@@ -97,15 +97,17 @@ impl CopyCtx {
     }
 
     pub fn reset(&mut self) -> Result<(), ThoError> {
+        info!("CopyCtx::reset_cuda_context: about to reset cu_ctx.reset");
+
         self.cu_ctx.reset()?;
-        info!("GlobalCtx::reset_cuda_context: cu_ctx.reset done");
+        info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 
         self.bufs_pool = Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize);
-        info!("GlobalCtx::reset_cuda_context: bufs_pool rebuilt");
+        info!("CopyCtx::reset_cuda_context: bufs_pool rebuilt");
 
         self.exec_stream_pool = Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cu_ctx.device, false).unwrap())));
 
-        info!("GlobalCtx::reset_cuda_context: exec_stream_pool rebuilt");
+        info!("CopyCtx::reset_cuda_context: exec_stream_pool rebuilt");
 
         Ok(())
     }

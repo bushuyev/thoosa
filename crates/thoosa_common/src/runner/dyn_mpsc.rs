@@ -697,6 +697,10 @@ impl DynamicTaskExecutor {
         let _accept_guard = track_await(Arc::clone(&accept_gate).write_owned()).await;
 
         if tho_device_idx > 0 {
+            debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
             if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
                 error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
             } else {

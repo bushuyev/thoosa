@@ -687,7 +687,7 @@ mod tests {
             tokio::task::spawn(async move {
                 debug!("spawn 0");
                 let x = zzzz()
-                    .instrument(tracing::debug_span!("zzzz", file = file!(), line = line!()))
+                    // .instrument(tracing::debug_span!("zzzz", file = file!(), line = line!()))
                     .await?;
 
                 Ok::<(), ThoError>(())
