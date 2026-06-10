@@ -699,7 +699,8 @@ impl DynamicTaskExecutor {
         if tho_device_idx > 0 {
             debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
 
-            tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
+
+            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
             if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
                 error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");

@@ -281,7 +281,7 @@ where
 
 
         track_await(stream::iter(items.into_iter()).for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
-            debug!("drop_gpu ok: key={key:?}");
+            trace!("drop_gpu: key={key:?}");
 
             match track_await(fut).await {
                 Ok(v) => {

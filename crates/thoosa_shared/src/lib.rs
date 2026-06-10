@@ -70,6 +70,7 @@ pub mod tmp_file;
 pub mod macros;
 pub mod rayon_pool;
 pub mod tracked_await;
+pub mod collect_futures_with_progress;
 
 struct GroupSlicesBuilder<T> {
     pairs_groups: HashMap<T, u16>,
