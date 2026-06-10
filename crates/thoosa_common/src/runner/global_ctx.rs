@@ -39,7 +39,7 @@ pub struct GlobalCtx {
 
     copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>,
 
-    reset_mutex:Vec<parking_lot::Mutex<bool>>
+    reset_mutex:Vec<parking_lot::Mutex<bool>>,
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -104,6 +104,7 @@ impl GlobalCtx {
             shutting_down: false.into(),
             copy_ctx: (1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
+
         }
     }
 

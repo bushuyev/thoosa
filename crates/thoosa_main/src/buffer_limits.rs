@@ -1,3 +1,26 @@
+use std::sync::{Arc, OnceLock};
+use tokio::sync::watch;
+use thoosa_common::runner::global_ctx::GlobalCtx;
+
+pub struct BufferLimits {
+    find_motifs_stages_buffer_unordered_limit_rs:tokio::sync::watch::Sender<usize>,
+    find_motifs_stages_buffer_unordered_limit_tx:Arc<tokio::sync::watch::Receiver<usize>>
+}
+
+impl BufferLimits {
+    pub fn new() -> Self {
+        let (tx, rx ) = watch::channel(FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT);
+
+        Self { find_motifs_stages_buffer_unordered_limit_rs: tx, find_motifs_stages_buffer_unordered_limit_tx: Arc::new(rx) }
+    }
+
+    pub fn find_motifs_stages_buffer_unordered_limit_tx(&self) -> &Arc<tokio::sync::watch::Receiver<usize>> {
+        &self.find_motifs_stages_buffer_unordered_limit_tx
+    }
+}
+
+pub static BUFFER_LIMITS: OnceLock<BufferLimits> = OnceLock::new();
+
 pub(crate) const FIND_MOTIFS_STAGES_BUFFER_UNORDERED_LIMIT: usize = 8;
 pub(crate) const CROSS_LOADERS_LIMIT: usize = 8;
 pub(crate) const BUCKETING_LIMIT: usize = 8;
