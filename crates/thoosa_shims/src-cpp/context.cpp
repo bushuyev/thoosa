@@ -7,22 +7,30 @@
 #include <cuda_runtime_api.h>
 #include <iostream>
 
+#include "logging.h"
+
 extern "C" {
 
 CUresult tho_cu_init(unsigned int flags) {
+    tho_log(CppLogLevel::Info, "tho_cu_init");
+
     return tho_record_cuda_result("cuInit", cuInit(flags));
 }
 
 CUresult tho_cu_reset(CUdevice device) {
   try {
-    std::cout << "tho_cu_reset 1 \n";
+    tho_log(CppLogLevel::Info, "tho_cu_reset: entered");
+
     at::cuda::clearCublasWorkspaces();
-    std::cout << "tho_cu_reset 2 \n";
+    tho_log(CppLogLevel::Info, "tho_cu_reset: clearCublasWorkspaces done");
+
     c10::cuda::CUDACachingAllocator::emptyCache();
-    std::cout << "tho_cu_reset 3 \n";
+    tho_log(CppLogLevel::Info, "tho_cu_reset: emptyCache done");
+
     auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRelease_v2(device));
 
-    std::cout << "tho_cu_reset 4 \n";
+    tho_log(CppLogLevel::Info, "tho_cu_reset: cuDevicePrimaryCtxRelease_v2 done");
+
     // auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRetain(device));
     // return tho_record_cuda_result("cuDevicePrimaryCtxReset", cuDevicePrimaryCtxReset(device));
     return record_cuda_result;

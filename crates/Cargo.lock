@@ -5409,6 +5409,7 @@ dependencies = [
  "tch",
  "thoosa_shared",
  "torch-sys",
+ "tracing",
 ]
 
 [[package]]
