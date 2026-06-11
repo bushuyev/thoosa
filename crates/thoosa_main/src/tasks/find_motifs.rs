@@ -34,7 +34,7 @@ use thoosa_common::runs::Simple;
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::distance::MaskMaker::{Le, LeAccumulatedMean, LeAccumulatedQuantile, LocalMin, Tril};
 use thoosa_motifs::find::{FindMotifsSavableResult, FixedFindMotifsConfig};
-use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, FuturesOrdering, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
@@ -461,7 +461,7 @@ where
         let cross_loaders = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "FindMotifsStage::new",
         )).await
         .into_iter()
@@ -530,7 +530,7 @@ where
         let _/*cross loader's out is ()*/ = track_await(collect_futures_with_progress(
             futures,
             run_config_stages_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "FindMotifsStage::run",
         )).await;
 

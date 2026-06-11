@@ -21,7 +21,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, FuturesOrdering, ThoError};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
 use thoosa_store::{Store, TrainedNet};
@@ -300,7 +300,7 @@ where
         let label_outputs = collect_futures_with_progress(
             futures,
             self.apply_nets.len(),
-            StreamBuffering::Ordered,
+            FuturesOrdering::Ordered,
             "ApplyLabelNets::run",
         )
         .await

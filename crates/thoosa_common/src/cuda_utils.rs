@@ -8,8 +8,8 @@ use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
 use tch::nn::VarStore;
 use tokio::task::{spawn_blocking, JoinError};
-use thoosa_shared::{collect_futures_with_progress, Cause, StreamBuffering, ThoError};
-use thoosa_shared::buffer_limits::{COPY_D2H, COPY_H2D};
+use thoosa_shared::{collect_futures_with_progress, Cause, FuturesOrdering, ThoError};
+use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D};
 use tokio_utils::Pool;
 use torch_sys::at_grad_set_enabled;
 use tub::Guard;
@@ -319,7 +319,7 @@ pub async fn copy_d2h_from_ptr(
                 }
             }),
             chunk_groups_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             COPY_D2H,
         )).await
             .into_iter()
@@ -473,7 +473,7 @@ pub async fn copy_h2d_from_ptr(
                 }
             }),
             chunk_groups_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             COPY_H2D,
         )).await
             .into_iter()

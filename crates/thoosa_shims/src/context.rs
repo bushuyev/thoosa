@@ -1,5 +1,4 @@
 use std::ffi::c_void;
-use std::sync::Arc;
 use log::{debug, error};
 use thoosa_shared::ThoError;
 
@@ -98,7 +97,7 @@ impl ThoCudaContext {
         unsafe {
             check_cuda_status(tho_cu_reset(self.cu_device), "cuDevicePrimaryCtxReset")?;
 
-            let mut cu_device: CuDevice = 0;
+            let cu_device: CuDevice = 0;
             check_cuda_status(
                 tho_cu_device_primary_ctx_retain(&mut self.ctx, cu_device),
                 "cuDevicePrimaryCtxRetain",

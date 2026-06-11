@@ -45,7 +45,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, CopyToDevice, FuturesOrdering, ThoError};
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
@@ -597,7 +597,7 @@ where
         let results = track_await(collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "train motif",
         )).await;
 

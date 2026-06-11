@@ -236,7 +236,7 @@ mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
-    use thoosa_shared::buffer_limits::{ENTRY, FutureLimitProgressEntry};
+    use thoosa_shared::futures_limits::{ENTRY, FutureLimitProgressEntry};
     use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState};
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::sync::watch;

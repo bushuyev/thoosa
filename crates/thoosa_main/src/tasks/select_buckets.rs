@@ -32,7 +32,7 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
 use thoosa_shared::tracked_await::track_await;
@@ -272,7 +272,7 @@ where
         let energies = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
         )).await;
         if energies.len() != motif_ids_len {
@@ -595,7 +595,7 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "SelectBucketsStage::run",
         )).await;
         if run_results.len() != run_configs_len {

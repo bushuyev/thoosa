@@ -27,7 +27,7 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
-use thoosa_shared::{async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
+use thoosa_shared::{async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, FuturesOrdering, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
@@ -247,7 +247,7 @@ where
         let run_configs__stacked_motifs = track_await(collect_futures_with_progress(
             futures,
             find_motifs_run_configs_len,
-            StreamBuffering::Ordered,
+            FuturesOrdering::Ordered,
             "SelectMotifsStage::load_stacked_motifs",
         )).await
             //gpt TODO!! collect_futures_with_progress drops errors and None results; missing find_motifs runs are silently skipped.
@@ -309,7 +309,7 @@ where
         let motif_stats = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
         )).await
             .into_iter()
@@ -441,7 +441,7 @@ where
         let _ = track_await(collect_futures_with_progress(
             futures,
             run_configs__stacked_motifs_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "SelectMotifsStage::extend_motifs_for_run_config",
         )).await;
         //gpt TODO!! per-run errors are swallowed; channels_motifs_added_slices may be incomplete with no signal to caller.
@@ -637,7 +637,7 @@ where
             track_await(collect_futures_with_progress(
                 futures,
                 channel_masks_dists_ids_len,
-                StreamBuffering::Unordered,
+                FuturesOrdering::Unordered,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
             )).await
                 .into_iter()
@@ -713,7 +713,7 @@ where
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, StreamBuffering::Unordered, "ExtendMotifsStage::run")).await;
+        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await;
         Ok(Arc::new(DevicesWrap::wrap(ExtendMotifsSavableResult::new())))
     }
 }

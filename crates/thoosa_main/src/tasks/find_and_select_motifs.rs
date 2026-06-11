@@ -28,7 +28,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, FuturesOrdering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::FindMotifsStage;
@@ -439,7 +439,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let mut indexed_best_configs = track_await(collect_futures_with_progress(
             futures,
             grid_runs_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "FindAndSelectMotifsStage::run",
         )).await;
 

@@ -41,7 +41,7 @@ use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, StreamBuffering, ThoError};
+use thoosa_shared::{async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock, FuturesOrdering, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{hump, Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
@@ -391,7 +391,7 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             motifs_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "filter_motifs_by_criteria",
         )).await
         .into_iter().filter_map(|v| v).collect::<Vec<SelectedMotifEvaluation>>();
@@ -473,7 +473,7 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "SelectMotifsStage::run",
         )).await;
 
