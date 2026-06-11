@@ -9,6 +9,7 @@ use tch::{Device, Kind, Tensor};
 use tch::nn::VarStore;
 use tokio::task::{spawn_blocking, JoinError};
 use thoosa_shared::{collect_futures_with_progress, Cause, StreamBuffering, ThoError};
+use thoosa_shared::buffer_limits::{COPY_D2H, COPY_H2D};
 use tokio_utils::Pool;
 use torch_sys::at_grad_set_enabled;
 use tub::Guard;
@@ -319,7 +320,7 @@ pub async fn copy_d2h_from_ptr(
             }),
             chunk_groups_len,
             StreamBuffering::Unordered,
-            "cuda_utils::copy_d2h_from_ptr",
+            COPY_D2H,
         )).await
             .into_iter()
             .collect::<Result<(), ThoError>>()?;
@@ -473,7 +474,7 @@ pub async fn copy_h2d_from_ptr(
             }),
             chunk_groups_len,
             StreamBuffering::Unordered,
-            "cuda_utils::copy_h2d_from_ptr",
+            COPY_H2D,
         )).await
             .into_iter()
             .collect::<Result<(), ThoError>>()?;
@@ -761,6 +762,7 @@ mod tests {
     use crate::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
+    use thoosa_shims::cpp_log::{init_cpp_logging};
     use crate::dims::AnyDims;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_device::ThoDevice;
@@ -902,7 +904,9 @@ mod tests {
     async fn test_small_one_copy_types() ->Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+            init_cpp_logging();
         }
+        ();
 
         let cu_ctx = ThoCudaContext::new(0).expect("failed to create CUDA context");
         cu_ctx

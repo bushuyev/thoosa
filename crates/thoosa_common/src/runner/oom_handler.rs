@@ -277,7 +277,7 @@ where
 fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
     warn!("OOMHandler::oom_executor: for mock");
     static EXECUTOR: std::sync::OnceLock<crate::runner::dyn_mpsc::DynamicTaskExecutor> = std::sync::OnceLock::new();
-    EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16, std::num::NonZeroUsize::new(1).expect("non-zero")))
+    EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16))
 }
 
 #[cfg(not(test))]

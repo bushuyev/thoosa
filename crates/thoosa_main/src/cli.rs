@@ -115,6 +115,7 @@ use crate::tasks::train_label_nets::{new_train_label_nets, TrainLabelNets, Train
 use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shims::cpp_log::init_cpp_logging;
 
 #[derive(Parser, Clone, Debug)]
 #[command(version, about, long_about = None)]
@@ -432,6 +433,8 @@ where
         "info",
         perf_path,
     )?;
+
+    init_cpp_logging();
 
     let _collect_eta_progress_server = match CollectEtaProgressSocketServer::start_default() {
         Ok(server) => Some(server),
