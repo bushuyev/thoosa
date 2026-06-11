@@ -20,6 +20,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use thoosa_shared::buffer_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgressEntry};
 use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
 use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::val::Val;
@@ -1406,6 +1407,14 @@ impl App {
         }
 
         lines
+    }
+
+    fn buffer_limit_lines(&self) -> Vec<String> {
+        if self.progress_state.futures_limits.is_empty() {
+            return vec!["No active future limits.".to_string()];
+        }
+
+        self.progress_state.futures_limits.iter().map(format_future_limit).collect()
     }
 
     fn rebuild_run_config_tree(&mut self, input_pairs: &[(u32, u32)], outputs_by_run_config_id: &HashMap<u32, Vec<u32>>) {
@@ -2806,10 +2815,20 @@ fn render_motif_detail_lines(app: &App) -> Vec<String> {
 }
 
 fn render_progress_view(frame: &mut Frame<'_>, app: &App, area: Rect) {
+    let block = Block::default().title("progress").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+        .split(inner);
     let progress = Paragraph::new(app.progress_lines().join("\n"))
-        .block(Block::default().title("progress").borders(Borders::ALL))
         .wrap(Wrap { trim: false });
-    frame.render_widget(progress, area);
+    let limits = Paragraph::new(app.buffer_limit_lines().join("\n"))
+        .block(Block::default().title("future limits").borders(Borders::LEFT))
+        .wrap(Wrap { trim: false });
+    frame.render_widget(progress, columns[0]);
+    frame.render_widget(limits, columns[1]);
 }
 
 fn render_status_line(frame: &mut Frame<'_>, app: &App, area: Rect) {
@@ -3410,6 +3429,16 @@ fn is_unmodified_or_shift(key: &KeyEvent) -> bool {
 
 fn format_progress_invocation(invocation: &CollectEtaProgressInvocation) -> String {
     format!("{:>6} / {:<6} {}", invocation.completed, invocation.total, invocation.descr)
+}
+
+fn format_future_limit(entry: &FutureLimitProgressEntry) -> String {
+    let descr = match entry.descr.as_str() {
+        ENTRY => "ENTRY",
+        COPY_D2H => "COPY_D2H",
+        COPY_H2D => "COPY_H2D",
+        descr => descr,
+    };
+    format!("{descr}: {}", entry.limit)
 }
 
 fn drain_progress_events(app: &mut App, rx: &mut mpsc::UnboundedReceiver<ProgressClientEvent>) {
@@ -4302,6 +4331,7 @@ mod tests {
                 requested: 1536,
                 non_releasable: 512,
             }),
+            futures_limits: vec![],
         };
 
         let lines = app.progress_lines();
@@ -4310,6 +4340,28 @@ mod tests {
         assert!(lines.iter().any(|line| line == "gpu reusable cached: 1.0 KiB"));
         assert!(lines.iter().any(|line| line == "gpu pending free: 1.0 KiB"));
         assert!(lines.iter().any(|line| line == "gpu rounding overhead: 512 B"));
+    }
+
+    #[test]
+    fn test_buffer_limit_lines_use_known_labels() {
+        let store = Box::new(MockStore::new()) as Box<dyn Store>;
+        let mut app = App::new(store, PathBuf::from("/tmp/ws"), PathBuf::from("/tmp/test.db3"));
+        app.progress_state.futures_limits = vec![
+            FutureLimitProgressEntry {
+                descr: ENTRY.to_string(),
+                limit: 4,
+                registrations: 1,
+                weight: 1,
+            },
+            FutureLimitProgressEntry {
+                descr: COPY_D2H.to_string(),
+                limit: 8,
+                registrations: 1,
+                weight: 2,
+            },
+        ];
+
+        assert_eq!(app.buffer_limit_lines(), vec!["ENTRY: 4", "COPY_D2H: 8"]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -4338,6 +4390,12 @@ mod tests {
                     requested: 512,
                     non_releasable: 256,
                 }),
+                futures_limits: vec![FutureLimitProgressEntry {
+                    descr: ENTRY.to_string(),
+                    limit: 4,
+                    registrations: 1,
+                    weight: 1,
+                }],
             };
             let mut writer = &stream;
             let mut bytes = serde_json::to_vec(&snapshot)?;
@@ -4380,6 +4438,12 @@ mod tests {
                     requested: 512,
                     non_releasable: 256,
                 }),
+                futures_limits: vec![FutureLimitProgressEntry {
+                    descr: ENTRY.to_string(),
+                    limit: 4,
+                    registrations: 1,
+                    weight: 1,
+                }],
             })
         );
 
