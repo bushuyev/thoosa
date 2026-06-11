@@ -20,7 +20,6 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, Stre
 use thoosa_store::{Store, TrainedNetEntry};
 use thoosa_shared::tracked_await::track_await;
 
-const PURGE_MODELS_BUFFER_LIMIT: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PurgeDate(String);
@@ -288,7 +287,7 @@ where
         let purged = track_await(collect_futures_with_progress(
             futures,
             entries_len,
-            PURGE_MODELS_BUFFER_LIMIT,
+            crate::buffer_limits::buffer_limits().purge_models_buffer_limit.receiver(),
             StreamBuffering::Unordered,
             "PurgeModelsStage::run",
         )).await;

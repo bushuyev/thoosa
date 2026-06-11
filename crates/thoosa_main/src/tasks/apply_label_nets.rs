@@ -300,7 +300,7 @@ where
         let label_outputs = collect_futures_with_progress(
             futures,
             self.apply_nets.len(),
-            crate::buffer_limits::APPLY_LABEL_NETS_RUN_BUFFERED_LIMIT,
+            crate::buffer_limits::buffer_limits().apply_label_nets_run_buffered_limit.receiver(),
             StreamBuffering::Ordered,
             "ApplyLabelNets::run",
         )

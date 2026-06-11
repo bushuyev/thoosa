@@ -1,6 +1,5 @@
 #![allow(non_camel_case_types)]
 
-use crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
@@ -38,7 +37,6 @@ use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
 use thoosa_shared::tracked_await::track_await;
 
-const SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT: usize = 16;
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
 #[allow(non_camel_case_types)]
@@ -274,7 +272,7 @@ where
         let energies = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            4, //SELECT_BUCKETS_MOTIFS_BUFFER_LIMIT,
+            crate::buffer_limits::buffer_limits().select_buckets_motifs_buffer_limit.receiver(),
             StreamBuffering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
         )).await;
@@ -598,7 +596,7 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            SELECT_MOTIFS_STAGE_RUN_CONFIGS,
+            crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(),
             StreamBuffering::Unordered,
             "SelectBucketsStage::run",
         )).await;
