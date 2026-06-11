@@ -39,7 +39,6 @@ use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use crate::buffer_limits::{BUCKETING_LIMIT, STACKED_MOTIFS_LOADER_RUN};
 use thoosa_shared::tracked_await::track_await;
 
 const MEL_PATCH_TEMP_MAGIC: [u8; 8] = *b"THOBUCK1";
@@ -1009,7 +1008,7 @@ where
         let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
             resources_len,
-            BUCKETING_LIMIT,
+            crate::buffer_limits::buffer_limits().bucketing_limit.receiver(),
             StreamBuffering::Unordered,
             "BucketingStage/resources",
         )).await

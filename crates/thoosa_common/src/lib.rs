@@ -14,6 +14,7 @@ pub mod tho_device;
 mod argmin;
 pub mod batches;
 pub mod bool_iter;
+pub mod buffer_limits;
 pub mod builder;
 pub mod copy_ctx;
 pub mod cuda_utils;

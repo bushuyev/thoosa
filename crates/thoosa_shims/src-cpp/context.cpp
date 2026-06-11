@@ -15,9 +15,14 @@ CUresult tho_cu_init(unsigned int flags) {
 
 CUresult tho_cu_reset(CUdevice device) {
   try {
+    std::cout << "tho_cu_reset 1 \n";
     at::cuda::clearCublasWorkspaces();
+    std::cout << "tho_cu_reset 2 \n";
     c10::cuda::CUDACachingAllocator::emptyCache();
+    std::cout << "tho_cu_reset 3 \n";
     auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRelease_v2(device));
+
+    std::cout << "tho_cu_reset 4 \n";
     // auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRetain(device));
     // return tho_record_cuda_result("cuDevicePrimaryCtxReset", cuDevicePrimaryCtxReset(device));
     return record_cuda_result;

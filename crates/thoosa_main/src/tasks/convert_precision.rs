@@ -22,7 +22,6 @@ use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, StreamBuffering, ThoError};
 use thoosa_shared::tracked_await::track_await;
 
-const CONVERT_PRECISION_BUFFER_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ConvertPrecisionTarget {
@@ -291,7 +290,7 @@ where
         let converted = track_await(collect_futures_with_progress(
             futures,
             entries_len,
-            CONVERT_PRECISION_BUFFER_LIMIT,
+            crate::buffer_limits::buffer_limits().convert_precision_buffer_limit.receiver(),
             StreamBuffering::Unordered,
             "ConvertPrecisionStage::run",
         )).await;

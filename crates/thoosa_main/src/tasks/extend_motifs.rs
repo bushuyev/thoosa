@@ -35,7 +35,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
-use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_dims::{ChannelsData2Selector, ChannelsMotifsDists};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
@@ -248,7 +247,7 @@ where
         let run_configs__stacked_motifs = track_await(collect_futures_with_progress(
             futures,
             find_motifs_run_configs_len,
-            LOAD_STACKED_MOTIFS_LIMIT,
+            crate::buffer_limits::buffer_limits().load_stacked_motifs_limit.receiver(),
             StreamBuffering::Ordered,
             "SelectMotifsStage::load_stacked_motifs",
         )).await
@@ -311,7 +310,7 @@ where
         let motif_stats = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN,
+            crate::buffer_limits::buffer_limits().stacked_motifs_loader_run.receiver(),
             StreamBuffering::Unordered,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
         )).await
@@ -444,7 +443,7 @@ where
         let _ = track_await(collect_futures_with_progress(
             futures,
             run_configs__stacked_motifs_len,
-            crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
+            crate::buffer_limits::buffer_limits().select_motifs_stage_find_motifs_buffer_unordered_limit.receiver(),
             StreamBuffering::Unordered,
             "SelectMotifsStage::extend_motifs_for_run_config",
         )).await;
@@ -641,7 +640,7 @@ where
             track_await(collect_futures_with_progress(
                 futures,
                 channel_masks_dists_ids_len,
-                crate::buffer_limits::SELECT_MOTIFS_STAGE_FIND_MOTIFS_BUFFER_UNORDERED_LIMIT,
+                crate::buffer_limits::buffer_limits().select_motifs_stage_find_motifs_buffer_unordered_limit.receiver(),
                 StreamBuffering::Unordered,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
             )).await
@@ -718,7 +717,7 @@ where
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS, StreamBuffering::Unordered, "ExtendMotifsStage::run")).await;
+        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(), StreamBuffering::Unordered, "ExtendMotifsStage::run")).await;
         Ok(Arc::new(DevicesWrap::wrap(ExtendMotifsSavableResult::new())))
     }
 }

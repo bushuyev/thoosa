@@ -62,7 +62,6 @@ use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_shared::rayon_pool::rayon_pool;
-use crate::buffer_limits::LOAD_STACKED_MOTIFS_LIMIT;
 use crate::tasks::find_motifs::config_to_stage;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistOutput};
@@ -392,7 +391,7 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             motifs_len,
-            crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
+            crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(),
             StreamBuffering::Unordered,
             "filter_motifs_by_criteria",
         )).await
@@ -475,7 +474,7 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            crate::buffer_limits::SELECT_MOTIFS_STAGE_RUN_CONFIGS,
+            crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(),
             StreamBuffering::Unordered,
             "SelectMotifsStage::run",
         )).await;
