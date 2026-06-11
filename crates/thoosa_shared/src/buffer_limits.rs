@@ -31,6 +31,7 @@ impl DynamicBufferLimit {
     }
 }
 
+//TODO rename it to something explaining its role clearly
 pub struct BufferLimits {
     pub find_motifs_stages_buffer_unordered_limit: DynamicBufferLimit,
     pub cross_loaders_limit: DynamicBufferLimit,
@@ -56,11 +57,13 @@ pub struct BufferLimits {
     pub select_buckets_motifs_buffer_limit: DynamicBufferLimit,
     pub bird_clef_labels_buffer_limit: DynamicBufferLimit,
     pub copy_concurrency: DynamicBufferLimit,
+    pub static_limit: DynamicBufferLimit,
 }
 
 impl BufferLimits {
     pub fn new() -> Self {
         Self {
+            //TODO replace with futures_limits:HashMap<&str (descr), DynamicBufferLimit>
             find_motifs_stages_buffer_unordered_limit: DynamicBufferLimit::new(1),
             cross_loaders_limit: DynamicBufferLimit::new(8),
             bucketing_limit: DynamicBufferLimit::new(8),
@@ -85,15 +88,31 @@ impl BufferLimits {
             select_buckets_motifs_buffer_limit: DynamicBufferLimit::new(4),
             bird_clef_labels_buffer_limit: DynamicBufferLimit::new(16),
             copy_concurrency: DynamicBufferLimit::new(8),
+            static_limit: DynamicBufferLimit::new(8),
         }
     }
 
     pub fn register(&self, descr:&str) -> Arc<watch::Receiver<usize>> {
+        //TODO add to futures_limits
         self.find_motifs_stages_buffer_unordered_limit.receiver()
     }
 
     pub fn forget(&self, descr:&str)  {
         //TODO remopve
+    }
+
+    pub fn on_oom(&self) {
+        //TODO
+    }
+
+    pub fn on_ok(&self) {
+        //TODO
+    }
+
+    //TODO (later) rename to sync limit and DynamicTaskExecutor to SyncTaskExecutor (it executes SyncStages, /src/runner/common/runnable.rs:45)
+    pub fn global_limit(&self) -> Arc<watch::Receiver<usize>> {
+        //TODO
+        self.static_limit.receiver()
     }
 }
 
