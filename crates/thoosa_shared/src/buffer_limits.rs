@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use tracing::debug;
 
@@ -44,6 +45,9 @@ impl DynamicBufferLimit {
         self.sender.send_replace(limit);
     }
 
+    fn current(&self) -> usize {
+        *self.receiver.borrow()
+    }
 }
 
 struct FutureLimitEntry {
@@ -60,6 +64,14 @@ struct BufferLimitsState {
     feedback_window_ooms: usize,
     consecutive_ok: usize,
     oom_seen: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FutureLimitProgressEntry {
+    pub descr: String,
+    pub limit: usize,
+    pub registrations: usize,
+    pub weight: usize,
 }
 
 #[derive(Debug)]
@@ -159,6 +171,7 @@ impl Drop for SyncExecutionPermit {
 pub struct BufferLimits {
     state: Mutex<BufferLimitsState>,
     sync_execution_limiter: Arc<SyncExecutionLimiter>,
+    publish_progress: bool,
 }
 
 pub struct BufferLimitRegistration<'a> {
@@ -183,13 +196,19 @@ impl BufferLimits {
     pub fn new() -> Self {
         let initial_limit = std::thread::available_parallelism().map(usize::from).unwrap_or(MIN_SYNC_PARALLELISM);
         let max_limit = initial_limit.saturating_mul(MAX_SYNC_PARALLELISM_MULTIPLIER).max(initial_limit);
-        Self::new_with_parallelism(initial_limit, max_limit)
+        Self::new_with_parallelism_and_progress(initial_limit, max_limit, true)
     }
 
+    #[cfg(test)]
     fn new_with_parallelism(initial_limit: usize, max_limit: usize) -> Self {
+        Self::new_with_parallelism_and_progress(initial_limit, max_limit, false)
+    }
+
+    fn new_with_parallelism_and_progress(initial_limit: usize, max_limit: usize, publish_progress: bool) -> Self {
         Self {
             state: Mutex::new(BufferLimitsState::default()),
             sync_execution_limiter: Arc::new(SyncExecutionLimiter::new(initial_limit, max_limit)),
+            publish_progress,
         }
     }
 
@@ -303,6 +322,7 @@ impl BufferLimits {
 
     fn rebalance_future_limits(&self, state: &BufferLimitsState) {
         if state.active_registrations == 0 {
+            self.publish_future_limits(Vec::new());
             return;
         }
 
@@ -310,6 +330,24 @@ impl BufferLimits {
         for entry in state.futures_limits.values() {
             let collector_limit = (self.sync_execution_limiter.limit().saturating_mul(entry.weight) / total_weight).max(1);
             entry.limit.set(collector_limit);
+        }
+        self.publish_future_limits(Self::future_limits_snapshot(state));
+    }
+
+    fn future_limits_snapshot(state: &BufferLimitsState) -> Vec<FutureLimitProgressEntry> {
+        let mut entries = state.futures_limits.iter().map(|(descr, entry)| FutureLimitProgressEntry {
+            descr: descr.clone(),
+            limit: entry.limit.current(),
+            registrations: entry.registrations,
+            weight: entry.weight,
+        }).collect::<Vec<_>>();
+        entries.sort_by(|a, b| a.descr.cmp(&b.descr));
+        entries
+    }
+
+    fn publish_future_limits(&self, entries: Vec<FutureLimitProgressEntry>) {
+        if self.publish_progress {
+            crate::collect_futures_eta::collect_eta_set_future_limits(entries);
         }
     }
 
