@@ -1008,7 +1008,6 @@ where
         let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
             resources_len,
-            crate::buffer_limits::buffer_limits().bucketing_limit.receiver(),
             StreamBuffering::Unordered,
             "BucketingStage/resources",
         )).await

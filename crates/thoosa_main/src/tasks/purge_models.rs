@@ -287,7 +287,6 @@ where
         let purged = track_await(collect_futures_with_progress(
             futures,
             entries_len,
-            crate::buffer_limits::buffer_limits().purge_models_buffer_limit.receiver(),
             StreamBuffering::Unordered,
             "PurgeModelsStage::run",
         )).await;

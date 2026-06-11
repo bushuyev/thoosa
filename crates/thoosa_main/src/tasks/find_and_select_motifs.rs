@@ -439,7 +439,6 @@ impl AsyncStage for FindAndSelectMotifsStage {
         let mut indexed_best_configs = track_await(collect_futures_with_progress(
             futures,
             grid_runs_len,
-            crate::buffer_limits::buffer_limits().find_and_select_motifs_run_buffer_ordered_limit.receiver(),
             StreamBuffering::Unordered,
             "FindAndSelectMotifsStage::run",
         )).await;

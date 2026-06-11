@@ -540,7 +540,6 @@ where
             let results = track_await(collect_futures_with_progress(
                 futures,
                 labels_train_and_valid_sets_len,
-                crate::buffer_limits::buffer_limits().train_label_nets_run_buffer_unordered_limit.receiver(),
                 StreamBuffering::Unordered,
                 "train labels",
             )).await;
@@ -723,32 +722,21 @@ where
                     }
                 });
 
-                let (x_1_wrapped, x_0_wrapped) = track_await(futures::stream::iter(futures)
-                    .buffered(crate::buffer_limits::buffer_limits().train_label_nets_resources_batch_load_buffered_limit.current())
-                    .try_collect::<Vec<_>>()).await?
+                let futures = futures.map(|future| async move { Ok::<_, ThoError>(track_await(future).await) });
+                let (x_1_wrapped, x_0_wrapped) = track_await(collect_futures_with_progress(
+                    futures,
+                    batch_len,
+                    StreamBuffering::Ordered,
+                    "ResourcesBatch::build_batch_stream",
+                )).await
+                    .into_iter()
+                    .collect::<Result<Vec<_>, ThoError>>()?
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
                         a.0.push(v.0);
                         a.1.push(v.1);
                         a
                     });
-
-                // let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
-                //     futures,
-                //     batch_len,
-                //     crate::buffer_limits::buffer_limits().train_label_nets_resources_batch_load_buffered_limit.receiver(),
-                //     StreamBuffering::Ordered,
-                //     "ResourcesBatch::build_batch_stream",
-                // )
-                //     .await
-                //     .into_iter()
-                //     .collect::<Vec<_>>()
-                //     .into_iter()
-                //     .fold((vec![], vec![]), |mut a, v| {
-                //         a.0.push(v.0);
-                //         a.1.push(v.1);
-                //         a
-                //     });
                 //
                 let r: Result<(ThoBatch<X>, Option<BatchLengths>, ThoBatch<Y>), ThoError> = track_await(build_batch_fn(x_1_wrapped, x_0_wrapped, ctx_for_build_fn)).await;
 

@@ -290,7 +290,6 @@ where
         let converted = track_await(collect_futures_with_progress(
             futures,
             entries_len,
-            crate::buffer_limits::buffer_limits().convert_precision_buffer_limit.receiver(),
             StreamBuffering::Unordered,
             "ConvertPrecisionStage::run",
         )).await;

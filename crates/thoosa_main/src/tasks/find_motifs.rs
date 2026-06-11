@@ -461,7 +461,6 @@ where
         let cross_loaders = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            crate::buffer_limits::buffer_limits().cross_loaders_limit.receiver(),
             StreamBuffering::Unordered,
             "FindMotifsStage::new",
         )).await
@@ -531,7 +530,6 @@ where
         let _/*cross loader's out is ()*/ = track_await(collect_futures_with_progress(
             futures,
             run_config_stages_len,
-            crate::buffer_limits::buffer_limits().find_motifs_stages_buffer_unordered_limit.receiver(),
             StreamBuffering::Unordered,
             "FindMotifsStage::run",
         )).await;
