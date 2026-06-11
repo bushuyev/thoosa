@@ -4,7 +4,6 @@ use std::ops::Range;
 use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use futures::StreamExt;
 use log::{debug, error, info};
 use tch::Device::Cpu;
 use tracing::Instrument;
@@ -39,6 +38,7 @@ use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRan
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
 use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, RangeOrValue, ResourceType, StreamBuffering, ThoError};
+use thoosa_shared::buffer_limits::ENTRY;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::math::unordered_sets_of_size;
 use thoosa_shared::ResourceType::NotInGroup;
@@ -111,7 +111,8 @@ pub(crate) async fn run_all(
 
             let find_resources = run_all_args.find_resources.clone();
             let _select_resources = run_all_args.select_resources.clone();
-            let labels_eta_guard = CollectEtaInvocationGuard::new("labels", labels_filter_ref.map(|v|v.len()).unwrap_or(labels.len()), 1);
+            let labels_len = labels_filter_ref.map(|v|v.len()).unwrap_or(labels.len());
+            let labels_eta_guard = CollectEtaInvocationGuard::new("labels", labels_len, 1);
             let labels_eta_guard_id = labels_eta_guard.id();
             let futures = labels.into_iter().filter(|label|
                 {
@@ -149,7 +150,7 @@ pub(crate) async fn run_all(
                 let loader_spawn = Arc::clone(&loader);
                 let run_all_args = run_all_args.clone();
 
-                tokio::spawn(async move {
+                async move {
                     panic_to_err_async!(async move {
 
                         let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
@@ -353,19 +354,15 @@ pub(crate) async fn run_all(
                     file = file!(),
                     line = line!(),
                     task = format!("run workflow for label_{label_for_span}"),
-                )))
+                ))
             });
 
-            track_await(futures::stream::iter(futures)
-            .buffer_unordered(8)
-            .collect::<Vec<_>>()).await;
-
-            // let _ = collect_futures_with_progress(
-            //     futures,
-            //     labels.len(),
-            //     StreamBuffering::Unordered,
-            //     "bird_clef_labels",
-            // ).await;
+            let _ = track_await(collect_futures_with_progress(
+                futures,
+                labels_len,
+                StreamBuffering::Unordered,
+                ENTRY,
+            )).await;
 
             Ok::<_, ThoError>(())
         }   
@@ -493,7 +490,7 @@ pub(crate) async fn run_all(
                 futures,
                 labels_len,
                 StreamBuffering::Unordered,
-                "bird_clef_labels",
+                ENTRY,
             )).await;
 
             info!("Clef train labels done, run_id={:?}", run_id());
