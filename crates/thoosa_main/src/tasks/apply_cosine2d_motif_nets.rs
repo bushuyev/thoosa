@@ -203,7 +203,6 @@ where
         let stft_run_configs: HashMap<u64, StftRunConfig> = track_await(collect_futures_with_progress(
             futures,
             trained_nets_len,
-            crate::buffer_limits::buffer_limits().apply_motif_nets_new_buffered_limit.receiver(),
             StreamBuffering::Ordered, //to keep same order as in trained_nets_ids
             "ApplyMotifNets::new/load motif nets",
         )).await

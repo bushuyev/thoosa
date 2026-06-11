@@ -14,7 +14,6 @@ use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_compl
 pub async fn collect_futures_with_progress<T, F>(
     futures: impl Iterator<Item = F>,
     len: usize,
-    _buffer_limit: Arc<watch::Receiver<usize>>, //TODO remove
     buffering: StreamBuffering,
     descr: &str,
 ) -> Vec<T>
@@ -24,8 +23,23 @@ where
     ThoError: Send + 'static,
 {
     debug!("collect_futures_with_progress: descr={descr} len={len}");
+    let registration = crate::buffer_limits::buffer_limits().register(descr);
+    collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, descr).await
+}
 
-    let mut buffer_limit = crate::buffer_limits::buffer_limits().register(descr).as_ref().clone();
+async fn collect_futures_with_progress_with_limit<T, F>(
+    futures: impl Iterator<Item = F>,
+    len: usize,
+    buffer_limit: Arc<watch::Receiver<usize>>,
+    buffering: StreamBuffering,
+    descr: &str,
+) -> Vec<T>
+where
+    T: Debug + Send + 'static,
+    F: Future<Output = Result<T, ThoError>> + Send + 'static,
+    ThoError: Send + 'static,
+{
+    let mut buffer_limit = buffer_limit.as_ref().clone();
     let initial_buffer_limit = *buffer_limit.borrow_and_update();
     assert!(initial_buffer_limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
 
@@ -83,8 +97,6 @@ where
     if eta_invocation_id.is_some() {
         collect_eta_maybe_log(true);
     }
-
-    crate::buffer_limits::buffer_limits().forget(descr);
 
     results
 }
@@ -312,7 +324,7 @@ mod tests {
 
     use tokio::sync::{Semaphore, watch};
 
-    use super::collect_futures_with_progress;
+    use super::collect_futures_with_progress_with_limit;
     use crate::{StreamBuffering, ThoError};
 
     async fn wait_for_value(value: &AtomicUsize, expected: usize) {
@@ -332,7 +344,7 @@ mod tests {
             let started = Arc::clone(&started);
             let permits = Arc::clone(&permits);
             tokio::spawn(async move {
-                collect_futures_with_progress(
+                collect_futures_with_progress_with_limit(
                     (0..6).map(move |idx| {
                         let started = Arc::clone(&started);
                         let permits = Arc::clone(&permits);
@@ -381,7 +393,7 @@ mod tests {
             let active = Arc::clone(&active);
             let permits = Arc::clone(&permits);
             tokio::spawn(async move {
-                collect_futures_with_progress(
+                collect_futures_with_progress_with_limit(
                     (0..5).map(move |idx| {
                         let started = Arc::clone(&started);
                         let active = Arc::clone(&active);

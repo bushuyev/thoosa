@@ -597,7 +597,6 @@ where
         let results = track_await(collect_futures_with_progress(
             futures,
             motifs_rates_selected_motifs_run_config_ids_len,
-            crate::buffer_limits::buffer_limits().train_motif_nets_run_buffer_unordered_limit.receiver(),
             StreamBuffering::Unordered,
             "train motif",
         )).await;

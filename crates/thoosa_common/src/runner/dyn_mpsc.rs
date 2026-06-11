@@ -23,6 +23,7 @@ use tokio::{
 use tracing::{debug, warn, Instrument};
 
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
+use thoosa_shared::buffer_limits::{BufferLimits, SyncExecutionPermit, buffer_limits};
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -111,6 +112,7 @@ struct LiveJob {
     /// Logical scheduler-active state. A suspended job is still physically alive,
     /// but is not counted against scheduling capacity.
     active: bool,
+    global_permit: Option<SyncExecutionPermit>,
     suspend_depth: usize,
     waiting_resumes: Vec<oneshot::Sender<()>>,
 }
@@ -283,6 +285,8 @@ impl Drop for ParentSuspendGuard {
 
 ///Its goal is to run synchronous tasks limiting parallelism.
 /// Maximum allowed number of parallel tasks is specified in max_other_parallel parameter to submit method
+/// All per-device executor instances share BufferLimits execution permits. The aggregate number of
+/// active jobs is bounded by that adaptive limit; set_max_parallelism provides a per-device ceiling.
 /// Currently, it's used from OOMHandler only.
 pub struct DynamicTaskExecutor {
     tx: mpsc::Sender<Job>,
@@ -337,10 +341,21 @@ impl DynamicTaskExecutor {
         tho_device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
+        Self::new_inner_with_buffer_limits(queue_capacity, initial_limit, tho_device_idx, reset_fn, Arc::clone(buffer_limits()))
+    }
+
+    fn new_inner_with_buffer_limits(
+        queue_capacity: usize,
+        initial_limit: NonZeroUsize,
+        tho_device_idx: usize,
+        reset_fn: ResetFn,
+        buffer_limits: Arc<BufferLimits>,
+    ) -> Self {
         debug!("DynamicTaskExecutor::new_inner: queue_capacity={queue_capacity} initial_limit={initial_limit} tho_device_idx={tho_device_idx}");
 
         let (tx, rx) = mpsc::channel(queue_capacity);
         let (limit_tx, limit_rx) = watch::channel(initial_limit.get());
+        let global_capacity_rx = buffer_limits.sync_capacity_changes();
         let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
         let (accepting_tx, _) = watch::channel(true);
         let accept_gate = Arc::new(tokio::sync::RwLock::new(()));
@@ -356,6 +371,7 @@ impl DynamicTaskExecutor {
             track_await(Self::run_manager(
                 rx,
                 limit_rx,
+                global_capacity_rx,
                 cmd_rx,
                 cmd_tx_for_tasks,
                 exclusive_job_id_for_manager,
@@ -363,6 +379,7 @@ impl DynamicTaskExecutor {
                 accept_gate_for_manager,
                 tho_device_idx,
                 reset_fn_for_manager,
+                buffer_limits,
             )).await;
         }.instrument(tracing::info_span!(
             "dyn_mpsc::manager",
@@ -754,6 +771,7 @@ impl DynamicTaskExecutor {
     async fn run_manager(
         mut rx: mpsc::Receiver<Job>,
         mut limit_rx: watch::Receiver<usize>,
+        mut global_capacity_rx: watch::Receiver<u64>,
         mut cmd_rx: mpsc::UnboundedReceiver<ManagerCmd>,
         cmd_tx_for_tasks: mpsc::UnboundedSender<ManagerCmd>,
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
@@ -761,6 +779,7 @@ impl DynamicTaskExecutor {
         accept_gate: Arc<tokio::sync::RwLock<()>>,
         tho_device_idx: usize,
         reset_fn: ResetFn,
+        buffer_limits: Arc<BufferLimits>,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -774,12 +793,13 @@ impl DynamicTaskExecutor {
         let mut input_closed = false;
         let mut cmd_closed = false;
         let mut limit_closed = false;
+        let mut global_capacity_closed = false;
         let mut pending_reset = None::<PendingCudaReset>;
 
-        let global_limit = Arc::new(AtomicU64::new(*limit_rx.borrow() as u64));
-
         loop {
-            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} global_limit={} jobs.len={}",running.len(),pending.len(),global_limit.load(Ordering::Relaxed),jobs.len());
+            let configured_limit = *limit_rx.borrow_and_update();
+            let _ = *global_capacity_rx.borrow_and_update();
+            debug!("DynamicTaskExecutor::run_manager, loop: active_caps={active_caps:?} active_count={active_count} running.len={} pending.len={} configured_limit={configured_limit} jobs.len={}",running.len(),pending.len(),jobs.len());
 
             Self::drain_finished(
                 &mut running,
@@ -798,7 +818,8 @@ impl DynamicTaskExecutor {
                 &mut jobs,
                 &mut active_caps,
                 &mut active_count,
-                global_limit.load(Ordering::Relaxed) as usize,
+                configured_limit,
+                &buffer_limits,
                 &mut pending_reset,
             );
 
@@ -814,8 +835,9 @@ impl DynamicTaskExecutor {
                     &mut jobs,
                     &mut active_caps,
                     &mut active_count,
-                    global_limit.load(Ordering::Relaxed) as usize,
+                    configured_limit,
                     None,
+                    &buffer_limits,
                 );
                 Self::try_spawn_ready_jobs(
                     &mut pending,
@@ -823,16 +845,18 @@ impl DynamicTaskExecutor {
                     &mut jobs,
                     &mut active_caps,
                     &mut active_count,
-                    Arc::clone(&global_limit),
+                    configured_limit,
                     &done_tx,
                     &cmd_tx_for_tasks,
                     current_exclusive_job_id,
+                    &buffer_limits,
                 );
             } else {
                 Self::force_resume_waiters_for_unwind(
                     &mut jobs,
                     &mut active_caps,
                     &mut active_count,
+                    &buffer_limits,
                 );
             }
 
@@ -893,7 +917,8 @@ impl DynamicTaskExecutor {
                                 &mut jobs,
                                 &mut active_caps,
                                 &mut active_count,
-                                global_limit.load(Ordering::Relaxed) as usize,
+                                configured_limit,
+                                &buffer_limits,
                                 &mut pending_reset,
                             );
                         }
@@ -905,12 +930,18 @@ impl DynamicTaskExecutor {
 
                 changed = limit_rx.changed(), if !limit_closed => {
                     match changed {
-                        Ok(()) => {
-                            let new_limit = *limit_rx.borrow_and_update();
-                            global_limit.store(new_limit as u64, Ordering::SeqCst);
-                        }
+                        Ok(()) => {}
                         Err(_) => {
                             limit_closed = true;
+                        }
+                    }
+                }
+
+                changed = global_capacity_rx.changed(), if !global_capacity_closed => {
+                    match changed {
+                        Ok(()) => {}
+                        Err(_) => {
+                            global_capacity_closed = true;
                         }
                     }
                 }
@@ -937,7 +968,8 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        global_limit: usize,
+        configured_limit: usize,
+        buffer_limits: &BufferLimits,
         pending_reset: &mut Option<PendingCudaReset>,
     ) {
         debug!("DynamicTaskExecutor::run_manager: manager cmd={cmd:?}");
@@ -952,11 +984,12 @@ impl DynamicTaskExecutor {
                     jobs,
                     active_caps,
                     active_count,
-                    global_limit,
+                    configured_limit,
                     None,
                     job_id,
                     reply,
                     cuda_activity_gate().is_paused(),
+                    buffer_limits,
                 );
             }
             ManagerCmd::RequestCudaReset { pause_ticket, source } => {
@@ -978,7 +1011,8 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        global_limit: usize,
+        configured_limit: usize,
+        buffer_limits: &BufferLimits,
         pending_reset: &mut Option<PendingCudaReset>,
     ) {
         use tokio::sync::mpsc::error::TryRecvError;
@@ -994,7 +1028,8 @@ impl DynamicTaskExecutor {
                     jobs,
                     active_caps,
                     active_count,
-                    global_limit,
+                    configured_limit,
+                    buffer_limits,
                     pending_reset,
                 ),
                 Err(TryRecvError::Empty) => break,
@@ -1012,10 +1047,11 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        global_limit: Arc<AtomicU64>,
+        configured_limit: usize,
         done_tx: &mpsc::UnboundedSender<JobId>,
         cmd_tx_for_tasks: &mpsc::UnboundedSender<ManagerCmd>,
         exclusive_job_id: Option<JobId>,
+        buffer_limits: &Arc<BufferLimits>,
     ) {
         debug!("DynamicTaskExecutor::try_spawn_ready_jobs: pending={pending:?}");
 
@@ -1024,19 +1060,20 @@ impl DynamicTaskExecutor {
             let mut idx = 0usize;
 
             while idx < pending.len() {
-                let can_spawn = {
+                let global_permit = {
                     let job = &pending[idx];
-                    Self::can_activate_now(
+                    Self::try_activate_now(
                         job.id,
                         *active_count,
-                        global_limit.load(Ordering::Relaxed) as usize,
+                        configured_limit,
                         active_caps,
                         job.total_parallel_cap(),
                         exclusive_job_id,
+                        buffer_limits,
                     )
                 };
 
-                if can_spawn {
+                if let Some(global_permit) = global_permit {
                     let job = pending.remove(idx).expect("pending index must be valid");
                     let job_id = job.id;
                     let cap = job.total_parallel_cap();
@@ -1046,6 +1083,7 @@ impl DynamicTaskExecutor {
                         LiveJob {
                             cap,
                             active: true,
+                            global_permit: Some(global_permit),
                             suspend_depth: 0,
                             waiting_resumes: Vec::new(),
                         },
@@ -1054,7 +1092,7 @@ impl DynamicTaskExecutor {
 
                     let done_tx = done_tx.clone();
                     let cmd_tx_for_tasks = cmd_tx_for_tasks.clone();
-                    let global_limit = Arc::clone(&global_limit);
+                    let buffer_limits = Arc::clone(buffer_limits);
 
                     debug!("DynamicTaskExecutor::try_spawn_ready_jobs: spawning job_id={job_id}");
 
@@ -1091,22 +1129,15 @@ impl DynamicTaskExecutor {
 
                         match feedback {
                             JobFeedback::Oom => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: OOM job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
-
-                                if global_limit.load(Ordering::Relaxed) > 16 {
-                                    global_limit.fetch_sub(1, Ordering::SeqCst);
-                                    thoosa_shared::buffer_limits::buffer_limits().on_oom();
-                                }
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: OOM job job_id={job_id}, global_limit={}",*buffer_limits.global_limit().borrow());
+                                buffer_limits.on_oom();
                             }
                             JobFeedback::Success => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
-                                if global_limit.load(Ordering::Relaxed) < 32 {
-                                    global_limit.fetch_add(1, Ordering::SeqCst);
-                                    thoosa_shared::buffer_limits::buffer_limits().on_ok();
-                                }
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job job_id={job_id}, global_limit={}",*buffer_limits.global_limit().borrow());
+                                buffer_limits.on_ok();
                             }
                             JobFeedback::Neutral => {
-                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
+                                debug!("DynamicTaskExecutor::try_spawn_ready_jobs: neutral job job_id={job_id}, global_limit={}",*buffer_limits.global_limit().borrow());
                             }
                         }
                     }.instrument(tracing::info_span!(
@@ -1149,7 +1180,7 @@ impl DynamicTaskExecutor {
     fn can_activate_now(
         job_id: JobId,
         active_count: usize,
-        global_limit: usize,
+        configured_limit: usize,
         active_caps: &BTreeMap<usize, usize>,
         new_cap: usize,
         exclusive_job_id: Option<JobId>,
@@ -1160,19 +1191,34 @@ impl DynamicTaskExecutor {
         }
 
         let next_total = active_count.saturating_add(1);
-        let current_group_cap = Self::current_group_cap(global_limit, active_caps);
+        let current_group_cap = Self::current_group_cap(configured_limit, active_caps);
 
         let min = current_group_cap.min(new_cap);
         let r = next_total <= min;
 
-        debug!("DynamicTaskExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} global_limit={global_limit} min={min} r={r}");
+        debug!("DynamicTaskExecutor::can_activate_now: job_id={job_id} active_count={active_count} next_total={next_total} configured_limit={configured_limit} min={min} r={r}");
         r
     }
 
-    fn current_group_cap(global_limit: usize, active_caps: &BTreeMap<usize, usize>) -> usize {
+    fn try_activate_now(
+        job_id: JobId,
+        active_count: usize,
+        configured_limit: usize,
+        active_caps: &BTreeMap<usize, usize>,
+        new_cap: usize,
+        exclusive_job_id: Option<JobId>,
+        buffer_limits: &BufferLimits,
+    ) -> Option<SyncExecutionPermit> {
+        if !Self::can_activate_now(job_id, active_count, configured_limit, active_caps, new_cap, exclusive_job_id) {
+            return None;
+        }
+        buffer_limits.try_acquire_sync_execution()
+    }
+
+    fn current_group_cap(configured_limit: usize, active_caps: &BTreeMap<usize, usize>) -> usize {
         match active_caps.first_key_value() {
-            Some((&smallest_active_cap, _)) => global_limit.min(smallest_active_cap),
-            None => global_limit,
+            Some((&smallest_active_cap, _)) => configured_limit.min(smallest_active_cap),
+            None => configured_limit,
         }
     }
 
@@ -1220,6 +1266,7 @@ impl DynamicTaskExecutor {
         if job.active {
             job.active = false;
             Self::remove_active(active_caps, active_count, job.cap);
+            job.global_permit.take();
         }
     }
 
@@ -1227,11 +1274,12 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        global_limit: usize,
+        configured_limit: usize,
         exclusive_job_id: Option<JobId>,
         job_id: JobId,
         reply: oneshot::Sender<()>,
         activity_paused: bool,
+        buffer_limits: &BufferLimits,
     ) {
         let Some(job) = jobs.get_mut(&job_id) else {
             let _ = reply.send(());
@@ -1252,6 +1300,7 @@ impl DynamicTaskExecutor {
             if job.suspend_depth == 0 {
                 if !job.active {
                     job.active = true;
+                    job.global_permit = Some(buffer_limits.force_acquire_sync_execution());
                     Self::add_active(active_caps, active_count, job.cap);
                 }
                 Self::flush_waiting_resumes(job);
@@ -1262,15 +1311,17 @@ impl DynamicTaskExecutor {
         if job.suspend_depth == 0 {
             if job.active {
                 Self::flush_waiting_resumes(job);
-            } else if Self::can_activate_now(
+            } else if let Some(global_permit) = Self::try_activate_now(
                 job_id,
                 *active_count,
-                global_limit,
+                configured_limit,
                 active_caps,
                 job.cap,
                 exclusive_job_id,
+                buffer_limits,
             ) {
                 job.active = true;
+                job.global_permit = Some(global_permit);
                 Self::add_active(active_caps, active_count, job.cap);
                 Self::flush_waiting_resumes(job);
             }
@@ -1280,16 +1331,18 @@ impl DynamicTaskExecutor {
         job.suspend_depth -= 1;
 
         if job.suspend_depth == 0
-            && Self::can_activate_now(
-            job_id,
-            *active_count,
-            global_limit,
-            active_caps,
-            job.cap,
-            exclusive_job_id,
-        )
+            && let Some(global_permit) = Self::try_activate_now(
+                job_id,
+                *active_count,
+                configured_limit,
+                active_caps,
+                job.cap,
+                exclusive_job_id,
+                buffer_limits,
+            )
         {
             job.active = true;
+            job.global_permit = Some(global_permit);
             Self::add_active(active_caps, active_count, job.cap);
             Self::flush_waiting_resumes(job);
         }
@@ -1299,6 +1352,7 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
+        buffer_limits: &BufferLimits,
     ) {
         // Resumes queued before the pause may not receive a fresh Resume command. Flush
         // only fully-unsuspended jobs so parent tasks that are already eligible to run
@@ -1307,6 +1361,7 @@ impl DynamicTaskExecutor {
             if job.suspend_depth == 0 && !job.waiting_resumes.is_empty() {
                 if !job.active {
                     job.active = true;
+                    job.global_permit = Some(buffer_limits.force_acquire_sync_execution());
                     Self::add_active(active_caps, active_count, job.cap);
                 }
                 Self::flush_waiting_resumes(job);
@@ -1318,8 +1373,9 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        global_limit: usize,
+        configured_limit: usize,
         exclusive_job_id: Option<JobId>,
+        buffer_limits: &BufferLimits,
     ) {
         for job in jobs.values_mut() {
             if job.active && !job.waiting_resumes.is_empty() {
@@ -1355,16 +1411,18 @@ impl DynamicTaskExecutor {
                     _ => continue,
                 };
 
-                if Self::can_activate_now(
+                if let Some(global_permit) = Self::try_activate_now(
                     job_id,
                     *active_count,
-                    global_limit,
+                    configured_limit,
                     active_caps,
                     cap,
                     exclusive_job_id,
+                    buffer_limits,
                 ) {
                     let job = jobs.get_mut(&job_id).expect("job must exist");
                     job.active = true;
+                    job.global_permit = Some(global_permit);
                     Self::add_active(active_caps, active_count, job.cap);
                     Self::flush_waiting_resumes(job);
                     progressed = true;
@@ -1770,6 +1828,7 @@ mod tests {
         let mut active_caps = BTreeMap::new();
         let mut active_count = 0;
         let mut pending_reset = None;
+        let limits = BufferLimits::new();
 
         DynamicTaskExecutor::process_command(
             ManagerCmd::RequestCudaReset {
@@ -1780,6 +1839,7 @@ mod tests {
             &mut active_caps,
             &mut active_count,
             4,
+            &limits,
             &mut pending_reset,
         );
 
@@ -1819,6 +1879,45 @@ mod tests {
 
         let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
         exec.shutdown().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_shared_global_parallelism_is_observed_across_executors() -> Result<(), ThoError> {
+        let limits = Arc::new(BufferLimits::new());
+        let shared_limit = *limits.global_limit().borrow();
+        let reset_fn: ResetFn = Arc::new(|_| async { Ok(()) }.boxed());
+        let exec_a = Arc::new(DynamicTaskExecutor::new_inner_with_buffer_limits(64, NonZeroUsize::new(32).unwrap(), 0, Arc::clone(&reset_fn), Arc::clone(&limits)));
+        let exec_b = Arc::new(DynamicTaskExecutor::new_inner_with_buffer_limits(64, NonZeroUsize::new(32).unwrap(), 1, reset_fn, limits));
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_seen = Arc::new(AtomicUsize::new(0));
+
+        let results = futures_util::stream::iter(0..shared_limit * 2)
+            .map(|idx| {
+                let exec = if idx % 2 == 0 { Arc::clone(&exec_a) } else { Arc::clone(&exec_b) };
+                let active = Arc::clone(&active);
+                let max_seen = Arc::clone(&max_seen);
+                async move {
+                    exec.submit(usize::MAX, async move {
+                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                        max_seen.fetch_max(now, Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(30)).await;
+                        active.fetch_sub(1, Ordering::SeqCst);
+                        Ok::<_, ThoError>(())
+                    }, None).await
+                }
+            })
+            .buffer_unordered(shared_limit * 2)
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        assert_eq!(results.len(), shared_limit * 2);
+        assert!(max_seen.load(Ordering::SeqCst) <= shared_limit);
+
+        let exec_a = Arc::try_unwrap(exec_a).expect("all Arc clones must be dropped");
+        let exec_b = Arc::try_unwrap(exec_b).expect("all Arc clones must be dropped");
+        exec_a.shutdown().await;
+        exec_b.shutdown().await;
         Ok(())
     }
 

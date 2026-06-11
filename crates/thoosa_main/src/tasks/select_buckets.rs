@@ -272,7 +272,6 @@ where
         let energies = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            crate::buffer_limits::buffer_limits().select_buckets_motifs_buffer_limit.receiver(),
             StreamBuffering::Unordered,
             "SelectBucketsStage::preload_bucket_mean_energies",
         )).await;
@@ -596,7 +595,6 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(),
             StreamBuffering::Unordered,
             "SelectBucketsStage::run",
         )).await;

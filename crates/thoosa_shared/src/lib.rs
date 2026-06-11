@@ -2386,7 +2386,6 @@ mod shared_tests {
     async fn test_collect_futures_with_progress_waits_for_cuda_activity_gate() {
         let started = Arc::new(AtomicUsize::new(0));
         let pause_ticket = super::cuda_activity_gate().request_pause();
-        let (_buffer_limit_tx, buffer_limit_rx) = tokio::sync::watch::channel(4);
 
         let collect = {
             let started = Arc::clone(&started);
@@ -2400,7 +2399,6 @@ mod shared_tests {
                         }
                     }),
                     4,
-                    Arc::new(buffer_limit_rx),
                     StreamBuffering::Unordered,
                     "test_collect_futures_with_progress_waits_for_cuda_activity_gate",
                 )
