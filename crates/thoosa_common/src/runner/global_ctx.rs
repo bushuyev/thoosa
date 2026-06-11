@@ -8,6 +8,7 @@ use std::future::ready;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use futures_util::future::BoxFuture;
 use thoosa_shared::traits::CachableIdTr;
 use thoosa_shared::{async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock, ThoError};
@@ -293,7 +294,7 @@ impl GlobalCtx {
         descr: &str,
     ) -> Result<(), ThoError> {
         assert_ne!(tho_device_idx, 0);
-        debug!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr}");
+        info!("GlobalCtx::drop_device: tho_device_idx={tho_device_idx} descr={descr}");
         let maps = self.caches_snapshot("GlobalCtx::drop_device: timed out waiting for caches read lock");
         // let caches_lock = perf_log!(sync_read_lock!(self.caches));
         let dump_eta_guard = CollectEtaInvocationGuard::new(&format!("drop_device{descr}"), maps.len(), 1);
@@ -370,7 +371,9 @@ impl GlobalCtx {
     pub async fn copy_ctx_mut<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockWriteGuard<'_, CopyCtx> {
         let device:ThoDevice = device.into();
         let gpu_device_ordinal = device.gpu_ordinal();
-        self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).try_write().expect("Should be able to write copy ctx")
+        let rw_lock = self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}"));
+        info!("GlobalCtx::copy_ctx_mut: waiting on rw_lock");
+        tokio::time::timeout(Duration::from_secs(10), rw_lock.write()).await.expect("Should be able to write copy ctx")
     }
 
 }
