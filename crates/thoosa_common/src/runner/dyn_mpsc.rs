@@ -13,7 +13,7 @@ use std::{
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use log::{error, info};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tokio::{
     runtime::Handle,
     sync::{mpsc, oneshot, watch},
@@ -36,6 +36,7 @@ enum JobFeedback {
 }
 
 type JobFuture = Pin<Box<dyn Future<Output = JobFeedback> + Send + 'static>>;
+type PendingJobFailure = Box<dyn FnOnce(ThoError) + Send + 'static>;
 type JobId = u64;
 type ResetFn = Arc<dyn Fn(usize /* tho_device */) -> BoxFuture<'static, Result<(), ThoError>> + Sync + Send + 'static>;
 
@@ -54,6 +55,7 @@ struct CurrentJob {
 struct Job {
     id: JobId,
     fut: JobFuture,
+    pending_failure: Option<PendingJobFailure>,
     /// Maximum number of *other* jobs allowed to run together with this one.
     ///
     /// Examples:
@@ -64,13 +66,14 @@ struct Job {
 }
 
 impl Job {
-    fn new<F>(id: JobId, max_other_parallel: usize, fut: F) -> Self
+    fn new<F>(id: JobId, max_other_parallel: usize, fut: F, pending_failure: PendingJobFailure) -> Self
     where
         F: Future<Output = JobFeedback> + Send + 'static,
     {
         Self {
             id,
             fut: Box::pin(fut),
+            pending_failure: Some(pending_failure),
             max_other_parallel,
         }
     }
@@ -93,6 +96,29 @@ impl Job {
 
         r
     }
+
+    fn fail_pending(mut self, error: ThoError) {
+        debug!("DynamicTaskExecutor, Job::fail_pending: job_id={} error={error:?}", self.id);
+        if let Some(pending_failure) = self.pending_failure.take() {
+            pending_failure(error);
+        }
+    }
+}
+
+struct JobResultSender<T> {
+    tx: Mutex<Option<oneshot::Sender<Result<T, ThoError>>>>,
+}
+
+impl<T> JobResultSender<T> {
+    fn new(tx: oneshot::Sender<Result<T, ThoError>>) -> Self {
+        Self { tx: Mutex::new(Some(tx)) }
+    }
+
+    fn send(&self, result: Result<T, ThoError>) {
+        if let Some(tx) = self.tx.lock().take() {
+            let _ = tx.send(result);
+        }
+    }
 }
 
 impl Debug for Job {
@@ -111,7 +137,8 @@ struct LiveJob {
     /// Logical scheduler-active state. A suspended job is still physically alive,
     /// but is not counted against scheduling capacity.
     active: bool,
-    global_permit: Option<SyncExecutionPermit>,
+    /// Held for its Drop implementation: releasing it returns one slot to the shared limiter.
+    sync_execution_permit: Option<SyncExecutionPermit>,
     suspend_depth: usize,
     waiting_resumes: Vec<oneshot::Sender<()>>,
 }
@@ -387,6 +414,10 @@ impl DynamicTaskExecutor {
         )
     }
 
+    fn context_reset_error() -> ThoError {
+        ThoError::new_with_cause("Resetting cuda context", Cause::ContextReset)
+    }
+
     async fn wait_until_accepting(&self, parent: Option<&CurrentJob>) -> Result<(), ThoError> {
         let mut accepting_rx = self.accepting_tx.subscribe();
 
@@ -542,13 +573,14 @@ impl DynamicTaskExecutor {
             }
 
             let (result_tx, result_rx) = oneshot::channel::<Result<T, ThoError>>();
+            let result_sender = Arc::new(JobResultSender::new(result_tx));
             let exclusive_job_id = Arc::clone(&self.exclusive_job_id);
             let rerun_job_id = job_id_to_rerun;
             let accepting_tx = self.accepting_tx.clone();
             let cmd_tx = self.cmd_tx.clone();
             let tho_device_idx = self.tho_device_idx;
 
-
+            let result_sender_for_job = Arc::clone(&result_sender);
             let wrapped = async move {
                 debug!("DynamicTaskExecutor::submit: job_id={job_id} waiting on wrapped fut");
                 let result = track_await(fut).await;
@@ -582,7 +614,7 @@ impl DynamicTaskExecutor {
                             }
                         }
 
-                        let _ = result_tx.send(Err(ThoError::new_with_cause("Resetting cuda context", Cause::ContextReset)));
+                        result_sender.send(Err(Self::context_reset_error()));
                         return JobFeedback::Neutral;
                     } else {
                         warn!("DynamicTaskExecutor::submit: job_id={job_id} reset requested on CPU/test executor");
@@ -617,7 +649,7 @@ impl DynamicTaskExecutor {
 
                 debug!("DynamicTaskExecutor::submit: job_id={job_id} wrapped result={result:?}");
 
-                let _ = result_tx.send(result);
+                result_sender.send(result);
 
                 if is_oom {
                     JobFeedback::Oom
@@ -628,7 +660,8 @@ impl DynamicTaskExecutor {
                 }
             };
 
-            send_permit.send(Job::new(job_id, max_other_parallel, wrapped));
+            let pending_failure = Box::new(move |error| result_sender_for_job.send(Err(error)));
+            send_permit.send(Job::new(job_id, max_other_parallel, wrapped, pending_failure));
             drop(accept_guard);
 
             debug!("DynamicTaskExecutor::submit: job_id={job_id} submitted job_id={job_id}");
@@ -651,7 +684,7 @@ impl DynamicTaskExecutor {
         tho_device_idx: usize,
         reset_fn: &ResetFn,
         accepting_tx: watch::Sender<bool>,
-        accept_gate: Arc<tokio::sync::RwLock<()>>,
+        accept_guard: tokio::sync::OwnedRwLockWriteGuard<()>,
         exclusive_job_id: Arc<RwLock<Option<JobId>>>,
         pending_reset: PendingCudaReset,
     ) {
@@ -684,9 +717,8 @@ impl DynamicTaskExecutor {
             exclusive_job_id,
             pause_ticket,
         };
-        // Hold the write side while resetting so new submissions cannot pass the
-        // read-side accept gate until reset_fn has completed and the gate is reopened.
-        let _accept_guard = track_await(Arc::clone(&accept_gate).write_owned()).await;
+        // Declared after ResetPauseGuard so it is released before the gate is reopened.
+        let _accept_guard = accept_guard;
 
         if tho_device_idx > 0 {
             debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
@@ -761,6 +793,7 @@ impl DynamicTaskExecutor {
         let mut cmd_closed = false;
         let mut sync_capacity_closed = false;
         let mut pending_reset = None::<PendingCudaReset>;
+        let mut reset_accept_guard = None::<tokio::sync::OwnedRwLockWriteGuard<()>>;
 
         loop {
             let max_parallel_jobs = *sync_capacity_rx.borrow_and_update();
@@ -787,6 +820,15 @@ impl DynamicTaskExecutor {
                 &buffer_limits,
                 &mut pending_reset,
             );
+
+            if pending_reset.is_some() {
+                if reset_accept_guard.is_none() {
+                    // Block submissions before draining the channel, otherwise a sender that
+                    // already passed the acceptance checks could enqueue after the purge.
+                    reset_accept_guard = Some(track_await(Arc::clone(&accept_gate).write_owned()).await);
+                }
+                Self::purge_pending_jobs(&mut pending, &mut rx, &mut input_closed);
+            }
 
             // While reset is pending, no queued jobs are started. Already-running jobs
             // continue to completion, and suspended parents are allowed to resume so they
@@ -833,7 +875,7 @@ impl DynamicTaskExecutor {
                     tho_device_idx,
                     &reset_fn,
                     accepting_tx.clone(),
-                    Arc::clone(&accept_gate),
+                    reset_accept_guard.take().expect("reset submission gate must be held"),
                     Arc::clone(&exclusive_job_id),
                     pending_reset,
                 )).instrument(tracing::info_span!(
@@ -997,6 +1039,40 @@ impl DynamicTaskExecutor {
         }
     }
 
+    fn purge_pending_jobs(
+        pending: &mut VecDeque<Job>,
+        rx: &mut mpsc::Receiver<Job>,
+        input_closed: &mut bool,
+    ) {
+        use tokio::sync::mpsc::error::TryRecvError;
+
+        let mut purged = 0usize;
+        while let Some(job) = pending.pop_front() {
+            job.fail_pending(Self::context_reset_error());
+            purged += 1;
+        }
+
+        if !*input_closed {
+            loop {
+                match rx.try_recv() {
+                    Ok(job) => {
+                        job.fail_pending(Self::context_reset_error());
+                        purged += 1;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => {
+                        *input_closed = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if purged > 0 {
+            debug!("DynamicTaskExecutor::purge_pending_jobs: purged={purged}");
+        }
+    }
+
     fn try_spawn_ready_jobs(
         pending: &mut VecDeque<Job>,
         running: &mut JoinSet<()>,
@@ -1016,7 +1092,7 @@ impl DynamicTaskExecutor {
             let mut idx = 0usize;
 
             while idx < pending.len() {
-                let global_permit = {
+                let sync_execution_permit = {
                     let job = &pending[idx];
                     Self::try_activate_now(
                         job.id,
@@ -1029,7 +1105,7 @@ impl DynamicTaskExecutor {
                     )
                 };
 
-                if let Some(global_permit) = global_permit {
+                if let Some(sync_execution_permit) = sync_execution_permit {
                     let job = pending.remove(idx).expect("pending index must be valid");
                     let job_id = job.id;
                     let cap = job.total_parallel_cap();
@@ -1039,7 +1115,7 @@ impl DynamicTaskExecutor {
                         LiveJob {
                             cap,
                             active: true,
-                            global_permit: Some(global_permit),
+                            sync_execution_permit: Some(sync_execution_permit),
                             suspend_depth: 0,
                             waiting_resumes: Vec::new(),
                         },
@@ -1222,7 +1298,7 @@ impl DynamicTaskExecutor {
         if job.active {
             job.active = false;
             Self::remove_active(active_caps, active_count, job.cap);
-            job.global_permit.take();
+            job.sync_execution_permit.take();
         }
     }
 
@@ -1256,7 +1332,7 @@ impl DynamicTaskExecutor {
             if job.suspend_depth == 0 {
                 if !job.active {
                     job.active = true;
-                    job.global_permit = Some(buffer_limits.force_acquire_sync_execution());
+                    job.sync_execution_permit = Some(buffer_limits.force_acquire_sync_execution());
                     Self::add_active(active_caps, active_count, job.cap);
                 }
                 Self::flush_waiting_resumes(job);
@@ -1267,7 +1343,7 @@ impl DynamicTaskExecutor {
         if job.suspend_depth == 0 {
             if job.active {
                 Self::flush_waiting_resumes(job);
-            } else if let Some(global_permit) = Self::try_activate_now(
+            } else if let Some(sync_execution_permit) = Self::try_activate_now(
                 job_id,
                 *active_count,
                 max_parallel_jobs,
@@ -1277,7 +1353,7 @@ impl DynamicTaskExecutor {
                 buffer_limits,
             ) {
                 job.active = true;
-                job.global_permit = Some(global_permit);
+                job.sync_execution_permit = Some(sync_execution_permit);
                 Self::add_active(active_caps, active_count, job.cap);
                 Self::flush_waiting_resumes(job);
             }
@@ -1287,7 +1363,7 @@ impl DynamicTaskExecutor {
         job.suspend_depth -= 1;
 
         if job.suspend_depth == 0
-            && let Some(global_permit) = Self::try_activate_now(
+            && let Some(sync_execution_permit) = Self::try_activate_now(
                 job_id,
                 *active_count,
                 max_parallel_jobs,
@@ -1298,7 +1374,7 @@ impl DynamicTaskExecutor {
             )
         {
             job.active = true;
-            job.global_permit = Some(global_permit);
+            job.sync_execution_permit = Some(sync_execution_permit);
             Self::add_active(active_caps, active_count, job.cap);
             Self::flush_waiting_resumes(job);
         }
@@ -1317,7 +1393,7 @@ impl DynamicTaskExecutor {
             if job.suspend_depth == 0 && !job.waiting_resumes.is_empty() {
                 if !job.active {
                     job.active = true;
-                    job.global_permit = Some(buffer_limits.force_acquire_sync_execution());
+                    job.sync_execution_permit = Some(buffer_limits.force_acquire_sync_execution());
                     Self::add_active(active_caps, active_count, job.cap);
                 }
                 Self::flush_waiting_resumes(job);
@@ -1367,7 +1443,7 @@ impl DynamicTaskExecutor {
                     _ => continue,
                 };
 
-                if let Some(global_permit) = Self::try_activate_now(
+                if let Some(sync_execution_permit) = Self::try_activate_now(
                     job_id,
                     *active_count,
                     max_parallel_jobs,
@@ -1378,7 +1454,7 @@ impl DynamicTaskExecutor {
                 ) {
                     let job = jobs.get_mut(&job_id).expect("job must exist");
                     job.active = true;
-                    job.global_permit = Some(global_permit);
+                    job.sync_execution_permit = Some(sync_execution_permit);
                     Self::add_active(active_caps, active_count, job.cap);
                     Self::flush_waiting_resumes(job);
                     progressed = true;
@@ -1459,6 +1535,93 @@ mod tests {
                 msg: "reset me".into(),
             },
         )
+    }
+
+    fn pending_test_job(job_id: JobId) -> (Job, oneshot::Receiver<Result<(), ThoError>>) {
+        let (result_tx, result_rx) = oneshot::channel();
+        let result_sender = Arc::new(JobResultSender::new(result_tx));
+        let result_sender_for_failure = Arc::clone(&result_sender);
+        let job = Job::new(
+            job_id,
+            usize::MAX,
+            async move {
+                result_sender.send(Ok(()));
+                JobFeedback::Success
+            },
+            Box::new(move |error| result_sender_for_failure.send(Err(error))),
+        );
+        (job, result_rx)
+    }
+
+    #[tokio::test]
+    async fn test_purge_pending_jobs_sends_context_reset_to_all_results() {
+        let (queued_tx, mut queued_rx) = mpsc::channel(2);
+        let (pending_job, pending_result_rx) = pending_test_job(1);
+        let (channel_job, channel_result_rx) = pending_test_job(2);
+        let mut pending = VecDeque::from([pending_job]);
+        queued_tx.send(channel_job).await.expect("channel must be open");
+        drop(queued_tx);
+        let mut input_closed = false;
+
+        DynamicTaskExecutor::purge_pending_jobs(&mut pending, &mut queued_rx, &mut input_closed);
+
+        assert!(pending.is_empty());
+        assert!(input_closed);
+        for result_rx in [pending_result_rx, channel_result_rx] {
+            let result = result_rx.await.expect("purged job must send a result");
+            let Err(ThoosaError { what: Cause::ContextReset, .. }) = result else {
+                panic!("unexpected purge result: {result:?}");
+            };
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_pending_job_is_purged_before_reset() -> Result<(), ThoError> {
+        cuda_activity_gate().wait_if_paused().await;
+        let exec = Arc::new(DynamicTaskExecutor::new(8));
+        let pending_ran = Arc::new(AtomicBool::new(false));
+        let (running_started_tx, running_started_rx) = oneshot::channel();
+        let (release_running_tx, release_running_rx) = oneshot::channel();
+
+        let running = {
+            let exec = Arc::clone(&exec);
+            tokio::spawn(async move {
+                exec.submit(0, async move {
+                    let _ = running_started_tx.send(());
+                    let _ = release_running_rx.await;
+                    Ok::<_, ThoError>(())
+                }, None).await
+            })
+        };
+        running_started_rx.await.expect("exclusive job must start");
+
+        let pending = {
+            let exec = Arc::clone(&exec);
+            let pending_ran = Arc::clone(&pending_ran);
+            tokio::spawn(async move {
+                exec.submit(usize::MAX, async move {
+                    pending_ran.store(true, Ordering::SeqCst);
+                    Ok::<_, ThoError>(())
+                }, None).await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        exec.request_cuda_reset();
+
+        let pending_result = tokio::time::timeout(Duration::from_secs(2), pending).await.expect("pending job must be purged")?;
+        let Err(ThoosaError { what: Cause::ContextReset, .. }) = pending_result else {
+            panic!("unexpected pending result: {pending_result:?}");
+        };
+        assert!(!pending_ran.load(Ordering::SeqCst));
+
+        let _ = release_running_tx.send(());
+        running.await??;
+        tokio::time::timeout(Duration::from_secs(2), cuda_activity_gate().wait_if_paused()).await.expect("CPU reset must complete");
+
+        let exec = Arc::try_unwrap(exec).expect("all Arc clones must be dropped");
+        exec.shutdown().await;
+        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
