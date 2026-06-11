@@ -20,7 +20,6 @@ use crate as thoosa_common;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::buffer_limits::buffer_limits;
 
 // One contiguous byte range in the source/destination tensor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -319,7 +318,6 @@ pub async fn copy_d2h_from_ptr(
                 }
             }),
             chunk_groups_len,
-            buffer_limits().copy_concurrency.receiver(),
             StreamBuffering::Unordered,
             "cuda_utils::copy_d2h_from_ptr",
         )).await
@@ -474,7 +472,6 @@ pub async fn copy_h2d_from_ptr(
                 }
             }),
             chunk_groups_len,
-            buffer_limits().copy_concurrency.receiver(),
             StreamBuffering::Unordered,
             "cuda_utils::copy_h2d_from_ptr",
         )).await

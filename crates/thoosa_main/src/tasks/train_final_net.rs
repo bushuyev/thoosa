@@ -327,7 +327,6 @@ where
                 let (outputs, labels) = track_await(collect_futures_with_progress(
                     futures,
                     batch_len,
-                    crate::buffer_limits::buffer_limits().logits_resources_batch_load_buffered_limit.receiver(),
                     StreamBuffering::Ordered,
                     "LogitsResourcesBatch::build_batch_stream",
                 )).await

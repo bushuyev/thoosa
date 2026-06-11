@@ -247,7 +247,6 @@ where
         let run_configs__stacked_motifs = track_await(collect_futures_with_progress(
             futures,
             find_motifs_run_configs_len,
-            crate::buffer_limits::buffer_limits().load_stacked_motifs_limit.receiver(),
             StreamBuffering::Ordered,
             "SelectMotifsStage::load_stacked_motifs",
         )).await
@@ -310,7 +309,6 @@ where
         let motif_stats = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            crate::buffer_limits::buffer_limits().stacked_motifs_loader_run.receiver(),
             StreamBuffering::Unordered,
             "SelectMotifsStage::clc_stacked_motifs_statistics",
         )).await
@@ -443,7 +441,6 @@ where
         let _ = track_await(collect_futures_with_progress(
             futures,
             run_configs__stacked_motifs_len,
-            crate::buffer_limits::buffer_limits().select_motifs_stage_find_motifs_buffer_unordered_limit.receiver(),
             StreamBuffering::Unordered,
             "SelectMotifsStage::extend_motifs_for_run_config",
         )).await;
@@ -640,7 +637,6 @@ where
             track_await(collect_futures_with_progress(
                 futures,
                 channel_masks_dists_ids_len,
-                crate::buffer_limits::buffer_limits().select_motifs_stage_find_motifs_buffer_unordered_limit.receiver(),
                 StreamBuffering::Unordered,
                 "SelectMotifsStage::extend_with_one_find_run_channel_masks",
             )).await
@@ -717,7 +713,7 @@ where
                 Ok::<_, ThoError>(())
             }
         });
-        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(), StreamBuffering::Unordered, "ExtendMotifsStage::run")).await;
+        let _ = track_await(collect_futures_with_progress(futures, run_configs_len, StreamBuffering::Unordered, "ExtendMotifsStage::run")).await;
         Ok(Arc::new(DevicesWrap::wrap(ExtendMotifsSavableResult::new())))
     }
 }

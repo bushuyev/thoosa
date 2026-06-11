@@ -391,7 +391,6 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             motifs_len,
-            crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(),
             StreamBuffering::Unordered,
             "filter_motifs_by_criteria",
         )).await
@@ -474,7 +473,6 @@ where
         let run_results = track_await(collect_futures_with_progress(
             futures,
             run_configs_len,
-            crate::buffer_limits::buffer_limits().select_motifs_stage_run_configs.receiver(),
             StreamBuffering::Unordered,
             "SelectMotifsStage::run",
         )).await;

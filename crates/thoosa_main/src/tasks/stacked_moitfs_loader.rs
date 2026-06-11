@@ -242,7 +242,6 @@ where
         let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            crate::buffer_limits::buffer_limits().stacked_motifs_loader_run.receiver(),
             StreamBuffering::Ordered,
             "StackedMotifsLoader::run",
         )).await
