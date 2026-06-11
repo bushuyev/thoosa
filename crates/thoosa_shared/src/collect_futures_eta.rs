@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
+use crate::buffer_limits::FutureLimitProgressEntry;
 use crate::device_stats::ThoDeviceStats;
 use crate::{perf_log, sync_mutex_lock};
 
@@ -112,6 +113,7 @@ struct CollectEtaState {
     oom_all_failed: u64,
     oom_success: u64,
     device_stats: Option<ThoDeviceStats>,
+    futures_limits: Vec<FutureLimitProgressEntry>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -122,6 +124,8 @@ pub struct CollectEtaProgressState {
     pub oom_success: u64,
     #[serde(default)]
     pub device_stats: Option<ThoDeviceStats>,
+    #[serde(default)]
+    pub futures_limits: Vec<FutureLimitProgressEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -163,6 +167,7 @@ impl CollectEtaTracker {
             oom_all_failed: 0,
             oom_success: 0,
             device_stats: None,
+            futures_limits: vec![],
         });
         Self {
             next_id: AtomicU64::new(1),
@@ -277,6 +282,18 @@ impl CollectEtaTracker {
         let _ = self.progress_tx.send_replace(progress_state);
     }
 
+    fn set_future_limits(&self, futures_limits: Vec<FutureLimitProgressEntry>) {
+        let progress_state = {
+            let mut state = self.state_guard();
+            if state.futures_limits == futures_limits {
+                return;
+            }
+            state.futures_limits = futures_limits;
+            self.build_snapshot(&state, Instant::now()).progress_state
+        };
+        let _ = self.progress_tx.send_replace(progress_state);
+    }
+
 
     fn build_snapshot(&self, state: &CollectEtaState, now: Instant) -> CollectEtaSnapshot {
         let mut snapshot = CollectEtaSnapshot {
@@ -287,6 +304,7 @@ impl CollectEtaTracker {
                 oom_all_failed: state.oom_all_failed,
                 oom_success: state.oom_success,
                 device_stats: state.device_stats,
+                futures_limits: state.futures_limits.clone(),
             },
             ..Default::default()
         };
@@ -412,6 +430,10 @@ pub fn collect_eta_set_device_stats(device_stats: Option<ThoDeviceStats>) {
     COLLECT_ETA_TRACKER.set_device_stats(device_stats);
 }
 
+pub fn collect_eta_set_future_limits(futures_limits: Vec<FutureLimitProgressEntry>) {
+    COLLECT_ETA_TRACKER.set_future_limits(futures_limits);
+}
+
 pub(crate) fn collect_eta_maybe_log(force: bool) {
     let _ = COLLECT_ETA_TRACKER.maybe_log(force);
 }
@@ -463,6 +485,7 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{CollectEtaProgressInvocation, CollectEtaTracker, COLLECT_ETA_LOG_INTERVAL};
+    use crate::buffer_limits::{ENTRY, FutureLimitProgressEntry};
     use crate::device_stats::ThoDeviceStats;
     use std::time::{Duration, Instant};
 
@@ -612,6 +635,22 @@ mod tests {
         tracker.set_device_stats(Some(device_stats));
 
         assert_eq!(rx.borrow().device_stats, Some(device_stats));
+    }
+
+    #[test]
+    fn test_progress_state_tracks_future_limits() {
+        let tracker = CollectEtaTracker::new();
+        let rx = tracker.subscribe_progress();
+        let entries = vec![FutureLimitProgressEntry {
+            descr: ENTRY.to_string(),
+            limit: 4,
+            registrations: 1,
+            weight: 1,
+        }];
+
+        tracker.set_future_limits(entries.clone());
+
+        assert_eq!(rx.borrow().futures_limits, entries);
     }
 
     #[test]

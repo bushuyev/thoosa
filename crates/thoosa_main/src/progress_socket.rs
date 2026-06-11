@@ -236,6 +236,7 @@ mod tests {
     use std::process;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
+    use thoosa_shared::buffer_limits::{ENTRY, FutureLimitProgressEntry};
     use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState};
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::sync::watch;
@@ -269,6 +270,12 @@ mod tests {
             oom_all_failed: 1,
             oom_success: 0,
             device_stats: None,
+            futures_limits: vec![FutureLimitProgressEntry {
+                descr: ENTRY.to_string(),
+                limit: 4,
+                registrations: 1,
+                weight: 1,
+            }],
         })?;
 
         let second = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("second line");
@@ -283,6 +290,12 @@ mod tests {
         );
         assert_eq!(second.started_at_unix_ms, 111);
         assert_eq!(second.oom_all_failed, 1);
+        assert_eq!(second.futures_limits, vec![FutureLimitProgressEntry {
+            descr: ENTRY.to_string(),
+            limit: 4,
+            registrations: 1,
+            weight: 1,
+        }]);
 
         snapshot_tx.send(CollectEtaProgressState {
             invocations: vec![
@@ -301,6 +314,7 @@ mod tests {
             oom_all_failed: 2,
             oom_success: 0,
             device_stats: None,
+            futures_limits: vec![],
         })?;
 
         let third = timeout(Duration::from_secs(2), lines.next_line()).await??.expect("third line");
