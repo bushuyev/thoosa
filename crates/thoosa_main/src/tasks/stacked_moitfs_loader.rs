@@ -30,7 +30,6 @@ use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::ChannelsMotifsSlices;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
-use crate::buffer_limits::STACKED_MOTIFS_LOADER_RUN;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, DummyData)]
@@ -243,7 +242,7 @@ where
         let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
             motif_ids_len,
-            STACKED_MOTIFS_LOADER_RUN,
+            crate::buffer_limits::buffer_limits().stacked_motifs_loader_run.receiver(),
             StreamBuffering::Ordered,
             "StackedMotifsLoader::run",
         )).await

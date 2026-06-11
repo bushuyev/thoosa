@@ -493,7 +493,7 @@ pub(crate) async fn run_all(
             let _ = track_await(collect_futures_with_progress(
                 futures,
                 labels_len,
-                16,
+                thoosa_common::buffer_limits::buffer_limits().bird_clef_labels_buffer_limit.receiver(),
                 StreamBuffering::Unordered,
                 "bird_clef_labels",
             )).await;

@@ -540,7 +540,7 @@ where
             let results = track_await(collect_futures_with_progress(
                 futures,
                 labels_train_and_valid_sets_len,
-                crate::buffer_limits::TRAIN_LABEL_NETS_RUN_BUFFER_UNORDERED_LIMIT,
+                crate::buffer_limits::buffer_limits().train_label_nets_run_buffer_unordered_limit.receiver(),
                 StreamBuffering::Unordered,
                 "train labels",
             )).await;
@@ -724,7 +724,7 @@ where
                 });
 
                 let (x_1_wrapped, x_0_wrapped) = track_await(futures::stream::iter(futures)
-                    .buffered(crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT)
+                    .buffered(crate::buffer_limits::buffer_limits().train_label_nets_resources_batch_load_buffered_limit.current())
                     .try_collect::<Vec<_>>()).await?
                     .into_iter()
                     .fold((vec![], vec![]), |mut a, v| {
@@ -736,7 +736,7 @@ where
                 // let (x_1_wrapped, x_0_wrapped) = collect_futures_with_progress(
                 //     futures,
                 //     batch_len,
-                //     crate::buffer_limits::TRAIN_LABEL_NETS_RESOURCES_BATCH_LOAD_BUFFERED_LIMIT,
+                //     crate::buffer_limits::buffer_limits().train_label_nets_resources_batch_load_buffered_limit.receiver(),
                 //     StreamBuffering::Ordered,
                 //     "ResourcesBatch::build_batch_stream",
                 // )

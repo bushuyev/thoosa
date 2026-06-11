@@ -336,7 +336,7 @@ where
         let loaded_motif_nets: Vec<(u32, Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>)> = track_await(collect_futures_with_progress(
             futures,
             trained_nets_len,
-            crate::buffer_limits::APPLY_MOTIF_NETS_NEW_BUFFERED_LIMIT,
+            crate::buffer_limits::buffer_limits().apply_motif_nets_new_buffered_limit.receiver(),
             StreamBuffering::Ordered, //to keep same order as in trained_nets_ids
             "ApplyMotifNets::new/load motif nets",
         )).await
@@ -554,7 +554,7 @@ where
         let motif_nets_applied = track_await(collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
-            crate::buffer_limits::APPLY_MOTIF_NETS_RUN_BUFFERED_LIMIT,
+            crate::buffer_limits::buffer_limits().apply_motif_nets_run_buffered_limit.receiver(),
             StreamBuffering::Unordered, //it's sorted in BatchAppliedMotifNets
             "ApplyMotifNets::run",
         )).await
