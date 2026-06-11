@@ -69,6 +69,8 @@ pub mod macros;
 pub mod rayon_pool;
 pub mod tracked_await;
 pub mod collect_futures_with_progress;
+pub mod buffer_limits;
+
 pub use collect_futures_with_progress::collect_futures_with_progress;
 
 struct GroupSlicesBuilder<T> {
@@ -2365,7 +2367,7 @@ mod shared_tests {
     use crate::{
         add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
         make_combos, parse_range_str, snake_to_camel, test_utils, Cause,
-        RangeOrValue, ResourceType, ThoError, StreamBuffering,
+        RangeOrValue, ResourceType, StreamBuffering, ThoError,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
