@@ -5,7 +5,6 @@ use mockall::automock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::ready;
-use std::num::NonZeroUsize;
 use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
@@ -89,7 +88,7 @@ impl GlobalCtx {
         Self {
             num_devices,
             executors: (0..num_devices).map(|tho_device_idx| {
-                DynamicTaskExecutor::new_with_reset_hook(1024, NonZeroUsize::new(32).unwrap(), tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+                DynamicTaskExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
             })
             .collect(),
 

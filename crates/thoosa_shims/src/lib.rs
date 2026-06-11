@@ -5,3 +5,4 @@ pub mod stream;
 pub mod device_stats;
 pub mod inference_mode;
 pub mod quantized_linear;
+pub mod cpp_log;
