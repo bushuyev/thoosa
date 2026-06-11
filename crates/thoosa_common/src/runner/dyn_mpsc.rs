@@ -1095,12 +1095,14 @@ impl DynamicTaskExecutor {
 
                                 if global_limit.load(Ordering::Relaxed) > 16 {
                                     global_limit.fetch_sub(1, Ordering::SeqCst);
+                                    thoosa_shared::buffer_limits::buffer_limits().on_oom();
                                 }
                             }
                             JobFeedback::Success => {
                                 debug!("DynamicTaskExecutor::try_spawn_ready_jobs: success job job_id={job_id}, global_limit={}",global_limit.load(Ordering::Relaxed));
                                 if global_limit.load(Ordering::Relaxed) < 32 {
                                     global_limit.fetch_add(1, Ordering::SeqCst);
+                                    thoosa_shared::buffer_limits::buffer_limits().on_ok();
                                 }
                             }
                             JobFeedback::Neutral => {
