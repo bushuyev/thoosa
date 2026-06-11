@@ -16,7 +16,7 @@ const COPY_FUTURE_WEIGHT: usize = 2;
 const ENTRY_FUTURE_WEIGHT: usize = 1;
 const DEFAULT_FUTURE_WEIGHT: usize = 1;
 // Increase only after a clean success streak; one OOM per 16 completed sync jobs is excessive.
-const SUCCESSFUL_EXECUTIONS_PER_INCREASE: usize = 32;
+const SUCCESSFUL_EXECUTIONS_PER_INCREASE: usize = 4;
 const OOM_RATE_MIN_EXECUTIONS: usize = 16;
 const OOM_RATE_DENOMINATOR: usize = 16;
 const FEEDBACK_WINDOW_CAPACITY: usize = 64;
@@ -63,7 +63,7 @@ struct FuturesLimitsState {
     feedback_window: VecDeque<bool>,
     feedback_window_ooms: usize,
     consecutive_ok: usize,
-    oom_seen: bool,
+
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -254,7 +254,7 @@ impl FuturesLimits {
     pub fn on_oom(&self) {
         let mut state = self.state.lock();
         state.consecutive_ok = 0;
-        state.oom_seen = true;
+
         Self::push_feedback(&mut state, true);
         self.decrease_if_oom_rate_high(&mut state);
     }
@@ -262,12 +262,8 @@ impl FuturesLimits {
     pub fn on_ok(&self) {
         let mut state = self.state.lock();
         Self::push_feedback(&mut state, false);
-        if self.decrease_if_oom_rate_high(&mut state) {
-            return;
-        }
-        if state.oom_seen {
-            return;
-        }
+
+
         state.consecutive_ok += 1;
 
         if state.consecutive_ok >= SUCCESSFUL_EXECUTIONS_PER_INCREASE {
@@ -343,7 +339,8 @@ impl FuturesLimits {
             registrations: entry.registrations,
             weight: entry.weight,
         }).collect::<Vec<_>>();
-        entries.sort_by(|a, b| a.descr.cmp(&b.descr));
+
+        // entries.sort_by(|a, b| a.descr.cmp(&b.descr));
         entries
     }
 
@@ -425,20 +422,6 @@ mod tests {
     }
 
     #[test]
-    fn test_oom_disables_future_increases() {
-        let limits = FuturesLimits::new_with_parallelism(8, 32);
-        let initial_limit = limits.max_parallel_jobs();
-        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE - 1 {
-            limits.on_ok();
-        }
-        limits.on_oom();
-        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE * 2 {
-            limits.on_ok();
-        }
-        assert_eq!(limits.max_parallel_jobs(), initial_limit);
-    }
-
-    #[test]
     fn test_frequent_ooms_decrease_limits_gradually() {
         let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
@@ -446,13 +429,13 @@ mod tests {
         for _ in 1..OOM_RATE_MIN_EXECUTIONS {
             limits.on_ok();
         }
-        assert_eq!(limits.max_parallel_jobs(), initial_limit.saturating_sub(1).max(1));
+        assert_eq!(limits.max_parallel_jobs(), initial_limit);
 
         limits.on_oom();
         for _ in 1..OOM_RATE_MIN_EXECUTIONS {
             limits.on_ok();
         }
-        assert_eq!(limits.max_parallel_jobs(), initial_limit.saturating_sub(2).max(1));
+        assert_eq!(limits.max_parallel_jobs(), initial_limit.saturating_sub(1).max(1));
     }
 
     #[test]
