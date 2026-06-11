@@ -4,7 +4,7 @@ use dashmap::DashMap;
 use futures_util::StreamExt;
 use futures_util::future::{BoxFuture, Shared};
 use futures_util::stream;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -266,7 +266,7 @@ where
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
-        debug!("FuturesRunnerMapPurger::drop_gpu: running name={name:?}");
+        info!("FuturesRunnerMapPurger::drop_gpu: running name={name:?}");
 
         //because of "implementation of `dashmap::Map` is not general enough"
         let items: Vec<(
@@ -282,30 +282,23 @@ where
 
         track_await(stream::iter(items.into_iter()).for_each_concurrent(PURGE_GPU_CONCURRENCY_LIMIT, move |(key, fut)| async move {
             trace!("drop_gpu: key={key:?}");
-
-            match track_await(fut).await {
-                Ok(v) => {
-                    if let Err(e) = track_await(v.drop_device(device_idx)).await {
-                        warn!("drop_gpu failed: key={key:?} err={e:?}");
-                    } else {
-                        trace!("drop_gpu ok: key={key:?} dropped");
-                    }
+            if let Some(w) = fut.peek().and_then(|wrapper| wrapper.as_ref().ok()) {
+                if let Err(e) = track_await(w.drop_device(device_idx)).await {
+                    warn!("drop_gpu failed: key={key:?} err={e:?}");
                 }
-                Err(e) => {
-                    if e.is_oom() {
-                        trace!("drop_gpu: Err key={key:?} err={e:?}")
-                    } else {
-                        warn!("drop_gpu: Err key={key:?} err={e:?}")
-                    }
-                },
             }
+
             collect_eta_record_completion(dump_eta_guard_id);
         })).await;
 
+        info!("FuturesRunnerMapPurger::drop_gpu: name={name:?} drop done");
+
+        // causes reset stall?
         self.retain(|k, v| {
             trace!("FuturesRunnerMapPurger::drop_gpu: key={k:?}");
             if v.peek()
                 .and_then(|v| v.as_ref().map(|r| {
+
                    r.is_on_device(0)// it's assumed that there are just two devices - CPU (tho_device_idx=0) and Cuda(0) (tho_device_idx=1). TODO check if on other devices.
                 }).ok())
                 .unwrap_or(false)
@@ -317,7 +310,7 @@ where
             }
         });
 
-        debug!("FuturesRunnerMapPurger::drop_gpu: name={name:?} done");
+        info!("FuturesRunnerMapPurger::drop_gpu: name={name:?} retain done");
 
         Ok(())
     }

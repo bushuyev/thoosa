@@ -12,7 +12,7 @@ use std::{
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{error, info};
+use log::{error, info, Level};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
     runtime::Handle,
@@ -724,7 +724,9 @@ impl DynamicTaskExecutor {
             debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
 
             log::logger().flush();
-            tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            if log::log_enabled!(Level::Debug) {
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+            }
 
             if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
                 error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
@@ -1052,7 +1054,7 @@ impl DynamicTaskExecutor {
             purged += 1;
         }
 
-        if !*input_closed {
+/*        if !*input_closed {
             loop {
                 match rx.try_recv() {
                     Ok(job) => {
@@ -1067,7 +1069,7 @@ impl DynamicTaskExecutor {
                 }
             }
         }
-
+*/
         if purged > 0 {
             debug!("DynamicTaskExecutor::purge_pending_jobs: purged={purged}");
         }
