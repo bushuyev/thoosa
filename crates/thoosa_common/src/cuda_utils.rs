@@ -20,7 +20,7 @@ use crate as thoosa_common;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
-use crate::buffer_limits::buffer_limits;
+use thoosa_shared::buffer_limits::buffer_limits;
 
 // One contiguous byte range in the source/destination tensor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
