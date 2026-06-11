@@ -44,7 +44,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
 use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 
@@ -336,7 +336,7 @@ where
         let loaded_motif_nets: Vec<(u32, Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>)> = track_await(collect_futures_with_progress(
             futures,
             trained_nets_len,
-            StreamBuffering::Ordered, //to keep same order as in trained_nets_ids
+            FuturesOrdering::Ordered, //to keep same order as in trained_nets_ids
             "ApplyMotifNets::new/load motif nets",
         )).await
             .into_iter()
@@ -553,7 +553,7 @@ where
         let motif_nets_applied = track_await(collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
-            StreamBuffering::Unordered, //it's sorted in BatchAppliedMotifNets
+            FuturesOrdering::Unordered, //it's sorted in BatchAppliedMotifNets
             "ApplyMotifNets::run",
         )).await
         .into_iter()

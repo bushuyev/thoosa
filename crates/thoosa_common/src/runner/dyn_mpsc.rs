@@ -22,7 +22,7 @@ use tokio::{
 use tracing::{debug, warn, Instrument};
 
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
-use thoosa_shared::buffer_limits::{BufferLimits, SyncExecutionPermit, buffer_limits};
+use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, buffer_limits};
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -327,7 +327,7 @@ impl DynamicTaskExecutor {
         queue_capacity: usize,
         tho_device_idx: usize,
         reset_fn: ResetFn,
-        buffer_limits: Arc<BufferLimits>,
+        buffer_limits: Arc<FuturesLimits>,
     ) -> Self {
         debug!("DynamicTaskExecutor::new_inner: queue_capacity={queue_capacity} tho_device_idx={tho_device_idx}");
 
@@ -746,7 +746,7 @@ impl DynamicTaskExecutor {
         accept_gate: Arc<tokio::sync::RwLock<()>>,
         tho_device_idx: usize,
         reset_fn: ResetFn,
-        buffer_limits: Arc<BufferLimits>,
+        buffer_limits: Arc<FuturesLimits>,
     ) {
         let mut pending = VecDeque::<Job>::new();
         let mut running = JoinSet::<()>::new();
@@ -925,7 +925,7 @@ impl DynamicTaskExecutor {
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
         max_parallel_jobs: usize,
-        buffer_limits: &BufferLimits,
+        buffer_limits: &FuturesLimits,
         pending_reset: &mut Option<PendingCudaReset>,
     ) {
         debug!("DynamicTaskExecutor::run_manager: manager cmd={cmd:?}");
@@ -968,7 +968,7 @@ impl DynamicTaskExecutor {
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
         max_parallel_jobs: usize,
-        buffer_limits: &BufferLimits,
+        buffer_limits: &FuturesLimits,
         pending_reset: &mut Option<PendingCudaReset>,
     ) {
         use tokio::sync::mpsc::error::TryRecvError;
@@ -1007,7 +1007,7 @@ impl DynamicTaskExecutor {
         done_tx: &mpsc::UnboundedSender<JobId>,
         cmd_tx_for_tasks: &mpsc::UnboundedSender<ManagerCmd>,
         exclusive_job_id: Option<JobId>,
-        buffer_limits: &Arc<BufferLimits>,
+        buffer_limits: &Arc<FuturesLimits>,
     ) {
         debug!("DynamicTaskExecutor::try_spawn_ready_jobs: pending={pending:?}");
 
@@ -1163,7 +1163,7 @@ impl DynamicTaskExecutor {
         active_caps: &BTreeMap<usize, usize>,
         new_cap: usize,
         exclusive_job_id: Option<JobId>,
-        buffer_limits: &BufferLimits,
+        buffer_limits: &FuturesLimits,
     ) -> Option<SyncExecutionPermit> {
         if !Self::can_activate_now(job_id, active_count, max_parallel_jobs, active_caps, new_cap, exclusive_job_id) {
             return None;
@@ -1235,7 +1235,7 @@ impl DynamicTaskExecutor {
         job_id: JobId,
         reply: oneshot::Sender<()>,
         activity_paused: bool,
-        buffer_limits: &BufferLimits,
+        buffer_limits: &FuturesLimits,
     ) {
         let Some(job) = jobs.get_mut(&job_id) else {
             let _ = reply.send(());
@@ -1308,7 +1308,7 @@ impl DynamicTaskExecutor {
         jobs: &mut HashMap<JobId, LiveJob>,
         active_caps: &mut BTreeMap<usize, usize>,
         active_count: &mut usize,
-        buffer_limits: &BufferLimits,
+        buffer_limits: &FuturesLimits,
     ) {
         // Resumes queued before the pause may not receive a fresh Resume command. Flush
         // only fully-unsuspended jobs so parent tasks that are already eligible to run
@@ -1331,7 +1331,7 @@ impl DynamicTaskExecutor {
         active_count: &mut usize,
         max_parallel_jobs: usize,
         exclusive_job_id: Option<JobId>,
-        buffer_limits: &BufferLimits,
+        buffer_limits: &FuturesLimits,
     ) {
         for job in jobs.values_mut() {
             if job.active && !job.waiting_resumes.is_empty() {
@@ -1780,7 +1780,7 @@ mod tests {
         let mut active_caps = BTreeMap::new();
         let mut active_count = 0;
         let mut pending_reset = None;
-        let limits = BufferLimits::new();
+        let limits = FuturesLimits::new();
 
         DynamicTaskExecutor::process_command(
             ManagerCmd::RequestCudaReset {
@@ -1836,7 +1836,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_shared_parallelism_is_observed_across_executors() -> Result<(), ThoError> {
-        let limits = Arc::new(BufferLimits::new());
+        let limits = Arc::new(FuturesLimits::new());
         let shared_limit = limits.max_parallel_jobs();
         let reset_fn: ResetFn = Arc::new(|_| async { Ok(()) }.boxed());
         let exec_a = Arc::new(DynamicTaskExecutor::new_inner_with_buffer_limits(64, 0, Arc::clone(&reset_fn), Arc::clone(&limits)));

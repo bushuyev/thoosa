@@ -34,7 +34,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, FuturesOrdering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, WithId};
 use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
@@ -203,7 +203,7 @@ where
         let stft_run_configs: HashMap<u64, StftRunConfig> = track_await(collect_futures_with_progress(
             futures,
             trained_nets_len,
-            StreamBuffering::Ordered, //to keep same order as in trained_nets_ids
+            FuturesOrdering::Ordered, //to keep same order as in trained_nets_ids
             "ApplyMotifNets::new/load motif nets",
         )).await
             .into_iter()

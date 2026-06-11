@@ -66,7 +66,7 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{run_id, OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
 use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
-use thoosa_shared::{collect_futures_with_progress, cuda_activity_gate, mono_key, panic_to_err_async, parse_resources, simple_id, CopyToDevice, RangeOrValue, StreamBuffering};
+use thoosa_shared::{collect_futures_with_progress, cuda_activity_gate, mono_key, panic_to_err_async, parse_resources, simple_id, CopyToDevice, RangeOrValue, FuturesOrdering};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::val::{NamedRange, NamedVal};
@@ -1489,7 +1489,7 @@ where
     let _ = track_await(collect_futures_with_progress(
         futures,
         motifs_len,
-        StreamBuffering::Unordered,
+        FuturesOrdering::Unordered,
         &format!("plot_found_motifs_for_run_config_id_{find_motifs_run_config_id}"),
     )).await;
 
@@ -1558,7 +1558,7 @@ where
     let _ = track_await(collect_futures_with_progress(
         futures,
         motifs_len,
-        StreamBuffering::Unordered,
+        FuturesOrdering::Unordered,
         &format!("plot_selected_motifs_for_run_config_id_{select_motifs_run_config_id}"),
     )).await;
 

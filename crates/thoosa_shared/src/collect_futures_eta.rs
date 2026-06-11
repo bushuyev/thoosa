@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::watch;
-use crate::buffer_limits::FutureLimitProgressEntry;
+use crate::futures_limits::FutureLimitProgressEntry;
 use crate::device_stats::ThoDeviceStats;
 use crate::{perf_log, sync_mutex_lock};
 
@@ -485,7 +485,7 @@ fn format_duration(duration: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::{CollectEtaProgressInvocation, CollectEtaTracker, COLLECT_ETA_LOG_INTERVAL};
-    use crate::buffer_limits::{ENTRY, FutureLimitProgressEntry};
+    use crate::futures_limits::{ENTRY, FutureLimitProgressEntry};
     use crate::device_stats::ThoDeviceStats;
     use std::time::{Duration, Instant};
 

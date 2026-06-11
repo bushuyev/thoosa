@@ -19,7 +19,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, FuturesOrdering, ThoError};
 use thoosa_shared::tracked_await::track_await;
 
 
@@ -290,7 +290,7 @@ where
         let converted = track_await(collect_futures_with_progress(
             futures,
             entries_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "ConvertPrecisionStage::run",
         )).await;
 
