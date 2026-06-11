@@ -37,7 +37,7 @@ use thoosa_common::train_nets::{conv_label_node, lin_label_node, opt_train, self
 use thoosa_common::utils::{mix_x_binary_with_labels, pad_stack_with_mask, ListenerResponse, TrainListener};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, CopyToDevice, FuturesOrdering, ThoError};
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::copy_mode::CpuOnly;
@@ -540,7 +540,7 @@ where
             let results = track_await(collect_futures_with_progress(
                 futures,
                 labels_train_and_valid_sets_len,
-                StreamBuffering::Unordered,
+                FuturesOrdering::Unordered,
                 "train labels",
             )).await;
 
@@ -726,7 +726,7 @@ where
                 let (x_1_wrapped, x_0_wrapped) = track_await(collect_futures_with_progress(
                     futures,
                     batch_len,
-                    StreamBuffering::Ordered,
+                    FuturesOrdering::Ordered,
                     "ResourcesBatch::build_batch_stream",
                 )).await
                     .into_iter()

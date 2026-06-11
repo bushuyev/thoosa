@@ -37,7 +37,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
-use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, FuturesOrdering, ThoError};
 use thoosa_store::Store;
 use thoosa_with_data::with_data;
 use thoosa_shared::tracked_await::track_await;
@@ -327,7 +327,7 @@ where
                 let (outputs, labels) = track_await(collect_futures_with_progress(
                     futures,
                     batch_len,
-                    StreamBuffering::Ordered,
+                    FuturesOrdering::Ordered,
                     "LogitsResourcesBatch::build_batch_stream",
                 )).await
                 .into_iter()

@@ -8,13 +8,13 @@ use std::{
 use tokio::sync::watch;
 use tokio::task::{JoinError, JoinSet};
 use tracing::{debug, error};
-use crate::{cuda_activity_gate, StreamBuffering, ThoError};
+use crate::{cuda_activity_gate, FuturesOrdering, ThoError};
 use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_completion, CollectEtaInvocationGuard};
 
 pub async fn collect_futures_with_progress<T, F>(
     futures: impl Iterator<Item = F>,
     len: usize,
-    buffering: StreamBuffering,
+    buffering: FuturesOrdering,
     descr: &str,
 ) -> Vec<T>
 where
@@ -23,7 +23,7 @@ where
     ThoError: Send + 'static,
 {
     debug!("collect_futures_with_progress: descr={descr} len={len}");
-    let registration = crate::buffer_limits::buffer_limits().register(descr);
+    let registration = crate::futures_limits::buffer_limits().register(descr);
     collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, descr).await
 }
 
@@ -31,7 +31,7 @@ async fn collect_futures_with_progress_with_limit<T, F>(
     futures: impl Iterator<Item = F>,
     len: usize,
     buffer_limit: Arc<watch::Receiver<usize>>,
-    buffering: StreamBuffering,
+    buffering: FuturesOrdering,
     descr: &str,
 ) -> Vec<T>
 where
@@ -59,7 +59,7 @@ where
     let mut set = JoinSet::<(usize, Result<T, ThoError>)>::new();
 
     match buffering {
-        StreamBuffering::Unordered => {
+        FuturesOrdering::Unordered => {
             collect_joinset_unordered(
                 &mut set,
                 &mut futures,
@@ -75,7 +75,7 @@ where
                 .await;
         }
 
-        StreamBuffering::Ordered => {
+        FuturesOrdering::Ordered => {
             collect_joinset_ordered(
                 &mut set,
                 &mut futures,
@@ -325,7 +325,7 @@ mod tests {
     use tokio::sync::{Semaphore, watch};
 
     use super::collect_futures_with_progress_with_limit;
-    use crate::{StreamBuffering, ThoError};
+    use crate::{FuturesOrdering, ThoError};
 
     async fn wait_for_value(value: &AtomicUsize, expected: usize) {
         tokio::time::timeout(Duration::from_secs(2), async {
@@ -335,7 +335,7 @@ mod tests {
         }).await.expect("timed out waiting for expected value");
     }
 
-    async fn assert_limit_increase_is_applied(buffering: StreamBuffering) {
+    async fn assert_limit_increase_is_applied(buffering: FuturesOrdering) {
         let started = Arc::new(AtomicUsize::new(0));
         let permits = Arc::new(Semaphore::new(0));
         let (limit_tx, limit_rx) = watch::channel(1);
@@ -373,12 +373,12 @@ mod tests {
 
     #[tokio::test]
     async fn unordered_limit_increase_starts_additional_futures() {
-        assert_limit_increase_is_applied(StreamBuffering::Unordered).await;
+        assert_limit_increase_is_applied(FuturesOrdering::Unordered).await;
     }
 
     #[tokio::test]
     async fn ordered_limit_increase_starts_additional_futures() {
-        assert_limit_increase_is_applied(StreamBuffering::Ordered).await;
+        assert_limit_increase_is_applied(FuturesOrdering::Ordered).await;
     }
 
     #[tokio::test]
@@ -408,7 +408,7 @@ mod tests {
                     }),
                     5,
                     Arc::new(limit_rx),
-                    StreamBuffering::Unordered,
+                    FuturesOrdering::Unordered,
                     "limit_decrease_waits_for_active_futures_before_starting_more",
                 ).await
             })

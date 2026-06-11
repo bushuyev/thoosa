@@ -20,7 +20,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
-use thoosa_shared::buffer_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgressEntry};
+use thoosa_shared::futures_limits::{COPY_D2H, COPY_H2D, ENTRY, FutureLimitProgressEntry};
 use thoosa_shared::collect_futures_eta::{CollectEtaProgressInvocation, CollectEtaProgressState, COLLECT_ETA_PROGRESS_SOCKET_ID};
 use thoosa_shared::device_stats::ThoDeviceStats;
 use thoosa_shared::val::Val;

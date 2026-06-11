@@ -37,8 +37,8 @@ use thoosa_main::tasks::train_label_nets::new_train_label_nets;
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
-use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, RangeOrValue, ResourceType, StreamBuffering, ThoError};
-use thoosa_shared::buffer_limits::ENTRY;
+use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, RangeOrValue, ResourceType, FuturesOrdering, ThoError};
+use thoosa_shared::futures_limits::ENTRY;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::math::unordered_sets_of_size;
 use thoosa_shared::ResourceType::NotInGroup;
@@ -360,7 +360,7 @@ pub(crate) async fn run_all(
             let _ = track_await(collect_futures_with_progress(
                 futures,
                 labels_len,
-                StreamBuffering::Unordered,
+                FuturesOrdering::Unordered,
                 ENTRY,
             )).await;
 
@@ -489,7 +489,7 @@ pub(crate) async fn run_all(
             let _ = track_await(collect_futures_with_progress(
                 futures,
                 labels_len,
-                StreamBuffering::Unordered,
+                FuturesOrdering::Unordered,
                 ENTRY,
             )).await;
 

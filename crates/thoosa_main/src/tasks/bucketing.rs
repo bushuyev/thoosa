@@ -32,7 +32,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, panic_to_err, StreamBuffering, TensorIdSliceIdx, ThoError};
+use thoosa_shared::{collect_futures_with_progress, panic_to_err, FuturesOrdering, TensorIdSliceIdx, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
@@ -1008,7 +1008,7 @@ where
         let loaded_motifs = track_await(collect_futures_with_progress(
             futures,
             resources_len,
-            StreamBuffering::Unordered,
+            FuturesOrdering::Unordered,
             "BucketingStage/resources",
         )).await
         .into_iter()

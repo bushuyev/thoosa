@@ -69,7 +69,7 @@ pub mod macros;
 pub mod rayon_pool;
 pub mod tracked_await;
 pub mod collect_futures_with_progress;
-pub mod buffer_limits;
+pub mod futures_limits;
 
 pub use collect_futures_with_progress::collect_futures_with_progress;
 
@@ -185,7 +185,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StreamBuffering {
+pub enum FuturesOrdering {
     Unordered,
     Ordered,
 }
@@ -2367,7 +2367,7 @@ mod shared_tests {
     use crate::{
         add_prefix, arg_prefix, avg_hist, batch_windows, camel_to_snake, clc_num_batches, group_slices,
         make_combos, parse_range_str, snake_to_camel, test_utils, Cause,
-        RangeOrValue, ResourceType, StreamBuffering, ThoError,
+        RangeOrValue, ResourceType, FuturesOrdering, ThoError,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -2399,7 +2399,7 @@ mod shared_tests {
                         }
                     }),
                     4,
-                    StreamBuffering::Unordered,
+                    FuturesOrdering::Unordered,
                     "test_collect_futures_with_progress_waits_for_cuda_activity_gate",
                 )
                     .await

@@ -10,8 +10,8 @@ pub const COPY_D2H: &str = "cuda_utils::copy_d2h_from_ptr";
 pub const COPY_H2D: &str = "cuda_utils::copy_h2d_from_ptr";
 pub const ENTRY: &str = "entry";
 
-const MIN_SYNC_PARALLELISM: usize = 1;
-const MAX_SYNC_PARALLELISM_MULTIPLIER: usize = 4;
+const MIN_SYNC_PARALLELISM: usize = 2;
+const MAX_SYNC_PARALLELISM_MULTIPLIER: usize = 2;
 const COPY_FUTURE_WEIGHT: usize = 2;
 const ENTRY_FUTURE_WEIGHT: usize = 1;
 const DEFAULT_FUTURE_WEIGHT: usize = 1;
@@ -21,12 +21,12 @@ const OOM_RATE_MIN_EXECUTIONS: usize = 16;
 const OOM_RATE_DENOMINATOR: usize = 16;
 const FEEDBACK_WINDOW_CAPACITY: usize = 64;
 
-pub struct DynamicBufferLimit {
+pub struct DynamicFutureLimit {
     sender: watch::Sender<usize>,
     receiver: Arc<watch::Receiver<usize>>,
 }
 
-impl DynamicBufferLimit {
+impl DynamicFutureLimit {
     fn new(limit: usize) -> Self {
         assert!(limit > 0, "buffer limit must be greater than zero");
         let (sender, receiver) = watch::channel(limit);
@@ -51,13 +51,13 @@ impl DynamicBufferLimit {
 }
 
 struct FutureLimitEntry {
-    limit: DynamicBufferLimit,
+    limit: DynamicFutureLimit,
     registrations: usize,
     weight: usize,
 }
 
 #[derive(Default)]
-struct BufferLimitsState {
+struct FuturesLimitsState {
     futures_limits: HashMap<String, FutureLimitEntry>,
     active_registrations: usize,
     feedback_window: VecDeque<bool>,
@@ -168,31 +168,31 @@ impl Drop for SyncExecutionPermit {
 /// or concurrent collector therefore lowers existing allowances; already-running futures drain,
 /// while new futures observe the reduced watch value. Dynamic task executors use shared execution
 /// permits, so the same limit is enforced across all per-device executor instances.
-pub struct BufferLimits {
-    state: Mutex<BufferLimitsState>,
+pub struct FuturesLimits {
+    state: Mutex<FuturesLimitsState>,
     sync_execution_limiter: Arc<SyncExecutionLimiter>,
     publish_progress: bool,
 }
 
-pub struct BufferLimitRegistration<'a> {
-    owner: &'a BufferLimits,
+pub struct FuturesLimitRegistration<'a> {
+    owner: &'a FuturesLimits,
     descr: String,
     receiver: Arc<watch::Receiver<usize>>,
 }
 
-impl BufferLimitRegistration<'_> {
+impl FuturesLimitRegistration<'_> {
     pub fn receiver(&self) -> Arc<watch::Receiver<usize>> {
         Arc::clone(&self.receiver)
     }
 }
 
-impl Drop for BufferLimitRegistration<'_> {
+impl Drop for FuturesLimitRegistration<'_> {
     fn drop(&mut self) {
         self.owner.forget(&self.descr);
     }
 }
 
-impl BufferLimits {
+impl FuturesLimits {
     pub fn new() -> Self {
         let initial_limit = std::thread::available_parallelism().map(usize::from).unwrap_or(MIN_SYNC_PARALLELISM);
         let max_limit = initial_limit.saturating_mul(MAX_SYNC_PARALLELISM_MULTIPLIER).max(initial_limit);
@@ -206,17 +206,19 @@ impl BufferLimits {
 
     fn new_with_parallelism_and_progress(initial_limit: usize, max_limit: usize, publish_progress: bool) -> Self {
         Self {
-            state: Mutex::new(BufferLimitsState::default()),
+            state: Mutex::new(FuturesLimitsState::default()),
             sync_execution_limiter: Arc::new(SyncExecutionLimiter::new(initial_limit, max_limit)),
             publish_progress,
         }
     }
 
-    pub fn register<'a>(&'a self, descr: &str) -> BufferLimitRegistration<'a> {
+    pub fn register<'a>(&'a self, descr: &str) -> FuturesLimitRegistration<'a> {
         let mut state = self.state.lock();
         let receiver = {
+
             let entry = state.futures_limits.entry(descr.to_owned()).or_insert_with(|| FutureLimitEntry {
-                limit: DynamicBufferLimit::new(1),
+
+                limit: DynamicFutureLimit::new(1),
                 registrations: 0,
                 weight: Self::future_limit_weight(descr),
             });
@@ -227,7 +229,7 @@ impl BufferLimits {
         self.rebalance_future_limits(&state);
         debug!(descr, active_registrations = state.active_registrations, max_parallel_jobs = self.sync_execution_limiter.limit(), "registered future collector");
 
-        BufferLimitRegistration {
+        FuturesLimitRegistration {
             owner: self,
             descr: descr.to_owned(),
             receiver,
@@ -296,7 +298,7 @@ impl BufferLimits {
         self.sync_execution_limiter.force_acquire()
     }
 
-    fn push_feedback(state: &mut BufferLimitsState, oom: bool) {
+    fn push_feedback(state: &mut FuturesLimitsState, oom: bool) {
         state.feedback_window.push_back(oom);
         state.feedback_window_ooms += usize::from(oom);
         if state.feedback_window.len() > FEEDBACK_WINDOW_CAPACITY {
@@ -304,7 +306,7 @@ impl BufferLimits {
         }
     }
 
-    fn decrease_if_oom_rate_high(&self, state: &mut BufferLimitsState) -> bool {
+    fn decrease_if_oom_rate_high(&self, state: &mut FuturesLimitsState) -> bool {
         if state.feedback_window.len() < OOM_RATE_MIN_EXECUTIONS
             || state.feedback_window_ooms.saturating_mul(OOM_RATE_DENOMINATOR) < state.feedback_window.len()
         {
@@ -320,7 +322,7 @@ impl BufferLimits {
         true
     }
 
-    fn rebalance_future_limits(&self, state: &BufferLimitsState) {
+    fn rebalance_future_limits(&self, state: &FuturesLimitsState) {
         if state.active_registrations == 0 {
             self.publish_future_limits(Vec::new());
             return;
@@ -334,7 +336,7 @@ impl BufferLimits {
         self.publish_future_limits(Self::future_limits_snapshot(state));
     }
 
-    fn future_limits_snapshot(state: &BufferLimitsState) -> Vec<FutureLimitProgressEntry> {
+    fn future_limits_snapshot(state: &FuturesLimitsState) -> Vec<FutureLimitProgressEntry> {
         let mut entries = state.futures_limits.iter().map(|(descr, entry)| FutureLimitProgressEntry {
             descr: descr.clone(),
             limit: entry.limit.current(),
@@ -360,25 +362,25 @@ impl BufferLimits {
     }
 }
 
-impl Default for BufferLimits {
+impl Default for FuturesLimits {
     fn default() -> Self {
         Self::new()
     }
 }
 
-pub static BUFFER_LIMITS: LazyLock<Arc<BufferLimits>> = LazyLock::new(|| Arc::new(BufferLimits::new()));
+static FUTURES_LIMITS: LazyLock<Arc<FuturesLimits>> = LazyLock::new(|| Arc::new(FuturesLimits::new()));
 
-pub fn buffer_limits() -> &'static Arc<BufferLimits> {
-    &BUFFER_LIMITS
+pub fn buffer_limits() -> &'static Arc<FuturesLimits> {
+    &FUTURES_LIMITS
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{BufferLimits, COPY_D2H, OOM_RATE_MIN_EXECUTIONS, SUCCESSFUL_EXECUTIONS_PER_INCREASE};
+    use super::{FuturesLimits, COPY_D2H, OOM_RATE_MIN_EXECUTIONS, SUCCESSFUL_EXECUTIONS_PER_INCREASE};
 
     #[test]
-    fn active_collectors_share_sync_limit() {
-        let limits = BufferLimits::new_with_parallelism(8, 32);
+    fn test_active_collectors_share_sync_limit() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
         let first = limits.register("first");
         assert_eq!(*first.receiver().borrow(), initial_limit);
@@ -398,8 +400,8 @@ mod tests {
     }
 
     #[test]
-    fn copy_collectors_get_a_larger_share() {
-        let limits = BufferLimits::new_with_parallelism(8, 32);
+    fn test_copy_collectors_get_a_larger_share() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
         let copy = limits.register(COPY_D2H);
         let regular = limits.register("regular");
@@ -409,8 +411,8 @@ mod tests {
     }
 
     #[test]
-    fn successful_execution_streak_increases_limits() {
-        let limits = BufferLimits::new_with_parallelism(8, 32);
+    fn test_successful_execution_streak_increases_limits() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
         let collector = limits.register("collector");
 
@@ -423,8 +425,8 @@ mod tests {
     }
 
     #[test]
-    fn oom_disables_future_increases() {
-        let limits = BufferLimits::new_with_parallelism(8, 32);
+    fn test_oom_disables_future_increases() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
         for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE - 1 {
             limits.on_ok();
@@ -437,8 +439,8 @@ mod tests {
     }
 
     #[test]
-    fn frequent_ooms_decrease_limits_gradually() {
-        let limits = BufferLimits::new_with_parallelism(8, 32);
+    fn test_frequent_ooms_decrease_limits_gradually() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
         limits.on_oom();
         for _ in 1..OOM_RATE_MIN_EXECUTIONS {
@@ -454,8 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn sync_execution_permits_enforce_one_shared_limit() {
-        let limits = BufferLimits::new_with_parallelism(8, 32);
+    fn test_sync_execution_permits_enforce_one_shared_limit() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
         let initial_limit = limits.max_parallel_jobs();
         let mut capacity_rx = limits.sync_capacity();
         capacity_rx.borrow_and_update();

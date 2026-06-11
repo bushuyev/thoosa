@@ -33,7 +33,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
-use thoosa_shared::{collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, StreamBuffering, ThoError};
+use thoosa_shared::{collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, FuturesOrdering, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
