@@ -14,7 +14,7 @@ use crate::collect_futures_eta::{collect_eta_maybe_log, collect_eta_record_compl
 pub async fn collect_futures_with_progress<T, F>(
     futures: impl Iterator<Item = F>,
     len: usize,
-    buffer_limit: Arc<watch::Receiver<usize>>,
+    _buffer_limit: Arc<watch::Receiver<usize>>, //TODO remove
     buffering: StreamBuffering,
     descr: &str,
 ) -> Vec<T>
@@ -25,7 +25,7 @@ where
 {
     debug!("collect_futures_with_progress: descr={descr} len={len}");
 
-    let mut buffer_limit = buffer_limit.as_ref().clone();
+    let mut buffer_limit = crate::buffer_limits::buffer_limits().register(descr).as_ref().clone();
     let initial_buffer_limit = *buffer_limit.borrow_and_update();
     assert!(initial_buffer_limit > 0, "buffer_limit must be > 0; JoinSet version cannot make progress with 0");
 
@@ -83,6 +83,8 @@ where
     if eta_invocation_id.is_some() {
         collect_eta_maybe_log(true);
     }
+
+    crate::buffer_limits::buffer_limits().forget(descr);
 
     results
 }

@@ -61,7 +61,7 @@ pub struct BufferLimits {
 impl BufferLimits {
     pub fn new() -> Self {
         Self {
-            find_motifs_stages_buffer_unordered_limit: DynamicBufferLimit::new(8),
+            find_motifs_stages_buffer_unordered_limit: DynamicBufferLimit::new(1),
             cross_loaders_limit: DynamicBufferLimit::new(8),
             bucketing_limit: DynamicBufferLimit::new(8),
             cli_run_plot_motif_slices_buffer_unordered_limit: DynamicBufferLimit::new(8),
@@ -86,6 +86,14 @@ impl BufferLimits {
             bird_clef_labels_buffer_limit: DynamicBufferLimit::new(16),
             copy_concurrency: DynamicBufferLimit::new(8),
         }
+    }
+
+    pub fn register(&self, descr:&str) -> Arc<watch::Receiver<usize>> {
+        self.find_motifs_stages_buffer_unordered_limit.receiver()
+    }
+
+    pub fn forget(&self, descr:&str)  {
+        //TODO remopve
     }
 }
 
