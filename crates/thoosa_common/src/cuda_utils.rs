@@ -313,7 +313,9 @@ pub async fn copy_d2h_from_ptr(
                             Ok::<(), ThoError>(())
 
                         })
-                    })).await.map_err(join_error_to_tho_error).and_then(|result| result);
+                    })).await
+                        .map_err(join_error_to_tho_error)
+                        .and_then(|result| result);
 
                     Ok::<_, ThoError>(result)
                 }
@@ -396,7 +398,7 @@ pub async fn copy_h2d_from_ptr(
     init_type: Kind,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-    dst_device_idx: usize,
+    dst_tho_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
 ) -> Result<Tensor, ThoError> {
@@ -408,7 +410,7 @@ pub async fn copy_h2d_from_ptr(
     let chunk_groups_len = chunk_groups.len();
 
     // destination tensor lives on GPU 0
-    let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_device_idx - 1)))?;
+    let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_tho_device_idx - 1)))?;
 
     unsafe {
         // base pointers

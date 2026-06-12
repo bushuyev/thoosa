@@ -16,7 +16,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use crate::copy_ctx::CopyCtx;
+use crate::copy_ctx::{CopyCtx, CudaActorHandle};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 use crate::tho_device::ThoDevice;
 use futures::FutureExt;
@@ -38,6 +38,7 @@ pub struct GlobalCtx {
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
     copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>,
+    cuda_actors:Vec<CudaActorHandle>,
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
 }
@@ -105,6 +106,7 @@ impl GlobalCtx {
             copy_ctx: (1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
+            cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
         }
     }
 
@@ -376,6 +378,12 @@ impl GlobalCtx {
         tokio::time::timeout(Duration::from_secs(10), rw_lock.write()).await.expect("Should be able to write copy ctx")
     }
 
+
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> CudaActorHandle {
+        let device:ThoDevice = device.into();
+        let gpu_device_ordinal = device.gpu_ordinal();
+        self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).clone()
+    }
 }
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -615,6 +623,13 @@ impl MockGlobalCtx {
         static COPY_CTX_ONCE: std::sync::OnceLock<tokio::sync::RwLock<CopyCtx>> = std::sync::OnceLock::new();
         track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).read()).await
     }
+
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> CudaActorHandle {
+        static COPY_CTX_ONCE: std::sync::OnceLock<CudaActorHandle> = std::sync::OnceLock::new();
+        COPY_CTX_ONCE.get_or_init(|| CudaActorHandle::new(device.into().ordinal())).clone()
+    }
+
+
 }
 
 #[cfg(test)]
