@@ -277,7 +277,9 @@ where
             let kernels = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.kernels)).collect::<Vec<_>>();
             let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
             let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
-            let stream = track_await(track_await(GlobalCtx::global().copy_ctx(ctx.tho_device_idx())).await.acquire_exec_stream()).await;
+            let cuda_actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx());
+            let stream = cuda_actor.acquire_exec_stream().await;
+
             let res = with_data!(ctx.branch(false), input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");
                 let _guard = ThoStreamGuard::new(&stream)?;
@@ -354,20 +356,7 @@ where
                 Ok(motifs_applied)
             })?;
 
-            track_await(tokio::time::timeout(
-                Duration::from_secs(5),
-                spawn_blocking(move || {
-                    tracing::info_span!(
-                        "apply_cosine2d_motif_nets::sync_stream",
-                        kind = "spawn_blocking",
-                        file = file!(),
-                        line = line!(),
-                        task = "synchronize cosine2d motif application stream",
-                    ).in_scope(|| {
-                        let _ = stream.synchronize();
-                    })
-                }),
-            )).await??;
+            track_await(cuda_actor.sync_stream(stream)).await?;
 
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));
@@ -822,7 +811,8 @@ async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<Dev
         let mask = if mask.is_contiguous() { mask } else { mask.f_contiguous()? };
         let device = ThoDevice::from(mask.device());
         let kind = mask.kind();
-        track_await(track_await(GlobalCtx::global().copy_ctx(device)).await.move_t(mask, 0, kind)).await?
+
+        track_await(GlobalCtx::global().cuda_actor(device).copy(mask, 0.into())).await?
     };
     Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, mask)?)))
 }

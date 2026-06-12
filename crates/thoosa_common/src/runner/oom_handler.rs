@@ -342,7 +342,9 @@ where
             match track_await(oom_executor(tho_device_idx).submit(
                 fast_run_ctx.max_other_parallel().into(),
                 async move {
-                    let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
+                    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                    let stream = cuda_actor.acquire_exec_stream().await;
+
                     let out = track_await(fast_input
                         .with_data_ref(
                             tho_device_idx,
@@ -353,20 +355,9 @@ where
                                 Arc::clone(&fast_task).do_run(data.borrow(), ctx)
                             },
                         )).await;
-                    track_await(tokio::time::timeout(
-                        Duration::from_secs(5),
-                        tokio::task::spawn_blocking(move || {
-                            tracing::info_span!(
-                                "oom_handler::run_fast_path_sync",
-                                kind = "spawn_blocking",
-                                file = file!(),
-                                line = line!(),
-                                task = format!("synchronize fast-path stream for tho_device_idx={tho_device_idx}"),
-                            ).in_scope(|| {
-                                let _ = stream.synchronize();
-                            })
-                        }),
-                    )).await??;
+
+                    track_await(cuda_actor.sync_stream(stream)).await?;
+
                     out
                 },
                 None
@@ -395,7 +386,12 @@ where
                 track_await(oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
-                        let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
+
+                        // let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
+
+                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                        let stream = cuda_actor.acquire_exec_stream().await;
+
                         let out = if let Some(selector) = selector {
                             track_await(input
                                 .with_selected_data_ref(
@@ -409,6 +405,7 @@ where
                                     },
                                 )).await
                         } else {
+
                             track_await(input
                                 .with_data_ref(
                                     tho_device_idx,
@@ -420,20 +417,10 @@ where
                                     },
                                 )).await
                         };
-                        track_await(tokio::time::timeout(
-                            Duration::from_secs(5),
-                            tokio::task::spawn_blocking(move || {
-                                tracing::info_span!(
-                                    "oom_handler::run_sync",
-                                    kind = "spawn_blocking",
-                                    file = file!(),
-                                    line = line!(),
-                                    task = format!("synchronize stage stream for tho_device_idx={tho_device_idx}"),
-                                ).in_scope(|| {
-                                    let _ = stream.synchronize();
-                                })
-                            }),
-                        )).await??;
+
+
+                        track_await(cuda_actor.sync_stream(stream)).await?;
+
 
                         out
                     },
@@ -471,27 +458,18 @@ where
                     let consume_result = if tho_device_idx == 0 {
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
                     } else {
-                        let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
+                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                        let stream = cuda_actor.acquire_exec_stream().await;
+
                         let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
                             match ThoStreamGuard::new(&stream) {
                                 Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
                                 Err(error) => ConsumeResult::Failed { input, error },
                             }
                         })).await;
-                        track_await(tokio::time::timeout(
-                            Duration::from_secs(5),
-                            tokio::task::spawn_blocking(move || {
-                                tracing::info_span!(
-                                    "oom_handler::consume_sync",
-                                    kind = "spawn_blocking",
-                                    file = file!(),
-                                    line = line!(),
-                                    task = format!("synchronize consume stream for tho_device_idx={tho_device_idx}"),
-                                ).in_scope(|| {
-                                    let _ = stream.synchronize();
-                                })
-                            }),
-                        )).await??;
+
+                        track_await(cuda_actor.sync_stream(stream)).await?;
+
                         consume_result
                     };
 
