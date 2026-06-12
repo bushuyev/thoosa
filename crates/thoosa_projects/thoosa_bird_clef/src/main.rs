@@ -87,8 +87,8 @@ fn main() -> Result<(), ThoError>{
             //     }
             // }
         })
-        .worker_threads(worker_threads.unwrap_or(cpu_num/2))
-        .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
+        .worker_threads(worker_threads.unwrap_or(cpu_num))
+        // .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
         .enable_all()
         .on_thread_park(||{
             trace!("on_thread_park: trace={:?}", n_trace_line(&Backtrace::capture(), 20))

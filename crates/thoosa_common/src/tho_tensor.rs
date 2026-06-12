@@ -10,7 +10,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, WithId};
 use torch_sys::IntList;
-use log::{debug, info, trace};
+use log::{debug, info, trace, warn};
 use mockall_double::double;
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
@@ -305,20 +305,28 @@ where
             self.tho_device()
         };
 
-        let copy_ctx = track_await(GlobalCtx::global().copy_ctx(ctx_device)).await;
+
         let src = if self.t.is_contiguous() { None } else {
-            info!("f_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguousf_contiguous");
+            warn!("CopyToDevice for ThoTensor: tensor was not contiguous, self.id={:?}", self.id);
             Some(self.t.f_contiguous()?)
         };
         let src_ref = src.as_ref().unwrap_or(&self.t);
         debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
 
-        let copy = track_await(copy_ctx
-            .copy_from_ptr(
-                src_ref.data_ptr() as usize,
-                &src_ref.size(),
-                dst_device.ordinal(),
-                src_ref.kind(),
+        // let copy_ctx = track_await(GlobalCtx::global().copy_ctx(ctx_device)).await;
+        // let copy = track_await(copy_ctx
+        //     .copy_from_ptr(
+        //         src_ref.data_ptr() as usize,
+        //         &src_ref.size(),
+        //         dst_device.ordinal(),
+        //         src_ref.kind(),
+        //     )).await?;
+
+        let cuda_actor = GlobalCtx::global().cuda_actor(ctx_device);
+        let copy = track_await(cuda_actor
+            .copy(
+                src_ref.shallow_clone(),
+                dst_device,
             )).await?;
 
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device:?} copy.device={:?}",self.id,  self.t.size(), self.t.device(), copy.device());

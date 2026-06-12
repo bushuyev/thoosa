@@ -602,7 +602,7 @@ impl DistsMask {
                     };
                     let device = ThoDevice::from(mask.device());
                     let kind = mask.kind();
-                    track_await(track_await(GlobalCtx::global().copy_ctx(device)).await.move_t(mask, 0, kind)).await?
+                    track_await(GlobalCtx::global().cuda_actor(device).copy(mask, 0.into())).await?
                 };
                 let dists = match self.dists {
                     Some(dists) if dists.device().eq(&Cpu) => Some(dists),
@@ -614,7 +614,8 @@ impl DistsMask {
                         };
                         let kind = dists.kind();
                         let dists_device = ThoDevice::from(dists.device());
-                        Some(track_await(track_await(GlobalCtx::global().copy_ctx(dists_device)).await.move_t(dists, 0, kind)).await?)
+                        Some(track_await(GlobalCtx::global().cuda_actor(dists_device).copy(dists, 0.into())).await?)
+
                     }
                     None => None,
                 };

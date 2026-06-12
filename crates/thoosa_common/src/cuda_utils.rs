@@ -313,7 +313,9 @@ pub async fn copy_d2h_from_ptr(
                             Ok::<(), ThoError>(())
 
                         })
-                    })).await.map_err(join_error_to_tho_error).and_then(|result| result);
+                    })).await
+                        .map_err(join_error_to_tho_error)
+                        .and_then(|result| result);
 
                     Ok::<_, ThoError>(result)
                 }
@@ -396,7 +398,7 @@ pub async fn copy_h2d_from_ptr(
     init_type: Kind,
     buf_size: usize,
     bufs_pool: &Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
-    dst_device_idx: usize,
+    dst_tho_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
 ) -> Result<Tensor, ThoError> {
@@ -408,7 +410,7 @@ pub async fn copy_h2d_from_ptr(
     let chunk_groups_len = chunk_groups.len();
 
     // destination tensor lives on GPU 0
-    let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_device_idx - 1)))?;
+    let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_tho_device_idx - 1)))?;
 
     unsafe {
         // base pointers
@@ -702,28 +704,13 @@ where
         return f(None);
     }
 
-    let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
+    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+    let stream = cuda_actor.acquire_exec_stream().await;
+
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
+    track_await(cuda_actor.sync_stream(stream)).await?;
 
-    track_await(tokio::time::timeout(
-        Duration::from_secs(5),
-        spawn_blocking(move || {
-            tracing::info_span!(
-                "cuda_utils::with_exec_stream_sync",
-                kind = "spawn_blocking",
-                file = file!(),
-                line = line!(),
-                task = format!("synchronize exec stream for tho_device_idx={tho_device_idx}"),
-            ).in_scope(|| {
-                Ok::<_, ThoError>(stream.synchronize()?)
-            })
-        }),
-    )).await???;
-
-    // spawn_blocking(move || {
-    //     stream.synchronize()
-    // }).await??;
 
     out
 }

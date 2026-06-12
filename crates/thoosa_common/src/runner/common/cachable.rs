@@ -1112,6 +1112,22 @@ pub trait WithDataRef: WithId + Debug + Send + Sync {
        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P:RunCtx + 'a;
 
+    fn with_data_ref_x<'a, R: Send + 'a, F, P>(
+        &'a self,
+        to_device_idx: usize,
+        permits_ctx: P,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    where
+        for <'f> F: AsyncFnOnce(Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P:RunCtx + 'a {
+        async move {
+            todo!()
+        }
+    }
+
+
 
     //shouldn't be here, used only in ClcOOMRunner which is test-only util
     fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics{
@@ -1139,6 +1155,26 @@ where
      // Self::O<'o>: Select<S, Output = Self::O<'o>>,
      for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
      P:RunCtx + 'a;
+
+    fn with_selected_data_ref_async<'a, 'o, R: Send + 'a, F, P>(
+        &'a self,
+        to_device_idx: usize,
+        _permits_ctx: P,
+        selector: S,
+        trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    where
+    // Self::O<'o>: Select<S, Output = Self::O<'o>>,
+        for<'f> F: AsyncFnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P:RunCtx + 'a
+    {
+        async move {
+            todo!()
+        }
+    }
+
+
 }
 
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.

@@ -1,15 +1,144 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::stream::ThoCudaStream;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
+use tokio::sync::{mpsc, oneshot};
 use tub::{Guard, Pool};
 use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::track_await;
+use crate::runner::common::cachable::WithDataRef;
+use crate::tho_device::ThoDevice;
 
+pub enum CudaActorMessage {
+    Copy{ src:Tensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
+    SyncStream {
+        stream:Guard<ThoCudaStream>,
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    }
+}
+
+
+struct CudaActor {
+    tho_device_idx:usize,
+    receiver: mpsc::Receiver<CudaActorMessage>,
+    copy_ctx:Arc<CopyCtx>
+}
+
+impl CudaActor {
+    pub fn new(tho_device_idx:usize, receiver: mpsc::Receiver<CudaActorMessage>) -> Self {
+        Self {
+            tho_device_idx,
+            receiver,
+            copy_ctx: Arc::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16)),
+        }
+    }
+
+     fn handle_message(&mut self, msg: CudaActorMessage) {
+        match msg {
+            CudaActorMessage::Copy{ src, dst_device, respond_to } => {
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                tokio::spawn(async move {
+                    debug!("CudaActor::handle_message: CudaActorMessage::Copy: src={src:?}");
+
+                     let _ = respond_to.send(
+                         copy_ctx.copy_from_ptr(
+                             src.data_ptr() as usize,
+                             &src.size(),
+                             dst_device.ordinal(),
+                             src.kind(),
+                         ).await
+                     );
+                 });
+            }
+            CudaActorMessage::SyncStream { stream, respond_to } => {
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                tokio::spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        let _ = stream.synchronize();
+
+                        let _ = respond_to.send(Ok(()));
+                    }).await?;
+
+                    Ok::<(), ThoError>(())
+                });
+            }
+        }
+    }
+
+    async fn run(mut actor: CudaActor) {
+        while let Some(msg) = actor.receiver.recv().await {
+            actor.handle_message(msg);
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct CudaActorHandle {
+    sender: mpsc::Sender<CudaActorMessage>,
+    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
+}
+
+impl Debug for CudaActorHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaActorHandle")
+        .field("sender", &self.sender)
+        .field("exec_stream_pool.remaining_capacity", &self.exec_stream_pool.remaining_capacity())
+        .finish()
+    }
+}
+
+impl CudaActorHandle {
+    pub fn new(tho_device_id:usize) -> Self {
+        let (sender, receiver) = mpsc::channel(8);
+        let actor = CudaActor::new(tho_device_id, receiver);
+        tokio::spawn(CudaActor::run(actor));
+
+        Self {
+            sender,
+            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(ThoDevice::from(tho_device_id).gpu_ordinal() as i32, false).unwrap()/*TODO unwrap*/)))
+        }
+    }
+
+    pub async fn copy(&self, src:Tensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaActorMessage::Copy {
+                src,
+                dst_device,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    }
+
+    pub async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaActorMessage::SyncStream {
+                stream,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    }
+
+
+    //TODO these are 'exec' streams, not for copy
+    pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
+        track_await(self.exec_stream_pool
+            .acquire())
+            .await
+    }
+
+
+
+}
 
 //TODO to be renamed to StreamCtx?
 pub struct CopyCtx {
@@ -26,7 +155,7 @@ impl Debug for CopyCtx {
             // .field("cu_ctx", &self.cu_ctx)
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
-            .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
+                .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
             .finish()
     }
 }
@@ -158,17 +287,18 @@ impl CopyCtx {
         &self,
         src_ptr: usize,
         src_size: &[i64],
-        dst_device: usize,
+        dst_tho_device_idx: usize,
         kind: Kind,
     ) -> Result<Tensor, ThoError> {
-        let t = if dst_device == 0 {
+        let t = if dst_tho_device_idx == 0 {
+            //TODO opt to .to if tensor_mem_size < buf_size {
             track_await(copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size)).await
         } else {
             track_await(copy_h2d_from_ptr(
                 kind,
                 self.buf_size,
                 &self.bufs_pool,
-                dst_device,
+                dst_tho_device_idx,
                 src_ptr,
                 src_size,
             )).await
@@ -184,4 +314,47 @@ impl CopyCtx {
     }
 
 
+}
+
+#[cfg(test)]
+mod tests {
+    use log::debug;
+    use tch::Device::Cuda;
+    use tch::kind::FLOAT_CPU;
+    use tch::Tensor;
+    use thoosa_shared::ThoError;
+    use thoosa_shims::context::ThoCudaContext;
+    use crate::copy_ctx::CudaActorHandle;
+    use crate::tho_device::ThoDevice;
+
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[test]
+    fn test_cuda_actor_copy() -> Result<(), ThoError> {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .on_thread_start(|| {
+                if tch::Cuda::is_available() {
+                    //runs cuCtxSetCurrent
+                    if let Err(err) = ThoCudaContext::new(0) {
+                        panic!("Failed to create context: {err:?}"); //TODO device
+                    }
+                }
+            })
+            .enable_all()
+            .build()?;
+        rt.block_on(async {
+
+
+            let actor = CudaActorHandle::new(1);
+
+            let t = Tensor::rand(&[10, 1000], FLOAT_CPU);
+
+            let r = actor.copy(t, ThoDevice::from(Cuda(0))).await;
+
+            debug!("r={r:?}");
+            // panic!("ok")
+
+        });
+
+        Ok(())
+    }
 }
