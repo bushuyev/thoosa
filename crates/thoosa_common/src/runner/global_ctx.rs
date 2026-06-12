@@ -103,7 +103,7 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            copy_ctx: (1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
+            copy_ctx: vec![], //(1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),

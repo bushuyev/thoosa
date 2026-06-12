@@ -704,28 +704,13 @@ where
         return f(None);
     }
 
-    let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
+    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+    let stream = cuda_actor.acquire_exec_stream().await;
+
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
+    track_await(cuda_actor.sync_stream(stream)).await?;
 
-    track_await(tokio::time::timeout(
-        Duration::from_secs(5),
-        spawn_blocking(move || {
-            tracing::info_span!(
-                "cuda_utils::with_exec_stream_sync",
-                kind = "spawn_blocking",
-                file = file!(),
-                line = line!(),
-                task = format!("synchronize exec stream for tho_device_idx={tho_device_idx}"),
-            ).in_scope(|| {
-                Ok::<_, ThoError>(stream.synchronize()?)
-            })
-        }),
-    )).await???;
-
-    // spawn_blocking(move || {
-    //     stream.synchronize()
-    // }).await??;
 
     out
 }

@@ -1,6 +1,6 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::stream::ThoCudaStream;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -10,11 +10,15 @@ use tokio::sync::{mpsc, oneshot};
 use tub::{Guard, Pool};
 use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::track_await;
+use crate::runner::common::cachable::WithDataRef;
 use crate::tho_device::ThoDevice;
 
 pub enum CudaActorMessage {
     Copy{ src:Tensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
-    Exec
+    SyncStream {
+        stream:Guard<ThoCudaStream>,
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    }
 }
 
 
@@ -50,8 +54,17 @@ impl CudaActor {
                      );
                  });
             }
-            CudaActorMessage::Exec => {
+            CudaActorMessage::SyncStream { stream, respond_to } => {
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                tokio::spawn(async move {
+                    tokio::task::spawn_blocking(move || {
+                        let _ = stream.synchronize();
 
+                        let _ = respond_to.send(Ok(()));
+                    }).await?;
+
+                    Ok::<(), ThoError>(())
+                });
             }
         }
     }
@@ -63,9 +76,19 @@ impl CudaActor {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CudaActorHandle {
     sender: mpsc::Sender<CudaActorMessage>,
+    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
+}
+
+impl Debug for CudaActorHandle {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CudaActorHandle")
+        .field("sender", &self.sender)
+        .field("exec_stream_pool.remaining_capacity", &self.exec_stream_pool.remaining_capacity())
+        .finish()
+    }
 }
 
 impl CudaActorHandle {
@@ -74,7 +97,10 @@ impl CudaActorHandle {
         let actor = CudaActor::new(tho_device_id, receiver);
         tokio::spawn(CudaActor::run(actor));
 
-        Self { sender }
+        Self {
+            sender,
+            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(ThoDevice::from(tho_device_id).gpu_ordinal() as i32, false).unwrap()/*TODO unwrap*/)))
+        }
     }
 
     pub async fn copy(&self, src:Tensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
@@ -89,6 +115,29 @@ impl CudaActorHandle {
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
+
+    pub async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaActorMessage::SyncStream {
+                stream,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    }
+
+
+    //TODO these are 'exec' streams, not for copy
+    pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
+        track_await(self.exec_stream_pool
+            .acquire())
+            .await
+    }
+
+
+
 }
 
 //TODO to be renamed to StreamCtx?
@@ -106,7 +155,7 @@ impl Debug for CopyCtx {
             // .field("cu_ctx", &self.cu_ctx)
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
-            .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
+                .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
             .finish()
     }
 }
@@ -242,6 +291,7 @@ impl CopyCtx {
         kind: Kind,
     ) -> Result<Tensor, ThoError> {
         let t = if dst_tho_device_idx == 0 {
+            //TODO opt to .to if tensor_mem_size < buf_size {
             track_await(copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size)).await
         } else {
             track_await(copy_h2d_from_ptr(
