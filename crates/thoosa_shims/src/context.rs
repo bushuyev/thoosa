@@ -32,6 +32,7 @@ pub struct ThoCudaContext {
 
 impl ThoCudaContext {
     pub fn new(device: i32) -> Result<Self, ThoError> {
+        debug!("ThoCudaContext::new: device={}", device);
         unsafe {
             check_cuda_status(tho_cu_init(0), "cuInit")?;
 

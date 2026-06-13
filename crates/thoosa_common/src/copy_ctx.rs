@@ -4,13 +4,20 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
+use std::time::Duration;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tokio::sync::{mpsc, oneshot, RwLock};
+use tokio::sync::oneshot::Sender;
+use tokio::time::timeout;
+use tracing::error;
 use tub::{Guard, Pool};
-use thoosa_shared::ThoError;
+use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use crate::runner::common::cachable::WithDataRef;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 
 pub enum CudaActorMessage {
@@ -18,6 +25,9 @@ pub enum CudaActorMessage {
     SyncStream {
         stream:Guard<ThoCudaStream>,
         respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
+    GetExecStream {
+        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
     },
     Reset {
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -29,22 +39,36 @@ pub enum CudaActorMessage {
 struct CudaActor {
     tho_device_idx:usize,
     receiver: mpsc::Receiver<CudaActorMessage>,
-    copy_ctx:Arc<RwLock<CopyCtx>>
+    copy_ctx:Arc<RwLock<CopyCtx>>,
+    is_resetting:Arc<AtomicBool>,
 }
 
 impl CudaActor {
     pub fn new(tho_device_idx:usize, receiver: mpsc::Receiver<CudaActorMessage>) -> Self {
+        debug!("CudaActor::new: tho_device_idx={tho_device_idx}");
+
         Self {
             tho_device_idx,
             receiver,
             copy_ctx: Arc::new(RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))),
+            is_resetting: Arc::new(AtomicBool::new(false)),
         }
     }
 
      fn handle_message(&mut self, msg: CudaActorMessage) {
+
         match msg {
             CudaActorMessage::Copy{ src, dst_device, respond_to } => {
+                if cuda_activity_gate().is_paused() {
+                    let _ = respond_to.send(
+                        Err(ThoError::new("CudaActor is offline"))
+                    );
+                    return;
+                }
+
                 let copy_ctx = Arc::clone(&self.copy_ctx);
+                let is_resetting = Arc::clone(&self.is_resetting);
+                let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
 
@@ -56,13 +80,8 @@ impl CudaActor {
                     ).await;
 
                     if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
-                        match copy_ctx.write().await.reset() {
-                            Ok(_) => {
-                                info!("CudaActor::handle_message/Copy: Reset ok");
-                            }
-                            Err(e) => {
-                                info!("CudaActor::handle_message/Copy: Reset failed: e={e:?}");
-                            }
+                        if let Err(e) = Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "Copy").await {
+                            error!("CudaActor::handle_message, Copy:, e={e:?}");
                         }
                     }
 
@@ -72,8 +91,17 @@ impl CudaActor {
                  });
             }
             CudaActorMessage::SyncStream { stream, respond_to } => {
-                let copy_ctx = Arc::clone(&self.copy_ctx);
+                if cuda_activity_gate().is_paused() {
+                    let _ = respond_to.send(
+                        Err(ThoError::new("CudaActor is offline"))
+                    );
+                    return;
+                }
 
+
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let is_resetting = Arc::clone(&self.is_resetting);
+                let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
                     let result= tokio::task::spawn_blocking(move || {
                         stream.synchronize()
@@ -81,13 +109,8 @@ impl CudaActor {
                     }).await?;
 
                     if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
-                        match copy_ctx.write().await.reset() {
-                            Ok(_) => {
-                                info!("CudaActor::handle_message/SyncStream: Reset ok");
-                            }
-                            Err(e) => {
-                                info!("CudaActor::handle_message/SyncStream: Reset failed: e={e:?}");
-                            }
+                        if let Err(e) =Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "SyncStream").await {
+                            error!("CudaActor::handle_message, SyncStream:, e={e:?}");
                         }
                     }
 
@@ -97,21 +120,67 @@ impl CudaActor {
                 });
             }
             CudaActorMessage::Reset { respond_to } => {
+                if self.is_resetting.load(Relaxed) {
+                    let _ = respond_to.send(
+                        Err(ThoError::new("CudaActor is resetting"))
+                    );
+                    return;
+                }
+
                 let copy_ctx = Arc::clone(&self.copy_ctx);
-
+                let is_resetting = Arc::clone(&self.is_resetting);
+                let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
+                    Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "Reset").await;
 
-                    match copy_ctx.write().await.reset() {
-                        Ok(_) => {
-                            info!("CudaActor::handle_message/Reset: Reset ok");
-                        }
-                        Err(e) => {
-                            info!("CudaActor::handle_message/Reset: Reset failed: e={e:?}");
-                        }
-                    }
+                    let _ = respond_to.send(Ok(()));
                 });
+            }
+            CudaActorMessage::GetExecStream { respond_to } => {
+                if cuda_activity_gate().is_paused() {
+                    let _ = respond_to.send(
+                        Err(ThoError::new("CudaActor is offline"))
+                    );
+                    return;
+                }
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                tokio::spawn(async move {
+                    respond_to.send(Ok(copy_ctx.read().await.acquire_exec_stream().await))
+                });
+            }
+        }
+    }
 
-                let _ = respond_to.send(Ok(()));
+    async fn do_reset(copy_ctx: Arc<RwLock<CopyCtx>>, is_resetting:Arc<AtomicBool>,  tho_device_idx:usize, from:&str) -> Result<(), ThoError> {
+        if is_resetting.load(Relaxed) {
+            return Ok(());
+        }
+
+        is_resetting.store(true, Relaxed);
+        let ticket = cuda_activity_gate().request_pause();
+
+
+        match {
+            track_await(GlobalCtx::global()
+                .drop_device(tho_device_idx, "drop"))
+                .await?;
+
+            info!("CudaActor::handle_message/{from}, Reset: drop_device done");
+
+            timeout(Duration::from_millis(1000), copy_ctx.write()).await?.reset()
+        } {
+            Ok(_) => {
+                is_resetting.store(false, Relaxed);
+                let is_owner = ticket.is_owner();
+
+                cuda_activity_gate().finish_pause(ticket);//TODO can be done only here so
+
+                info!("CudaActor::handle_message/{from}: is_owner={is_owner} Reset ok");
+                Ok(())
+            }
+            Err(e) => {
+                info!("CudaActor::handle_message/{from}, Reset: failed: e={e:?}");
+                panic!("reset failed");//TODO shutdown
             }
         }
     }
@@ -123,30 +192,22 @@ impl CudaActor {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CudaActorHandle {
     sender: mpsc::Sender<CudaActorMessage>,
-    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
 }
 
-impl Debug for CudaActorHandle {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CudaActorHandle")
-        .field("sender", &self.sender)
-        .field("exec_stream_pool.remaining_capacity", &self.exec_stream_pool.remaining_capacity())
-        .finish()
-    }
-}
 
 impl CudaActorHandle {
     pub fn new(tho_device_id:usize) -> Self {
+        debug!("CudaActorHandle::new: tho_device_id={tho_device_id}");
+
         let (sender, receiver) = mpsc::channel(8);
         let actor = CudaActor::new(tho_device_id, receiver);
         tokio::spawn(CudaActor::run(actor));
 
         Self {
             sender,
-            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(ThoDevice::from(tho_device_id).gpu_ordinal() as i32, false).unwrap()/*TODO unwrap*/)))
         }
     }
 
@@ -187,13 +248,16 @@ impl CudaActorHandle {
     }
 
     //TODO these are 'exec' streams, not for copy
-    pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
-        track_await(self.exec_stream_pool
-            .acquire())
-            .await
+    pub async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaActorMessage::GetExecStream {
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
-
-
 
 }
 
@@ -202,8 +266,8 @@ pub struct CopyCtx {
     pub(crate) cu_ctx: ThoCudaContext,
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
-    exec_stream_pool: Arc<Pool<ThoCudaStream>>,
-    bufs_pool: Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>,
+    exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
+    bufs_pool: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
 }
 
 impl Debug for CopyCtx {
@@ -212,17 +276,22 @@ impl Debug for CopyCtx {
             // .field("cu_ctx", &self.cu_ctx)
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
-                .field("bufs_pool.remaining_capacity", &self.bufs_pool.remaining_capacity())
+                .field("bufs_pool.remaining_capacity", &self.bufs_pool.as_ref().expect("bufs_pool").remaining_capacity())
             .finish()
     }
 }
 
 impl CopyCtx {
-    pub fn new(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
+    pub fn new(cuda_device: usize, mem_k: f64, buffs: usize) -> Self {
+        debug!("CopyCtx::new: cuda_device={cuda_device} mem_k={mem_k} buffs={buffs}");
+
         let cuda_context = ThoCudaContext::new(cuda_device as i32).unwrap();
         cuda_context.bind_to_thread().unwrap();
         // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-        let bufs_pool = Self::build_pool(buffs, buf_size, cuda_device);
+
+        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
+
+        let bufs_pool = Some(Self::build_pool(buffs, buf_size, cuda_device));
         // let device = cu_ctx.ordinal() as i32;
 
 
@@ -230,7 +299,7 @@ impl CopyCtx {
             cu_ctx: cuda_context,
             buffs,
             buf_size,
-            exec_stream_pool: Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap()))),//TODO unwrap)),
+            exec_stream_pool: Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
             bufs_pool,
         }
     }
@@ -253,7 +322,7 @@ impl CopyCtx {
     #[cfg(test)]
     #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) {
-        assert_eq!(self.bufs_pool.remaining_capacity(), self.buffs);
+        assert_eq!(self.bufs_pool.as_ref().expect("no bufs_pool").remaining_capacity(), self.buffs);
         // self
             // .cu_ctx
             // .bind_to_thread()
@@ -269,12 +338,12 @@ impl CopyCtx {
 
         self.buffs = buffs;
         self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs);
-        self.bufs_pool = Self::build_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/)
+        self.bufs_pool = Some(Self::build_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/))
     }
 
     //TODO these are 'exec' streams, not for copy
     pub async fn acquire_exec_stream(&self) -> Guard<ThoCudaStream> {
-        track_await(self.exec_stream_pool
+        track_await(self.exec_stream_pool.as_ref().expect("no exec_stream_pool")
             .acquire())
             .await
     }
@@ -282,13 +351,16 @@ impl CopyCtx {
     pub fn reset(&mut self) -> Result<(), ThoError> {
         info!("CopyCtx::reset_cuda_context: about to reset cu_ctx.reset");
 
+        drop(self.bufs_pool.take());
+        drop(self.exec_stream_pool.take());
+
         self.cu_ctx.reset()?;
         info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 
-        self.bufs_pool = Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize);
+        self.bufs_pool = Some(Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize));
         info!("CopyCtx::reset_cuda_context: bufs_pool rebuilt");
 
-        self.exec_stream_pool = Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cu_ctx.device, false).unwrap())));
+        self.exec_stream_pool = Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cu_ctx.device, false).unwrap()))));
 
         info!("CopyCtx::reset_cuda_context: exec_stream_pool rebuilt");
 
@@ -300,9 +372,10 @@ impl CopyCtx {
     }
 
     pub fn make_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> CopyCtx {
-        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
 
-        CopyCtx::new(cuda_device, buffs, buf_size)
+        debug!("make_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
+
+        CopyCtx::new(cuda_device, mem_k, buffs)
     }
 
     fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize) -> usize {
@@ -323,17 +396,17 @@ impl CopyCtx {
 
     pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_device == 0 {
-            track_await(move_d2h(kind, src_t, self.buf_size, &self.bufs_pool)).await
+            track_await(move_d2h(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"))).await
         } else {
-            track_await(move_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_device)).await
+            track_await(move_h2d(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), dst_device)).await
         }
     }
 
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_tho_device == 0 {
-            track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool)).await
+            track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"))).await
         } else {
-            track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool, dst_tho_device)).await
+            track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), dst_tho_device)).await
         }
     }
     
@@ -346,12 +419,12 @@ impl CopyCtx {
     ) -> Result<Tensor, ThoError> {
         let t = if dst_tho_device_idx == 0 {
             //TODO opt to .to if tensor_mem_size < buf_size {
-            track_await(copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool, src_ptr, src_size)).await
+            track_await(copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), src_ptr, src_size)).await
         } else {
             track_await(copy_h2d_from_ptr(
                 kind,
                 self.buf_size,
-                &self.bufs_pool,
+                &self.bufs_pool.as_ref().expect("no bufs_pool"),
                 dst_tho_device_idx,
                 src_ptr,
                 src_size,

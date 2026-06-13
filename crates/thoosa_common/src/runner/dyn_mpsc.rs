@@ -24,6 +24,7 @@ use tracing::{debug, warn, Instrument};
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, buffer_limits};
 use thoosa_shared::tracked_await::track_await;
+use crate::runner::global_ctx::GlobalCtx;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum JobFeedback {
@@ -604,15 +605,15 @@ impl DynamicTaskExecutor {
                         // that request. The failing job must return ContextReset immediately:
                         // it may be a child of a suspended parent that also has to unwind
                         // before reset_fn can run exclusively.
-                        // let pause_ticket = cuda_activity_gate().request_pause();
-                        // if pause_ticket.is_owner() {
-                        //     let _ = accepting_tx.send(false);
-                            // if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
-                            //     error!("DynamicTaskExecutor::submit: manager is closed while requesting CUDA reset");
-                            //     let _ = accepting_tx.send(true);
-                            //     cuda_activity_gate().finish_pause(pause_ticket);
-                            // }
-                        // }
+                        let pause_ticket = cuda_activity_gate().request_pause();
+                        if pause_ticket.is_owner() {
+                            let _ = accepting_tx.send(false);
+                            if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
+                                error!("DynamicTaskExecutor::submit: manager is closed while requesting CUDA reset");
+                                let _ = accepting_tx.send(true);
+                                cuda_activity_gate().finish_pause(pause_ticket);
+                            }
+                        }
 
                         result_sender.send(Err(Self::context_reset_error()));
                         return JobFeedback::Neutral;
@@ -724,11 +725,11 @@ impl DynamicTaskExecutor {
             debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
 
             log::logger().flush();
-            if log::log_enabled!(Level::Debug) {
+            // if log::log_enabled!(Level::Debug) {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            }
+            // }
 
-            if let Err(e) = track_await(reset_fn(tho_device_idx)).await {
+            if let Err(e) = track_await(GlobalCtx::global().cuda_actor(tho_device_idx).reset()).await {
                 error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
             } else {
                 info!("DynamicTaskExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
