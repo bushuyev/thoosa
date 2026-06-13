@@ -604,15 +604,15 @@ impl DynamicTaskExecutor {
                         // that request. The failing job must return ContextReset immediately:
                         // it may be a child of a suspended parent that also has to unwind
                         // before reset_fn can run exclusively.
-                        let pause_ticket = cuda_activity_gate().request_pause();
-                        if pause_ticket.is_owner() {
-                            let _ = accepting_tx.send(false);
-                            if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
-                                error!("DynamicTaskExecutor::submit: manager is closed while requesting CUDA reset");
-                                let _ = accepting_tx.send(true);
-                                cuda_activity_gate().finish_pause(pause_ticket);
-                            }
-                        }
+                        // let pause_ticket = cuda_activity_gate().request_pause();
+                        // if pause_ticket.is_owner() {
+                        //     let _ = accepting_tx.send(false);
+                            // if cmd_tx.send(ManagerCmd::RequestCudaReset { pause_ticket, source: "submit" }).is_err() {
+                            //     error!("DynamicTaskExecutor::submit: manager is closed while requesting CUDA reset");
+                            //     let _ = accepting_tx.send(true);
+                            //     cuda_activity_gate().finish_pause(pause_ticket);
+                            // }
+                        // }
 
                         result_sender.send(Err(Self::context_reset_error()));
                         return JobFeedback::Neutral;
