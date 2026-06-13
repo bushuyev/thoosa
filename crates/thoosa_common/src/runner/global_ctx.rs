@@ -378,11 +378,10 @@ impl GlobalCtx {
         tokio::time::timeout(Duration::from_secs(10), rw_lock.write()).await.expect("Should be able to write copy ctx")
     }
 
-
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> CudaActorHandle {
         let device:ThoDevice = device.into();
         let gpu_device_ordinal = device.gpu_ordinal();
-        self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).clone()
+        self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
     }
 }
 
@@ -770,11 +769,12 @@ mod tests {
         // let cu_ctx = ThoCudaContext::new(0 as i32)?;
         // cu_ctx.reset()?;
 
-        GlobalCtx::reset_cuda_context(1).await?;
+        let cuda_actor = GlobalCtx::global().cuda_actor(1);
+        cuda_actor.reset().await?;
         debug!("reset done");
 
         let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
-        let t_cuda = GlobalCtx::global().copy_ctx(1).await.copy(&t_cpu, 1, Float).await?;
+        let t_cuda = cuda_actor.copy(t_cpu, 1.into()).await?;
         debug!("t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();

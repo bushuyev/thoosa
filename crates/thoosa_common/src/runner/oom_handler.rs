@@ -333,46 +333,6 @@ where
         }
 
         let tho_device_idx = run_context.tho_device_idx();
-        let fast_path_key = oom_fast_path_key::<R, W, S>(tho_device_idx);
-        let initial_error = if !oom_fast_path_disabled().contains(&fast_path_key) {//TODO remove
-            let fast_task = Arc::clone(task);
-            let fast_input = Arc::clone(&input);
-            let fast_run_ctx = run_context.branch(false);
-
-            match track_await(oom_executor(tho_device_idx).submit(
-                fast_run_ctx.max_other_parallel().into(),
-                async move {
-                    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                    let stream = cuda_actor.acquire_exec_stream().await;
-
-                    let out = track_await(fast_input
-                        .with_data_ref(
-                            tho_device_idx,
-                            fast_run_ctx,
-                            None,
-                            |data, ctx| {
-                                let _guard = ThoStreamGuard::new(&stream)?;
-                                Arc::clone(&fast_task).do_run(data.borrow(), ctx)
-                            },
-                        )).await;
-
-                    track_await(cuda_actor.sync_stream(stream)).await?;
-
-                    out
-                },
-                None
-            )).await {
-                Ok(out) => return Ok(out),
-                Err(err) if err.is_retryable_oom() => {
-                    oom_fast_path_disabled().insert(fast_path_key);
-                    debug!("OOMHandler::run: disabling fast path for key={fast_path_key:?} after retryable OOM err={err:?}");
-                    Some(err)
-                }
-                Err(err) => return Err(err),
-            }
-        } else {
-            None
-        };
 
         track_await(run_with_runner(
             &self.adjusters,
@@ -380,7 +340,6 @@ where
             input,
             run_context,
             contexts,
-            initial_error,
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
                 track_await(oom_executor(tho_device_idx).submit(
@@ -390,7 +349,7 @@ where
                         // let stream = track_await(track_await(GlobalCtx::global().copy_ctx(tho_device_idx)).await.acquire_exec_stream()).await;
 
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        let stream = cuda_actor.acquire_exec_stream().await;
+                        let stream = cuda_actor.acquire_exec_stream().await?;
 
                         let out = if let Some(selector) = selector {
                             track_await(input
@@ -428,8 +387,11 @@ where
                                 if e.needs_cuda_ctx_reset() {
                                     info!("OOMHandler::run: needs_cuda_ctx_reset e={e:?}");
                                     cuda_actor.reset().await;
+                                    Err(ThoError::new("Reset done"))
+                                } else {
+                                    Err(e)
                                 }
-                               Err(ThoError::new("Reset done"))
+
                             }
                         }
 
@@ -469,7 +431,7 @@ where
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
                     } else {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        let stream = cuda_actor.acquire_exec_stream().await;
+                        let stream = cuda_actor.acquire_exec_stream().await?;
 
                         let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
                             match ThoStreamGuard::new(&stream) {
@@ -478,9 +440,19 @@ where
                             }
                         })).await;
 
-                        track_await(cuda_actor.sync_stream(stream)).await?;
+                        match consume_result {
+                            ConsumeResult::Failed { input, error } => {
+                                if error.needs_cuda_ctx_reset() {
+                                    cuda_actor.reset().await;
+                                }
+                                ConsumeResult::Failed {input, error}
+                            }
+                            ConsumeResult::Ok(out) => {
+                                track_await(cuda_actor.sync_stream(stream)).await?;
+                                ConsumeResult::Ok(out)
+                            }
+                        }
 
-                        consume_result
                     };
 
                     if matches!(&consume_result, ConsumeResult::Failed { error, .. } if error.needs_cuda_ctx_reset()) {
@@ -720,7 +692,6 @@ async fn run_with_runner_impl<'a, 'z, R, IC, RC, RCC, S, A>(
     out_key: <R::In<'_> as WithId>::ID,
     run_context: R::Ctx,
     mut contexts: Contexts<'a, R, IC, RC, RCC>,
-    initial_error: Option<ThoError>,
     mut runner: A,
 ) -> Result<R::Out, ThoError>
 where
@@ -744,22 +715,18 @@ where
     let mut i = 0;
     let mut input_select_adjusted: Option<S> = None;
 
-    let initial_result = match initial_error {
-        Some(err) => Err(err),
-        None => track_await(runner
-            .run(
-                Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
-                None,
-                device_idx,
-                run_context
-                    .as_mut()
-                    .expect("run_with_runner_impl: missing run context")
-                    .branch(false),
-                None,
-            )).await,
-    };
 
-    match initial_result {
+    match track_await(runner
+        .run(
+            Arc::clone(task.as_ref().expect("run_with_runner_impl: missing task")),
+            None,
+            device_idx,
+            run_context
+                .as_mut()
+                .expect("run_with_runner_impl: missing run context")
+                .branch(false),
+            None,
+        )).await {
         Err(te) => {
             exclusive_job.update_from_error(&te);
             debug!("OOMHandler::run, error: 0. ctx_id={ctx_id:?} task={:?} os_thread_id={}  te={te:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
@@ -885,7 +852,6 @@ async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
     input: Arc<W>,
     run_context: R::Ctx,
     contexts: Contexts<'a, R, IC, RC, RCC>,
-    initial_error: Option<ThoError>,
     runner: Run,
 ) -> Result<R::Out, ThoError>
 where
@@ -910,7 +876,6 @@ where
         input.id().clone(),
         run_context,
         contexts,
-        initial_error,
         SharedRunnerRetryAdapter { input, runner },
     )).await
 }
@@ -947,7 +912,6 @@ where
         input.id().clone(),
         run_context,
         contexts,
-        None,
         ConsumeRunnerRetryAdapter {
             input: Some(input),
             runner,

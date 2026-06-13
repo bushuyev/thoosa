@@ -13,7 +13,7 @@ use crate::val::{GridValueSet, NamedRange, NamedVal, PendingOptField, Val};
 use bytemuck::{Pod, Zeroable};
 use chrono::SecondsFormat;
 use lazy_static::lazy_static;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use num_traits::PrimInt;
 use once_cell::sync::Lazy;
 use parking_lot::Mutex;
@@ -240,7 +240,7 @@ impl CudaActivityGate {
     }
 
     pub fn finish_pause(&self, ticket: CudaActivityPauseTicket) {
-        debug!("CudaActivityGate::finish_pause: self={self:?}");
+        info!("CudaActivityGate::finish_pause: self={self:?} ticket={ticket:?}");
         if !ticket.owner {
             return;
         }
