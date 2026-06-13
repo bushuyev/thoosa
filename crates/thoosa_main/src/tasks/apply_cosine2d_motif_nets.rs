@@ -278,7 +278,7 @@ where
             let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
             let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
             let cuda_actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx());
-            let stream = cuda_actor.acquire_exec_stream().await;
+            let stream = cuda_actor.acquire_exec_stream().await?;
 
             let res = with_data!(ctx.branch(false), input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");

@@ -125,10 +125,10 @@ impl Drop for PinnedHostBuffer {
 pub fn cuda_mem_for_device(cuda_device: usize) -> (usize, usize) {
     use cust::sys::cuMemGetInfo_v2;
 
-    let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-    ctx
-        .bind_to_thread()
-        .expect("failed to bind CUDA context while querying memory usage");
+    // let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
+    // ctx
+    //     .bind_to_thread()
+    //     .expect("failed to bind CUDA context while querying memory usage");
 
     let mut free: usize = 0;
     let mut total: usize = 0;
@@ -705,7 +705,7 @@ where
     }
 
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-    let stream = cuda_actor.acquire_exec_stream().await;
+    let stream = cuda_actor.acquire_exec_stream().await?;
 
     let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
 
