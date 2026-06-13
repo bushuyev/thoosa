@@ -12,7 +12,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use dashmap::DashSet;
-use log::{debug, trace, warn};
+use log::{debug, info, trace, warn};
 use mockall::{automock, Any};
 use std::any::TypeId;
 use std::fmt::Debug;
@@ -418,11 +418,21 @@ where
                                 )).await
                         };
 
+                        match out {
+                            Ok(out) => {
+                                track_await(cuda_actor.sync_stream(stream)).await?;
+                                Ok(out)
+                            }
+                            Err(e) => {
 
-                        track_await(cuda_actor.sync_stream(stream)).await?;
+                                if e.needs_cuda_ctx_reset() {
+                                    info!("OOMHandler::run: needs_cuda_ctx_reset e={e:?}");
+                                    cuda_actor.reset().await;
+                                }
+                               Err(ThoError::new("Reset done"))
+                            }
+                        }
 
-
-                        out
                     },
                     job_id_to_rerun
                 )).await

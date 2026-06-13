@@ -38,9 +38,9 @@ impl ThoCudaContext {
             let mut cu_device: CuDevice = 0;
             check_cuda_status(tho_cu_device_get(&mut cu_device, device), "cuDeviceGet")?;
 
-            let mut ctx: CuContext = std::ptr::null_mut();
+            let mut primary_ctx: CuContext = std::ptr::null_mut();
             check_cuda_status(
-                tho_cu_device_primary_ctx_retain(&mut ctx, cu_device),
+                tho_cu_device_primary_ctx_retain(&mut primary_ctx, cu_device),
                 "cuDevicePrimaryCtxRetain",
             )?;
 
@@ -54,15 +54,15 @@ impl ThoCudaContext {
                 "cuDeviceGetAttribute",
             )?;
 
-            let ctx = Self {
+            let tho_ctx = Self {
                 device,
                 cu_device,
-                ctx,
+                ctx: primary_ctx,
                 has_memory_pools: pools_supported > 0,
             };
 
-            ctx.bind_to_thread()?;
-            Ok(ctx)
+            tho_ctx.bind_to_thread()?;
+            Ok(tho_ctx)
         }
     }
 
@@ -95,7 +95,7 @@ impl ThoCudaContext {
 
     pub fn reset(&mut self) -> Result<(), ThoError> {
         unsafe {
-            check_cuda_status(tho_cu_reset(self.cu_device), "cuDevicePrimaryCtxReset")?;
+            check_cuda_status(tho_cu_reset(self.cu_device), "tho_cu_reset")?;
 
             let cu_device: CuDevice = 0;
             check_cuda_status(

@@ -31,10 +31,7 @@ CUresult tho_cu_reset(CUdevice device) {
 
     tho_log(CppLogLevel::Info, "tho_cu_reset: cuDevicePrimaryCtxRelease_v2 done");
 
-    // auto record_cuda_result = tho_record_cuda_result("cuDevicePrimaryCtxRelease_v2", cuDevicePrimaryCtxRetain(device));
-    // return tho_record_cuda_result("cuDevicePrimaryCtxReset", cuDevicePrimaryCtxReset(device));
     return record_cuda_result;
-    // return CUresult::CUDA_SUCCESS;//TODO add ThoShimResult and use its errors
   } catch (...) {
     return CUresult::CUDA_ERROR_UNKNOWN;
   }
