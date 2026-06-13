@@ -384,13 +384,14 @@ where
                             }
                             Err(e) => {
 
-                                if e.needs_cuda_ctx_reset() {
-                                    info!("OOMHandler::run: needs_cuda_ctx_reset e={e:?}");
-                                    cuda_actor.reset().await;
-                                    Err(ThoError::new("Reset done"))
-                                } else {
-                                    Err(e)
-                                }
+                                // if e.needs_cuda_ctx_reset() {
+                                //     info!("OOMHandler::run: needs_cuda_ctx_reset e={e:?}");
+                                //     cuda_actor.reset().await;
+                                //     Err(ThoError::new("Reset done"))
+                                // } else {
+                                //     Err(e)
+                                // }
+                                Err(e)
 
                             }
                         }
@@ -442,9 +443,9 @@ where
 
                         match consume_result {
                             ConsumeResult::Failed { input, error } => {
-                                if error.needs_cuda_ctx_reset() {
-                                    cuda_actor.reset().await;
-                                }
+                                // if error.needs_cuda_ctx_reset() {
+                                //     cuda_actor.reset().await;
+                                // }
                                 ConsumeResult::Failed {input, error}
                             }
                             ConsumeResult::Ok(out) => {

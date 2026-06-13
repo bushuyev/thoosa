@@ -13,7 +13,7 @@ pub const ENTRY: &str = "entry";
 const MIN_SYNC_PARALLELISM: usize = 2;
 const MAX_SYNC_PARALLELISM_MULTIPLIER: usize = 2;
 const COPY_FUTURE_WEIGHT: usize = 2;
-const ENTRY_FUTURE_WEIGHT: usize = 1;
+const ENTRY_FUTURE_WEIGHT: usize = 3;
 const DEFAULT_FUTURE_WEIGHT: usize = 1;
 // Increase only after a clean success streak; one OOM per 16 completed sync jobs is excessive.
 const SUCCESSFUL_EXECUTIONS_PER_INCREASE: usize = 4;
