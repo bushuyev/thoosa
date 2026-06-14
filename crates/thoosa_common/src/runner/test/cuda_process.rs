@@ -8,7 +8,18 @@ use thoosa_shared::ThoError;
 
 const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 
-async fn spawn_worker() -> Result<(Child, UnixStream), ThoError> {
+macro_rules! pure_module_path {
+    () => {{
+        let p = module_path!();
+
+        match p.split_once("::") {
+            Some((_crate_name, rest)) => rest,
+            None => "",
+        }
+    }};
+}
+
+async fn spawn_worker(test_name: &str) -> Result<(Child, UnixStream), ThoError> {
     let exe = std::env::current_exe()?;
 
     let dir = tempfile::tempdir()?;
@@ -20,13 +31,13 @@ async fn spawn_worker() -> Result<(Child, UnixStream), ThoError> {
 
     debug!("spawn_worker, listener={listener:?}");
 
-    let test_name = concat!(module_path!(), "::test_cuda_process");
+    let test_name = format!("{}::{}", pure_module_path!(), test_name);
 
     debug!("spawn_worker, test_name={test_name:?}");
 
     let mut child = Command::new(exe)
-        // .arg(test_name)
-        .arg("runner::test::cuda_process::test_cuda_process")
+        .arg(test_name)
+        // .arg("runner::test::cuda_process::test_cuda_process")
         .arg("--exact")
         .arg("--nocapture")
         .env(IPC_SOCK_ENV, &sock_path)
@@ -93,11 +104,11 @@ async fn test_cuda_process() {
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         run_worker().await.unwrap();
     } else {
-        run_main().await.unwrap();
+        run_main("test_cuda_process").await.unwrap();
     }
 }
-async fn run_main() -> Result<(), ThoError> {
-    let (mut child, mut stream) = spawn_worker().await?;
+async fn run_main(test_name: &str) -> Result<(), ThoError> {
+    let (mut child, mut stream) = spawn_worker(test_name).await?;
 
     let mut buf = [0u8; 1024];
     let n = stream.read(&mut buf).await?;
