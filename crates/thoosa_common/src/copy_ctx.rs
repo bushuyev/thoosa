@@ -330,11 +330,11 @@ impl CopyCtx {
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool,
-            Arc::new(Pool::from_vec(vec![(
+            Some(Arc::new(Pool::from_vec(vec![(
                 PinnedHostBuffer::new(1).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(0/*self.cu_ctx.ordinal()*/ as i32, true).unwrap()),
-            )])),
-        )));
+            )]))),
+        ).unwrap()));
 
         self.buffs = buffs;
         self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs);
