@@ -1,7 +1,5 @@
 #![allow(dead_code)]
 
-pub mod cuda_process;
-
 use log::debug;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -14,7 +12,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, WithId};
 use tokio::task::JoinSet;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
+use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
@@ -335,7 +333,7 @@ pub mod fixtures {
     use thoosa_shared::traits::{Data, Select, SimpleId, WithId};
     use thoosa_shared::ThoError;
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use crate::runner::common::{OutId, RunCtx};
+    use crate::runner::common::OutId;
     use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::common::runnable::{AsyncStage, Stage};
     use crate::runner::run_ctx_2::RunCtxImpl;

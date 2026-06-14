@@ -10,8 +10,7 @@ pub mod metrics;
 #[cfg(test)]
 mod model_test;
 pub mod output_builders;
-
-
+pub mod cuda_process;
 
 pub struct ThoTensorView<'a, D: Dims, Id: Named + Debug + Clone> {
     t: Tensor,
@@ -135,7 +134,7 @@ mod tests {
     }
 
     #[derive(Debug, Clone)]
-    struct LoadedTensor;
+    pub struct LoadedTensor;
     impl Dims for LoadedTensor {
         type Metrics = MonoMetrics<1, 2>;
 
@@ -145,7 +144,7 @@ mod tests {
     // impl Adjustable for ThoTensor2<LoadedTensor, SimpleId> {}
 
     #[derive(Debug, Clone, Default)]
-    struct  LoadedRange {
+    pub(crate) struct  LoadedRange {
         range:std::ops::Range<MonoMetrics<1, 2>>
     }
     impl Adjustable for LoadedRange {}
@@ -213,7 +212,6 @@ mod tests {
 
             let device_idx = ctx.tho_device_idx();
 
-            let num_devices = GlobalCtx::global().device_count();
 
             let tensor = ThoTensor::new(
                 self.out_id(WithId::id(input.as_ref())),
@@ -240,7 +238,7 @@ mod tests {
 
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
-    struct ClcTask {
+    pub(crate) struct ClcTask {
         id: SynKey,
         k: ThoTensor<MulK, SimpleId>,
         fail_until: Vec<FailUntil>,
@@ -299,7 +297,7 @@ mod tests {
     }
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-    struct ClcTaskOutput;
+    pub struct ClcTaskOutput;
     impl Dims for ClcTaskOutput {
         type Metrics = MonoMetrics<1, 2>;
     }
@@ -417,7 +415,6 @@ mod tests {
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let device_idx = ctx.tho_device_idx();
-            let num_devices = GlobalCtx::global().device_count();
 
             let stage = Arc::clone(&self);
             let ctx = ctx;
@@ -435,10 +432,10 @@ mod tests {
     //////////////////////////////
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-    struct LoadAndClcTaskId(&'static str);
+    pub(crate) struct LoadAndClcTaskId(pub(crate) &'static str);
 
     #[derive(Debug, Named)]
-    struct LoadAndClcTask {
+    pub(crate) struct LoadAndClcTask {
         #[allow(dead_code)]
         id: LoadAndClcTaskId,
 
@@ -493,7 +490,6 @@ mod tests {
                 .await?;
 
             let device_idx = ctx.tho_device_idx();
-            let num_devices = GlobalCtx::global().device_count();
 
             Ok(Arc::new(DevicesWrap::wrap(result)))
         }
@@ -693,7 +689,7 @@ mod tests {
         Ok(())
     }
 
-    fn mul_check(
+    pub(crate) fn mul_check(
         mul_k: f64,
         size: MonoMetrics<1, 2>,
         res: &str,
