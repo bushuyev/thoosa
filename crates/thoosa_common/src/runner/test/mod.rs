@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+pub mod cuda_process;
+
 use log::debug;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
@@ -528,6 +530,7 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+    use std::process::Stdio;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock, OnceLock};
@@ -535,12 +538,15 @@ mod tests {
     use super::fixtures::{DLoadedTensor, DLoaderInput, DLoaderInputId, DMulTaskOutputId};
     use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use async_trait::async_trait;
+    use clap::{Args, Parser, Subcommand};
+    use crossbeam::deque::Worker;
     use cached_derive::Cached;
     use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use log::{debug, error};
     use thoosa_named_derive::Named;
     use mockall_double::double;
+    use tokio::process::{Child, Command};
     use thoosa_shared::{simple_id, CopyToDevice};
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
