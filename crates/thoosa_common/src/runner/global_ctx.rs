@@ -28,11 +28,12 @@ use thoosa_shared::tracked_await::track_await;
 pub struct GlobalCtx {
 
     executors: Vec<DynamicTaskExecutor>,
-    num_devices: usize,
+
+    num_devices: usize,//TODO replace with Vec<ThoDevice>
+    sep_process_cuda:bool,//TODO move to ThoDevice
 
     caches: parking_lot::RwLock<HashMap<&'static str, Arc<CacheRegistryEntry>>>,
     is_all_on_cpu: Vec<AtomicBool>,
-    caches_areas: parking_lot::RwLock<CacheAreasKeeper>,
     cache_time: AtomicU64, //for tracking CPU-only lifetime
     purger: Purger,
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
@@ -98,7 +99,6 @@ impl GlobalCtx {
 
             is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
 
-            caches_areas: parking_lot::RwLock::new(CacheAreasKeeper::new(1000)), //100 * 64 cache areas
 
             cache_time: Default::default(),
             purger: Purger::new(),
@@ -107,6 +107,7 @@ impl GlobalCtx {
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
+            sep_process_cuda: true,
         }
     }
 
