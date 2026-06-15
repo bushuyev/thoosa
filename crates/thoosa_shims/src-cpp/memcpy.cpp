@@ -74,13 +74,4 @@ extern "C" {
   CUresult tho_cu_mem_host_unregister(void *ptr) {
     return tho_record_cuda_result("cuMemHostUnregister", cuMemHostUnregister(ptr));
   }
-
-  CUresult tho_cu_stream_synchronize(void *stream) {
-    CUstream cu_stream = nullptr;
-    if (stream != nullptr) {
-      auto *cuda_stream = static_cast<c10::cuda::CUDAStream *>(stream);
-      cu_stream = cuda_stream->stream();
-    }
-    return tho_record_cuda_result("cuStreamSynchronize", cuStreamSynchronize(cu_stream));
-  }
 }
