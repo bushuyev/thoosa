@@ -79,6 +79,7 @@ with-id = "1.0.2"
 tub = "0.3"
 sha2.workspace = true
 tempfile = "3.27.0"
+libc.workspace = true
 
 [build-dependencies]
 chrono.workspace = true
