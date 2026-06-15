@@ -31,6 +31,8 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
     }
 }
 
+
+
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
 mod tests {
