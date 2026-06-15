@@ -334,6 +334,10 @@ where
 
         let tho_device_idx = run_context.tho_device_idx();
 
+        if tho_device_idx == 1 {
+
+        }
+
         track_await(run_with_runner(
             &self.adjusters,
             Arc::clone(task),
@@ -342,56 +346,53 @@ where
             contexts,
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
-                if true {
 
-                    todo!()
-                } else {
-                    track_await(oom_executor(tho_device_idx).submit(
-                        run_ctx.max_other_parallel().into(),
-                        async move {
-                            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                            let stream = cuda_actor.acquire_exec_stream().await?;
+                track_await(oom_executor(tho_device_idx).submit(
+                    run_ctx.max_other_parallel().into(),
+                    async move {
+                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                        let stream = cuda_actor.acquire_exec_stream().await?;
 
-                            let out = if let Some(selector) = selector {
-                                track_await(input
-                                    .with_selected_data_ref(
-                                        tho_device_idx,
-                                        run_ctx,
-                                        selector,
-                                        None,
-                                        |data, ctx| {
-                                            let _guard = ThoStreamGuard::new(&stream)?;
-                                            Arc::clone(&task).do_run(data.borrow(), ctx)
-                                        },
-                                    )).await
-                            } else {
-                                track_await(input
-                                    .with_data_ref(
-                                        tho_device_idx,
-                                        run_ctx,
-                                        None,
-                                        |data, ctx| {
-                                            let _guard = ThoStreamGuard::new(&stream)?;
-                                            Arc::clone(&task).do_run(data.borrow(), ctx)
-                                        },
-                                    )).await
-                            };
+                        let out = if let Some(selector) = selector {
+                            track_await(input
+                                .with_selected_data_ref(
+                                    tho_device_idx,
+                                    run_ctx,
+                                    selector,
+                                    None,
+                                    |data, ctx| {
+                                        let _guard = ThoStreamGuard::new(&stream)?;
+                                        Arc::clone(&task).do_run(data.borrow(), ctx)
+                                    },
+                                )).await
+                        } else {
+                            track_await(input
+                                .with_data_ref(
+                                    tho_device_idx,
+                                    run_ctx,
+                                    None,
+                                    |data, ctx| {
+                                        let _guard = ThoStreamGuard::new(&stream)?;
+                                        Arc::clone(&task).do_run(data.borrow(), ctx)
+                                    },
+                                )).await
+                        };
 
-                            match out {
-                                Ok(out) => {
-                                    track_await(cuda_actor.sync_stream(stream)).await?;
-                                    Ok(out)
-                                }
-                                Err(e) => {
-                                    Err(e)
-                                }
+                        match out {
+                            Ok(out) => {
+                                track_await(cuda_actor.sync_stream(stream)).await?;
+                                Ok(out)
                             }
+                            Err(e) => {
+                                Err(e)
+                            }
+                        }
 
 
-                        },
-                        job_id_to_rerun
-                    )).await
-                }
+                    },
+                    job_id_to_rerun
+                )).await
+
             },
         )).await
     }
