@@ -39,6 +39,4 @@ unsafe extern "C" {
     ) -> CuResult;
 
     pub fn tho_cu_mem_host_unregister(ptr: *mut c_void) -> CuResult;
-
-    pub fn tho_cu_stream_synchronize(stream: *mut c_void) -> CuResult;
 }
