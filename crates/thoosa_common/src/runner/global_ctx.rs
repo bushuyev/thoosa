@@ -23,6 +23,7 @@ use futures::FutureExt;
 use thoosa_shims::context::ThoCudaContext;
 use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
+use crate::torch_runner::cuda_process::CudaWorkerEndpoint;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -40,6 +41,7 @@ pub struct GlobalCtx {
 
     copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>,
     cuda_actors:Vec<CudaActorHandle>,
+    cuda_endpoints:Vec<CudaWorkerEndpoint>,
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
 }
@@ -108,8 +110,39 @@ impl GlobalCtx {
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
             sep_process_cuda: true,
+            cuda_endpoints: vec![],
         }
     }
+
+    async fn new_2(num_devices: usize, cuda_worker_args: Vec<&'static str>) -> Result<Self, ThoError> {
+        debug!("GlobalCtx::new: num_devices={num_devices}");
+
+        assert!(num_devices > 0);//TODO test if it works without GPU
+
+        Ok(Self {
+            num_devices,
+            executors: (0..num_devices).map(|tho_device_idx| {
+                DynamicTaskExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
+            })
+                .collect(),
+
+            caches: parking_lot::RwLock::new(HashMap::new()),
+
+            is_all_on_cpu: (0..num_devices).map(|_| AtomicBool::new(false)).collect(),
+
+
+            cache_time: Default::default(),
+            purger: Purger::new(),
+            shutting_down: false.into(),
+            copy_ctx: vec![], //(1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
+            reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
+
+            cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
+            cuda_endpoints: vec![CudaWorkerEndpoint::new(cuda_worker_args).await?],
+            sep_process_cuda: true,
+        })
+    }
+
 
     fn reset_cuda_context(tho_device_idx: usize) -> BoxFuture<'static, Result<(), ThoError>> {
         let mut guard  = GlobalCtx::global().reset_mutex[tho_device_idx-1].lock();
@@ -157,6 +190,18 @@ impl GlobalCtx {
 
         Self::global()
     }
+
+    ///num_devices: number of devices - CPU + GPU count
+    pub async fn init_devices_2(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<&'static str>/*TODO move to device init struct*/) -> Result<&'static GlobalCtx, ThoError> {
+        debug!("GlobalCtx::init_devices: num_devices={num_devices}");
+
+        GLOBAL_CTX
+            .set(GlobalCtx::new_2(num_devices, cuda_worker_args).await?)
+            .expect("`init_devices` must only be called once at program start");
+
+        Ok(Self::global())
+    }
+
 
     pub fn register_cache(&self, cache: (&'static str, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {
         debug!("GlobalCtx::register_cache: cache={}", cache.0);
@@ -383,6 +428,12 @@ impl GlobalCtx {
         let device:ThoDevice = device.into();
         let gpu_device_ordinal = device.gpu_ordinal();
         self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
+    }
+
+    pub fn cuda_worker_endpoint<D:Into<ThoDevice>+ 'static>(&self, device:D) -> &CudaWorkerEndpoint {
+        let device:ThoDevice = device.into();
+        let gpu_device_ordinal = device.gpu_ordinal();
+        self.cuda_endpoints.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
     }
 }
 
