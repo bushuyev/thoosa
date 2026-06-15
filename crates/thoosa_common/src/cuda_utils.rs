@@ -24,14 +24,14 @@ use thoosa_shared::tracked_await::track_await;
 
 // One contiguous byte range in the source/destination tensor.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct CopyChunk {
-    index: usize,
-    offset: usize,
-    len: usize,
+pub(crate) struct CopyChunk {
+    pub(crate) index: usize,
+    pub(crate) offset: usize,
+    pub(crate) len: usize,
 }
 
 // Split a tensor byte range into chunks that fit in one pinned host buffer checkout.
-fn copy_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) -> Result<Vec<CopyChunk>, ThoError> {
+pub(crate) fn copy_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) -> Result<Vec<CopyChunk>, ThoError> {
     if tensor_mem_size == 0 {
         return Ok(Vec::new());
     }
@@ -951,6 +951,46 @@ mod tests {
 
             assert!(src_t.allclose(&dst, 0.01, 0.01, false));
         }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_small_one_ipc_copy_types() -> Result<(), ThoError> {
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+            init_cpp_logging();
+        }
+
+        let copy_ctx = CopyCtx::make_instance_with_buffer_size(0, 3, 7);
+
+        for tensor_kind in [
+            Kind::Uint8,
+            Kind::Int16,
+            Kind::Int,
+            Kind::Int64,
+            Kind::Double,
+        ] {
+            let source = Tensor::rand(&[10, 1], (Float, Cuda(0)))
+                .multiply_scalar(10.)
+                .totype(tensor_kind);
+
+            let cpu = copy_ctx.ipc_copy_from_ptr(
+                source.data_ptr() as usize,
+                &source.size(),
+                0,
+                tensor_kind,
+            ).await?;
+
+            let copied = copy_ctx.ipc_copy_from_ptr(
+                cpu.data_ptr() as usize,
+                &cpu.size(),
+                1,
+                tensor_kind,
+            ).await?;
+
+            assert!(source.allclose(&copied, 0.01, 0.01, false));
+        }
+
         Ok(())
     }
 
