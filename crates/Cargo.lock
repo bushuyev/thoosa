@@ -5107,6 +5107,7 @@ dependencies = [
  "futures",
  "futures-util",
  "lazy_static",
+ "libc",
  "libloading 0.9.0",
  "log",
  "mockall",

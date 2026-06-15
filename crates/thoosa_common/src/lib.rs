@@ -17,6 +17,7 @@ pub mod bool_iter;
 pub mod builder;
 pub mod copy_ctx;
 pub mod cuda_utils;
+pub mod interprocess_cuda_copy;
 pub mod dims;
 pub mod seq_scan_run_config;
 mod gaussian;

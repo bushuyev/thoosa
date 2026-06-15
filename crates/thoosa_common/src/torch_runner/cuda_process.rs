@@ -18,6 +18,7 @@ use crate::runner::common::RunCtx;
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
+#[cfg(test)]
 use crate::torch_runner::tests::{ClcTask, LoadedTensor};
 
 const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
@@ -53,8 +54,10 @@ impl CudaWorker {
 
         write_text_frame(&mut stream, "worker-ready").await?;
 
+        #[cfg(test)]
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
+        #[cfg(test)]
         let task = Arc::new(ClcTask::new(
             SynKey::new([mono_key!(0, "mul_task_0")]),
             1.0,
@@ -75,6 +78,7 @@ impl CudaWorker {
                     write_text_frame(&mut stream, "pong").await?;
                 }
 
+                #[cfg(test)]
                 "run" => {
                     let input : Arc<DevicesWrap<ThoTensor<LoadedTensor, SynKey>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new("x".into(), Tensor::rand(&[20,30], FLOAT_CUDA))?));
                     let result = OOMHandler::new(
