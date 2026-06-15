@@ -1151,7 +1151,6 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
-        let num_devices = GlobalCtx::global().device_count();
 
         // TODO: replace the test-only u32 -> MotifLoaderInput conversion with explicit constructors.
         let input_id = Arc::new(DevicesWrap::wrap(10u32.into()));
@@ -1234,7 +1233,6 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
-        let num_devices = GlobalCtx::global().device_count();
         let input = Arc::new(DevicesWrap::wrap(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }));
 
         let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = random_slices_loader
