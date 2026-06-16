@@ -23,7 +23,7 @@ use futures::FutureExt;
 use thoosa_shims::context::ThoCudaContext;
 use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
-use crate::torch_runner::cuda_process::CudaWorkerEndpoint;
+use crate::torch_runner::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -41,7 +41,7 @@ pub struct GlobalCtx {
 
     copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>,
     cuda_actors:Vec<CudaActorHandle>,
-    cuda_endpoints:Vec<CudaWorkerEndpoint>,
+    cuda_ipc_actors:Vec<CudaIPCActorHandle>,
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
 }
@@ -110,10 +110,11 @@ impl GlobalCtx {
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
             sep_process_cuda: true,
-            cuda_endpoints: vec![],
+            cuda_ipc_actors: vec![],
         }
     }
 
+    //TODO this should replace GlobalCtx::new when ipc refactoring is completed
     async fn new_2(num_devices: usize, cuda_worker_args: Vec<&'static str>) -> Result<Self, ThoError> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
@@ -138,7 +139,7 @@ impl GlobalCtx {
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
-            cuda_endpoints: vec![CudaWorkerEndpoint::new(cuda_worker_args).await?],
+            cuda_ipc_actors: vec![CudaIPCActorHandle::new(1, cuda_worker_args).await?],//TODO should be merged with cuda_actors when ipc refactoring is completed - each device should be used either in-process or through IPC
             sep_process_cuda: true,
         })
     }
@@ -430,10 +431,10 @@ impl GlobalCtx {
         self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
     }
 
-    pub fn cuda_worker_endpoint<D:Into<ThoDevice>+ 'static>(&self, device:D) -> &CudaWorkerEndpoint {
+    pub fn cuda_ipc_actor<D:Into<ThoDevice>+ 'static>(&self, device:D) -> CudaIPCActorHandle {
         let device:ThoDevice = device.into();
         let gpu_device_ordinal = device.gpu_ordinal();
-        self.cuda_endpoints.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
+        self.cuda_ipc_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
     }
 }
 
