@@ -81,7 +81,11 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 
 
 //D:Dims - is just a reminder of what dimensions a tensor has.
-pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
+pub struct ThoTensor<D = AnyDims, Id = ()>
+where
+    D:Dims,
+    Id:Named + Debug + Clone
+{
     id: Id,
     pub t: Tensor,
 
@@ -305,7 +309,6 @@ where
             self.tho_device()
         };
 
-
         let src = if self.t.is_contiguous() { None } else {
             warn!("CopyToDevice for ThoTensor: tensor was not contiguous, self.id={:?}", self.id);
             Some(self.t.f_contiguous()?)
@@ -313,14 +316,6 @@ where
         let src_ref = src.as_ref().unwrap_or(&self.t);
         debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
 
-        // let copy_ctx = track_await(GlobalCtx::global().copy_ctx(ctx_device)).await;
-        // let copy = track_await(copy_ctx
-        //     .copy_from_ptr(
-        //         src_ref.data_ptr() as usize,
-        //         &src_ref.size(),
-        //         dst_device.ordinal(),
-        //         src_ref.kind(),
-        //     )).await?;
 
         let cuda_actor = GlobalCtx::global().cuda_actor(ctx_device);
         let copy = track_await(cuda_actor

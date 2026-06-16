@@ -17,6 +17,8 @@ use tracing::error;
 use tub::{Guard, Pool};
 use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::Named;
+use crate::dims::Dims;
 use crate::runner::common::cachable::WithDataRef;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
@@ -547,7 +549,7 @@ mod tests {
 
             let t = Tensor::rand(&[10, 1000], FLOAT_CPU);
 
-            let r = actor.copy(t, ThoDevice::from(Cuda(0))).await;
+            let r = actor.copy(t.into(), ThoDevice::from(Cuda(0))).await;
 
             debug!("r={r:?}");
             // panic!("ok")
