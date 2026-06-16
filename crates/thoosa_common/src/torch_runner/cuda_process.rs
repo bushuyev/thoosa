@@ -3,6 +3,9 @@ use std::fmt::Debug;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+use dashmap::DashMap;
 use log::{debug, error};
 use tch::Device::Cuda;
 use tch::Kind::Float;
@@ -34,8 +37,15 @@ const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 
 struct CudaWorker {
+    all_cuda_tensors:DashMap<u64, Tensor>,
     handle:JoinHandle<Result<(), ThoError>>,
 }
+
+struct WorkerReply {
+    id: u64,
+    payload: String,
+}
+
 
 impl CudaWorker {
     pub fn new() -> Result<Self, ThoError> {
@@ -46,74 +56,67 @@ impl CudaWorker {
         });
 
         Ok(Self {
+            all_cuda_tensors:DashMap::new(),
             handle
         })
     }
 
-    async fn run_worker() -> Result<(), ThoError> {
 
+    pub async fn run_worker() -> Result<(), ThoError> {
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
 
         debug!("running worker: sock_path={sock_path:?}");
 
-        let mut stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
+        let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
-        debug!("worker connected");
+        debug!("run_worker: worker connected");
 
-        write_text_frame(&mut stream, "worker-ready").await?;
+        let (mut reader, mut writer) = stream.into_split();
 
-        #[cfg(test)]
-        let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
+        write_text_frame(&mut writer, "worker-ready").await?;
 
-        #[cfg(test)]
-        let task = Arc::new(ClcTask::new(
-            SynKey::new([mono_key!(0, "mul_task_0")]),
-            1.0,
-            vec![],
-            1000,
-            Float,
-            Cuda(0),
-            false,
-        ));
+        let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
+
+        let writer_task = tokio::spawn(worker_response_writer_loop(writer, reply_rx));
 
         loop {
-            let msg = read_text_frame(&mut stream).await?;
+            let frame = read_text_frame(&mut reader).await?;
+            let (id, payload) = parse_wire_msg(&frame)?;
 
-            debug!("worker received: {msg:?}");
+            debug!("run_worker: worker received: id={id}, payload={payload:?}");
 
-            match msg.as_str() {
-                "ping" => {
-                    write_text_frame(&mut stream, "pong").await?;
-                }
+            if payload == "shutdown" {
+                reply_tx
+                    .send(WorkerReply {
+                        id,
+                        payload: "shutdown-ok".to_string(),
+                    })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
-                #[cfg(test)]
-                "run" => {
-
-                }
-
-                "status" => {
-                    write_text_frame(&mut stream, "worker-status: alive").await?;
-                }
-
-                "shutdown" => {
-                    write_text_frame(&mut stream, "shutdown-ok").await?;
-                    debug!("worker shutting down after shutdown command");
-                    break;
-                }
-
-                msg if msg.starts_with("echo ") => {
-                    let payload = &msg["echo ".len()..];
-                    let reply = format!("echo-reply {payload}");
-                    write_text_frame(&mut stream, &reply).await?;
-                }
-
-                other => {
-                    let reply = format!("unknown-command {other:?}");
-                    write_text_frame(&mut stream, &reply).await?;
-                }
+                debug!("run_worker: worker got shutdown command");
+                break;
             }
+
+            let reply_tx = reply_tx.clone();
+
+            tokio::spawn(async move {
+                let reply = handle_worker_request(payload).await;
+
+                debug!("run_worker: reply={reply}");
+
+                let _ = reply_tx
+                    .send(WorkerReply { id, payload: reply })
+                    .await;
+            });
         }
+
+        drop(reply_tx);
+
+        writer_task
+            .await
+            .map_err(|e| ThoError::new(format!("worker writer task join error: {e}")))??;
 
         debug!("worker finished");
 
@@ -121,6 +124,45 @@ impl CudaWorker {
     }
 
 }
+
+
+async fn worker_response_writer_loop<W>(
+    mut writer: W,
+    mut reply_rx: mpsc::Receiver<WorkerReply>,
+) -> Result<(), ThoError>
+where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(reply) = reply_rx.recv().await {
+        let frame = encode_wire_msg(reply.id, &reply.payload);
+        write_text_frame(&mut writer, &frame).await?;
+    }
+
+    Ok(())
+}
+
+
+async fn handle_worker_request(payload: String) -> String {
+    debug!("handle_worker_request: payload={payload:?}");
+
+    match payload.as_str() {
+        "ping" => "pong".to_string(),
+
+        "status" => "worker-status: alive".to_string(),
+
+        msg if msg.starts_with("copy: ") => {
+            let text = &msg["copy: ".len()..];
+
+            format!("copy: {text} done")
+        }
+
+
+        other => {
+            format!("unknown-command {other:?}")
+        }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct IPCTensor {//reference to a tensor kept in worker process started in CudaWorker::run_worker
@@ -157,8 +199,12 @@ struct OutgoingRequest {
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
+    tx: mpsc::Sender<OutgoingRequest>,
     receiver: mpsc::Receiver<CudaIPCActorMessage>,
     child:Child,
+
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    next_id: Arc<AtomicU64>,
 }
 
 impl CudaIPCActor {
@@ -178,8 +224,11 @@ impl CudaIPCActor {
 
 
         Ok(Self {
+            tx,
             receiver,
             child,
+            pending,
+            next_id: Arc::new(AtomicU64::new(1)),
         })
     }
 
@@ -252,15 +301,40 @@ impl CudaIPCActor {
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
 
-                tokio::spawn(async move {
-                    // write_text_frame(&mut self.stream, "main ").await?;
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let (reply_tx, reply_rx) = oneshot::channel();
+                let payload = format!("copy: {src:?}");
+                let pending = Arc::clone(&self.pending);
+                let self_tx = self.tx.clone();
 
-                    Ok::<_, ThoError>(())
+                tokio::spawn(async move {
+                    {
+                        let mut pending = pending.lock().await;
+
+                        let old = pending.insert(id, reply_tx);
+                        debug_assert!(old.is_none());
+                    }
+
+                    let send_result = self_tx.send(OutgoingRequest { id, payload }).await;
+
+                    if send_result.is_err() {
+                        let mut pending = pending.lock().await;
+                        pending.remove(&id);
+
+                        return Err(ThoError::new("worker IPC writer task is closed"));
+                    }
+
+
+                    let id = reply_rx
+                        .await
+                        .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))??;
+
+                    respond_to.send(Ok(IPCTensor::new(id.clone()))).map_err(|e| ThoError::new(format!("response channel for request {id} got {e:?}")))?;
+
+                    Ok(())
                 });
 
-                let _ = respond_to.send(
-                    Ok(IPCTensor::new("1")),
-                );
+
             }
             CudaIPCActorMessage::SyncStream { .. } => {}
             CudaIPCActorMessage::GetExecStream { .. } => {}
@@ -273,8 +347,6 @@ impl CudaIPCActor {
             actor.handle_message(msg);
         }
     }
-
-
 }
 
 async fn writer_loop<W>(
@@ -302,7 +374,7 @@ async fn writer_loop<W>(
         }
     }
 
-    println!("worker IPC writer loop finished");
+    debug!("worker IPC writer loop finished");
 }
 
 async fn reader_loop<R>(
@@ -315,7 +387,7 @@ async fn reader_loop<R>(
         let frame = match read_text_frame(&mut reader).await {
             Ok(frame) => frame,
             Err(e) => {
-                println!("worker IPC reader stopped: {e}");
+                debug!("worker IPC reader stopped: {e}");
 
                 fail_all_pending(&pending, format!("worker IPC reader stopped: {e}")).await;
                 break;
@@ -345,7 +417,7 @@ async fn reader_loop<R>(
         }
     }
 
-    println!("worker IPC reader loop finished");
+    debug!("worker IPC reader loop finished");
 }
 
 fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
@@ -626,6 +698,8 @@ mod tests {
                 main_process_cpu_tensor,
                 tho_device_idx.into(),
             )).await?;
+
+        debug!("run_main: copy={copy:?}");
 
         // let ready = read_text_frame(&mut stream).await?;
         // debug!("main received: {ready:?}");
