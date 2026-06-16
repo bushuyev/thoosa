@@ -1,16 +1,17 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use log::debug;
+use log::{debug, error};
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::Tensor;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tub::Guard;
 use thoosa_shared::comp_id::SynKey;
@@ -88,25 +89,7 @@ impl CudaWorker {
 
                 #[cfg(test)]
                 "run" => {
-                    let input : Arc<DevicesWrap<ThoTensor<LoadedTensor, SynKey>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new("x".into(), Tensor::rand(&[20,30], FLOAT_CUDA))?));
-                    let result = OOMHandler::new(
-                        vec![Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
-                            20,
-                            10,
-                        )))],
-                        None,
-                    )
-                        .run(
-                            &task,
-                            input,
-                            root_ctx.branch(true),
-                            Contexts::new(
-                                NoopInputContext(None),
-                                NoopRunnableContext {},
-                                MaxParallelAdjustContextImpl::new(),
-                            ),
-                        )
-                        .await?;
+
                 }
 
                 "status" => {
@@ -166,22 +149,37 @@ pub enum CudaIPCActorMessage {
 
 }
 
+struct OutgoingRequest {
+    id: u64,
+    payload: String,
+}
+
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
     receiver: mpsc::Receiver<CudaIPCActorMessage>,
     child:Child,
-    stream:UnixStream
 }
 
 impl CudaIPCActor {
     pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
 
-        let (child, stream) = Self::spawn_worker(cuda_worker_args).await?;
+        let (mut child, stream) = Self::spawn_worker(cuda_worker_args).await?;
+
+        let (reader, writer) = stream.into_split();
+
+        let (tx, rx) = mpsc::channel::<OutgoingRequest>(1024);
+
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending)));
+        tokio::spawn(reader_loop(reader, Arc::clone(&pending)));
+
+
         Ok(Self {
             receiver,
             child,
-            stream,
         })
     }
 
@@ -275,7 +273,129 @@ impl CudaIPCActor {
             actor.handle_message(msg);
         }
     }
+
+
 }
+
+async fn writer_loop<W>(
+    mut writer: W,
+    mut rx: mpsc::Receiver<OutgoingRequest>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+) where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(req) = rx.recv().await {
+        let frame = encode_wire_msg(req.id, &req.payload);
+
+        if let Err(e) = write_text_frame(&mut writer, &frame).await {
+            error!("worker IPC writer failed: {e}");
+
+            fail_one_pending(
+                &pending,
+                req.id,
+                format!("failed to write request {}: {e}", req.id),
+            )
+                .await;
+
+            fail_all_pending(&pending, format!("worker IPC writer stopped: {e}")).await;
+            break;
+        }
+    }
+
+    println!("worker IPC writer loop finished");
+}
+
+async fn reader_loop<R>(
+    mut reader: R,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+) where
+    R: AsyncRead + Unpin,
+{
+    loop {
+        let frame = match read_text_frame(&mut reader).await {
+            Ok(frame) => frame,
+            Err(e) => {
+                println!("worker IPC reader stopped: {e}");
+
+                fail_all_pending(&pending, format!("worker IPC reader stopped: {e}")).await;
+                break;
+            }
+        };
+
+        let (id, payload) = match parse_wire_msg(&frame) {
+            Ok(parsed) => parsed,
+            Err(e) => {
+                error!("bad worker response frame {frame:?}: {e}");
+                continue;
+            }
+        };
+
+        let reply_tx = {
+            let mut pending = pending.lock().await;
+            pending.remove(&id)
+        };
+
+        match reply_tx {
+            Some(reply_tx) => {
+                let _ = reply_tx.send(Ok(payload));
+            }
+            None => {
+                error!("received response for unknown request id={id}, payload={payload:?}");
+            }
+        }
+    }
+
+    println!("worker IPC reader loop finished");
+}
+
+fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
+    let Some((id, payload)) = frame.split_once('\t') else {
+        return Err(ThoError::new(format!(
+            "bad wire frame without request id separator: {frame:?}"
+        )));
+    };
+
+    let id = id
+        .parse::<u64>()
+        .map_err(|e| ThoError::new(format!("bad request id {id:?}: {e}")))?;
+
+    Ok((id, payload.to_string()))
+}
+
+
+async fn fail_one_pending(
+    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    id: u64,
+    msg: String,
+) {
+    let reply_tx = {
+        let mut pending = pending.lock().await;
+        pending.remove(&id)
+    };
+
+    if let Some(reply_tx) = reply_tx {
+        let _ = reply_tx.send(Err(ThoError::new(msg)));
+    }
+}
+
+async fn fail_all_pending(
+    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    msg: String,
+) {
+    let pending_items = {
+        let mut pending = pending.lock().await;
+        pending.drain().collect::<Vec<_>>()
+    };
+
+    for (_id, reply_tx) in pending_items {
+        let _ = reply_tx.send(Err(ThoError::new(msg.clone())));
+    }
+}
+
+fn encode_wire_msg(id: u64, payload: &str) -> String {
+    format!("{id}\t{payload}")
+}
+
 
 #[derive(Debug, Clone)]
 pub struct CudaIPCActorHandle {
@@ -346,27 +466,36 @@ impl CudaIPCActorHandle {
 
 }
 
-async fn write_text_frame(
-    stream: &mut UnixStream,
+async fn write_text_frame<W>(
+    writer: &mut W,
     text: &str,
-) -> Result<(), ThoError> {
-    write_frame(stream, text.as_bytes()).await?;
+) -> Result<(), ThoError>
+where
+    W: AsyncWrite + Unpin,
+{
+    write_frame(writer, text.as_bytes()).await?;
     Ok(())
 }
 
-async fn read_text_frame(
-    stream: &mut UnixStream,
-) -> Result<String, ThoError> {
-    let payload = read_frame(stream).await?;
+async fn read_text_frame<R>(
+    reader: &mut R,
+) -> Result<String, ThoError>
+where
+    R: AsyncRead + Unpin,
+{
+    let payload = read_frame(reader).await?;
 
     String::from_utf8(payload)
         .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")))
 }
 
-async fn write_frame(
-    w: &mut UnixStream,
+async fn write_frame<W>(
+    writer: &mut W,
     payload: &[u8],
-) -> std::io::Result<()> {
+) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
     if payload.len() > u32::MAX as usize {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -376,19 +505,22 @@ async fn write_frame(
 
     let len = payload.len() as u32;
 
-    w.write_all(&len.to_le_bytes()).await?;
-    w.write_all(payload).await?;
-    w.flush().await?;
+    writer.write_all(&len.to_le_bytes()).await?;
+    writer.write_all(payload).await?;
+    writer.flush().await?;
 
     Ok(())
 }
 
-async fn read_frame(
-    r: &mut UnixStream,
-) -> std::io::Result<Vec<u8>> {
+async fn read_frame<R>(
+    reader: &mut R,
+) -> std::io::Result<Vec<u8>>
+where
+    R: AsyncRead + Unpin,
+{
     let mut len_buf = [0u8; 4];
 
-    r.read_exact(&mut len_buf).await?;
+    reader.read_exact(&mut len_buf).await?;
 
     let len = u32::from_le_bytes(len_buf) as usize;
 
@@ -401,7 +533,7 @@ async fn read_frame(
 
     let mut payload = vec![0u8; len];
 
-    r.read_exact(&mut payload).await?;
+    reader.read_exact(&mut payload).await?;
 
     Ok(payload)
 }
