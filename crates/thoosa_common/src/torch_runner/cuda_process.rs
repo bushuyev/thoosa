@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::ops::Add;
-use std::os::fd::{BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -26,7 +25,7 @@ use thoosa_shims::stream::ThoCudaStream;
 use crate::copy_ctx::{CopyCtx, CudaActorMessage};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
-use crate::interprocess_cuda_copy::{IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection};
+use crate::interprocess_cuda_copy::{recv_fd, send_fd, IpcProcessRole, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::RunCtx;
@@ -39,6 +38,7 @@ use crate::torch_runner::tests::{ClcTask, LoadedTensor};
 
 const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
+const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
 
 struct CudaWorker {
     all_cuda_tensors:DashMap<u64, Tensor>,
@@ -103,6 +103,41 @@ impl CudaWorker {
                 break;
             }
 
+            if let Some(metadata_json) = payload.strip_prefix(SHARED_MEMFD_PAYLOAD_PREFIX) {
+
+                let metadata: IpcTensorTransferMetadata = serde_json::from_str(metadata_json)
+                    .map_err(|e| ThoError::new(format!("failed to parse shared memfd metadata: {e}")))?;
+
+                let fd = recv_fd(reader.as_ref()).await?;
+
+                let buffer = SharedMemfdBuffer::from_received_fd(fd, metadata.mapped_len)?;
+
+                if metadata.mapped_len != buffer.len() {
+                    return Err(ThoError::new(format!("metadata mapped_len={} does not match received buffer len={}", metadata.mapped_len, buffer.len())));
+                }
+
+                let end = metadata.offset.checked_add(metadata.byte_len).ok_or_else(|| ThoError::new("shared memfd metadata range overflow"))?;
+                if end > buffer.len() {
+                    return Err(ThoError::new(format!("shared memfd range [{}, {end}) exceeds mapped_len={}", metadata.offset, buffer.len())));
+                }
+
+                let preview_len = metadata.byte_len.min(16);
+                let preview = unsafe {
+                    // SAFETY: offset + preview_len was checked against the live mmap above, and the buffer is kept alive for the slice lifetime.
+                    std::slice::from_raw_parts(buffer.as_ptr().add(metadata.offset), preview_len)
+                };
+
+                debug!("run_worker: received shared memfd tensor chunk: metadata={metadata:?} local_mmap_ptr={:?} preview={preview:?}", buffer.as_ptr());
+                reply_tx
+                    .send(WorkerReply {
+                        id,
+                        payload: OutgoingRequestPayload::Msg(format!("shared-memfd-ok: transfer_id={} buffer_id={} byte_len={} mapped_len={}", metadata.transfer_id, metadata.buffer_id, metadata.byte_len, metadata.mapped_len)),
+                    })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                continue;
+            }
+
             let reply_tx = reply_tx.clone();
 
             tokio::spawn(async move {
@@ -138,7 +173,7 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(reply) = reply_rx.recv().await {
-        let frame = encode_wire_msg(reply.id, reply.payload);
+        let frame = encode_wire_msg(reply.id, &reply.payload)?;
         write_text_frame(&mut writer, &frame).await?;
     }
 
@@ -320,21 +355,23 @@ impl CudaIPCActor {
 
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
-                let payload = format!("copy: {src:?}");
                 let pending = Arc::clone(&self.pending);
                 let self_tx = self.tx.clone();
                 let copy_ctx = Arc::clone(&self.copy_ctx);
                 let buf_size = self.buf_size;
+                let dst_worker_id = dst_device.ordinal() as u64;
 
                 let tensor_mem_size = tensor_mem_size(src.kind(), &src.size());
                 debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.size());
 
-                // Keep one future per chunk so a limit increase can start more copy work immediately.
+                // The parent side of H2D only stages CPU bytes into memfd-backed chunks; the worker owns the later CUDA copy.
                 let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
-                let chunk_groups_len = chunk_groups.len();
+                let src_kind = src.kind();
+                let src_shape = src.size();
                 let src_ptr: usize = src.data_ptr() as usize;
 
                 tokio::spawn(async move {
+                    let _src_keepalive = src;
 
                     {
 
@@ -344,40 +381,41 @@ impl CudaIPCActor {
                         debug_assert!(old.is_none());
                     }
 
-                    for chunk_group in chunk_groups  {
+                    let mut held_buffers = Vec::new();
+                    for chunk_group in chunk_groups {
                         for chunk in chunk_group {
-                            let buf_stream = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
+                            let mut buf_stream = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
+                            let src_off_ptr = src_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("source tensor pointer offset overflow"))?;
+                            if chunk.len > buf_stream.0.len() {
+                                return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf_stream.0.len())));
+                            }
+                            unsafe {
+                                // SAFETY: src_ptr is the data pointer of _src_keepalive, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
+                                std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf_stream.0.as_mut_ptr(), chunk.len);
+                            }
+                            let metadata = IpcTensorTransferMetadata {
+                                transfer_id: id,
+                                buffer_id: buf_stream.0.buffer_id(),
+                                byte_len: chunk.len,
+                                mapped_len: buf_stream.0.len(),
+                                offset: 0,
+                                kind: src_kind.into(),
+                                shape: src_shape.clone(),
+                                direction: IpcTransferDirection::HostToDevice,
+                                producer: IpcProcessRole::Parent,
+                                consumer: IpcProcessRole::Worker { worker_id: dst_worker_id },
+                            };
+                            debug!("CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf_stream.0.as_ptr());
 
-                            let pending = Arc::clone(&pending);
-                            let self_tx = self_tx.clone();
-                            let src_off_ptr = src_ptr.add(chunk.offset);
+                            let fd = buf_stream.0.try_clone_fd()?;
+                            let send_result = self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await;
 
-                            tokio::spawn(async move {
-
-                                let send_result = self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::SharedMemfdBuffer{
-                                    meta: IpcTensorTransferMetadata {
-                                        transfer_id: 0,
-                                        buffer_id: 0,
-                                        byte_len: 0,
-                                        mapped_len: 0,
-                                        offset: 0,
-                                        kind: IpcTensorKind::Uint8,
-                                        shape: vec![],
-                                        direction: IpcTransferDirection::HostToDevice,
-                                        producer: IpcProcessRole::Parent,
-                                        consumer: IpcProcessRole::Parent,
-                                    }, fd: buf_stream.0.try_clone_fd()?
-                                } }).await;
-
-                                if send_result.is_err() {
-                                    let mut pending = pending.lock().await;
-                                    pending.remove(&id);
-
-                                    return Err(ThoError::new("worker IPC writer task is closed"));
-                                }
-
-                                Ok(())
-                            });
+                            if send_result.is_err() {
+                                let mut pending = pending.lock().await;
+                                pending.remove(&id);
+                                return Err(ThoError::new("worker IPC writer task is closed"));
+                            }
+                            held_buffers.push(buf_stream);
                         }
                     }
 
@@ -414,10 +452,17 @@ async fn writer_loop<W>(
     mut rx: mpsc::Receiver<OutgoingRequest>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
 ) where
-    W: AsyncWrite + Unpin,
+    W: AsyncWrite + Unpin + AsRef<UnixStream>,
 {
     while let Some(req) = rx.recv().await {
-        let frame = encode_wire_msg(req.id, req.payload);
+        let frame = match encode_wire_msg(req.id, &req.payload) {
+            Ok(frame) => frame,
+            Err(e) => {
+                error!("worker IPC writer failed to encode request {}: {e}", req.id);
+                fail_one_pending(&pending, req.id, format!("failed to encode request {}: {e}", req.id)).await;
+                continue;
+            }
+        };
 
         if let Err(e) = write_text_frame(&mut writer, &frame).await {
             error!("worker IPC writer failed: {e}");
@@ -431,6 +476,15 @@ async fn writer_loop<W>(
 
             fail_all_pending(&pending, format!("worker IPC writer stopped: {e}")).await;
             break;
+        }
+
+        if let OutgoingRequestPayload::SharedMemfdBuffer { fd, .. } = &req.payload {
+            if let Err(e) = send_fd(writer.as_ref(), fd.as_fd()).await {
+                error!("worker IPC fd send failed: {e}");
+                fail_one_pending(&pending, req.id, format!("failed to send request {} fd: {e}", req.id)).await;
+                fail_all_pending(&pending, format!("worker IPC writer stopped while sending fd: {e}")).await;
+                break;
+            }
         }
     }
 
@@ -524,16 +578,20 @@ async fn fail_all_pending(
     }
 }
 
-fn encode_wire_msg(id: u64, payload: OutgoingRequestPayload) -> String {
+fn encode_wire_msg(id: u64, payload: &OutgoingRequestPayload) -> Result<String, ThoError> {
 
-    match payload {
+    let encoded_payload = match payload {
         OutgoingRequestPayload::Msg(msg) => {
             msg.clone()
         }
-        OutgoingRequestPayload::SharedMemfdBuffer{..} => {
-            todo!()
+        OutgoingRequestPayload::SharedMemfdBuffer{ meta, .. } => {
+            let metadata_json = serde_json::to_string(meta)
+                .map_err(|e| ThoError::new(format!("failed to encode shared memfd metadata: {e}")))?;
+            format!("{SHARED_MEMFD_PAYLOAD_PREFIX}{metadata_json}")
         }
-    }
+    };
+
+    Ok(format!("{id}\t{encoded_payload}"))
 }
 
 
@@ -782,7 +840,7 @@ mod tests {
             // CudaProcess::new().unwrap();//will be called from run_cli //crates/thoosa_main/src/cli.rs:339, i.e. if app is started as "worker"
             CudaWorker::run_worker().await.unwrap()
         } else {
-            run_main("test_cuda_process").await.unwrap();
+            run_main("test_copy_to_cuda_worker").await.unwrap();
         }
     }
 

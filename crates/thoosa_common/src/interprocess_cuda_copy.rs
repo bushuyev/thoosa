@@ -69,6 +69,7 @@ fn page_aligned_len(len: usize) -> Result<usize, ThoError> {
 
 /// An owned, process-local `MAP_SHARED` mapping of an anonymous memfd object.
 pub struct SharedMemfdBuffer {
+    buffer_id: u64,
     fd: OwnedFd,
     ptr: NonNull<u8>,
     len: usize,
@@ -77,6 +78,7 @@ pub struct SharedMemfdBuffer {
 impl Debug for SharedMemfdBuffer {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SharedMemfdBuffer")
+            .field("buffer_id", &self.buffer_id)
             .field("fd", &self.fd.as_raw_fd())
             .field("ptr", &self.ptr)
             .field("len", &self.len)
@@ -112,7 +114,7 @@ impl SharedMemfdBuffer {
         if truncate_result != 0 {
             return Err(io::Error::last_os_error().into());
         }
-        Self::map_owned_fd(fd, mapped_len)
+        Self::map_owned_fd(buffer_id, fd, mapped_len)
     }
 
     /// Maps an fd received through inheritance or `SCM_RIGHTS` in this process.
@@ -137,10 +139,10 @@ impl SharedMemfdBuffer {
         if stat.st_size < 0 || (stat.st_size as usize) < mapped_len {
             return Err(invalid(format!("received memfd is too small: file_len={} mapped_len={mapped_len}", stat.st_size)));
         }
-        Self::map_owned_fd(fd, mapped_len)
+        Self::map_owned_fd(0, fd, mapped_len)
     }
 
-    fn map_owned_fd(fd: OwnedFd, mapped_len: usize) -> Result<Self, ThoError> {
+    fn map_owned_fd(buffer_id: u64, fd: OwnedFd, mapped_len: usize) -> Result<Self, ThoError> {
         let raw_ptr = unsafe {
             // SAFETY: fd has at least mapped_len bytes and remains owned by Self for
             // the mapping lifetime. MAP_SHARED is required for interprocess visibility.
@@ -157,8 +159,12 @@ impl SharedMemfdBuffer {
             return Err(io::Error::last_os_error().into());
         }
         let ptr = NonNull::new(raw_ptr.cast::<u8>()).ok_or_else(|| invalid("mmap returned a null pointer"))?;
-        debug!("SharedMemfdBuffer::map_owned_fd: fd={} local_mmap_ptr={:?} mapped_len={mapped_len}", fd.as_raw_fd(), ptr);
-        Ok(Self { fd, ptr, len: mapped_len })
+        debug!("SharedMemfdBuffer::map_owned_fd: buffer_id={buffer_id} fd={} local_mmap_ptr={:?} mapped_len={mapped_len}", fd.as_raw_fd(), ptr);
+        Ok(Self { buffer_id, fd, ptr, len: mapped_len })
+    }
+
+    pub fn buffer_id(&self) -> u64 {
+        self.buffer_id
     }
 
     pub fn as_ptr(&self) -> *const u8 {
