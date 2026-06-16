@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Add;
+use std::os::fd::{BorrowedFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -14,15 +16,17 @@ use tch::Tensor;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tub::Guard;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Data, Named};
 use thoosa_shims::stream::ThoCudaStream;
-use crate::copy_ctx::CudaActorMessage;
+use crate::copy_ctx::{CopyCtx, CudaActorMessage};
+use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
+use crate::interprocess_cuda_copy::{IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection};
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::RunCtx;
@@ -43,7 +47,7 @@ struct CudaWorker {
 
 struct WorkerReply {
     id: u64,
-    payload: String,
+    payload: OutgoingRequestPayload,
 }
 
 
@@ -90,7 +94,7 @@ impl CudaWorker {
                 reply_tx
                     .send(WorkerReply {
                         id,
-                        payload: "shutdown-ok".to_string(),
+                        payload: OutgoingRequestPayload::Msg("shutdown-ok".to_string()),
                     })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
@@ -107,7 +111,7 @@ impl CudaWorker {
                 debug!("run_worker: reply={reply}");
 
                 let _ = reply_tx
-                    .send(WorkerReply { id, payload: reply })
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(reply) })
                     .await;
             });
         }
@@ -134,7 +138,7 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(reply) = reply_rx.recv().await {
-        let frame = encode_wire_msg(reply.id, &reply.payload);
+        let frame = encode_wire_msg(reply.id, reply.payload);
         write_text_frame(&mut writer, &frame).await?;
     }
 
@@ -193,9 +197,16 @@ pub enum CudaIPCActorMessage {
 
 struct OutgoingRequest {
     id: u64,
-    payload: String,
+    payload: OutgoingRequestPayload,
 }
 
+pub enum OutgoingRequestPayload {
+    Msg(String),
+    SharedMemfdBuffer{
+        meta: IpcTensorTransferMetadata,
+        fd:OwnedFd,
+    },
+}
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
@@ -205,10 +216,12 @@ pub struct CudaIPCActor {
 
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
     next_id: Arc<AtomicU64>,
+    copy_ctx:Arc<RwLock<CopyCtx>>,
+    buf_size: usize
 }
 
 impl CudaIPCActor {
-    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
+    pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
 
         let (mut child, stream) = Self::spawn_worker(cuda_worker_args).await?;
 
@@ -223,12 +236,16 @@ impl CudaIPCActor {
         tokio::spawn(reader_loop(reader, Arc::clone(&pending)));
 
 
+        let copy_ctx = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
+        let buf_size = copy_ctx.buf_size;
         Ok(Self {
             tx,
             receiver,
             child,
             pending,
             next_id: Arc::new(AtomicU64::new(1)),
+            copy_ctx: Arc::new(RwLock::new(copy_ctx)),
+            buf_size,
         })
     }
 
@@ -297,7 +314,7 @@ impl CudaIPCActor {
         Ok((child, stream))
     }
 
-    fn handle_message(&mut self, msg: CudaIPCActorMessage) {
+    fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
 
@@ -306,24 +323,63 @@ impl CudaIPCActor {
                 let payload = format!("copy: {src:?}");
                 let pending = Arc::clone(&self.pending);
                 let self_tx = self.tx.clone();
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                let buf_size = self.buf_size;
+
+                let tensor_mem_size = tensor_mem_size(src.kind(), &src.size());
+                debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.size());
+
+                // Keep one future per chunk so a limit increase can start more copy work immediately.
+                let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
+                let chunk_groups_len = chunk_groups.len();
+                let src_ptr: usize = src.data_ptr() as usize;
 
                 tokio::spawn(async move {
+
                     {
+
                         let mut pending = pending.lock().await;
 
                         let old = pending.insert(id, reply_tx);
                         debug_assert!(old.is_none());
                     }
 
-                    let send_result = self_tx.send(OutgoingRequest { id, payload }).await;
+                    for chunk_group in chunk_groups  {
+                        for chunk in chunk_group {
+                            let buf_stream = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
 
-                    if send_result.is_err() {
-                        let mut pending = pending.lock().await;
-                        pending.remove(&id);
+                            let pending = Arc::clone(&pending);
+                            let self_tx = self_tx.clone();
+                            let src_off_ptr = src_ptr.add(chunk.offset);
 
-                        return Err(ThoError::new("worker IPC writer task is closed"));
+                            tokio::spawn(async move {
+
+                                let send_result = self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::SharedMemfdBuffer{
+                                    meta: IpcTensorTransferMetadata {
+                                        transfer_id: 0,
+                                        buffer_id: 0,
+                                        byte_len: 0,
+                                        mapped_len: 0,
+                                        offset: 0,
+                                        kind: IpcTensorKind::Uint8,
+                                        shape: vec![],
+                                        direction: IpcTransferDirection::HostToDevice,
+                                        producer: IpcProcessRole::Parent,
+                                        consumer: IpcProcessRole::Parent,
+                                    }, fd: buf_stream.0.try_clone_fd()?
+                                } }).await;
+
+                                if send_result.is_err() {
+                                    let mut pending = pending.lock().await;
+                                    pending.remove(&id);
+
+                                    return Err(ThoError::new("worker IPC writer task is closed"));
+                                }
+
+                                Ok(())
+                            });
+                        }
                     }
-
 
                     let id = reply_rx
                         .await
@@ -331,7 +387,7 @@ impl CudaIPCActor {
 
                     respond_to.send(Ok(IPCTensor::new(id.clone()))).map_err(|e| ThoError::new(format!("response channel for request {id} got {e:?}")))?;
 
-                    Ok(())
+                    Ok::<_, ThoError>(())
                 });
 
 
@@ -340,12 +396,16 @@ impl CudaIPCActor {
             CudaIPCActorMessage::GetExecStream { .. } => {}
             CudaIPCActorMessage::Reset { .. } => {}
         }
+
+        Ok(())
     }
 
-    async fn run(mut actor: CudaIPCActor) {
+    async fn run(mut actor: CudaIPCActor) -> Result<(), ThoError> {
         while let Some(msg) = actor.receiver.recv().await {
-            actor.handle_message(msg);
+            actor.handle_message(msg)?;
         }
+
+        Ok(())
     }
 }
 
@@ -357,7 +417,7 @@ async fn writer_loop<W>(
     W: AsyncWrite + Unpin,
 {
     while let Some(req) = rx.recv().await {
-        let frame = encode_wire_msg(req.id, &req.payload);
+        let frame = encode_wire_msg(req.id, req.payload);
 
         if let Err(e) = write_text_frame(&mut writer, &frame).await {
             error!("worker IPC writer failed: {e}");
@@ -464,8 +524,16 @@ async fn fail_all_pending(
     }
 }
 
-fn encode_wire_msg(id: u64, payload: &str) -> String {
-    format!("{id}\t{payload}")
+fn encode_wire_msg(id: u64, payload: OutgoingRequestPayload) -> String {
+
+    match payload {
+        OutgoingRequestPayload::Msg(msg) => {
+            msg.clone()
+        }
+        OutgoingRequestPayload::SharedMemfdBuffer{..} => {
+            todo!()
+        }
+    }
 }
 
 
@@ -773,7 +841,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_cuda_process() {
+    async fn test_copy_to_cuda_worker() {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {

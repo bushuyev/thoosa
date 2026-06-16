@@ -273,7 +273,7 @@ pub struct CopyCtx {
     pub(crate) buf_size: usize,
     exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
     bufs_pool: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
-    ipc_bufs_pool: Option<Arc<IpcBufsPool>>,
+    pub(crate)  ipc_bufs_pool: Option<Arc<IpcBufsPool>>,
 }
 
 impl Debug for CopyCtx {
