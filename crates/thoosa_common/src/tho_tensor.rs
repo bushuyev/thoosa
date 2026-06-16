@@ -81,7 +81,11 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 
 
 //D:Dims - is just a reminder of what dimensions a tensor has.
-pub struct ThoTensor<D: Dims = AnyDims, Id: Named + Debug + Clone = ()> {
+pub struct ThoTensor<D = AnyDims, Id = ()>
+where
+    D:Dims,
+    Id:Named + Debug + Clone
+{
     id: Id,
     pub t: Tensor,
 

@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -14,8 +15,10 @@ use tokio::task::JoinHandle;
 use tub::Guard;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::traits::{Data, Named};
 use thoosa_shims::stream::ThoCudaStream;
 use crate::copy_ctx::CudaActorMessage;
+use crate::dims::Dims;
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::RunCtx;
@@ -137,14 +140,42 @@ impl CudaWorker {
 }
 
 #[derive(Debug)]
+pub struct IPCTensor {//reference to a tensor kept in worker process started in CudaWorker::run_worker
+    id:String,
+}
+
+
+impl IPCTensor {
+    pub fn new<S:Into<String>>(id:S) -> Self {
+        Self { id :id.into() }
+    }
+}
+
+pub enum CudaIPCActorMessage {
+    Copy{ src:Tensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<IPCTensor, ThoError>>},
+    SyncStream {
+        stream:Guard<ThoCudaStream>,
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
+    GetExecStream {
+        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
+    },
+    Reset {
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    }
+
+}
+
+
+#[derive(Debug)]
 pub struct CudaIPCActor {
-    receiver: mpsc::Receiver<CudaActorMessage>,
+    receiver: mpsc::Receiver<CudaIPCActorMessage>,
     child:Child,
     stream:UnixStream
 }
 
 impl CudaIPCActor {
-    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaActorMessage>) -> Result<Self, ThoError> {
+    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
 
         let (child, stream) = Self::spawn_worker(cuda_worker_args).await?;
         Ok(Self {
@@ -219,16 +250,23 @@ impl CudaIPCActor {
         Ok((child, stream))
     }
 
-    fn handle_message(&mut self, msg: CudaActorMessage) {
+    fn handle_message(&mut self, msg: CudaIPCActorMessage) {
         match msg {
-            CudaActorMessage::Copy { src, dst_device, respond_to } => {
+            CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
+
+                tokio::spawn(async move {
+                    // write_text_frame(&mut self.stream, "main ").await?;
+
+                    Ok::<_, ThoError>(())
+                });
+
                 let _ = respond_to.send(
-                    Ok(Tensor::rand(&[10, 100], FLOAT_CPU))
+                    Ok(IPCTensor::new("1")),
                 );
             }
-            CudaActorMessage::SyncStream { .. } => {}
-            CudaActorMessage::GetExecStream { .. } => {}
-            CudaActorMessage::Reset { .. } => {}
+            CudaIPCActorMessage::SyncStream { .. } => {}
+            CudaIPCActorMessage::GetExecStream { .. } => {}
+            CudaIPCActorMessage::Reset { .. } => {}
         }
     }
 
@@ -241,7 +279,7 @@ impl CudaIPCActor {
 
 #[derive(Debug, Clone)]
 pub struct CudaIPCActorHandle {
-    sender: mpsc::Sender<CudaActorMessage>,
+    sender: mpsc::Sender<CudaIPCActorMessage>,
 }
 
 
@@ -258,10 +296,10 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn copy(&self, src:Tensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
+    pub async fn copy(&self, src:Tensor, dst_device:ThoDevice) ->Result<IPCTensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::Copy {
+            CudaIPCActorMessage::Copy {
                 src,
                 dst_device,
                 respond_to,
@@ -274,7 +312,7 @@ impl CudaIPCActorHandle {
     pub async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::SyncStream {
+            CudaIPCActorMessage::SyncStream {
                 stream,
                 respond_to,
             }
@@ -286,7 +324,7 @@ impl CudaIPCActorHandle {
     pub async fn reset(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::Reset {
+            CudaIPCActorMessage::Reset {
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
@@ -298,7 +336,7 @@ impl CudaIPCActorHandle {
     pub async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaActorMessage::GetExecStream {
+            CudaIPCActorMessage::GetExecStream {
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
