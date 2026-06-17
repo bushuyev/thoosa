@@ -768,7 +768,7 @@ mod tests {
     use tokio::time::Instant;
     use tokio_utils::Pool;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::futures_limits::{futures_limits, COPY_D2H};
+    use thoosa_shared::futures_limits::{futures_limits, COPY_D2H, COPY_H2D};
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use crate::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
@@ -821,6 +821,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
+        futures_limits().force(COPY_H2D, 10);
         futures_limits().force(COPY_D2H, 10);
 
         let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)));
@@ -833,11 +834,11 @@ mod tests {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_test_copy_from_ptr"))]
     async fn run_test_copy_from_ptr(ctx: &'static CopyCtx, threads: u8, runs: u8) -> (f64, f64) {
-        let (free_mem, _total_mem) = cuda_mem();
+        let (_free_mem, total_mem) = cuda_mem();
 
         let init_type = Float;
 
-        let total_size = (free_mem as f64 * 0.2) as u64 / init_type.elt_size_in_bytes() as u64; //123456; //25000; //123456; //
+        let total_size = (total_mem as f64 * 0.8) as u64 / init_type.elt_size_in_bytes() as u64; //123456; //25000; //123456; //
         let dim_1 = 4u64;
         let input_n = total_size / dim_1;
 
