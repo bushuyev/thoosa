@@ -416,7 +416,7 @@ impl IPCTensor {
 }
 
 pub enum CudaIPCActorMessage {
-    Copy{ src:Tensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<IPCTensor, ThoError>>},
+    Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<IPCTensor, ThoError>>},
     SyncStream {
         stream:Guard<ThoCudaStream>,
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -564,11 +564,11 @@ impl CudaIPCActor {
                 let buf_size = self.buf_size;
                 let dst_worker_id = dst_device.ordinal() as u64;
 
-                let source_digest = tensor_digest(&src)?;
+                let source_digest = tensor_digest(src.t_ref())?;
                 debug!("CudaIPCActor::Copy: original tensor digest={source_digest:?}");
                 let source_digest_hex = source_digest.hex.clone();
-                let tensor_mem_size = tensor_mem_size(src.kind(), &src.size());
-                debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.size());
+                let tensor_mem_size = tensor_mem_size(src.t_ref().kind(), &src.t_ref().size());
+                debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.t_ref().size());
                 if tensor_mem_size == 0 {
                     return Err(ThoError::new("worker IPC H2D copy does not support zero-byte tensors"));
                 }
@@ -576,9 +576,9 @@ impl CudaIPCActor {
                 // The parent side of H2D only stages CPU bytes into memfd-backed chunks; the worker owns the later CUDA copy.
                 let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
                 let chunk_count = chunk_groups.iter().map(Vec::len).sum::<usize>();
-                let src_kind = src.kind();
-                let src_shape = src.size();
-                let src_ptr: usize = src.data_ptr() as usize;
+                let src_kind = src.t_ref().kind();
+                let src_shape = src.t_ref().size();
+                let src_ptr: usize = src.t_ref().data_ptr() as usize;
 
                 tokio::spawn(async move {
                     let _src_keepalive = src;
@@ -878,7 +878,7 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn copy(&self, src:Tensor, dst_device:ThoDevice) ->Result<IPCTensor, ThoError> {
+    pub async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<IPCTensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Copy {
@@ -1096,7 +1096,7 @@ mod tests {
         let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
         let copy = track_await(cuda_actor
             .copy(
-                main_process_cpu_tensor,
+                main_process_cpu_tensor.into(),
                 tho_device_idx.into(),
             )).await?;
 
