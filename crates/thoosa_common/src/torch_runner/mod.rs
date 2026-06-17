@@ -10,7 +10,6 @@ pub mod metrics;
 #[cfg(test)]
 mod model_test;
 pub mod output_builders;
-pub mod cuda_process;
 
 pub struct ThoTensorView<'a, D: Dims, Id: Named + Debug + Clone> {
     t: Tensor,
@@ -35,7 +34,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorView<'a, D, Id> {
 
 #[cfg(test)]
 #[allow(unused_imports, unused_variables, dead_code)]
-mod tests {
+pub(crate) mod tests {
 
     use dashmap::DashMap;
     use crate::runner::common::*;

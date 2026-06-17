@@ -1,5 +1,5 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
-use crate::interprocess_cuda_copy::{IpcBufsPool, SharedMemfdBuffer, ipc_copy_d2h_from_ptr, ipc_copy_h2d_from_ptr};
+use crate::ipc::ipc_cuda_utils::{IpcBufsPool, SharedMemfdBuffer, ipc_copy_d2h_from_ptr, ipc_copy_h2d_from_ptr};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
