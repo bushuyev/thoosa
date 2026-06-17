@@ -59,7 +59,7 @@ struct WorkerCopyDonePayload {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(super) struct WorkerTensorInfoPayload {
+pub(crate) struct WorkerTensorInfoPayload {
     tensor_key: u64,
     kind: IpcTensorKind,
     shape: Vec<i64>,
@@ -1526,7 +1526,7 @@ mod tests {
             CudaWorker::run_worker().await.unwrap()
         } else {
             let (d2h, h2d) = run_ipc_copy_perf_main("test_copy_ipc_cuda_worker_once", 3, 3).await.unwrap();
-            info!("\n IPC worker copy d2h speed: {d2h:#2} Gb/s, h2d speed {h2d:#2} Gb/s");
+            info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
         }
     }
 
