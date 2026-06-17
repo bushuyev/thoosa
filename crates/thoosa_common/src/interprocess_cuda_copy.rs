@@ -356,6 +356,10 @@ pub struct IpcTensorTransferMetadata {
     pub transfer_id: u64,
     pub buffer_id: u64,
     pub byte_len: usize,
+    pub tensor_byte_len: usize,
+    pub tensor_offset: usize,
+    pub chunk_index: usize,
+    pub chunk_count: usize,
     pub mapped_len: usize,
     pub offset: usize,
     pub kind: IpcTensorKind,
@@ -382,6 +386,10 @@ impl IpcTensorTransferMetadata {
             transfer_id,
             buffer_id,
             byte_len,
+            tensor_byte_len: byte_len,
+            tensor_offset: 0,
+            chunk_index: 0,
+            chunk_count: 1,
             mapped_len,
             offset,
             kind: kind.into(),
@@ -426,8 +434,21 @@ impl IpcTensorTransferMetadata {
         if expected == 0 {
             return Err(invalid("zero-byte tensors are not supported by the interprocess CUDA copy path"));
         }
-        if expected != self.byte_len {
-            return Err(invalid(format!("metadata byte_len={} but dtype/shape require {expected}", self.byte_len)));
+        if expected != self.tensor_byte_len {
+            return Err(invalid(format!("metadata tensor_byte_len={} but dtype/shape require {expected}", self.tensor_byte_len)));
+        }
+        if self.byte_len == 0 {
+            return Err(invalid("zero-byte chunks are not supported by the interprocess CUDA copy path"));
+        }
+        if self.chunk_count == 0 {
+            return Err(invalid("metadata chunk_count must be non-zero"));
+        }
+        if self.chunk_index >= self.chunk_count {
+            return Err(invalid(format!("metadata chunk_index={} exceeds chunk_count={}", self.chunk_index, self.chunk_count)));
+        }
+        let tensor_end = self.tensor_offset.checked_add(self.byte_len).ok_or_else(|| invalid("metadata tensor_offset + byte_len overflow"))?;
+        if tensor_end > self.tensor_byte_len {
+            return Err(invalid(format!("metadata tensor range [{}, {tensor_end}) exceeds tensor_byte_len={}", self.tensor_offset, self.tensor_byte_len)));
         }
         let end = self.offset.checked_add(self.byte_len).ok_or_else(|| invalid("metadata offset + byte_len overflow"))?;
         if end > self.mapped_len {
