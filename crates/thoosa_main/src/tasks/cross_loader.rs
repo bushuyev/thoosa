@@ -1470,10 +1470,10 @@ mod tests {
         let r = input.with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, ctx|{
             assert_eq!(data.tensors().len(), 4);
 
-            assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t.to_device(Cpu), 0.02, 0.02, false));
-            assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].t.to_device(Cpu), 0.02, 0.02, false));
-            assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].t.to_device(Cpu), 0.02, 0.02, false));
-            assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t.to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t_ref().to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].t_ref().to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].t_ref().to_device(Cpu), 0.02, 0.02, false));
+            assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t_ref().to_device(Cpu), 0.02, 0.02, false));
 
             debug!("data={data:?}");
             Ok(())
@@ -1529,7 +1529,7 @@ mod tests {
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.tensors()[1].t.size()[1], 4);
+                assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
                 Ok(())
             })
             .await?;
@@ -1545,7 +1545,7 @@ mod tests {
 
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.tensors()[1].t.size()[1], 4);
+                assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
                 Ok(())
             })
             .await?;
@@ -1608,7 +1608,7 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-                assert_eq!(data.tensors()[1].t.size()[1], 3);
+                assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
                 Ok(())
             })
             .await?;
@@ -1625,7 +1625,7 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-                assert_eq!(data.tensors()[1].t.size()[1], 3);
+                assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
                 Ok(())
             })
             .await?;
@@ -1642,7 +1642,7 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector, None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
-                assert_eq!(data.tensors()[1].t.size()[1], 3);
+                assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
                 Ok(())
             })
             .await?;
