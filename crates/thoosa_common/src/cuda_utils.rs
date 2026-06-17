@@ -758,6 +758,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::AtomicU64;
     use std::sync::atomic::Ordering::Relaxed;
+    use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
     use futures_util::StreamExt;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Float, Int64, Uint8};
@@ -933,18 +934,13 @@ mod tests {
 
         let init_type = Int64;
 
-        let elts_in_mem = free_mem / init_type.elt_size_in_bytes() as usize; //123456; //25000; //123456; //
+        let elts_in_mem = (0.1 * free_mem as f32) as usize / init_type.elt_size_in_bytes(); //123456; //25000; //123456; //
 
-        let buffs = 64;
+        let buffs = 16;
         let elts_in_buff = elts_in_mem / buffs;
 
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
-        let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
-            (
-                PinnedHostBuffer::new(buf_size as usize, 0).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-            )
-        })));
+
 
         for tensor_kind in [
             Kind::Uint8,
@@ -962,7 +958,12 @@ mod tests {
             let dst = copy_d2h_from_ptr(
                 tensor_kind,
                 buf_size,
-                &bufs_pool,
+                &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
+                    (
+                        PinnedHostBuffer::new(buf_size, 0).unwrap(),
+                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
+                    )
+                }))),
                 src_t.data_ptr() as usize,
                 &src_t.size(),
             ).await?;
@@ -972,7 +973,12 @@ mod tests {
             let dst = copy_h2d_from_ptr(
                 tensor_kind,
                 buf_size,
-                &bufs_pool,
+                &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
+                    (
+                        PinnedHostBuffer::new(buf_size, CU_MEMHOSTALLOC_WRITECOMBINED).unwrap(),
+                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
+                    )
+                }))),
                 1,
                 dst.data_ptr() as usize,
                 &dst.size(),
@@ -1042,16 +1048,10 @@ mod tests {
         let dim_1 = 4i64;
         let input_n = ((elts_in_mem as f64 * 0.7) as usize / dim_1 as usize) as i64;
 
-        let buffs = 64;
+        let buffs = 16;
         let elts_in_buff = elts_in_mem / buffs;
 
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
-        let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
-            (
-                PinnedHostBuffer::new(buf_size as usize, 0).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-            )
-        })));
 
         for tensor_kind in [
             Kind::Uint8,
@@ -1067,7 +1067,12 @@ mod tests {
             let dst = copy_d2h_from_ptr(
                 tensor_kind,
                 buf_size,
-                &bufs_pool,
+                &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
+                    (
+                        PinnedHostBuffer::new(buf_size as usize, CU_MEMHOSTALLOC_WRITECOMBINED).unwrap(),
+                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
+                    )
+                }))),
                 src_t.data_ptr() as usize,
                 &src_t.size(),
             ).await?;
@@ -1077,7 +1082,12 @@ mod tests {
             let dst = copy_h2d_from_ptr(
                 tensor_kind,
                 buf_size,
-                &bufs_pool,
+                &Arc::new(Pool::from_iter((0..buffs).map(|_i| {
+                    (
+                        PinnedHostBuffer::new(buf_size as usize, 0).unwrap(),
+                        Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
+                    )
+                }))),
                 1,
                 dst.data_ptr() as usize,
                 &dst.size(),
