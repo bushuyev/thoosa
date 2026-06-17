@@ -827,7 +827,7 @@ mod tests {
         debug!("reset done");
 
         let t_cpu = Tensor::rand(&[10, 1000], FLOAT_CPU);
-        let t_cuda = cuda_actor.copy(t_cpu, 1.into()).await?;
+        let t_cuda = cuda_actor.copy(t_cpu.into(), 1.into()).await?;
         debug!("t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();

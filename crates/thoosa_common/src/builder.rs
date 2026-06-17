@@ -262,7 +262,7 @@ impl Node {
                 )))?;
                 if let Some(init) = init {
                     no_grad(|| {
-                        conv.ws.copy_(&init.t.view((1, 1, kernel as i64)));
+                        conv.ws.copy_(&init.t_ref().view((1, 1, kernel as i64)));
                     });
 
                 }

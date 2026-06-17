@@ -1072,8 +1072,8 @@ impl <C> SyncStage for ApplyMotifNet<C> where
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let motif_id = input.motif_net.extra().motif_id();
 
-        debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t={:?}", self.id, input.batch.t);
-        trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t);
+        debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t={:?}", self.id, input.batch.t_ref());
+        trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t_ref());
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < input.batch.size()[1] as usize).unwrap_or(false) {
@@ -1085,7 +1085,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
 
-        trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t);
+        trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t_ref());
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());
 
         Ok(out)
@@ -1104,9 +1104,9 @@ pub fn apply_motif_net_forward(
     let c = motif_net.extra().channel() as i64;
     let motif_width = motif_net.extra().motif_net_params.num_features() as i64;
 
-    debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.t.size());
-    trace!("ApplyMotifNet::do_run: batch.t=\n{}", input.t);
-    let t = input.t.f_i((c, ..))?;
+    debug!("ApplyMotifNet::do_run: 0. motif_id={motif_id} c={c} motif_width={motif_width} input.id={input_id:?} input.t.size={:?} slice_step={slice_step}", input.t_ref().size());
+    trace!("ApplyMotifNet::do_run: batch.t=\n{}", input.t_ref());
+    let t = input.t_ref().f_i((c, ..))?;
     let t = if t.size()[0] >= motif_width {
         t
     } else {
@@ -1752,7 +1752,7 @@ pub(crate) mod tests {
         let test_net = dummy_motif_net::<AnyDims, AnyDims, &str>("test", 100, 1., Cpu, "test", &motif_t.i((0, ..)), 1)?;
 
         let resource: ThoTensor<AnyDims, SimpleId> = resource_a_t.shallow_clone().into();
-        let out = test_net.tho_forward(&resource, None, false)?.t;//.i((0, .., 0));//channel[1], slices, vals[1]
+        let out = test_net.tho_forward(&resource, None, false)?.t();//.i((0, .., 0));//channel[1], slices, vals[1]
 
         plot_series_with_lanes(
             vec![

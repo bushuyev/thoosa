@@ -452,7 +452,7 @@ where
                 debug!("ApplyLabelNet::run: done, out_id={out_id} out={out:?}");
 
                 // let out = out.t_ref().f_i(0)?;
-                let out = ThoTensor::new(out_id, out.t)?;
+                let out = ThoTensor::new(out_id, out.t())?;
 
                 trace!("ApplyLabelNets::run: out=\n{}", out.as_ref());
 

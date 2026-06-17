@@ -436,8 +436,8 @@ impl OutputBuilder for FreqFilterOutputBuilder {
 
         let mut partials = self.partials.into_iter();
         let first = partials.next().ok_or_else(|| ThoError::new("FreqFilterOutputBuilder: no partial outputs"))?;
-        let mut tensors = vec![first.t];
-        tensors.extend(partials.map(|partial| partial.t));
+        let mut tensors = vec![first.t()];
+        tensors.extend(partials.map(|partial| partial.t()));
         let tensor_refs = tensors.iter().collect::<Vec<_>>();
 
         ThoTensor::new(self.output_id, Tensor::f_cat(tensor_refs.as_slice(), 1)?)
