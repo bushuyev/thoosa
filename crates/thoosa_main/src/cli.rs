@@ -78,7 +78,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::Instrument;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
-use thoosa_common::copy_ctx::CopyCtx;
+use thoosa_common::copy_ctx::{CopyCtx, CudaActorHandle};
 
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
@@ -2010,7 +2010,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
     async fn load_tensors(dim_1: &i64, num_tensors: usize, cuda_first:bool) -> Result<u128, ThoError> {
         let mut tensors = Vec::with_capacity(num_tensors);
 
-        let ctx = track_await(thoosa_common::runner::global_ctx::GlobalCtx::global().copy_ctx(Cuda(0))).await;
+        let ctx = thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(Cuda(0));
 
         let t_0 = Instant::now();
         for i in 0..num_tensors {
@@ -2030,7 +2030,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
         let batch = Tensor::f_concat(tensors.as_slice(), 1)?;
         let batch= if !cuda_first {
-            track_await(ctx.copy(&batch, 1, Float)).await?
+            track_await(ctx.copy(batch.into(), 1.into())).await?
         } else {
             batch
         };
@@ -2040,11 +2040,11 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         Ok(t_0.elapsed().as_millis())
     }
 
-    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &CopyCtx, cuda_first:bool) -> Result<Tensor, ThoError> {
+    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &CudaActorHandle, cuda_first:bool) -> Result<Tensor, ThoError> {
         let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
 
         if cuda_first {
-            track_await(copy_ctx.copy(&t, 1, Float)).await
+            track_await(copy_ctx.copy(t.into(), 1.into())).await
         } else {
             Ok(t)
         }
