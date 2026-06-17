@@ -278,8 +278,8 @@ pub struct CopyCtx {
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
     exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
-    bufs_pool_ro: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
-    bufs_pool: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
+    bufs_pool_d2h: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
+    bufs_pool_h2d: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
     pub(crate)  ipc_bufs_pool: Option<Arc<IpcBufsPool>>,
 }
 
@@ -289,7 +289,7 @@ impl Debug for CopyCtx {
             // .field("cu_ctx", &self.cu_ctx)
             .field("buffs", &self.buffs)
             .field("buf_size", &self.buf_size)
-                .field("bufs_pool.remaining_capacity", &self.bufs_pool.as_ref().expect("bufs_pool").remaining_capacity())
+                .field("bufs_pool.remaining_capacity", &self.bufs_pool_h2d.as_ref().expect("bufs_pool").remaining_capacity())
                 .field("ipc_bufs_pool.remaining_capacity", &self.ipc_bufs_pool.as_ref().expect("ipc_bufs_pool").remaining_capacity())
             .finish()
     }
@@ -316,8 +316,8 @@ impl CopyCtx {
             buffs,
             buf_size,
             exec_stream_pool: Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
-            bufs_pool_ro: Some(Self::build_pool(16, buf_size, cuda_device, 0)),//TODO unwrap)),
-            bufs_pool: Some(Self::build_pool(16, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
+            bufs_pool_d2h: Some(Self::build_pool(16, buf_size, cuda_device, 0)),//TODO unwrap)),
+            bufs_pool_h2d: Some(Self::build_pool(16, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
             ipc_bufs_pool: Some(Self::build_ipc_pool(buffs, buf_size, cuda_device)),
         }
     }
@@ -360,7 +360,7 @@ impl CopyCtx {
     #[cfg(test)]
     #[allow(dead_code)]
     pub fn rebuild(&mut self, mem_k: f64, buffs: usize) {
-        assert_eq!(self.bufs_pool.as_ref().expect("no bufs_pool").remaining_capacity(), self.buffs);
+        assert_eq!(self.bufs_pool_h2d.as_ref().expect("no bufs_pool").remaining_capacity(), self.buffs);
         assert_eq!(self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool").remaining_capacity(), self.buffs);
         // self
             // .cu_ctx
@@ -368,7 +368,7 @@ impl CopyCtx {
             // .expect("failed to bind CUDA context to thread");
 
         drop(Arc::into_inner(std::mem::replace(
-            &mut self.bufs_pool,
+            &mut self.bufs_pool_h2d,
             Some(Arc::new(Pool::from_vec(vec![(
                 PinnedHostBuffer::new(1, 0).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(0/*self.cu_ctx.ordinal()*/ as i32, true).unwrap()),
@@ -385,7 +385,7 @@ impl CopyCtx {
 
         self.buffs = buffs;
         self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs);
-        self.bufs_pool = Some(Self::build_pool(buffs, self.buf_size, 0, CU_MEMHOSTALLOC_WRITECOMBINED/*&self.cu_ctx*/));
+        self.bufs_pool_h2d = Some(Self::build_pool(buffs, self.buf_size, 0, CU_MEMHOSTALLOC_WRITECOMBINED/*&self.cu_ctx*/));
         self.ipc_bufs_pool = Some(Self::build_ipc_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/));
     }
 
@@ -399,14 +399,14 @@ impl CopyCtx {
     pub fn reset(&mut self) -> Result<(), ThoError> {
         info!("CopyCtx::reset_cuda_context: about to reset cu_ctx.reset");
 
-        drop(self.bufs_pool.take());
+        drop(self.bufs_pool_h2d.take());
         drop(self.ipc_bufs_pool.take());
         drop(self.exec_stream_pool.take());
 
         self.cu_ctx.reset()?;
         info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 
-        self.bufs_pool = Some(Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize, CU_MEMHOSTALLOC_WRITECOMBINED));
+        self.bufs_pool_h2d = Some(Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize, CU_MEMHOSTALLOC_WRITECOMBINED));
         info!("CopyCtx::reset_cuda_context: bufs_pool rebuilt");
 
         self.ipc_bufs_pool = Some(Self::build_ipc_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize));
@@ -450,17 +450,17 @@ impl CopyCtx {
 
     pub async fn move_t(&self, src_t: Tensor, dst_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_device == 0 {
-            track_await(move_d2h(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"))).await
+            track_await(move_d2h(kind, src_t, self.buf_size, &self.bufs_pool_h2d.as_ref().expect("no bufs_pool"))).await
         } else {
-            track_await(move_h2d(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), dst_device)).await
+            track_await(move_h2d(kind, src_t, self.buf_size, &self.bufs_pool_h2d.as_ref().expect("no bufs_pool"), dst_device)).await
         }
     }
 
     pub async fn copy<R: AsRef<Tensor>>(&self, src_t: &R, dst_tho_device: usize, kind: Kind) -> Result<Tensor, ThoError> {
         if dst_tho_device == 0 {
-            track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"))).await
+            track_await(copy_d2h(kind, src_t, self.buf_size, &self.bufs_pool_h2d.as_ref().expect("no bufs_pool"))).await
         } else {
-            track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), dst_tho_device)).await
+            track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool_h2d.as_ref().expect("no bufs_pool"), dst_tho_device)).await
         }
     }
 
@@ -476,13 +476,13 @@ impl CopyCtx {
             //TODO opt to .to if tensor_mem_size < buf_size {
             track_await(copy_d2h_from_ptr(
                 kind, self.buf_size,
-                &self.bufs_pool_ro.as_ref().expect("no bufs_pool"), src_ptr, src_size
+                &self.bufs_pool_d2h.as_ref().expect("no bufs_pool"), src_ptr, src_size
             )).await
         } else {
             track_await(copy_h2d_from_ptr(
                 kind,
                 self.buf_size,
-                &self.bufs_pool.as_ref().expect("no bufs_pool"),
+                &self.bufs_pool_h2d.as_ref().expect("no bufs_pool"),
                 dst_tho_device_idx,
                 src_ptr,
                 src_size,
