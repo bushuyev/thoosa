@@ -125,10 +125,10 @@ impl Drop for PinnedHostBuffer {
 pub fn cuda_mem_for_device(cuda_device: usize) -> (usize, usize) {
     use cust::sys::cuMemGetInfo_v2;
 
-    // let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-    // ctx
-    //     .bind_to_thread()
-    //     .expect("failed to bind CUDA context while querying memory usage");
+    let ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
+    ctx
+        .bind_to_thread()
+        .expect("failed to bind CUDA context while querying memory usage");
 
     let mut free: usize = 0;
     let mut total: usize = 0;
@@ -1197,7 +1197,7 @@ mod tests {
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
         let packed_mask = pack_bits_bool(&mask)?;
-        let packed = GlobalCtx::global().copy_ctx(Cuda(0)).await.copy(&packed_mask, 0, Uint8).await?;
+        let packed = GlobalCtx::global().cuda_actor(Cuda(0)).copy(packed_mask.into(), 0.into()).await?;
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();

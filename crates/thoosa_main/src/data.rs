@@ -201,10 +201,11 @@ pub fn clc_records(resource_ids: &Vec<String>, base_dir: &str) -> Result<usize, 
 
 pub fn save_tensor(columns: &[&str], ids: Vec<String>, t: &Tensor, path: &str) {
     assert_eq!(t.size().len(), 2);
+    assert_eq!(t.size()[0] as usize, ids.len());
     assert_eq!(t.size()[1] as usize, columns.len() - 1);
 
     let mut df = DataFrame::new(
-        1, //TODO - just to fix compile errors
+        ids.len(),
         [
             vec![Series::new(columns[0].into(), ids).into()],
             columns
