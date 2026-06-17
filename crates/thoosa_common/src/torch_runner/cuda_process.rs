@@ -425,6 +425,9 @@ pub enum CudaIPCActorMessage {
     },
     Reset {
         respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
+    Shutdown {
+        respond_to: oneshot::Sender<Result<(), ThoError>>
     }
 
 }
@@ -648,6 +651,44 @@ impl CudaIPCActor {
             CudaIPCActorMessage::SyncStream { .. } => {}
             CudaIPCActorMessage::GetExecStream { .. } => {}
             CudaIPCActorMessage::Reset { .. } => {}
+            CudaIPCActorMessage::Shutdown { respond_to } => {
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let (reply_tx, reply_rx) = oneshot::channel();
+                let pending = Arc::clone(&self.pending);
+                let self_tx = self.tx.clone();
+
+                tokio::spawn(async move {
+                    {
+                        let mut pending = pending.lock().await;
+                        let old = pending.insert(id, reply_tx);
+                        debug_assert!(old.is_none());
+                    }
+
+                    if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()) }).await.is_err() {
+                        let mut pending = pending.lock().await;
+                        pending.remove(&id);
+                        let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                        return;
+                    }
+
+                    let reply = reply_rx
+                        .await
+                        .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
+                        .and_then(|reply| reply);
+
+                    match reply {
+                        Ok(reply) if reply == "shutdown-ok" => {
+                            let _ = respond_to.send(Ok(()));
+                        }
+                        Ok(reply) => {
+                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
+                        }
+                        Err(error) => {
+                            let _ = respond_to.send(Err(error));
+                        }
+                    }
+                });
+            }
         }
 
         Ok(())
@@ -872,6 +913,17 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
+    pub async fn shutdown(&self) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::Shutdown {
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
     //TODO these are 'exec' streams, not for copy
     pub async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
         let (respond_to, recv) = oneshot::channel();
@@ -1049,7 +1101,7 @@ mod tests {
 
         debug!("run_main: copy={copy:?}");
 
-
+        cuda_actor.shutdown().await?;
 
         Ok(())
     }
