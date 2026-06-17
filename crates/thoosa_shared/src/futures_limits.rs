@@ -59,6 +59,7 @@ struct FutureLimitEntry {
 #[derive(Default)]
 struct FuturesLimitsState {
     futures_limits: HashMap<String, FutureLimitEntry>,
+    forced_future_limits: HashMap<String, usize>,
     active_registrations: usize,
     feedback_window: VecDeque<bool>,
     feedback_window_ooms: usize,
@@ -214,6 +215,7 @@ impl FuturesLimits {
 
     pub fn register<'a>(&'a self, descr: &str) -> FuturesLimitRegistration<'a> {
         let mut state = self.state.lock();
+        let forced_limit = state.forced_future_limits.get(descr).copied();
         let receiver = {
 
             let entry = state.futures_limits.entry(descr.to_owned()).or_insert_with(|| FutureLimitEntry {
@@ -223,6 +225,9 @@ impl FuturesLimits {
                 weight: Self::future_limit_weight(descr),
             });
             entry.registrations += 1;
+            if let Some(forced_limit) = forced_limit {
+                entry.limit.set(forced_limit);
+            }
             entry.limit.receiver()
         };
         state.active_registrations += 1;
@@ -249,6 +254,17 @@ impl FuturesLimits {
         }
         self.rebalance_future_limits(&state);
         debug!(descr, active_registrations = state.active_registrations, max_parallel_jobs = self.sync_execution_limiter.limit(), "forgot future collector");
+    }
+
+    pub fn force(&self, descr: &str, limit: usize) {
+        assert!(limit > 0, "buffer limit must be greater than zero");
+        let mut state = self.state.lock();
+        state.forced_future_limits.insert(descr.to_owned(), limit);
+        if let Some(entry) = state.futures_limits.get(descr) {
+            entry.limit.set(limit);
+        }
+        self.publish_future_limits(Self::future_limits_snapshot(&state));
+        debug!(descr, limit, "forced future collector limit");
     }
 
     pub fn on_oom(&self) {
@@ -325,7 +341,11 @@ impl FuturesLimits {
         }
 
         let total_weight = state.futures_limits.values().map(|entry| entry.registrations.saturating_mul(entry.weight)).sum::<usize>();
-        for entry in state.futures_limits.values() {
+        for (descr, entry) in &state.futures_limits {
+            if let Some(forced_limit) = state.forced_future_limits.get(descr) {
+                entry.limit.set(*forced_limit);
+                continue;
+            }
             let collector_limit = (self.sync_execution_limiter.limit().saturating_mul(entry.weight) / total_weight).max(1);
             entry.limit.set(collector_limit);
         }
@@ -367,7 +387,7 @@ impl Default for FuturesLimits {
 
 static FUTURES_LIMITS: LazyLock<Arc<FuturesLimits>> = LazyLock::new(|| Arc::new(FuturesLimits::new()));
 
-pub fn buffer_limits() -> &'static Arc<FuturesLimits> {//TODO rename futures_limits
+pub fn futures_limits() -> &'static Arc<FuturesLimits> {
     &FUTURES_LIMITS
 }
 
@@ -405,6 +425,40 @@ mod tests {
 
         assert_eq!(*copy.receiver().borrow(), (initial_limit * 2 / 3).max(1));
         assert_eq!(*regular.receiver().borrow(), (initial_limit / 3).max(1));
+    }
+
+    #[test]
+    fn test_forced_collector_limit_is_used_and_not_rebalanced() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
+        limits.force(COPY_D2H, 10);
+
+        let copy = limits.register(COPY_D2H);
+        assert_eq!(*copy.receiver().borrow(), 10);
+
+        for _ in 0..SUCCESSFUL_EXECUTIONS_PER_INCREASE {
+            limits.on_ok();
+        }
+        assert_eq!(*copy.receiver().borrow(), 10);
+
+        limits.on_oom();
+        for _ in 1..OOM_RATE_MIN_EXECUTIONS {
+            limits.on_ok();
+        }
+        limits.on_oom();
+        for _ in 1..OOM_RATE_MIN_EXECUTIONS {
+            limits.on_ok();
+        }
+        assert_eq!(*copy.receiver().borrow(), 10);
+    }
+
+    #[test]
+    fn test_forcing_active_collector_updates_receiver() {
+        let limits = FuturesLimits::new_with_parallelism(8, 32);
+        let copy = limits.register(COPY_D2H);
+        assert_ne!(*copy.receiver().borrow(), 10);
+
+        limits.force(COPY_D2H, 10);
+        assert_eq!(*copy.receiver().borrow(), 10);
     }
 
     #[test]
