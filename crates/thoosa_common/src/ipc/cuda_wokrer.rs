@@ -86,7 +86,7 @@ impl CudaWorker {
 
                         format!("{TENSOR_INFO_PAYLOAD_PREFIX}{info_json}")
                     }
-                    Err(error) => format!("copy-error: {error}"),
+                    Err(error) => cuda_process::encode_worker_copy_error(&error),
                 };
                 reply_tx
                     .send(WorkerReply {

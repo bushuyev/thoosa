@@ -357,6 +357,12 @@ pub enum CudaAction {
 #[derive(Debug, Clone)]
 pub enum Cause {
     Cuda { action: CudaAction, msg: String },
+    CudaWoker {
+        msg: String,
+        is_oom: bool,
+        is_retryable_oom: bool,
+        needs_cuda_ctx_reset: bool,
+    },
     AdjusterFailed,
     UnsupportedDegradeLevel,
     ExpectedValue,
@@ -463,6 +469,7 @@ impl ThoError {
             Cause::JobError { job_id: _, inner } => {
                 inner.is_oom()
             },
+            Cause::CudaWoker { is_oom, .. } => *is_oom,
             _=> false
         }
 
@@ -481,6 +488,7 @@ impl ThoError {
             Cause::JobError { job_id: _, inner } => {
                 inner.is_retryable_oom()
             },
+            Cause::CudaWoker { is_retryable_oom, .. } => *is_retryable_oom,
             _=> false
         }
     }
@@ -493,6 +501,7 @@ impl ThoError {
                     _=> false
                 }
             },
+            Cause::CudaWoker { needs_cuda_ctx_reset, .. } => *needs_cuda_ctx_reset,
 
             _=> false
         }
@@ -505,6 +514,7 @@ impl ThoError {
     fn cause_summary(&self) -> String {
         match &self.what {
             Cause::Cuda { action, msg } => format!("cuda {action:?}: {msg}"),
+            Cause::CudaWoker { msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset } => format!("CudaWoker happened in the CudaWorker: {msg}; is_oom={is_oom}, is_retryable_oom={is_retryable_oom}, needs_cuda_ctx_reset={needs_cuda_ctx_reset}"),
             Cause::AdjusterFailed => "adjuster failed".into(),
             Cause::UnsupportedDegradeLevel => "unsupported degrade level".into(),
             Cause::ExpectedValue => "expected value".into(),
