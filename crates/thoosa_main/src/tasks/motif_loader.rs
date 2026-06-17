@@ -809,7 +809,7 @@ where
             let mut dst = Tensor::f_zeros([valid_slices.len() as i64, window as i64], (raw_tt.t_ref().kind(), raw_tt.t_ref().device()))?;
             for (slice_i, slice) in valid_slices.into_iter().enumerate() {
                 // TODO(perf): replace per-slice f_get/f_copy with an index tensor/gather or batched narrow copy when slices are contiguous enough.
-                let src = raw_tt.t.f_i((channel, slice as i64..(slice + window) as i64))?;
+                let src = raw_tt.t_ref().f_i((channel, slice as i64..(slice + window) as i64))?;
                 dst.f_get(slice_i as i64)?.f_copy_(&src)?;
             }
 
@@ -933,8 +933,8 @@ where
                 } else {
                     debug!("load_random_slices:  slice_i={slice_i} slice={slice:?} size={size:?}");
                     // TODO(perf): this copies one random slice at a time; build a batched index/gather path to reduce tensor indexing overhead during training.
-                    let src = raw_tt.t.f_i((0..channels, slice as i64..(slice + window) as i64))?;
-                    let mut dst = motif_t.t.f_i((0..channels, slice_i, ..))?;
+                    let src = raw_tt.t_ref().f_i((0..channels, slice as i64..(slice + window) as i64))?;
+                    let mut dst = motif_t.t_ref().f_i((0..channels, slice_i, ..))?;
                     dst.f_copy_(&src)?;
                     slice_i += 1;
                 }
@@ -947,7 +947,7 @@ where
             } else {
                 Ok::<_, ThoError>(Some(ThoTensor::new(
                     mono_key!(resource_id, format!("random_slices_resource_id={resource_id}")).into(),
-                    motif_t.t.f_i((.., 0..slice_i, ..))?,
+                    motif_t.t_ref().f_i((.., 0..slice_i, ..))?,
                 )?))
             }
         })?;

@@ -1099,7 +1099,7 @@ impl MotifNetParams {
             MotifNetTypeParams::CosineNetParams(v) => cosine_motif_node(v, motif),
             MotifNetTypeParams::CosineNet2DParams(v) => {cosine_2d_motif_node(
                 v,
-                motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t).unwrap()))
+                motif.map(|tt|Arc::new(ThoTensor::new(tt.id().clone(), Arc::into_inner(tt).expect("").t()).unwrap()))
             )}//TODO
         }
     }

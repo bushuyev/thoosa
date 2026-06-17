@@ -58,7 +58,7 @@ impl Deref for ArgminThoTensor {
     type Target = Tensor;
 
     fn deref(&self) -> &Self::Target {
-        &self.0.t
+        self.0.t_ref()
     }
 }
 
@@ -73,7 +73,7 @@ impl ArgminThoTensor {
         unsafe {
             let const_ptr = self as *const Self;
             let mut_ptr = const_ptr as *mut Self;
-            (*mut_ptr).0.t = self.0.t.shallow_clone().set_requires_grad(true);
+            (*mut_ptr).0 = ThoTensor::new(self.0.id().clone(), self.0.t_ref().shallow_clone().set_requires_grad(true)).expect("can't force requires_grad");
         }
     }
 
@@ -96,43 +96,39 @@ impl ArgminThoTensor {
 
 impl DerefMut for ArgminThoTensor {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0.t
+        self.0.t_mut()
     }
 }
 
 impl ArgminSub<ArgminThoTensor, ArgminThoTensor> for ArgminThoTensor {
     fn sub(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
-        (&self.0.t - &other.0.t).into()
+        (self.0.t_ref() - other.0.t_ref()).into()
     }
 }
 
 impl ArgminSub<f64, ArgminThoTensor> for ArgminThoTensor {
     fn sub(&self, other: &f64) -> ArgminThoTensor {
-        (self.0.t.subtract_scalar(*other)).into()
+        (self.0.t_ref().subtract_scalar(*other)).into()
     }
 }
 
 impl ArgminAdd<ArgminThoTensor, ArgminThoTensor> for ArgminThoTensor {
     fn add(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
-        (&self.0.t + &other.0.t).into()
+        (self.0.t_ref() + other.0.t_ref()).into()
     }
 }
 
 impl ArgminAdd<f64, ArgminThoTensor> for ArgminThoTensor {
     fn add(&self, other: &f64) -> ArgminThoTensor {
-        (self.0.t.f_add_scalar(*other)).unwrap().into()
+        (self.0.t_ref().f_add_scalar(*other)).unwrap().into()
     }
 }
 
 impl ArgminDot<ArgminThoTensor, f64> for ArgminThoTensor {
     fn dot(&self, other: &ArgminThoTensor) -> f64 {
-        debug!("ArgminDot::dot: size={:?} self.0.t={}", self.0.t.size(), self.0.t);
-        debug!(
-            "ArgminDot::dot: size={:?} other.0.t={}",
-            other.0.t.size(),
-            other.0.t
-        );
-        let v = self.0.t.dot(&other.0.t).double_value(&[]);
+        debug!("ArgminDot::dot: size={:?} self.0.t={}", self.0.t_ref().size(), self.0.t_ref());
+        debug!("ArgminDot::dot: size={:?} other.0.t={}", other.0.t_ref().size(), other.0.t_ref());
+        let v = self.0.t_ref().dot(other.0.t_ref()).double_value(&[]);
         debug!("ArgminDot::dot: v={}", v);
         v
     }
@@ -140,47 +136,47 @@ impl ArgminDot<ArgminThoTensor, f64> for ArgminThoTensor {
 
 impl ArgminMul<f64, ArgminThoTensor> for ArgminThoTensor {
     fn mul(&self, other: &f64) -> ArgminThoTensor {
-        self.0.t.multiply_scalar(*other).into()
+        self.0.t_ref().multiply_scalar(*other).into()
     }
 }
 
 impl ArgminMul<ArgminThoTensor, ArgminThoTensor> for ArgminThoTensor {
     fn mul(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
-        self.0.t.multiply(other).into()
+        self.0.t_ref().multiply(other).into()
     }
 }
 
 impl ArgminL1Norm<f64> for ArgminThoTensor {
     fn l1_norm(&self) -> f64 {
-        self.0.t.linalg_norm(0, 0, true, None).double_value(&[])
+        self.0.t_ref().linalg_norm(0, 0, true, None).double_value(&[])
     }
 }
 
 impl ArgminSignum for ArgminThoTensor {
     fn signum(self) -> Self {
-        self.0.t.sign().into()
+        self.0.t().sign().into()
     }
 }
 
 impl ArgminZeroLike for ArgminThoTensor {
     fn zero_like(&self) -> Self {
-        Tensor::zeros(self.0.t.size(), (self.0.t.kind(), self.0.t.device())).into()
+        Tensor::zeros(self.0.t_ref().size(), (self.0.t_ref().kind(), self.0.t_ref().device())).into()
     }
 }
 
 //TODO test
 impl ArgminMinMax for ArgminThoTensor {
     fn min(x: &Self, y: &Self) -> Self {
-        Tensor::stack(&[&x.0.t, &y.0.t], 0).amin(1, false).into()
+        Tensor::stack(&[x.0.t_ref(), y.0.t_ref()], 0).amin(1, false).into()
     }
     fn max(x: &Self, y: &Self) -> Self {
-        Tensor::stack(&[&x.0.t, &y.0.t], 0).amax(1, false).into()
+        Tensor::stack(&[x.0.t_ref(), y.0.t_ref()], 0).amax(1, false).into()
     }
 }
 
 impl ArgminL2Norm<f64> for ArgminThoTensor {
     fn l2_norm(&self) -> f64 {
-        self.0.t.linalg_norm(2, 0, true, None).double_value(&[])
+        self.0.t_ref().linalg_norm(2, 0, true, None).double_value(&[])
     }
 }
 
@@ -193,7 +189,7 @@ impl From<Tensor> for ArgminThoTensor {
 
 impl ArgminMul<ArgminThoTensor, ArgminThoTensor> for f64 {
     fn mul(&self, other: &ArgminThoTensor) -> ArgminThoTensor {
-        other.0.t.multiply_scalar(*self).into()
+        other.0.t_ref().multiply_scalar(*self).into()
     }
 }
 

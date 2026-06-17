@@ -983,9 +983,9 @@ mod tests {
 
             let output = net.tho_forward(&t.to_device(Cuda(0)).i((0, ..)).unfold(0, 100, 1).into(), None, false)?;
 
-            debug!("output.t=\n{}", output.t.view((1,-1)));
+            debug!("output.t=\n{}", output.t_ref().view((1,-1)));
 
-            debug_plot!(&output.t.view((1,-1)), "applied 0")?;
+            debug_plot!(&output.t_ref().view((1,-1)), "applied 0")?;
 
             Ok(())
         }

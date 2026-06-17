@@ -290,7 +290,7 @@ where
 
                     let stft = SyncStft::<C>::new("".into(), stft_config.clone())?;
 
-                    let t = input.t.f_i((tensors.channel as i64, ..))?;
+                    let t = input.t_ref().f_i((tensors.channel as i64, ..))?;
                     let size = t.size();
                     let pad_to_width = tensors.motif_width.max(stft_config.n_fft as u32);
                      let stft_t = if self_clone.run_stft {
@@ -804,7 +804,7 @@ async fn move_cosine_conv2d_tensors_to_cpu(raw_tensors: Vec<RawMyCosineConv2dTen
 
 async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<DevicesWrap<CosineConv2dTensor>>, ThoError> {
     let id = tensor.id().clone();
-    let mask = tensor.t;
+    let mask = tensor.t();
     let mask = if mask.device().eq(&tch::Device::Cpu) {
         mask
     } else {
@@ -812,7 +812,7 @@ async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<Dev
         let device = ThoDevice::from(mask.device());
         let kind = mask.kind();
 
-        track_await(GlobalCtx::global().cuda_actor(device).copy(mask, 0.into())).await?
+        track_await(GlobalCtx::global().cuda_actor(device).copy(mask.into(), 0.into())).await?
     };
     Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, mask)?)))
 }

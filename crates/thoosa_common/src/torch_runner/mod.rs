@@ -320,7 +320,7 @@ mod tests {
             loaded: &ThoTensor<LoadedTensor, SynKey>,
             k: &ThoTensor<MulK, SimpleId>,
         ) -> Result<ThoTensor<ClcTaskOutput, SynKey>, ThoError> {
-            debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t,k.t);
+            debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t_ref(),k.t_ref());
 
             let multed = loaded.t_ref().f_multiply(&k.as_ref());
 

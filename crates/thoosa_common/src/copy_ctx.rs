@@ -22,11 +22,12 @@ use crate::dims::Dims;
 use crate::runner::common::cachable::WithDataRef;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
+use crate::tho_tensor::ThoTensor;
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
 pub enum CudaActorMessage {
-    Copy{ src:Tensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
+    Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<Tensor, ThoError>>},
     SyncStream {
         stream:Guard<ThoCudaStream>,
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -76,12 +77,16 @@ impl CudaActor {
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
                     debug!("CudaActor::handle_message/Copy: src={src:?}");
+                    let src_ptr = src.t_ref().data_ptr() as usize;
+                    let src_size = src.t_ref().size();
+                    let src_kind = src.t_ref().kind();
+                    let _src_keepalive = src;
 
                     let result = copy_ctx.read().await.copy_from_ptr(
-                        src.data_ptr() as usize,
-                        &src.size(),
+                        src_ptr,
+                        &src_size,
                         dst_device.ordinal(),
-                        src.kind(),
+                        src_kind,
                     ).await;
 
                     if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
@@ -216,7 +221,7 @@ impl CudaActorHandle {
         }
     }
 
-    pub async fn copy(&self, src:Tensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
+    pub async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaActorMessage::Copy {
