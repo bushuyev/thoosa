@@ -217,18 +217,36 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     pub fn new(id: Id, tensor: Tensor) -> Result<Self, ThoError> {
-        // debug!("ThoTensor::new: id={:?} trace={}", id, backtrace_head_lines(8));
+
+        let t = if tensor.is_contiguous() {
+            tensor
+        } else {
+            warn!("got a non-contiguous ThoTensor: id={id:?}");
+            tensor.f_contiguous()?
+        };
+
         Ok(Self {
             id,
-            inner: ThoTensorInner::Val { t: if tensor.is_contiguous() {
-                tensor
-            } else {
-                tensor.f_contiguous()?
-            } },
+            inner: ThoTensorInner::Val {
+                t
+            },
             tracking: Default::default(),
             pd: PhantomData,
         })
     }
+
+    pub fn new_ref(id: Id, key:u64) -> Self {
+
+        Self {
+            id,
+            inner: ThoTensorInner::Ref {
+                key
+            },
+            tracking: Default::default(),
+            pd: PhantomData,
+        }
+    }
+
 
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Result<Self, ThoError> {
         Ok(Self {

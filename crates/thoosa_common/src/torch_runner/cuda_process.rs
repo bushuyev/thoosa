@@ -366,6 +366,7 @@ fn spawn_worker_h2d_copy_task(
 
         let payload = match copy_result {
             Ok((transfer_id, tensor, tensor_digest_hex)) => {
+                //TODO should tensors have their own id generator?
                 all_cuda_tensors.lock().await.insert(transfer_id, tensor);
                 let done = WorkerCopyDonePayload { transfer_id, tensor_digest_hex };
                 match serde_json::to_string(&done) {
@@ -403,20 +404,8 @@ async fn handle_worker_request(payload: String) -> String {
 }
 
 
-#[derive(Debug)]
-pub struct IPCTensor {//reference to a tensor kept in worker process started in CudaWorker::run_worker
-    id:String,
-}
-
-
-impl IPCTensor {
-    pub fn new<S:Into<String>>(id:S) -> Self {
-        Self { id :id.into() }
-    }
-}
-
 pub enum CudaIPCActorMessage {
-    Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<IPCTensor, ThoError>>},
+    Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
     SyncStream {
         stream:Guard<ThoCudaStream>,
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -556,7 +545,7 @@ impl CudaIPCActor {
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
 
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
                 let pending = Arc::clone(&self.pending);
                 let self_tx = self.tx.clone();
@@ -587,7 +576,7 @@ impl CudaIPCActor {
 
                         let mut pending = pending.lock().await;
 
-                        let old = pending.insert(id, reply_tx);
+                        let old = pending.insert(transfer_id, reply_tx);
                         debug_assert!(old.is_none());
                     }
 
@@ -604,7 +593,7 @@ impl CudaIPCActor {
                                 std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf_stream.0.as_mut_ptr(), chunk.len);
                             }
                             let metadata = IpcTensorTransferMetadata {
-                                transfer_id: id,
+                                transfer_id,
                                 buffer_id: buf_stream.0.buffer_id(),
                                 byte_len: chunk.len,
                                 tensor_byte_len: tensor_mem_size,
@@ -622,11 +611,11 @@ impl CudaIPCActor {
                             debug!("CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf_stream.0.as_ptr());
 
                             let fd = buf_stream.0.try_clone_fd()?;
-                            let send_result = self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await;
+                            let send_result = self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await;
 
                             if send_result.is_err() {
                                 let mut pending = pending.lock().await;
-                                pending.remove(&id);
+                                pending.remove(&transfer_id);
                                 return Err(ThoError::new("worker IPC writer task is closed"));
                             }
                             held_buffers.push(buf_stream);
@@ -635,14 +624,16 @@ impl CudaIPCActor {
 
                     let id = reply_rx
                         .await
-                        .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))??;
+                        .map_err(|_| ThoError::new(format!("response channel for request {transfer_id} was dropped")))??;
 
                     let done = parse_worker_copy_done_payload(&id)?;
                     if done.tensor_digest_hex != source_digest_hex {
                         return Err(ThoError::new(format!("worker copy digest mismatch for transfer {}: source={} copied={}", done.transfer_id, source_digest_hex, done.tensor_digest_hex)));
                     }
                     debug!("CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, done.tensor_digest_hex);
-                    respond_to.send(Ok(IPCTensor::new(id.clone()))).map_err(|e| ThoError::new(format!("response channel for request {id} got {e:?}")))?;
+
+                    respond_to.send(Ok(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */)))
+                        .map_err(|e| ThoError::new(format!("response channel for request {id} got {e:?}")))?;
 
                     Ok::<_, ThoError>(())
                 });
@@ -878,7 +869,7 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<IPCTensor, ThoError> {
+    pub async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<ThoTensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Copy {
@@ -1090,17 +1081,27 @@ mod tests {
 
         let tho_device_idx = 1;
 
-        let main_process_cpu_tensor = Tensor::rand(&[10000, 10000], FLOAT_CPU);
+        let main_process_cpu_tensor = Tensor::rand(&[1000, 10000], FLOAT_CPU);
 
 
         let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
-        let copy = track_await(cuda_actor
+        let cuda_ref = track_await(cuda_actor
             .copy(
                 main_process_cpu_tensor.into(),
-                tho_device_idx.into(),
+                tho_device_idx.into(),//Cuda
             )).await?;
 
-        debug!("run_main: copy={copy:?}");
+        debug!("run_main: cuda_ref={cuda_ref:?}");
+
+        let cpu_tensor = track_await(cuda_actor
+            .copy(
+                cuda_ref,
+                0.into(),//Cpu
+            )).await?;
+
+        debug!("run_main: cpu_tensor={cpu_tensor:?}");
+
+        //TODO compare tensors
 
         cuda_actor.shutdown().await?;
 
