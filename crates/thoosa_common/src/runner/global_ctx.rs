@@ -161,10 +161,10 @@ impl GlobalCtx {
                 .await?;
             info!("GlobalCtx::reset_cuda_context: drop_device done");
 
-            track_await(GlobalCtx::global()
-                .copy_ctx_mut(tho_device_idx))
-                .await
-                .reset()?;
+            GlobalCtx::global()
+                .cuda_actor(tho_device_idx)
+                .reset()
+                .await?;
 
 
             info!("GlobalCtx::reset_cuda_context: all done");
@@ -411,19 +411,6 @@ impl GlobalCtx {
 }
 
 impl GlobalCtx {
-    pub async fn copy_ctx<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockReadGuard<'_, CopyCtx> {
-        let device:ThoDevice = device.into();
-        let gpu_device_ordinal = device.gpu_ordinal();
-        track_await(self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}")).read()).await
-    }
-
-    pub async fn copy_ctx_mut<D:Into<ThoDevice>+ 'static>(&self, device:D)-> tokio::sync::RwLockWriteGuard<'_, CopyCtx> {
-        let device:ThoDevice = device.into();
-        let gpu_device_ordinal = device.gpu_ordinal();
-        let rw_lock = self.copy_ctx.get(gpu_device_ordinal).expect(&format!("No copy ctx for device={gpu_device_ordinal}"));
-        info!("GlobalCtx::copy_ctx_mut: waiting on rw_lock");
-        tokio::time::timeout(Duration::from_secs(10), rw_lock.write()).await.expect("Should be able to write copy ctx")
-    }
 
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> CudaActorHandle {
         let device:ThoDevice = device.into();
@@ -894,7 +881,7 @@ mod tests {
             tokio::task::spawn(async move {
                 let kind = Float;
                 let cpu_input = Tensor::ones(&[n, n], FLOAT_CPU);
-                let cuda_input = GlobalCtx::global().copy_ctx(1).await.move_t(cpu_input, 1, kind).await?;
+                let cuda_input = GlobalCtx::global().cuda_actor(Cuda(0)).copy(cpu_input.into(), 1.into()).await?;
                 // let cuda_input = cpu_input.to(Cuda(0));
 
                 let cuda_t =
@@ -904,7 +891,7 @@ mod tests {
                 ?;
 
 
-                GlobalCtx::global().copy_ctx(1).await.move_t(cuda_t, 0, kind).await
+                GlobalCtx::global().cuda_actor(Cuda(0)).copy(cuda_t.into(), 0.into()).await
                 // Ok(cuda_t.to(Cpu))
             })
         })

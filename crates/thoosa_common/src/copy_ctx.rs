@@ -438,9 +438,11 @@ impl CopyCtx {
         let max_elt_size = init_type.elt_size_in_bytes();
         let elts_in_mem = (total_mem as f64 * mem_k) as usize / max_elt_size; //123456; //25000; //123456; //
 
+        debug!("CopyCtx::clc_buff_size: elts_in_mem={elts_in_mem} total_mem={total_mem} max_elt_size={max_elt_size}");
+
         let elts_in_buff = elts_in_mem / buffs;
 
-        debug!("CopyCtx::clc_buff_size: buf_size={elts_in_buff} buffs={buffs}");
+        debug!("CopyCtx::clc_buff_size: elts_in_buff={elts_in_buff} buffs={buffs}");
 
         let buf_size = elts_in_buff * max_elt_size;
         buf_size
