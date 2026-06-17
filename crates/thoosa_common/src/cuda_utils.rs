@@ -70,10 +70,10 @@ pub struct PinnedHostBuffer {
 }
 
 impl PinnedHostBuffer {
-    pub fn new(len: usize) -> Result<Self, ThoError> {
+    pub fn new(len: usize, flags: u32) -> Result<Self, ThoError> {
 
         let mut raw: *mut c_void = std::ptr::null_mut();
-        let flags = CU_MEMHOSTALLOC_WRITECOMBINED;
+        // let flags = CU_MEMHOSTALLOC_WRITECOMBINED;
         let res = unsafe {
             thoosa_shims::memcpy::tho_cu_mem_host_alloc(&mut raw, len, flags)
         };
@@ -940,7 +940,7 @@ mod tests {
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
-                PinnedHostBuffer::new(buf_size as usize).unwrap(),
+                PinnedHostBuffer::new(buf_size as usize, 0).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
             )
         })));
@@ -1047,7 +1047,7 @@ mod tests {
         let buf_size = elts_in_buff * init_type.elt_size_in_bytes() + 17; //64 * 1024 * 1024; // total_size/ buffs as i64;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_i| {
             (
-                PinnedHostBuffer::new(buf_size as usize).unwrap(),
+                PinnedHostBuffer::new(buf_size as usize, 0).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
             )
         })));
@@ -1104,7 +1104,7 @@ mod tests {
         let buf_size = 1024usize;
         let bufs_pool = Arc::new(Pool::from_iter((0..buffs).map(|_| {
             (
-                PinnedHostBuffer::new(buf_size).unwrap(),
+                PinnedHostBuffer::new(buf_size, 0).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
             )
         })));
