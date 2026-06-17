@@ -271,28 +271,32 @@ pub async fn copy_d2h_from_ptr(
                     let buf_stream = track_await(pool.acquire()).await;
 
                     let result = track_await(spawn_blocking(move || {
-                        tracing::info_span!(
-                            "cuda_utils::copy_d2h_from_ptr_chunk_group",
-                            kind = "spawn_blocking",
-                            file = file!(),
-                            line = line!(),
-                            task = format!("copy {} D2H chunks", chunk_group.len()),
-                        ).in_scope(|| {
-                            let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
-                            let stream = Arc::clone(&buf_stream.1);
-                            let _guard = ThoStreamGuard::new(stream.as_ref())?;
+                        let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
+                        let stream = Arc::clone(&buf_stream.1);
+                        let _guard = ThoStreamGuard::new(stream.as_ref())?;
 
                         for chunk in chunk_group {
                             let src_off_ptr = src_ptr.add(chunk.offset) as thoosa_shims::memcpy::CuDevicePtr;
                             let dst_off_ptr: usize = dst_ptr.add(chunk.offset);
 
                             debug!("copy_d2h_from_ptr: starting {} thread_name={:?} src_off_ptr={src_off_ptr:?} off={}", chunk.index, os_thread_id(), chunk.offset);
-                            let result = thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
-                                buf_ptr as *mut c_void,
-                                src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                                chunk.len,
-                                stream.as_mut_ptr(),
-                            );
+
+
+                            let result = {
+                                let span = tracing::debug_span!(
+                                    "copy_d2h_from_ptr",
+                                    agg_perf = "cuda_utils::copy_d2h_from_ptr/tho_cu_memcpy_dtoh_async",
+                                    len = chunk.len,
+                                );
+
+                                let _enter = span.enter();
+                                thoosa_shims::memcpy::tho_cu_memcpy_dtoh_async(
+                                    buf_ptr as *mut c_void,
+                                    src_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                                    chunk.len,
+                                    stream.as_mut_ptr(),
+                                )
+                            };
                             if result != CUDA_SUCCESS {
                                 debug!("tho_cu_memcpy_dtoh_async failed at chunk {} with {result:?}. buf_ptr={buf_ptr} src_off_ptr={src_off_ptr} c_buf_size={}", chunk.index, chunk.len);
                                 check_cuda_status(result, "tho_cu_memcpy_dtoh_async")?;
@@ -302,17 +306,25 @@ pub async fn copy_d2h_from_ptr(
 
                             stream.synchronize()?;
 
-                            std::ptr::copy_nonoverlapping(
-                                buf_ptr as *const u8,
-                                dst_off_ptr as *mut u8,
-                                chunk.len,
-                            );
+
+                            {
+                                let span = tracing::debug_span!(
+                                    "copy_d2h_from_ptr",
+                                    agg_perf = "cuda_utils::copy_d2h_from_ptr/copy_nonoverlapping",
+                                    len = chunk.len,
+                                );
+
+                                let _enter = span.enter();
+                                std::ptr::copy_nonoverlapping(
+                                    buf_ptr as *const u8,
+                                    dst_off_ptr as *mut u8,
+                                    chunk.len,
+                                );
+                            }
                         }
 
-                            drop(buf_stream);
-                            Ok::<(), ThoError>(())
-
-                        })
+                        drop(buf_stream);
+                        Ok::<(), ThoError>(())
                     })).await
                         .map_err(join_error_to_tho_error)
                         .and_then(|result| result);
@@ -427,13 +439,7 @@ pub async fn copy_h2d_from_ptr(
                     let buf_stream = track_await(pool.acquire()).await;
 
                     let result = track_await(spawn_blocking(move || {
-                        tracing::info_span!(
-                            "cuda_utils::copy_h2d_from_ptr_chunk_group",
-                            kind = "spawn_blocking",
-                            file = file!(),
-                            line = line!(),
-                            task = format!("copy {} H2D chunks", chunk_group.len()),
-                        ).in_scope(|| {
+
                             let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
                             let stream = Arc::clone(&buf_stream.1);
                             let _guard = ThoStreamGuard::new(stream.as_ref())?;
@@ -444,18 +450,34 @@ pub async fn copy_h2d_from_ptr(
 
                             debug!("copy_h2d_from_ptr: starting {} thread_name={:?}", chunk.index, os_thread_id());
                             debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={} thread_name={:?}", chunk.len, os_thread_id());
-                            std::ptr::copy_nonoverlapping(
-                                src_off_ptr as *const u8,
-                                buf_ptr as *mut u8,
-                                chunk.len,
-                            );
+                            {
+                                let span = tracing::debug_span!(
+                                    "copy_d2h_from_ptr",
+                                    agg_perf = "cuda_utils::copy_h2d_from_ptr/copy_nonoverlapping",
+                                    len = chunk.len,
+                                );
 
-                            let result = thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
-                                dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
-                                buf_ptr as *const c_void,
-                                chunk.len,
-                                stream.as_mut_ptr(),
-                            );
+                                std::ptr::copy_nonoverlapping(
+                                    src_off_ptr as *const u8,
+                                    buf_ptr as *mut u8,
+                                    chunk.len,
+                                );
+                            }
+
+                            let result = {
+                                let span = tracing::debug_span!(
+                                    "copy_d2h_from_ptr",
+                                    agg_perf = "cuda_utils::copy_h2d_from_ptr/tho_cu_memcpy_htod_async",
+                                    len = chunk.len,
+                                );
+
+                                thoosa_shims::memcpy::tho_cu_memcpy_htod_async(
+                                    dst_off_ptr as thoosa_shims::memcpy::CuDevicePtr,
+                                    buf_ptr as *const c_void,
+                                    chunk.len,
+                                    stream.as_mut_ptr(),
+                                )
+                            };
                             if result != CUDA_SUCCESS {
                                 debug!("tho_cu_memcpy_htod_async failed at chunk {} with {result:?}. buf_ptr={buf_ptr} dst_off_ptr={dst_off_ptr} c_buf_size={}", chunk.index, chunk.len);
                                 check_cuda_status(result, "tho_cu_memcpy_htod_async")?;
@@ -467,7 +489,7 @@ pub async fn copy_h2d_from_ptr(
                             drop(buf_stream); // return buffer/stream to pool
 
                             Ok::<(), ThoError>(())
-                        })
+
 
                     })).await.map_err(join_error_to_tho_error).and_then(|result| result);
 
@@ -746,6 +768,8 @@ mod tests {
     use tokio::time::Instant;
     use tokio_utils::Pool;
     use thoosa_shared::applicables_runner::Output;
+    use thoosa_shared::futures_limits::{buffer_limits, COPY_D2H};
+    use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use crate::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
     use thoosa_shims::{context::ThoCudaContext, stream::ThoCudaStream};
@@ -797,12 +821,17 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
+        // buffer_limits().force(COPY_D2H, 10);
+
         let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)));
 
-        run_test_copy_from_ptr(ctx, 3, 3).await;
+        let (d2h, h2d) = run_test_copy_from_ptr(ctx, 3, 10).await;
+        info!("\n Copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
+
+        info!("\n{}", format_perf_map(&PERF));
     }
 
-    #[allow(dead_code)]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_test_copy_from_ptr"))]
     async fn run_test_copy_from_ptr(ctx: &'static CopyCtx, threads: u8, runs: u8) -> (f64, f64) {
         let (free_mem, _total_mem) = cuda_mem();
 
@@ -845,7 +874,7 @@ mod tests {
         )
     }
 
-    #[allow(dead_code)]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="run_copy_"))]
     async fn run_copy_(
         _thread_i: u8,
         input_n: i64,
@@ -856,28 +885,27 @@ mod tests {
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
         ctx: &CopyCtx,
-    ) ->Result<(), ThoError>{
-        let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64) as i64;
-        // println!("run_copy_: dim_0={dim_0} dim_1={dim_1}");
-        let mut src_t = Tensor::rand([dim_0, dim_1], (Float, Cpu));
+    ) -> Result<(), ThoError> {
 
-        let mut src_ptr = src_t.data_ptr() as usize;
-        let mut src_size = src_t.size();
         for _t in 0..runs {
-            // println!("run_copy_: thread_i={thread_i} t={t} src_t.size={:?}", src_t.size());
+            let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64) as i64;
+            let mut src_t = Tensor::rand([dim_0, dim_1], (Float, Cpu));
+
+            let mut src_ptr = src_t.data_ptr() as usize;
+            let mut src_size = src_t.size();
+
             let inst_0 = Instant::now();
             let tensor = ctx.copy_from_ptr(src_ptr, &src_size, 1, init_type).await?;
             h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
             (src_ptr, src_size) = (tensor.data_ptr() as usize, tensor.size());
 
-            // println!("run_copy_: thread_i={thread_i} t={t} copy_d2h done in {}", inst_0.elapsed().as_millis());
 
             let inst_0 = Instant::now();
             let tensor = ctx.copy_from_ptr(src_ptr, &src_size, 0, init_type).await?;
             d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
 
-            (src_ptr, src_size) = (tensor.data_ptr() as usize, tensor.size());
+            (_, src_size) = (tensor.data_ptr() as usize, tensor.size());
 
             assert!(equal_bytes(&tensor, &src_t));
 

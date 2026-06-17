@@ -333,7 +333,7 @@ impl FuturesLimits {
     }
 
     fn future_limits_snapshot(state: &FuturesLimitsState) -> Vec<FutureLimitProgressEntry> {
-        let mut entries = state.futures_limits.iter().map(|(descr, entry)| FutureLimitProgressEntry {
+        let entries = state.futures_limits.iter().map(|(descr, entry)| FutureLimitProgressEntry {
             descr: descr.clone(),
             limit: entry.limit.current(),
             registrations: entry.registrations,
@@ -367,7 +367,7 @@ impl Default for FuturesLimits {
 
 static FUTURES_LIMITS: LazyLock<Arc<FuturesLimits>> = LazyLock::new(|| Arc::new(FuturesLimits::new()));
 
-pub fn buffer_limits() -> &'static Arc<FuturesLimits> {
+pub fn buffer_limits() -> &'static Arc<FuturesLimits> {//TODO rename futures_limits
     &FUTURES_LIMITS
 }
 

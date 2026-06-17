@@ -141,7 +141,7 @@ impl CudaActor {
                 let is_resetting = Arc::clone(&self.is_resetting);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
-                    Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "Reset").await;
+                    Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "Reset").await.unwrap();
 
                     let _ = respond_to.send(Ok(()));
                 });
@@ -463,7 +463,8 @@ impl CopyCtx {
             track_await(copy_h2d(kind, src_t, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), dst_tho_device)).await
         }
     }
-    
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores"))]
     pub async fn copy_from_ptr(
         &self,
         src_ptr: usize,

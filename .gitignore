@@ -8,7 +8,7 @@
 /python/shared_util.py
 /data_down/**
 .~lock.doc.odt#
-**.venv
+/python/.thoosa
 **/build/
 **/cmake-build-*
 **/version.rs
