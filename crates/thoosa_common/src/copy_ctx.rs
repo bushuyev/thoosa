@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
 use std::time::Duration;
+use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -277,6 +278,7 @@ pub struct CopyCtx {
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
     exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
+    bufs_pool_ro: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
     bufs_pool: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
     pub(crate)  ipc_bufs_pool: Option<Arc<IpcBufsPool>>,
 }
@@ -308,18 +310,15 @@ impl CopyCtx {
         cuda_context.bind_to_thread().unwrap();
         // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
 
-        let bufs_pool = Some(Self::build_pool(buffs, buf_size, cuda_device));
-        let ipc_bufs_pool = Some(Self::build_ipc_pool(buffs, buf_size, cuda_device));
-        // let device = cu_ctx.ordinal() as i32;
-
 
         Self {
             cu_ctx: cuda_context,
             buffs,
             buf_size,
             exec_stream_pool: Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
-            bufs_pool,
-            ipc_bufs_pool,
+            bufs_pool_ro: Some(Self::build_pool(16, buf_size, cuda_device, 0)),//TODO unwrap)),
+            bufs_pool: Some(Self::build_pool(16, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
+            ipc_bufs_pool: Some(Self::build_ipc_pool(buffs, buf_size, cuda_device)),
         }
     }
 
@@ -346,12 +345,13 @@ impl CopyCtx {
         num_buffs: usize,
         buf_size: usize,
         //cu_ctx: &Arc<ThoCudaContext>,
-        cuda_device:usize
+        cuda_device:usize,
+        flags: u32
     ) -> Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>> {
 
         Arc::new(Pool::from_iter((0..num_buffs).map(|_| {
             (
-                PinnedHostBuffer::new(buf_size).unwrap(),
+                PinnedHostBuffer::new(buf_size, flags).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(cuda_device as i32, true).unwrap()), //TODO unwrap
             )
         })))
@@ -370,7 +370,7 @@ impl CopyCtx {
         drop(Arc::into_inner(std::mem::replace(
             &mut self.bufs_pool,
             Some(Arc::new(Pool::from_vec(vec![(
-                PinnedHostBuffer::new(1).unwrap(),
+                PinnedHostBuffer::new(1, 0).unwrap(),
                 Arc::new(ThoCudaStream::from_pool(0/*self.cu_ctx.ordinal()*/ as i32, true).unwrap()),
             )]))),
         ).unwrap()));
@@ -385,7 +385,7 @@ impl CopyCtx {
 
         self.buffs = buffs;
         self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs);
-        self.bufs_pool = Some(Self::build_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/));
+        self.bufs_pool = Some(Self::build_pool(buffs, self.buf_size, 0, CU_MEMHOSTALLOC_WRITECOMBINED/*&self.cu_ctx*/));
         self.ipc_bufs_pool = Some(Self::build_ipc_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/));
     }
 
@@ -406,7 +406,7 @@ impl CopyCtx {
         self.cu_ctx.reset()?;
         info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 
-        self.bufs_pool = Some(Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize));
+        self.bufs_pool = Some(Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize, CU_MEMHOSTALLOC_WRITECOMBINED));
         info!("CopyCtx::reset_cuda_context: bufs_pool rebuilt");
 
         self.ipc_bufs_pool = Some(Self::build_ipc_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize));
@@ -474,7 +474,10 @@ impl CopyCtx {
     ) -> Result<Tensor, ThoError> {
         let t = if dst_tho_device_idx == 0 {
             //TODO opt to .to if tensor_mem_size < buf_size {
-            track_await(copy_d2h_from_ptr(kind, self.buf_size, &self.bufs_pool.as_ref().expect("no bufs_pool"), src_ptr, src_size)).await
+            track_await(copy_d2h_from_ptr(
+                kind, self.buf_size,
+                &self.bufs_pool_ro.as_ref().expect("no bufs_pool"), src_ptr, src_size
+            )).await
         } else {
             track_await(copy_h2d_from_ptr(
                 kind,
