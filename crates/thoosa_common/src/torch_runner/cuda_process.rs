@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
+use std::ffi::c_void;
 use std::fmt::Debug;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
@@ -8,7 +10,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use dashmap::DashMap;
 use log::{debug, error};
-use tch::Device::Cuda;
+use serde::{Deserialize, Serialize};
+use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::Tensor;
@@ -17,15 +20,18 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tub::Guard;
+use tub::{Guard, Pool};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::traits::{Data, Named};
-use thoosa_shims::stream::ThoCudaStream;
+use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::cuda_result::check_cuda_status;
+use thoosa_shims::memcpy::tho_cu_memcpy_htod_async;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use crate::copy_ctx::{CopyCtx, CudaActorMessage};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
-use crate::interprocess_cuda_copy::{recv_fd, send_fd, IpcProcessRole, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
+use crate::interprocess_cuda_copy::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::RunCtx;
@@ -33,12 +39,91 @@ use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunn
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use crate::utils::tensor_digest;
 #[cfg(test)]
 use crate::torch_runner::tests::{ClcTask, LoadedTensor};
 
 const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
+const COPY_DONE_PAYLOAD_PREFIX: &str = "copy-done:";
+const WORKER_COPY_STREAMS: usize = 16;
+
+#[derive(Debug, Serialize, Deserialize)]
+struct WorkerCopyDonePayload {
+    transfer_id: u64,
+    tensor_digest_hex: String,
+}
+
+struct WorkerCudaResources {
+    _context: Arc<ThoCudaContext>,
+    stream_pool: Arc<Pool<ThoCudaStream>>,
+}
+
+impl WorkerCudaResources {
+    fn new(cuda_device: usize) -> Result<Self, ThoError> {
+        let context = Arc::new(ThoCudaContext::new(cuda_device as i32)?);
+        context.bind_to_thread()?;
+        let streams = (0..WORKER_COPY_STREAMS)
+            .map(|_| ThoCudaStream::from_pool(cuda_device as i32, true))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            _context: context,
+            stream_pool: Arc::new(Pool::from_iter(streams)),
+        })
+    }
+}
+
+struct WorkerH2dChunk {
+    metadata: IpcTensorTransferMetadata,
+    buffer: SharedMemfdBuffer,
+}
+
+struct PendingWorkerH2dTransfer {
+    request_id: u64,
+    metadata: IpcTensorTransferMetadata,
+    received_bytes: usize,
+    seen_chunks: HashSet<usize>,
+    chunks: Vec<WorkerH2dChunk>,
+}
+
+impl PendingWorkerH2dTransfer {
+    fn new(request_id: u64, chunk: WorkerH2dChunk) -> Result<Self, ThoError> {
+        let mut seen_chunks = HashSet::new();
+        if !seen_chunks.insert(chunk.metadata.chunk_index) {
+            return Err(ThoError::new(format!("duplicate H2D chunk index {}", chunk.metadata.chunk_index)));
+        }
+        Ok(Self {
+            request_id,
+            metadata: chunk.metadata.clone(),
+            received_bytes: chunk.metadata.byte_len,
+            seen_chunks,
+            chunks: vec![chunk],
+        })
+    }
+
+    fn push(&mut self, chunk: WorkerH2dChunk) -> Result<(), ThoError> {
+        if self.request_id != chunk.metadata.transfer_id {
+            return Err(ThoError::new(format!("H2D request id={} does not match transfer_id={}", self.request_id, chunk.metadata.transfer_id)));
+        }
+        if self.metadata.kind != chunk.metadata.kind || self.metadata.shape != chunk.metadata.shape || self.metadata.tensor_byte_len != chunk.metadata.tensor_byte_len || self.metadata.chunk_count != chunk.metadata.chunk_count {
+            return Err(ThoError::new(format!("inconsistent H2D chunk metadata for transfer {}", self.metadata.transfer_id)));
+        }
+        if !self.seen_chunks.insert(chunk.metadata.chunk_index) {
+            return Err(ThoError::new(format!("duplicate H2D chunk index {} for transfer {}", chunk.metadata.chunk_index, self.metadata.transfer_id)));
+        }
+        self.received_bytes = self.received_bytes.checked_add(chunk.metadata.byte_len).ok_or_else(|| ThoError::new("H2D received byte count overflow"))?;
+        if self.received_bytes > self.metadata.tensor_byte_len {
+            return Err(ThoError::new(format!("H2D transfer {} received {} bytes but tensor has {} bytes", self.metadata.transfer_id, self.received_bytes, self.metadata.tensor_byte_len)));
+        }
+        self.chunks.push(chunk);
+        Ok(())
+    }
+
+    fn is_complete(&self) -> bool {
+        self.received_bytes == self.metadata.tensor_byte_len && self.chunks.len() == self.metadata.chunk_count
+    }
+}
 
 struct CudaWorker {
     all_cuda_tensors:DashMap<u64, Tensor>,
@@ -83,6 +168,9 @@ impl CudaWorker {
         let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
 
         let writer_task = tokio::spawn(worker_response_writer_loop(writer, reply_rx));
+        let all_cuda_tensors = Arc::new(Mutex::new(HashMap::new()));
+        let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
+        let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
 
         loop {
             let frame = read_text_frame(&mut reader).await?;
@@ -111,30 +199,28 @@ impl CudaWorker {
                 let fd = recv_fd(reader.as_ref()).await?;
 
                 let buffer = SharedMemfdBuffer::from_received_fd(fd, metadata.mapped_len)?;
+                let chunk = WorkerH2dChunk { metadata, buffer };
+                let cuda_device = validate_worker_h2d_chunk(&chunk)?;
 
-                if metadata.mapped_len != buffer.len() {
-                    return Err(ThoError::new(format!("metadata mapped_len={} does not match received buffer len={}", metadata.mapped_len, buffer.len())));
-                }
-
-                let end = metadata.offset.checked_add(metadata.byte_len).ok_or_else(|| ThoError::new("shared memfd metadata range overflow"))?;
-                if end > buffer.len() {
-                    return Err(ThoError::new(format!("shared memfd range [{}, {end}) exceeds mapped_len={}", metadata.offset, buffer.len())));
-                }
-
-                let preview_len = metadata.byte_len.min(16);
+                let preview_len = chunk.metadata.byte_len.min(16);
                 let preview = unsafe {
-                    // SAFETY: offset + preview_len was checked against the live mmap above, and the buffer is kept alive for the slice lifetime.
-                    std::slice::from_raw_parts(buffer.as_ptr().add(metadata.offset), preview_len)
+                    // SAFETY: validate_worker_h2d_chunk checked offset + byte_len against the live mmap, and preview_len is bounded by byte_len.
+                    std::slice::from_raw_parts(chunk.buffer.as_ptr().add(chunk.metadata.offset), preview_len)
                 };
 
-                debug!("run_worker: received shared memfd tensor chunk: metadata={metadata:?} local_mmap_ptr={:?} preview={preview:?}", buffer.as_ptr());
-                reply_tx
-                    .send(WorkerReply {
-                        id,
-                        payload: OutgoingRequestPayload::Msg(format!("shared-memfd-ok: transfer_id={} buffer_id={} byte_len={} mapped_len={}", metadata.transfer_id, metadata.buffer_id, metadata.byte_len, metadata.mapped_len)),
-                    })
-                    .await
-                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                debug!("run_worker: received shared memfd tensor chunk: metadata={:?} local_mmap_ptr={:?} preview={preview:?}", chunk.metadata, chunk.buffer.as_ptr());
+                let transfer_id = chunk.metadata.transfer_id;
+                match pending_h2d_transfers.get_mut(&transfer_id) {
+                    Some(transfer) => transfer.push(chunk)?,
+                    None => {
+                        pending_h2d_transfers.insert(transfer_id, PendingWorkerH2dTransfer::new(id, chunk)?);
+                    }
+                }
+                if pending_h2d_transfers.get(&transfer_id).is_some_and(PendingWorkerH2dTransfer::is_complete) {
+                    let transfer = pending_h2d_transfers.remove(&transfer_id).expect("complete transfer disappeared");
+                    let resources = get_or_create_worker_cuda_resources(&mut cuda_resources, cuda_device)?;
+                    spawn_worker_h2d_copy_task(transfer, resources, Arc::clone(&all_cuda_tensors), reply_tx.clone());
+                }
                 continue;
             }
 
@@ -178,6 +264,119 @@ where
     }
 
     Ok(())
+}
+
+fn worker_cuda_device(metadata: &IpcTensorTransferMetadata) -> Result<usize, ThoError> {
+    let IpcProcessRole::Worker { worker_id } = metadata.consumer else {
+        return Err(ThoError::new(format!("H2D consumer must be worker, got {:?}", metadata.consumer)));
+    };
+    let tho_device_idx = usize::try_from(worker_id)
+        .map_err(|_| ThoError::new(format!("worker id {worker_id} does not fit usize")))?;
+    tho_device_idx
+        .checked_sub(1)
+        .ok_or_else(|| ThoError::new("worker id 0 cannot map to CUDA device"))
+}
+
+fn validate_worker_h2d_chunk(chunk: &WorkerH2dChunk) -> Result<usize, ThoError> {
+    if !matches!(chunk.metadata.direction, IpcTransferDirection::HostToDevice) {
+        return Err(ThoError::new(format!("worker H2D copy got direction {:?}", chunk.metadata.direction)));
+    }
+    if !matches!(chunk.metadata.producer, IpcProcessRole::Parent) {
+        return Err(ThoError::new(format!("worker H2D copy got producer {:?}", chunk.metadata.producer)));
+    }
+    chunk.metadata.validate_for_buffer(&chunk.buffer)?;
+    worker_cuda_device(&chunk.metadata)
+}
+
+fn get_or_create_worker_cuda_resources(
+    resources: &mut HashMap<usize, Arc<WorkerCudaResources>>,
+    cuda_device: usize,
+) -> Result<Arc<WorkerCudaResources>, ThoError> {
+    if let Some(resources) = resources.get(&cuda_device) {
+        return Ok(Arc::clone(resources));
+    }
+    let created = Arc::new(WorkerCudaResources::new(cuda_device)?);
+    resources.insert(cuda_device, Arc::clone(&created));
+    Ok(created)
+}
+
+fn copy_worker_h2d_transfer_to_cuda(
+    mut transfer: PendingWorkerH2dTransfer,
+    stream: Guard<ThoCudaStream>,
+) -> Result<(u64, Tensor, String), ThoError> {
+    let cuda_device = worker_cuda_device(&transfer.metadata)?;
+    if stream.device() != cuda_device as i32 {
+        return Err(ThoError::new(format!("worker copy stream device={} does not match cuda_device={cuda_device}", stream.device())));
+    }
+
+    transfer.chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
+    let mut expected_offset = 0usize;
+    for chunk in &transfer.chunks {
+        if chunk.metadata.tensor_offset != expected_offset {
+            return Err(ThoError::new(format!("H2D transfer {} has gap or overlap at tensor offset {}; got chunk offset {}", transfer.metadata.transfer_id, expected_offset, chunk.metadata.tensor_offset)));
+        }
+        expected_offset = expected_offset.checked_add(chunk.metadata.byte_len).ok_or_else(|| ThoError::new("H2D expected tensor offset overflow"))?;
+    }
+    if expected_offset != transfer.metadata.tensor_byte_len {
+        return Err(ThoError::new(format!("H2D transfer {} copied {expected_offset} bytes but tensor has {} bytes", transfer.metadata.transfer_id, transfer.metadata.tensor_byte_len)));
+    }
+
+    let _thread_context = ThoCudaContext::new(stream.device())?;
+    let _stream_guard = ThoStreamGuard::new(&stream)?;
+    let destination = Tensor::f_empty(transfer.metadata.shape.as_slice(), (transfer.metadata.tch_kind(), Cuda(cuda_device)))?;
+    let dst_base = destination.data_ptr() as u64;
+
+    for chunk in &transfer.chunks {
+        let source = unsafe {
+            // SAFETY: metadata.validate_for_buffer was run before insertion and sort does not mutate buffer metadata.
+            chunk.buffer.as_ptr().add(chunk.metadata.offset)
+        };
+        let destination_offset = dst_base
+            .checked_add(chunk.metadata.tensor_offset as u64)
+            .ok_or_else(|| ThoError::new("H2D destination pointer overflow"))?;
+        let _registration = CuMemHostRegistrationGuard::new(&chunk.buffer)?;
+        let result = unsafe {
+            // SAFETY: destination_offset points into the CUDA tensor byte range checked by metadata tensor offsets, source points into the registered live mmap, and the stream context is current on this OS thread.
+            tho_cu_memcpy_htod_async(destination_offset, source.cast::<c_void>(), chunk.metadata.byte_len, stream.as_mut_ptr())
+        };
+        check_cuda_status(result, "cuMemcpyHtoDAsync(worker memfd chunk)")?;
+        stream.synchronize()?;
+    }
+
+    let copied_cpu = destination.f_to_device(Cpu)?;
+    let copied_digest = tensor_digest(&copied_cpu)?;
+    debug!("copy_worker_h2d_transfer_to_cuda: copied tensor digest={copied_digest:?}");
+    Ok((transfer.metadata.transfer_id, destination, copied_digest.hex))
+}
+
+fn spawn_worker_h2d_copy_task(
+    transfer: PendingWorkerH2dTransfer,
+    resources: Arc<WorkerCudaResources>,
+    all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
+    reply_tx: mpsc::Sender<WorkerReply>,
+) {
+    tokio::spawn(async move {
+        let request_id = transfer.request_id;
+        let stream = resources.stream_pool.acquire().await;
+        let copy_result = tokio::task::spawn_blocking(move || copy_worker_h2d_transfer_to_cuda(transfer, stream))
+            .await
+            .map_err(|e| ThoError::new(format!("worker H2D copy task join error: {e}")))
+            .and_then(|result| result);
+
+        let payload = match copy_result {
+            Ok((transfer_id, tensor, tensor_digest_hex)) => {
+                all_cuda_tensors.lock().await.insert(transfer_id, tensor);
+                let done = WorkerCopyDonePayload { transfer_id, tensor_digest_hex };
+                match serde_json::to_string(&done) {
+                    Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
+                    Err(e) => OutgoingRequestPayload::Msg(format!("copy-error: failed to encode worker copy result for request {request_id}: {e}")),
+                }
+            }
+            Err(e) => OutgoingRequestPayload::Msg(format!("copy-error: {e}")),
+        };
+
+        let _ = reply_tx.send(WorkerReply { id: request_id, payload }).await;
+    });
 }
 
 
@@ -361,11 +560,18 @@ impl CudaIPCActor {
                 let buf_size = self.buf_size;
                 let dst_worker_id = dst_device.ordinal() as u64;
 
+                let source_digest = tensor_digest(&src)?;
+                debug!("CudaIPCActor::Copy: original tensor digest={source_digest:?}");
+                let source_digest_hex = source_digest.hex.clone();
                 let tensor_mem_size = tensor_mem_size(src.kind(), &src.size());
                 debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.size());
+                if tensor_mem_size == 0 {
+                    return Err(ThoError::new("worker IPC H2D copy does not support zero-byte tensors"));
+                }
 
                 // The parent side of H2D only stages CPU bytes into memfd-backed chunks; the worker owns the later CUDA copy.
                 let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
+                let chunk_count = chunk_groups.iter().map(Vec::len).sum::<usize>();
                 let src_kind = src.kind();
                 let src_shape = src.size();
                 let src_ptr: usize = src.data_ptr() as usize;
@@ -397,6 +603,10 @@ impl CudaIPCActor {
                                 transfer_id: id,
                                 buffer_id: buf_stream.0.buffer_id(),
                                 byte_len: chunk.len,
+                                tensor_byte_len: tensor_mem_size,
+                                tensor_offset: chunk.offset,
+                                chunk_index: chunk.index,
+                                chunk_count,
                                 mapped_len: buf_stream.0.len(),
                                 offset: 0,
                                 kind: src_kind.into(),
@@ -423,6 +633,11 @@ impl CudaIPCActor {
                         .await
                         .map_err(|_| ThoError::new(format!("response channel for request {id} was dropped")))??;
 
+                    let done = parse_worker_copy_done_payload(&id)?;
+                    if done.tensor_digest_hex != source_digest_hex {
+                        return Err(ThoError::new(format!("worker copy digest mismatch for transfer {}: source={} copied={}", done.transfer_id, source_digest_hex, done.tensor_digest_hex)));
+                    }
+                    debug!("CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, done.tensor_digest_hex);
                     respond_to.send(Ok(IPCTensor::new(id.clone()))).map_err(|e| ThoError::new(format!("response channel for request {id} got {e:?}")))?;
 
                     Ok::<_, ThoError>(())
@@ -546,6 +761,13 @@ fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
         .map_err(|e| ThoError::new(format!("bad request id {id:?}: {e}")))?;
 
     Ok((id, payload.to_string()))
+}
+
+fn parse_worker_copy_done_payload(payload: &str) -> Result<WorkerCopyDonePayload, ThoError> {
+    let done_json = payload.strip_prefix(COPY_DONE_PAYLOAD_PREFIX)
+        .ok_or_else(|| ThoError::new(format!("worker copy response did not start with {COPY_DONE_PAYLOAD_PREFIX:?}: {payload:?}")))?;
+    serde_json::from_str(done_json)
+        .map_err(|e| ThoError::new(format!("failed to parse worker copy response: {e}")))
 }
 
 
