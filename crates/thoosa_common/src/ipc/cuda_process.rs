@@ -1310,7 +1310,11 @@ mod tests {
     use std::path::PathBuf;
     use std::process::Stdio;
     use std::sync::Arc;
-    use log::debug;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::time::Instant;
+    use log::{debug, info};
+    use rand::random_range;
     use tch::{Device, Tensor};
     use tch::Device::Cuda;
     use tch::Kind::Float;
@@ -1318,9 +1322,11 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
     use tokio::process::{Child, Command};
+    use tokio::task::JoinSet;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::tracked_await::track_await;
+    use crate::cuda_utils::{cuda_mem, speed_gb_per_s};
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
     use crate::runner::common::cachable::DevicesWrap;
     use crate::runner::common::RunCtx;
@@ -1331,7 +1337,7 @@ mod tests {
     use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ipc::cuda_process::{read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
+    use crate::ipc::cuda_process::{read_text_frame, write_text_frame, CudaIPCActor, CudaIPCActorHandle, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor};
@@ -1416,6 +1422,114 @@ mod tests {
         Ok(())
     }
 
+    async fn run_ipc_copy_perf_main(test_name: &str, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
+        let module = pure_module_path!();
+        let test_name = if module.is_empty() {
+            test_name.to_string()
+        } else {
+            format!("{module}::{test_name}")
+        };
+        let args: Vec<&str> = vec![test_name.clone().leak(), "--exact", "--nocapture", "--ignored"];
+
+        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
+        RealGlobalCtx::init_devices_2(2, args).await?;
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
+        let result = run_ipc_copy_perf(cuda_actor.clone(), threads, runs).await;
+        let shutdown_result = cuda_actor.shutdown().await;
+
+        match (result, shutdown_result) {
+            (Ok(speeds), Ok(())) => Ok(speeds),
+            (Err(e), _) => Err(e),
+            (Ok(_), Err(e)) => Err(e),
+        }
+    }
+
+    async fn run_ipc_copy_perf(cuda_actor: CudaIPCActorHandle, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
+        let (free_mem, _total_mem) = cuda_mem();
+        let init_type = Float;
+        let dim_1 = 4u64;
+        let retained_copies = u64::from(threads).max(1) * u64::from(runs).max(1);
+        let total_size = (free_mem as f64 * 0.2) as u64 / init_type.elt_size_in_bytes() as u64 / retained_copies;
+        let input_n = (total_size / dim_1).max(1);
+
+        let d2h_time = Arc::new(AtomicU64::new(0));
+        let h2d_time = Arc::new(AtomicU64::new(0));
+        let mut tasks = JoinSet::new();
+
+        for thread_i in 0..threads {
+            tasks.spawn(run_ipc_copy_perf_thread(
+                thread_i,
+                input_n as i64,
+                dim_1 as i64,
+                runs,
+                init_type,
+                Arc::clone(&d2h_time),
+                Arc::clone(&h2d_time),
+                cuda_actor.clone(),
+            ));
+        }
+
+        while let Some(result) = tasks.join_next().await {
+            result.map_err(|e| ThoError::new(format!("IPC copy perf task join error: {e}")))??;
+        }
+
+        let total_copied_mem_size = input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
+
+        Ok((
+            speed_gb_per_s(total_copied_mem_size, d2h_time.load(Relaxed)),
+            speed_gb_per_s(total_copied_mem_size, h2d_time.load(Relaxed)),
+        ))
+    }
+
+    async fn run_ipc_copy_perf_thread(
+        _thread_i: u8,
+        input_n: i64,
+        dim_1: i64,
+        runs: u8,
+        init_type: tch::Kind,
+        d2h_time: Arc<AtomicU64>,
+        h2d_time: Arc<AtomicU64>,
+        cuda_actor: CudaIPCActorHandle,
+    ) -> Result<(), ThoError> {
+        let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64).max(1.0) as i64;
+        let mut src_t = Tensor::rand([dim_0, dim_1], FLOAT_CPU);
+
+        for _ in 0..runs {
+            let inst_0 = Instant::now();
+            let cuda_ref = track_await(cuda_actor.copy(src_t.into(), 1.into())).await?;
+            h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
+
+            let inst_0 = Instant::now();
+            let cpu_tensor = track_await(cuda_actor.copy(cuda_ref, 0.into())).await?;
+            d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
+
+            let tensor = cpu_tensor.t();
+            if tensor.kind() != init_type {
+                return Err(ThoError::new(format!("IPC copy perf expected kind {init_type:?}, got {:?}", tensor.kind())));
+            }
+            src_t = tensor;
+        }
+
+        Ok(())
+    }
+
+    //cargo nextest run --release test_copy_ipc_cuda_worker_once --no-capture --run-ignored all
+    #[ignore]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+    async fn test_copy_ipc_cuda_worker_once() {
+        debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
+
+        if std::env::var_os(IPC_SOCK_ENV).is_some() {
+            CudaWorker::run_worker().await.unwrap()
+        } else {
+            let (d2h, h2d) = run_ipc_copy_perf_main("test_copy_ipc_cuda_worker_once", 3, 3).await.unwrap();
+            info!("\n IPC worker copy d2h speed: {d2h:#2} Gb/s, h2d speed {h2d:#2} Gb/s");
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_copy_ipc_cuda_worker() {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
@@ -1424,7 +1538,7 @@ mod tests {
             // CudaProcess::new().unwrap();//will be called from run_cli //crates/thoosa_main/src/cli.rs:339, i.e. if app is started as "worker"
             CudaWorker::run_worker().await.unwrap()
         } else {
-            run_main("test_copy_to_cuda_worker").await.unwrap();
+            run_main("test_copy_ipc_cuda_worker").await.unwrap();
         }
     }
 
