@@ -340,8 +340,9 @@ fn copy_worker_h2d_transfer_to_cuda(
             tho_cu_memcpy_htod_async(destination_offset, source.cast::<c_void>(), chunk.metadata.byte_len, stream.as_mut_ptr())
         };
         check_cuda_status(result, "cuMemcpyHtoDAsync(worker memfd chunk)")?;
-        stream.synchronize()?;
+
     }
+    stream.synchronize()?;
 
     let copied_cpu = destination.f_to_device(Cpu)?;
     let copied_digest = tensor_digest(&copied_cpu)?;
@@ -1089,7 +1090,7 @@ mod tests {
 
         let tho_device_idx = 1;
 
-        let main_process_cpu_tensor = Tensor::rand(&[10, 1000], FLOAT_CPU);
+        let main_process_cpu_tensor = Tensor::rand(&[10000, 10000], FLOAT_CPU);
 
 
         let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
