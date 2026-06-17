@@ -23,7 +23,7 @@ use futures::FutureExt;
 use thoosa_shims::context::ThoCudaContext;
 use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
-use crate::torch_runner::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
+use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
 
 #[derive(Debug)]
 pub struct GlobalCtx {
