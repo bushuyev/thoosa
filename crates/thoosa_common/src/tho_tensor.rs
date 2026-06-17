@@ -320,7 +320,7 @@ where
         let cuda_actor = GlobalCtx::global().cuda_actor(ctx_device);
         let copy = track_await(cuda_actor
             .copy(
-                src_ref.shallow_clone(),
+                src_ref.shallow_clone().into(),
                 dst_device,
             )).await?;
 
