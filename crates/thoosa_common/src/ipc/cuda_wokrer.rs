@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
 use tokio::task::JoinHandle;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 
 pub struct CudaWorker {
@@ -86,7 +86,34 @@ impl CudaWorker {
 
                         format!("{TENSOR_INFO_PAYLOAD_PREFIX}{info_json}")
                     }
-                    Err(error) => format!("copy-error: {error}"),
+                    Err(error) => cuda_process::encode_worker_copy_error(&error),
+                };
+                reply_tx
+                    .send(WorkerReply {
+                        id,
+                        payload: OutgoingRequestPayload::Msg(payload),
+                    })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+                continue;
+            }
+
+            if let Some(start_json) = payload.strip_prefix(H2D_START_PAYLOAD_PREFIX) {
+                let payload = match serde_json::from_str::<WorkerH2dStartPayload>(start_json) {
+                    Ok(start) => {
+                        let transfer_id = start.transfer_id;
+                        match cuda_process::prepare_worker_h2d_transfer(start, &mut cuda_resources) {
+                            Ok(transfer) => {
+                                if pending_h2d_transfers.insert(transfer_id, transfer).is_some() {
+                                    cuda_process::encode_worker_copy_error(&ThoError::new(format!("duplicate H2D transfer start for transfer_id={transfer_id}")))
+                                } else {
+                                    H2D_START_OK_PAYLOAD.to_string()
+                                }
+                            }
+                            Err(error) => cuda_process::encode_worker_copy_error(&error),
+                        }
+                    }
+                    Err(error) => cuda_process::encode_worker_copy_error(&ThoError::new(format!("failed to parse H2D start payload: {error}"))),
                 };
                 reply_tx
                     .send(WorkerReply {
