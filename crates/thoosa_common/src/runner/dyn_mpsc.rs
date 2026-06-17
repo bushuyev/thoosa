@@ -22,7 +22,7 @@ use tokio::{
 use tracing::{debug, warn, Instrument};
 
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
-use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, buffer_limits};
+use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, futures_limits};
 use thoosa_shared::tracked_await::track_await;
 use crate::runner::global_ctx::GlobalCtx;
 
@@ -348,7 +348,7 @@ impl DynamicTaskExecutor {
         tho_device_idx: usize,
         reset_fn: ResetFn,
     ) -> Self {
-        Self::new_inner_with_buffer_limits(queue_capacity, tho_device_idx, reset_fn, Arc::clone(buffer_limits()))
+        Self::new_inner_with_buffer_limits(queue_capacity, tho_device_idx, reset_fn, Arc::clone(futures_limits()))
     }
 
     fn new_inner_with_buffer_limits(

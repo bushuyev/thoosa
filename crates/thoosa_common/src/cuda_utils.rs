@@ -768,7 +768,7 @@ mod tests {
     use tokio::time::Instant;
     use tokio_utils::Pool;
     use thoosa_shared::applicables_runner::Output;
-    use thoosa_shared::futures_limits::{buffer_limits, COPY_D2H};
+    use thoosa_shared::futures_limits::{futures_limits, COPY_D2H};
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use crate::runner::global_ctx::GlobalCtx;
     use thoosa_shared::traits::SimpleId;
@@ -821,7 +821,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        // buffer_limits().force(COPY_D2H, 10);
+        futures_limits().force(COPY_D2H, 10);
 
         let ctx:&'static CopyCtx = Box::leak(Box::new(CopyCtx::make_instance(0.2, 16)));
 

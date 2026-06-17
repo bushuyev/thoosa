@@ -23,7 +23,7 @@ where
     ThoError: Send + 'static,
 {
     debug!("collect_futures_with_progress: descr={descr} len={len}");
-    let registration = crate::futures_limits::buffer_limits().register(descr);
+    let registration = crate::futures_limits::futures_limits().register(descr);
     collect_futures_with_progress_with_limit(futures, len, registration.receiver(), buffering, descr).await
 }
 
