@@ -247,6 +247,13 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         }
     }
 
+    pub(crate) fn ref_key(&self) -> Option<u64> {
+        match &self.inner {
+            ThoTensorInner::Val { .. } => None,
+            ThoTensorInner::Ref { key } => Some(*key),
+        }
+    }
+
 
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Result<Self, ThoError> {
         Ok(Self {
