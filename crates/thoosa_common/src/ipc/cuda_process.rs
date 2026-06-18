@@ -631,7 +631,7 @@ struct OutgoingRequest {
 }
 
 pub enum OutgoingRequestPayload {
-    Msg(String),
+    Msg(String),//action:data
     SharedMemfdBuffer{
         meta: IpcTensorTransferMetadata,
         fd:OwnedFd,
@@ -1131,9 +1131,7 @@ async fn reader_loop<R>(
 
 pub(crate) fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
     let Some((id, payload)) = frame.split_once('\t') else {
-        return Err(ThoError::new(format!(
-            "bad wire frame without request id separator: {frame:?}"
-        )));
+        return Err(ThoError::new(format!("bad wire frame without request id separator: {frame:?}")));
     };
 
     let id = id

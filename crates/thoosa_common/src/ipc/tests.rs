@@ -88,11 +88,16 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
             let input_id = SynKey::new([mono_key!(resource, "resource key")]);
             let self_k = parse_numeric_part(resource).unwrap_or(1.0);
             let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu);
+
             let worker_ref = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?;
+
             assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
+
             let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
             let loaded = ThoTensor::<LoadedTensor, SynKey>::new(input_id, cpu_copy.t())?;
+
             let clc_dim = if use_matmul { size[0] } else { size[1] };
+
             let clc_task = Arc::new(ClcTask::new(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
             let out = Arc::clone(&clc_task).do_run(&loaded, &RunCtxImpl::new(0, "ipc_load_and_mul"))?;
 

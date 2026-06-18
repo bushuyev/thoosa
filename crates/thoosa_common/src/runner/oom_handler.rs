@@ -347,6 +347,17 @@ where
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
+                /*
+                SyncStage::do_run – executes operations on tensors synchronously, receive tensors or composite tensor types as references
+                OOMHandler::run //runs syn_stage.do_run until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-  specific adjusters as configured at call site
+                DynamicTaskExecutor::submit – ensures that no more than requested max_other_parallel sync stages are being executed at a given moment.
+                selector – when OOMHandler tries to process input in chunks used to select current chunk.
+                Then – input.with_data_ref/with_selected_data_ref calls
+                             load_from_any_device_→ensure_copied→
+                            if tensor is absent in current (from RunContext)  memory it’s copied with
+                            ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
+
+                 */
                 track_await(oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
