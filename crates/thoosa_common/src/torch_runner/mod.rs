@@ -241,9 +241,16 @@ pub(crate) mod tests {
 
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
-    pub(crate) struct ClcTask
+    pub(crate) struct ClcTask<S = SyncClcTask>
+    where
+        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+        for<'a> S: Stage<
+            In<'a> = ThoTensor<LoadedTensor, SynKey>,
+            Out = ThoTensor<ClcTaskOutput, SynKey>,
+            Ctx = RunCtxImpl,
+        >,
     {
-        pub(crate) sync_clc: Arc<SyncClcTask>,
+        pub(crate) sync_clc: Arc<S>,
     }
 
     #[derive(Debug)]
@@ -279,7 +286,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl ClcTask
+    impl ClcTask<SyncClcTask>
     {
         pub fn new(
             id: SynKey,
@@ -297,12 +304,28 @@ pub(crate) mod tests {
         }
     }
 
-    impl Adjustable for ClcTask {}
+    impl<S> Adjustable for ClcTask<S>
+    where
+        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+        for<'a> S: Stage<
+            In<'a> = ThoTensor<LoadedTensor, SynKey>,
+            Out = ThoTensor<ClcTaskOutput, SynKey>,
+            Ctx = RunCtxImpl,
+        >,
+    {}
     impl Adjustable for SyncClcTask {}
 
 
 
-    impl OutId for ClcTask {
+    impl<S> OutId for ClcTask<S>
+    where
+        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+        for<'a> S: Stage<
+            In<'a> = ThoTensor<LoadedTensor, SynKey>,
+            Out = ThoTensor<ClcTaskOutput, SynKey>,
+            Ctx = RunCtxImpl,
+        >,
+    {
         fn out_id(&self, input_id: &SynKey) -> SynKey {
 
             self.sync_clc.out_id(input_id)
@@ -358,7 +381,15 @@ pub(crate) mod tests {
         }
     }
 
-    impl Stage for ClcTask {
+    impl<S> Stage for ClcTask<S>
+    where
+        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+        for<'a> S: Stage<
+            In<'a> = ThoTensor<LoadedTensor, SynKey>,
+            Out = ThoTensor<ClcTaskOutput, SynKey>,
+            Ctx = RunCtxImpl,
+        >,
+    {
         type In<'a> = ThoTensor<LoadedTensor, SynKey>;
         type Out = ThoTensor<ClcTaskOutput, SynKey>;
         type Ctx = RunCtxImpl;
@@ -444,12 +475,29 @@ pub(crate) mod tests {
         type Ctx = RunCtxImpl;
     }
 
+    impl Adjustable for ProxySyncClcTask {}
+
+    impl OutId for ProxySyncClcTask {
+        fn out_id(&self, input_id: &SynKey) -> SynKey {
+
+            input_id.clone()
+        }
+    }
+
     impl SyncStage for ProxySyncClcTask {
 
     }
 
     // #[async_trait]
-    impl AsyncStage for ClcTask {
+    impl<S> AsyncStage for ClcTask<S>
+    where
+        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+        for<'a> S: Stage<
+            In<'a> = ThoTensor<LoadedTensor, SynKey>,
+            Out = ThoTensor<ClcTaskOutput, SynKey>,
+            Ctx = RunCtxImpl,
+        >,
+    {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
