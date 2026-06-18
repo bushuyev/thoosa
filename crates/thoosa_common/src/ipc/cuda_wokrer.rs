@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
 use tokio::task::JoinHandle;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX};
+use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::common::runnable::SyncStage;
 
@@ -22,7 +22,7 @@ pub struct CudaWorker {
 
 
 pub trait SyncStageJsonWrapper:Debug {
-    fn do_dun(&self, _input:String)->Result<String, ThoError>;
+    fn do_run(&self, _input:String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) ->Result<String, ThoError>;
 }
 pub trait Init {
     fn init() -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>;
@@ -197,7 +197,17 @@ impl CudaWorker {
                 let endpoint_wrapper = endpoint_inits.get("SyncClcTask").expect("no SyncClcTask")(init_msg.to_string()).expect("SyncClcTask");
                 debug!("run_worker: install endpoint init_msg={init_msg} endpoint_wrapper={endpoint_wrapper:?}");
 
-                installed_endpoints.write().insert("SyncClcTask".to_string(), endpoint_wrapper);//TODO key
+                installed_endpoints.write().insert("SyncClcTask".to_string(), endpoint_wrapper);//TODO key, check if installed
+
+                continue;
+            }
+
+            if let Some(input) = payload.strip_prefix(INVOKE_ENDPOINT_PREFIX) {
+                debug!("run_worker: invoke endpoint input={input:?}");
+
+                let response = installed_endpoints.read().get("SyncClcTask").unwrap().do_run(input.to_string(), &all_cuda_tensors);//TODO key, check if installed
+
+                debug!("run_worker: invoke endpoint  response={response:?}");
 
                 continue;
             }

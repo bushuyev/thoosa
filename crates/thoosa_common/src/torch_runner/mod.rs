@@ -72,9 +72,11 @@ pub(crate) mod tests {
     use crate::utils::lin_for_size;
     use std::ops::Add;
     use std::time::Duration;
+    use futures::executor::block_on;
     use futures_util::StreamExt;
     use serde::{Deserialize, Serialize};
     use tch::Device::Cuda;
+    use tokio::sync::Mutex;
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
     use crate::ipc::cuda_process::WorkerH2dStartPayload;
@@ -323,7 +325,7 @@ pub(crate) mod tests {
     }
 
     impl SyncStageJsonWrapper for SyncClcTaskJsonWrapper {
-        fn do_dun(&self, _input: String) -> Result<String, ThoError> {
+        fn do_run(&self, _input: String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
             todo!()
         }
     }
@@ -349,19 +351,19 @@ pub(crate) mod tests {
     }
 
     impl ClcTask<ProxySyncClcTask> {
-        pub fn new_proxy(
+        pub async fn new_proxy(
             id: SynKey,
-            k: impl Into<Scalar>,
+            k: f64,
             fail_until: Vec<FailUntil>,
             dim: i64,
             kind: Kind,
             device: Device,
             use_matmul: bool,
-        ) -> Self {
+        ) -> Result<Self, ThoError> {
 
-            Self {
-                sync_clc: Arc::new(ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul)),
-            }
+            Ok(Self {
+                sync_clc: Arc::new(ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul).await?),
+            })
         }
 
     }
@@ -546,13 +548,31 @@ pub(crate) mod tests {
         }
     }
 
-    impl SyncStage for ProxySyncClcTask {
+    impl ProxySyncClcTask {
+        pub async fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Result<Self, ThoError> {
+            debug!("ProxySyncClcTask::new: id={id:?} k={k:?}");
+            GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
+                .install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(id, k, dim, vec![], false))?).await?;
 
+            Ok(Self {
+
+            })
+        }
     }
 
-    impl ProxySyncClcTask {
-        pub fn new(id: SynKey,k: impl Into<Scalar>, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Self {
-            Self {}
+    impl SyncStage for ProxySyncClcTask {
+        fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            debug!("ProxySyncClcTask::new: _input={_input:?}");
+            block_on( async move {
+                GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
+                    .invoke_endpoint(serde_json::to_string(&_input)?).await?;
+
+                Ok(())
+            })?;
+
+
+
+            Ok(ThoTensor::new(mono_key!(0, "TODO").into(), Tensor::rand([10, 10], FLOAT_CPU))?)
         }
     }
 

@@ -98,7 +98,7 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
     const MUL_K: f64 = 2.;
     let clc_dim = if use_matmul { size[0] } else { size[1] };
 
-    cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
+    // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
 
     let mut tasks = JoinSet::new();
     for resource in resources {
@@ -116,9 +116,10 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
             // let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
             let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
 
+            debug!("run_load_and_mul_ipc_cuda_worker: loaded={loaded:?}");
 
 
-            let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
+            let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul).await?);
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_mul");
             let out = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
 
