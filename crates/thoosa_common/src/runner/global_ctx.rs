@@ -31,7 +31,6 @@ pub struct GlobalCtx {
     executors: Vec<DynamicTaskExecutor>,
 
     num_devices: usize,//TODO replace with Vec<ThoDevice>
-    sep_process_cuda:bool,//TODO move to ThoDevice
 
     caches: parking_lot::RwLock<HashMap<&'static str, Arc<CacheRegistryEntry>>>,
     is_all_on_cpu: Vec<AtomicBool>,
@@ -39,7 +38,6 @@ pub struct GlobalCtx {
     purger: Purger,
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
-    copy_ctx:Vec<tokio::sync::RwLock<CopyCtx>>,
     cuda_actors:Vec<CudaActorHandle>,
     cuda_ipc_actors:Vec<CudaIPCActorHandle>,
 
@@ -105,17 +103,15 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            copy_ctx: vec![], //(1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
-            sep_process_cuda: true,
             cuda_ipc_actors: vec![],
         }
     }
 
     //TODO this should replace GlobalCtx::new when ipc refactoring is completed
-    async fn new_2(num_devices: usize, cuda_worker_args: Vec<&'static str>) -> Result<Self, ThoError> {
+    async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<&'static str>) -> Result<Self, ThoError> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
@@ -135,12 +131,10 @@ impl GlobalCtx {
             cache_time: Default::default(),
             purger: Purger::new(),
             shutting_down: false.into(),
-            copy_ctx: vec![], //(1..num_devices).map(|tho_device_idx|tokio::sync::RwLock::new(CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16))).collect(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
-            cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
+            cuda_actors: vec![],
             cuda_ipc_actors: vec![CudaIPCActorHandle::new(1, cuda_worker_args).await?],//TODO should be merged with cuda_actors when ipc refactoring is completed - each device should be used either in-process or through IPC
-            sep_process_cuda: true,
         })
     }
 
@@ -197,7 +191,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
         GLOBAL_CTX
-            .set(GlobalCtx::new_2(num_devices, cuda_worker_args).await?)
+            .set(GlobalCtx::new_ipc(num_devices, cuda_worker_args).await?)
             .expect("`init_devices` must only be called once at program start");
 
         Ok(Self::global())

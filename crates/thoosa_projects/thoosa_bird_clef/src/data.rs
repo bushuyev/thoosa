@@ -50,26 +50,6 @@ pub fn ogg_to_tensor<P: AsRef<Path> + Debug>(
     Ok(tensor)
 }
 
-#[allow(dead_code)]
-pub fn clc_tracks<P: AsRef<Path>>(file: P) -> Result<usize, ThoError> {
-    let file = File::open(file)?;
-    let reader = BufReader::new(file);
-    let mut pr = PacketReader::new(reader);
-
-    let mut serial_numbers = HashSet::new();
-
-    while let Some(packet) = pr.read_packet()? {
-        serial_numbers.insert(packet.stream_serial());
-    }
-
-    // println!("Found {} logical stream(s).", serial_numbers.len());
-    // for (i, serial) in serial_numbers.iter().enumerate() {
-    //     println!("  Stream #{}: serial={}", i + 1, serial);
-    // }
-
-    Ok(serial_numbers.len())
-}
-
 pub fn labeled_resourses(
     path: impl AsRef<Path>,
 ) -> Result<HashMap<String, Vec<(String, f32)>>, ThoError> {
@@ -200,7 +180,7 @@ pub fn resource_to_tensor(source_path: &dyn AsRef<Path>, key: &str) -> Result<Te
 #[cfg(test)]
 mod tests {
     #![allow(unused_imports, dead_code, unused_variables)]
-    use crate::data::{clc_tracks, labeled_resourses, ogg_to_tensor};
+    use crate::data::{labeled_resourses, ogg_to_tensor};
     use crate::labels::LABELS;
     use log::LevelFilter::Trace;
     use log::{debug, warn};
@@ -287,31 +267,6 @@ mod tests {
             // Process your float samples here (e.g., stream to DSP, etc.)
             println!("Got {} float samples", float_samples.len());
         }
-
-        Ok(())
-    }
-
-    #[test]
-    pub fn test_all() -> Result<(), ThoError> {
-        let files = recurse_files(&"/home/bu/dvl/data/kaggle/birdclef-2026", &|path| {
-            path.extension().map(|v| v.eq("ogg")).unwrap_or(false)
-        })?;
-        let files_cnt = files.len();
-        debug!("files_cnt={files_cnt}");
-
-        for (i, file) in files.iter().enumerate() {
-            if i % 100 == 0 {
-                debug!("{i} files done");
-            }
-
-            let tracks = clc_tracks(&file)?;
-            // let tracks = ogg_to_tensor(&file)?;
-            if tracks != 1 {
-                debug!("file: {file:?} tracks={tracks}");
-            }
-        }
-
-        debug!("{files_cnt} done");
 
         Ok(())
     }
