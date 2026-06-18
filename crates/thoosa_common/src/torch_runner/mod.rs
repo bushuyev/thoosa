@@ -240,6 +240,11 @@ pub(crate) mod tests {
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
     pub(crate) struct ClcTask {
+        pub(crate) sync_clc: Arc<SyncClcTask>,
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct SyncClcTask {
         id: SynKey,
         k: ThoTensor<MulK, SimpleId>,
         fail_until: Vec<FailUntil>,
@@ -278,19 +283,29 @@ pub(crate) mod tests {
             debug!("ClcTask::new: use_matmul={use_matmul} k_t.size={:?}", k_t.size());
 
             Self {
-                id,
-                k: k_t,
-                fail_until,
-                use_matmul,
+                sync_clc: Arc::new(SyncClcTask {
+                    id,
+                    k: k_t,
+                    fail_until,
+                    use_matmul,
+                }),
             }
         }
     }
 
     impl Adjustable for ClcTask {}
+    impl Adjustable for SyncClcTask {}
 
 
 
     impl OutId for ClcTask {
+        fn out_id(&self, input_id: &SynKey) -> SynKey {
+
+            self.sync_clc.out_id(input_id)
+        }
+    }
+
+    impl OutId for SyncClcTask {
         fn out_id(&self, input_id: &SynKey) -> SynKey {
 
             &self.id + input_id
@@ -345,7 +360,13 @@ pub(crate) mod tests {
         type Ctx = RunCtxImpl;
     }
 
-    impl SyncStage for ClcTask {
+    impl Stage for SyncClcTask {
+        type In<'a> = ThoTensor<LoadedTensor, SynKey>;
+        type Out = ThoTensor<ClcTaskOutput, SynKey>;
+        type Ctx = RunCtxImpl;
+    }
+
+    impl SyncStage for SyncClcTask {
         fn do_run<'a>(
             self: Arc<Self>,
             input: &Self::In<'a>,
@@ -417,7 +438,7 @@ pub(crate) mod tests {
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let device_idx = ctx.tho_device_idx();
 
-            let stage = Arc::clone(&self);
+            let stage = Arc::clone(&self.sync_clc);
             let ctx = ctx;
             let output = input
                 .with_data_ref(device_idx, ctx, None, move |tensor: &ThoTensor<LoadedTensor, SynKey>, run_ctx| {
@@ -442,7 +463,7 @@ pub(crate) mod tests {
 
         loader: Arc<TestTensorLoader>,
         clc_task: Arc<ClcTask>,
-        clc_oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
+        clc_oom_runner: ClcOOMRunner<SyncClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
     }
 
     impl Stage for LoadAndClcTask {
@@ -487,7 +508,7 @@ pub(crate) mod tests {
 
             let result = self
                 .clc_oom_runner
-                .run(&self.clc_task, loaded, ctx.branch(false), &required_ids)
+                .run(&self.clc_task.sync_clc, loaded, ctx.branch(false), &required_ids)
                 .await?;
 
             let device_idx = ctx.tho_device_idx();
@@ -524,7 +545,7 @@ pub(crate) mod tests {
             k: impl Into<Scalar>,
             fail_until: Vec<FailUntil>,
             dim: MonoMetrics<1, 2>,
-            oom_runner: ClcOOMRunner<ClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
+            oom_runner: ClcOOMRunner<SyncClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
