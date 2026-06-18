@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use log::debug;
 use tch::Device;
@@ -9,7 +10,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_with_data::with_data;
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
-use crate::ipc::cuda_wokrer::CudaWorker;
+use crate::ipc::cuda_wokrer::{CudaWorker, SyncStageJsonWrapper};
 use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::{OutId, RunCtx};
@@ -22,7 +23,7 @@ use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor, mul_check};
+use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor, mul_check, SyncClcTask, SyncClcTaskJsonWrapper, SyncClcTaskInit};
 use crate::utils::lin_for_size;
 
 macro_rules! pure_module_path {
@@ -95,6 +96,9 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
     let size = [3, 10];
     const MUL_K: f64 = 2.;
+    let clc_dim = if use_matmul { size[0] } else { size[1] };
+
+    cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
 
     let mut tasks = JoinSet::new();
     for resource in resources {
@@ -112,7 +116,7 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
             // let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
             let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
 
-            let clc_dim = if use_matmul { size[0] } else { size[1] };
+
 
             let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_mul");
@@ -221,7 +225,7 @@ async fn test_load_and_mul_ipc_cuda_worker_no_oom_tensor() {
     debug!("test_load_and_mul_ipc_cuda_worker_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker().await.unwrap()
+        CudaWorker::run_worker(HashMap::new()).await.unwrap()
     } else {
         run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await.unwrap();
     }
@@ -232,7 +236,7 @@ async fn test_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu() {
     debug!("test_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker().await.unwrap()
+        CudaWorker::run_worker(HashMap::new()).await.unwrap()
     } else {
         run_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu("test_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu").await.unwrap();
     }
@@ -243,7 +247,14 @@ async fn test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor() {
     debug!("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker().await.unwrap()
+        CudaWorker::run_worker(HashMap::from([
+            (
+                "SyncClcTask".to_string(),
+                Box::new(|init_msg|{
+                    Ok(Box::new(SyncClcTaskJsonWrapper::new(init_msg)) as Box<dyn SyncStageJsonWrapper>)
+                }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+            )
+        ])).await.unwrap()
     } else {
         run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
     }

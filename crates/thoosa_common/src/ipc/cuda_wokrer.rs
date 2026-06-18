@@ -1,38 +1,38 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc};
 use dashmap::DashMap;
 use log::debug;
+use parking_lot::RwLock;
 use thoosa_shared::ThoError;
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
 use tokio::task::JoinHandle;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
+use crate::runner::common::runnable::SyncStage;
 
 pub struct CudaWorker {
     all_cuda_tensors:DashMap<u64, Tensor>,
     handle:JoinHandle<Result<(), ThoError>>,
 }
 
+
+pub trait SyncStageJsonWrapper:Debug {
+    fn do_dun(&self, _input:String)->Result<String, ThoError>;
+}
+pub trait Init {
+    fn init() -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>;
+}
+
 impl CudaWorker {
-    pub fn new() -> Result<Self, ThoError> {
-        let handle = tokio::spawn(async move {
-            Self::run_worker().await?;
-
-            Ok(())
-        });
-
-        Ok(Self {
-            all_cuda_tensors:DashMap::new(),
-            handle
-        })
-    }
 
 
-    pub async fn run_worker() -> Result<(), ThoError> {
+
+    pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>  >>) -> Result<(), ThoError> {
 
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
@@ -54,6 +54,7 @@ impl CudaWorker {
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
+        let mut installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageJsonWrapper>>::new()));
 
         loop {
             let frame = cuda_process::read_text_frame(&mut reader).await?;
@@ -75,9 +76,11 @@ impl CudaWorker {
             }
 
             if let Some(tensor_key) = payload.strip_prefix(DESCRIBE_REF_PAYLOAD_PREFIX) {
+
                 let tensor_key = tensor_key
                     .parse::<u64>()
                     .map_err(|e| ThoError::new(format!("bad tensor ref key {tensor_key:?}: {e}")))?;
+
                 let payload = match cuda_process::describe_worker_tensor(Arc::clone(&all_cuda_tensors), tensor_key).await {
                     Ok(info) => {
 
@@ -190,8 +193,18 @@ impl CudaWorker {
                 continue;
             }
 
+            if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {
+                let endpoint_wrapper = endpoint_inits.get("SyncClcTask").expect("no SyncClcTask")(init_msg.to_string()).expect("SyncClcTask");
+                debug!("run_worker: install endpoint init_msg={init_msg} endpoint_wrapper={endpoint_wrapper:?}");
+
+                installed_endpoints.write().insert("SyncClcTask".to_string(), endpoint_wrapper);//TODO key
+
+                continue;
+            }
+
             let reply_tx = reply_tx.clone();
 
+            //TODO remove
             tokio::spawn(async move {
                 let reply = cuda_process::handle_worker_request(payload).await;
 

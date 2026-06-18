@@ -77,6 +77,8 @@ pub(crate) mod tests {
     use tch::Device::Cuda;
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
+    use crate::ipc::cuda_process::WorkerH2dStartPayload;
+    use crate::ipc::cuda_wokrer::SyncStageJsonWrapper;
     use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
     use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -304,6 +306,25 @@ pub(crate) mod tests {
             SyncClcTask::new(
                 id, k, dim, fail_until, Float, Cuda(0), use_matmul
             )
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct SyncClcTaskJsonWrapper {
+        sync_clc:SyncClcTask
+    }
+
+    impl SyncClcTaskJsonWrapper {
+        pub fn new(init_msg:String) -> Self {
+            Self {
+                sync_clc: SyncClcTask::init(serde_json::from_str::<SyncClcTaskInit>(&init_msg).unwrap())
+            }
+        }
+    }
+
+    impl SyncStageJsonWrapper for SyncClcTaskJsonWrapper {
+        fn do_dun(&self, _input: String) -> Result<String, ThoError> {
+            todo!()
         }
     }
 

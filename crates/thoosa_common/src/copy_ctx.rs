@@ -67,6 +67,10 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         &'a self,
         action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>>;
+
+    async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
+        Ok(())
+    }
 }
 
 impl dyn CudaActorHandle + '_ {

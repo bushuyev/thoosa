@@ -55,6 +55,7 @@ pub(crate) const DESCRIBE_REF_PAYLOAD_PREFIX: &str = "describe-ref:";
 pub(super) const TENSOR_INFO_PAYLOAD_PREFIX: &str = "tensor-info:";
 pub(crate) const H2D_START_PAYLOAD_PREFIX: &str = "h2d-start:";
 pub(crate) const D2H_START_PAYLOAD_PREFIX: &str = "d2h-start:";
+pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
 const WORKER_COPY_STREAMS: usize = 16;
 pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
 
@@ -617,7 +618,10 @@ pub enum CudaIPCActorMessage {
     },
     Shutdown {
         respond_to: oneshot::Sender<Result<(), ThoError>>
-    }
+    },
+    InstallEndpoint {
+        init_msg: String, respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
 
 }
 
@@ -790,8 +794,10 @@ impl CudaIPCActor {
                 }
 
                 let final_result = async {
+
                     let start_json = serde_json::to_string(&WorkerD2hStartPayload { transfer_id, tensor_key })
                         .map_err(|e| ThoError::new(format!("failed to encode D2H start payload: {e}")))?;
+
                     if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::Msg(format!("{D2H_START_PAYLOAD_PREFIX}{start_json}")) }).await.is_err() {
                         return Err(ThoError::new("worker IPC writer task is closed"));
                     }
@@ -899,6 +905,7 @@ impl CudaIPCActor {
                             tensor_byte_len: tensor_mem_size,
                             chunk_count,
                         }).map_err(|e| ThoError::new(format!("failed to encode H2D start payload: {e}")))?;
+
                         let preflight_reply = send_request_and_wait(
                             self_tx.clone(),
                             Arc::clone(&pending),
@@ -1019,6 +1026,29 @@ impl CudaIPCActor {
                             let _ = respond_to.send(Err(error));
                         }
                     }
+                });
+            }
+            CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {
+                let self_tx = self.tx.clone();
+                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
+                tokio::spawn(async move {
+
+                    if self_tx.send(
+
+                        OutgoingRequest {
+                                id: next_id,
+                                payload: OutgoingRequestPayload::Msg(format!("{INSTALL_ENDPOINT_PREFIX}{init_msg}")),
+                            }
+                    ).await.is_err() {
+
+                        return Err(ThoError::new("worker IPC writer task is closed"));
+                    }
+
+                    //TODO
+                    let _ = respond_to.send(Ok(()));
+
+                    Ok::<_, ThoError>(())
                 });
             }
         }
@@ -1370,6 +1400,18 @@ impl CudaActorHandle for CudaIPCActorHandle {
             todo!("CudaIPCActorHandle::exec_sync_stage")
         })
     }
+
+    async fn install_endpoint(&self, init_msg: String) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::InstallEndpoint {
+                init_msg,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    }
 }
 
 pub(crate) async fn write_text_frame<W>(
@@ -1447,6 +1489,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::process::Stdio;
     use std::sync::Arc;
@@ -1710,7 +1753,7 @@ mod tests {
         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker().await.unwrap()
+            CudaWorker::run_worker(HashMap::new()).await.unwrap()
         } else {
             run_ipc_copy_oom_main("test_copy_ipc_cuda_worker_propagates_oom").await.unwrap();
         }
@@ -1723,7 +1766,7 @@ mod tests {
         debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker().await.unwrap()
+            CudaWorker::run_worker(HashMap::new()).await.unwrap()
         } else {
             let (d2h, h2d) = run_ipc_copy_perf_main("test_copy_ipc_cuda_worker_once", 3, 3).await.unwrap();
             info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
@@ -1736,7 +1779,7 @@ mod tests {
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
             // CudaProcess::new().unwrap();//will be called from run_cli //crates/thoosa_main/src/cli.rs:339, i.e. if app is started as "worker"
-            CudaWorker::run_worker().await.unwrap()
+            CudaWorker::run_worker(HashMap::new()).await.unwrap()
         } else {
             run_main("test_copy_ipc_cuda_worker").await.unwrap();
         }
