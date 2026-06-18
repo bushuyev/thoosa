@@ -71,6 +71,10 @@ pub trait CudaActorHandle: Debug + Send + Sync {
     async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
         Ok(())
     }
+
+    async fn invoke_endpoint(&self, _input:String)-> Result<String, ThoError> {
+        Ok("todo".to_string())
+    }
 }
 
 impl dyn CudaActorHandle + '_ {
