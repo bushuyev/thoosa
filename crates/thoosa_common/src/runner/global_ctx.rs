@@ -189,7 +189,7 @@ impl GlobalCtx {
     }
 
     ///num_devices: number of devices - CPU + GPU count
-    pub async fn init_devices_2(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<&'static str>/*TODO move to device init struct*/) -> Result<&'static GlobalCtx, ThoError> {
+    pub async fn init_devices_ipc(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<&'static str>/*TODO move to device init struct*/) -> Result<&'static GlobalCtx, ThoError> {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
         GLOBAL_CTX

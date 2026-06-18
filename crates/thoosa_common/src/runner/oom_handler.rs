@@ -377,6 +377,7 @@ where
                                         },
                                     )).await
                             } else {
+                                debug!("OOMHandler::run: input={input:?}");
                                 track_await(input
                                     .with_data_ref(
                                         tho_device_idx,
