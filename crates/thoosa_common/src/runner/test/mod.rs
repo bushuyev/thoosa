@@ -328,9 +328,9 @@ pub mod fixtures {
 
     use async_trait::async_trait;
     use thoosa_named_derive::Named;
-    use thoosa_shared::{simple_id, CopyToDevice};
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Data, Select, SimpleId, WithId};
+    use thoosa_shared::traits::{Data, Select, WithId};
     use thoosa_shared::ThoError;
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::runner::common::OutId;
@@ -344,6 +344,10 @@ pub mod fixtures {
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     #[name = "MulTaskOutputId"]
     pub struct DMulTaskOutputId(pub &'static str);
+
+    #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
+    #[name = "LoadedTensorId"]
+    pub struct DLoadedTensorId(pub &'static str);
 
 
     #[derive(Debug, cached_derive::Cached, Named)]
@@ -360,13 +364,13 @@ pub mod fixtures {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            simple_id!(format!("loaded_{}", input_id.0))
+            DLoadedTensorId(format!("loaded_{}", input_id.0).leak())
         }
 
     }
 
     pub struct DLoadedTensor {
-        pub id: SimpleId,
+        pub id: DLoadedTensorId,
         pub data: DummyTensor,
     }
 
@@ -422,7 +426,7 @@ pub mod fixtures {
     }
 
     impl WithId for DLoadedTensor {
-        type ID = SimpleId;
+        type ID = DLoadedTensorId;
 
         fn id(&self) -> &Self::ID {
             &self.id
@@ -533,7 +537,7 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock, OnceLock};
     use std::time::Duration;
-    use super::fixtures::{DLoadedTensor, DLoaderInput, DLoaderInputId, DMulTaskOutputId};
+    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId};
     use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use async_trait::async_trait;
     use clap::{Args, Parser, Subcommand};
@@ -545,7 +549,7 @@ mod tests {
     use thoosa_named_derive::Named;
     use mockall_double::double;
     use tokio::process::{Child, Command};
-    use thoosa_shared::{simple_id, CopyToDevice};
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::traits::{Data, WithId};
@@ -632,7 +636,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            simple_id!(format!("loaded_{}", input_id.0))
+            DLoadedTensorId(format!("loaded_{}", input_id.0).leak())
         }
     }
 
@@ -749,7 +753,7 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            DMulTaskOutputId(format!("multiplied_{}", input_id).leak())
+            DMulTaskOutputId(format!("multiplied_{}", input_id.0).leak())
         }
 
     }
