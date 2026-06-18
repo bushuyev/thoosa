@@ -5,6 +5,8 @@ use thoosa_shared::{panic_to_err, simple_id};
 use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::ser::SerializeStruct;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -107,6 +109,47 @@ where
     tracking: parking_lot::RwLock<Vec<&'static str>>,
 
     pd: PhantomData<D>,
+}
+
+impl<D, Id> Serialize for ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match &self.inner {
+            ThoTensorInner::Ref { key } => {
+                let mut state = serializer.serialize_struct("ThoTensor", 2)?;
+                state.serialize_field("id", &self.id)?;
+                state.serialize_field("ref_key", key)?;
+                state.end()
+            }
+            ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
+        }
+    }
+}
+
+impl<'de, D, Id> Deserialize<'de> for ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone + Deserialize<'de>,
+{
+    fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
+    where
+        De: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct ThoTensorRef<Id> {
+            id: Id,
+            ref_key: u64,
+        }
+
+        let tensor_ref = ThoTensorRef::deserialize(deserializer)?;
+        Ok(ThoTensor::new_ref(tensor_ref.id, tensor_ref.ref_key))
+    }
 }
 
 impl<D: Dims, Id: Named + Debug + Clone> Borrow<Tensor> for ThoTensor<D, Id> {

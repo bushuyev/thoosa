@@ -1058,20 +1058,25 @@ impl CudaIPCActor {
             CudaIPCActorMessage::InvokeEndpoint { input, respond_to } => {
                 let self_tx = self.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.pending);
 
                 tokio::spawn(async move {
 
-                    if self_tx.send(
+                    let response = send_request_and_wait(
+                        self_tx,
+                        pending,
                         OutgoingRequest {
                             id: next_id,
                             payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
+                        },
+                    ).await.and_then(|response| {
+                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                            Err(parse_worker_copy_error_payload(error))
+                        } else {
+                            Ok(response)
                         }
-                    ).await.is_err() {
-                        return Err(ThoError::new("worker IPC writer task is closed"));
-                    }
-
-                    //TODO
-                    let _ = respond_to.send(Ok("TODO".to_string()));
+                    });
+                    let _ = respond_to.send(response);
 
                     Ok::<_, ThoError>(())
                 });

@@ -209,6 +209,15 @@ impl CudaWorker {
 
                 debug!("run_worker: invoke endpoint  response={response:?}");
 
+                let payload = match response {
+                    Ok(response) => OutgoingRequestPayload::Msg(response),
+                    Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
+                };
+                reply_tx
+                    .send(WorkerReply { id, payload })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
                 continue;
             }
 

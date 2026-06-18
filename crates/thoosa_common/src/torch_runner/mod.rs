@@ -72,7 +72,6 @@ pub(crate) mod tests {
     use crate::utils::lin_for_size;
     use std::ops::Add;
     use std::time::Duration;
-    use futures::executor::block_on;
     use futures_util::StreamExt;
     use serde::{Deserialize, Serialize};
     use tch::Device::Cuda;
@@ -313,20 +312,49 @@ pub(crate) mod tests {
 
     #[derive(Debug)]
     pub struct SyncClcTaskJsonWrapper {
-        sync_clc:SyncClcTask
+        sync_clc:Arc<SyncClcTask>
     }
 
     impl SyncClcTaskJsonWrapper {
         pub fn new(init_msg:String) -> Self {
             Self {
-                sync_clc: SyncClcTask::init(serde_json::from_str::<SyncClcTaskInit>(&init_msg).unwrap())
+                sync_clc: Arc::new(SyncClcTask::init(serde_json::from_str::<SyncClcTaskInit>(&init_msg).unwrap()))
             }
         }
     }
 
     impl SyncStageJsonWrapper for SyncClcTaskJsonWrapper {
-        fn do_run(&self, _input: String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
-            todo!()
+        fn do_run(&self, input: String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+            let input_ref = serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&input)?;
+            let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("SyncClcTaskJsonWrapper expected ThoTensor ref input, got {input_ref:?}")))?;
+            let input_tensor = tokio::task::block_in_place(|| {
+                let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+                Ok::<_, ThoError>(tensors
+                    .get(&input_key)
+                    .ok_or_else(|| ThoError::new(format!("SyncClcTaskJsonWrapper could not find worker tensor ref key={input_key}")))?
+                    .shallow_clone())
+            })?;
+            let loaded = ThoTensor::new(input_ref.id().clone(), input_tensor)?;
+            let ctx = RunCtxImpl::new(1, "ipc_sync_clc_task");
+            let out = Arc::clone(&self.sync_clc).do_run(&loaded, &ctx)?;
+            let out_id = out.id().clone();
+            let out_tensor = out.t();
+            let out_key = tokio::task::block_in_place(|| {
+                let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+                let mut key = tensors
+                    .keys()
+                    .copied()
+                    .max()
+                    .unwrap_or(0)
+                    .checked_add(1)
+                    .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+                while tensors.contains_key(&key) {
+                    key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+                }
+                tensors.insert(key, out_tensor);
+                Ok::<_, ThoError>(key)
+            })?;
+            Ok(serde_json::to_string(&ThoTensor::<ClcTaskOutput, SynKey>::new_ref(out_id, out_key))?)
         }
     }
 
@@ -530,7 +558,7 @@ pub(crate) mod tests {
 
     #[derive(Debug)]
     pub struct ProxySyncClcTask {
-
+        id: SynKey,
     }
 
     impl Stage for ProxySyncClcTask {
@@ -544,7 +572,7 @@ pub(crate) mod tests {
     impl OutId for ProxySyncClcTask {
         fn out_id(&self, input_id: &SynKey) -> SynKey {
 
-            input_id.clone()
+            &self.id + input_id
         }
     }
 
@@ -552,27 +580,30 @@ pub(crate) mod tests {
         pub async fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Result<Self, ThoError> {
             debug!("ProxySyncClcTask::new: id={id:?} k={k:?}");
             GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(id, k, dim, vec![], false))?).await?;
+                .install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(id.clone(), k, dim, vec![], use_matmul))?).await?;
 
             Ok(Self {
-
+                id,
             })
         }
     }
 
     impl SyncStage for ProxySyncClcTask {
-        fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-            debug!("ProxySyncClcTask::new: _input={_input:?}");
-            block_on( async move {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            debug!("ProxySyncClcTask::new: input={input:?}");
+            let output_ref = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+                let response = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
+                    .invoke_endpoint(serde_json::to_string(input)?).await?;
+                serde_json::from_str::<ThoTensor<ClcTaskOutput, SynKey>>(&response)
+                    .map_err(ThoError::from)
+            }))?;
+            let out_id = output_ref.id().clone();
+            let out_key = output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))?;
+            let cpu_output = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
                 GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                    .invoke_endpoint(serde_json::to_string(&_input)?).await?;
-
-                Ok(())
-            })?;
-
-
-
-            Ok(ThoTensor::new(mono_key!(0, "TODO").into(), Tensor::rand([10, 10], FLOAT_CPU))?)
+                    .copy(ThoTensor::new_ref((), out_key), 0.into()).await
+            }))?;
+            Ok(ThoTensor::new(out_id, cpu_output.t())?)
         }
     }
 
