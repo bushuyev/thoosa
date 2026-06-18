@@ -75,6 +75,17 @@ fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<
     assert!(ok);
 }
 
+fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
+    HashMap::from([
+        (
+            "SyncClcTask".to_string(),
+            Box::new(|init_msg| {
+                Ok(Box::new(SyncClcTaskJsonWrapper::new(init_msg)) as Box<dyn SyncStageJsonWrapper>)
+            }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+        )
+    ])
+}
+
 impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
     fn from(t: ThoTensor) -> Self {
         let ThoTensor { id, inner, .. } = t;
@@ -98,7 +109,7 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
     const MUL_K: f64 = 2.;
     let clc_dim = if use_matmul { size[0] } else { size[1] };
 
-    cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
+    // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
 
     let mut tasks = JoinSet::new();
     for resource in resources {
@@ -116,9 +127,10 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
             // let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
             let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
 
+            debug!("run_load_and_mul_ipc_cuda_worker: loaded={loaded:?}");
 
 
-            let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
+            let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul).await?);
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_mul");
             let out = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
 
@@ -225,7 +237,7 @@ async fn test_load_and_mul_ipc_cuda_worker_no_oom_tensor() {
     debug!("test_load_and_mul_ipc_cuda_worker_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(HashMap::new()).await.unwrap()
+        CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
     } else {
         run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await.unwrap();
     }
@@ -247,14 +259,7 @@ async fn test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor() {
     debug!("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(HashMap::from([
-            (
-                "SyncClcTask".to_string(),
-                Box::new(|init_msg|{
-                    Ok(Box::new(SyncClcTaskJsonWrapper::new(init_msg)) as Box<dyn SyncStageJsonWrapper>)
-                }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-            )
-        ])).await.unwrap()
+        CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
     } else {
         run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
     }

@@ -56,6 +56,7 @@ pub(super) const TENSOR_INFO_PAYLOAD_PREFIX: &str = "tensor-info:";
 pub(crate) const H2D_START_PAYLOAD_PREFIX: &str = "h2d-start:";
 pub(crate) const D2H_START_PAYLOAD_PREFIX: &str = "d2h-start:";
 pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
+pub(crate) const INVOKE_ENDPOINT_PREFIX: &str = "invoke_endpoint:";
 const WORKER_COPY_STREAMS: usize = 16;
 pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
 
@@ -623,6 +624,9 @@ pub enum CudaIPCActorMessage {
         init_msg: String, respond_to: oneshot::Sender<Result<(), ThoError>>
     },
 
+    InvokeEndpoint {
+        input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
+    },
 }
 
 struct OutgoingRequest {
@@ -1051,6 +1055,32 @@ impl CudaIPCActor {
                     Ok::<_, ThoError>(())
                 });
             }
+            CudaIPCActorMessage::InvokeEndpoint { input, respond_to } => {
+                let self_tx = self.tx.clone();
+                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.pending);
+
+                tokio::spawn(async move {
+
+                    let response = send_request_and_wait(
+                        self_tx,
+                        pending,
+                        OutgoingRequest {
+                            id: next_id,
+                            payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
+                        },
+                    ).await.and_then(|response| {
+                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                            Err(parse_worker_copy_error_payload(error))
+                        } else {
+                            Ok(response)
+                        }
+                    });
+                    let _ = respond_to.send(response);
+
+                    Ok::<_, ThoError>(())
+                });
+            }
         }
 
         Ok(())
@@ -1412,6 +1442,20 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
+
+    async fn invoke_endpoint(&self, input: String) -> Result<String, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::InvokeEndpoint {
+                input,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+
+    }
+
 }
 
 pub(crate) async fn write_text_frame<W>(
