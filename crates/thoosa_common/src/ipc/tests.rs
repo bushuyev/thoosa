@@ -114,7 +114,7 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
 
             let clc_dim = if use_matmul { size[0] } else { size[1] };
 
-            let clc_task = Arc::new(ClcTask::new(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
+            let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_mul");
             let out = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
 

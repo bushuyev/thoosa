@@ -302,6 +302,26 @@ pub(crate) mod tests {
                 sync_clc: Arc::new(SyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul)),
             }
         }
+
+
+    }
+
+    impl ClcTask<ProxySyncClcTask> {
+        pub fn new_proxy(
+            id: SynKey,
+            k: impl Into<Scalar>,
+            fail_until: Vec<FailUntil>,
+            dim: i64,
+            kind: Kind,
+            device: Device,
+            use_matmul: bool,
+        ) -> Self {
+
+            Self {
+                sync_clc: Arc::new(ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul)),
+            }
+        }
+
     }
 
     impl<S> Adjustable for ClcTask<S>
@@ -465,7 +485,7 @@ pub(crate) mod tests {
     }
 
     #[derive(Debug)]
-    struct ProxySyncClcTask {
+    pub struct ProxySyncClcTask {
 
     }
 
@@ -486,6 +506,12 @@ pub(crate) mod tests {
 
     impl SyncStage for ProxySyncClcTask {
 
+    }
+
+    impl ProxySyncClcTask {
+        pub fn new(id: SynKey,k: impl Into<Scalar>, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Self {
+            Self {}
+        }
     }
 
     // #[async_trait]
