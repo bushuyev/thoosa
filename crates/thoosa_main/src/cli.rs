@@ -78,7 +78,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::Instrument;
 use thoosa_common::tho_tensor::ThoTensor;
 use torch_sys::at_grad_set_enabled;
-use thoosa_common::copy_ctx::{CopyCtx, CudaActorHandle};
+use thoosa_common::copy_ctx::CudaActorHandle;
 
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef};
@@ -2017,11 +2017,11 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
 
             let t = Tensor::f_stack(&[
-                track_await(make_t(&dim_1, &(i as i64), 0.1, &ctx, cuda_first)).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.2, &ctx, cuda_first)).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.3, &ctx, cuda_first)).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.4, &ctx, cuda_first)).await?,
-                track_await(make_t(&dim_1, &(i as i64), 0.5, &ctx, cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.1, ctx.as_ref(), cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.2, ctx.as_ref(), cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.3, ctx.as_ref(), cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.4, ctx.as_ref(), cuda_first)).await?,
+                track_await(make_t(&dim_1, &(i as i64), 0.5, ctx.as_ref(), cuda_first)).await?,
             ], 0)?
                 .f_unfold(1, 1000, 100)?;
 
@@ -2030,7 +2030,7 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
 
         let batch = Tensor::f_concat(tensors.as_slice(), 1)?;
         let batch= if !cuda_first {
-            track_await(ctx.copy(batch.into(), 1.into())).await?
+            track_await(ctx.copy(batch.into(), 1.into())).await?.t()
         } else {
             batch
         };
@@ -2040,11 +2040,11 @@ async fn perf_unfold_concat_cuda_vs_cpu() -> Result<(), ThoError>{
         Ok(t_0.elapsed().as_millis())
     }
 
-    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &CudaActorHandle, cuda_first:bool) -> Result<Tensor, ThoError> {
+    async fn make_t(dim_1: &i64, i: &i64, x: f64, copy_ctx: &dyn CudaActorHandle, cuda_first:bool) -> Result<Tensor, ThoError> {
         let t = x + Tensor::f_arange_start(i * dim_1, (i + 1) * dim_1, FLOAT_CPU)?;
 
         if cuda_first {
-            track_await(copy_ctx.copy(t.into(), 1.into())).await
+            Ok(track_await(copy_ctx.copy(t.into(), 1.into())).await?.t())
         } else {
             Ok(t)
         }

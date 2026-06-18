@@ -722,7 +722,7 @@ pub async fn with_pooled_cuda_stream<F, R>(
 ) -> Result<R, ThoError>
 where
     F: FnOnce(Option<&ThoCudaStream>) -> Result<R, ThoError> + Send,
-    R: Send,
+    R: Send + 'static,
 {
     if tho_device_idx == 0 {
         return f(None);
@@ -1234,7 +1234,7 @@ mod tests {
         let mask = Tensor::randint( 2, [channels * n], (Kind::Bool, Cuda(0))).view((channels, n));
         let size = mask.size();
         let packed_mask = pack_bits_bool(&mask)?;
-        let packed = GlobalCtx::global().cuda_actor(Cuda(0)).copy(packed_mask.into(), 0.into()).await?;
+        let packed = GlobalCtx::global().cuda_actor(Cuda(0)).copy(packed_mask.into(), 0.into()).await?.t();
 
         let mask_size = mask.numel()*mask.kind().elt_size_in_bytes();
         let packed_size = packed.numel()*packed.kind().elt_size_in_bytes();
