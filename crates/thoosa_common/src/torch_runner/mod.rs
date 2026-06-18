@@ -241,7 +241,8 @@ pub(crate) mod tests {
 
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
-    pub(crate) struct ClcTask {
+    pub(crate) struct ClcTask
+    {
         pub(crate) sync_clc: Arc<SyncClcTask>,
     }
 
@@ -253,7 +254,33 @@ pub(crate) mod tests {
         use_matmul: bool,
     }
 
-    impl ClcTask {
+    impl SyncClcTask {
+        pub fn new(id: SynKey,k: impl Into<Scalar>, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Self {
+            let k =
+                if use_matmul {
+                    ThoTensor::new(
+                        simple_id!("mul_k"),
+                        Tensor::ones([dim, 1], (kind, device))
+                            .f_mul_scalar_(k)
+                            .unwrap(),
+                    ).unwrap()
+                } else {
+                    ThoTensor::new(
+                        simple_id!("mul_k"),
+                        Tensor::ones([dim], (kind, device))
+                            .f_mul_scalar_(k)
+                            .unwrap(),
+                    ).unwrap()
+                };
+
+            debug!("ClcTask::new: use_matmul={use_matmul} i.size={:?}", k.size());
+
+            Self { id, k, fail_until, use_matmul }
+        }
+    }
+
+    impl ClcTask
+    {
         pub fn new(
             id: SynKey,
             k: impl Into<Scalar>,
@@ -264,33 +291,8 @@ pub(crate) mod tests {
             use_matmul: bool,
         ) -> Self {
 
-
-            let k_t =
-            if use_matmul {
-                ThoTensor::new(
-                    simple_id!("mul_k"),
-                    Tensor::ones([dim, 1], (kind, device))
-                        .f_mul_scalar_(k)
-                        .unwrap(),
-                ).unwrap()
-            } else {
-                ThoTensor::new(
-                    simple_id!("mul_k"),
-                    Tensor::ones([dim], (kind, device))
-                        .f_mul_scalar_(k)
-                        .unwrap(),
-                ).unwrap()
-            };
-
-            debug!("ClcTask::new: use_matmul={use_matmul} k_t.size={:?}", k_t.size());
-
             Self {
-                sync_clc: Arc::new(SyncClcTask {
-                    id,
-                    k: k_t,
-                    fail_until,
-                    use_matmul,
-                }),
+                sync_clc: Arc::new(SyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul)),
             }
         }
     }
@@ -431,6 +433,21 @@ pub(crate) mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ProxySyncClcTask {
+
+    }
+
+    impl Stage for ProxySyncClcTask {
+        type In<'a> = ThoTensor<LoadedTensor, SynKey>;
+        type Out = ThoTensor<ClcTaskOutput, SynKey>;
+        type Ctx = RunCtxImpl;
+    }
+
+    impl SyncStage for ProxySyncClcTask {
+
+    }
+
     // #[async_trait]
     impl AsyncStage for ClcTask {
         async fn run(
@@ -439,6 +456,8 @@ pub(crate) mod tests {
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let device_idx = ctx.tho_device_idx();
+
+            debug!("AsyncStage for ClcTask::run: device_idx={device_idx} input={input:?}");
 
             let output = OOMHandler::new(vec![], None).run(
                 &self.sync_clc,

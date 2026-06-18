@@ -62,9 +62,6 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
-    // fn init_sync_stage(&self) ->Result<Box<dyn SyncStage>, ThoError> {
-    //     todo!()
-    // }
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,

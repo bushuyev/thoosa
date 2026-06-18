@@ -79,7 +79,7 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 }
 
 
-enum ThoTensorInner {
+pub/*TODO*/ enum ThoTensorInner {
     Val { t: Tensor },
     Ref { key: u64 },
 }
@@ -100,8 +100,8 @@ where
     D:Dims,
     Id:Named + Debug + Clone
 {
-    id: Id,
-    inner: ThoTensorInner,
+    pub id: Id,
+    pub inner: ThoTensorInner,
 
     #[allow(dead_code)]
     tracking: parking_lot::RwLock<Vec<&'static str>>,
@@ -160,19 +160,47 @@ where
     type M = CpuOrGpu<ThoTensor<D, Id>>;
 
     fn size(&self) -> Self::Metrics {
-        self.t_ref()
-            .size()
-            .try_into()
-            .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
-            .unwrap_or(Self::Metrics::default())
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                t.size()
+                    .try_into()
+                    .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
+                    .unwrap_or(Self::Metrics::default())
+            },
+            ThoTensorInner::Ref { key } => {
+                Self::Metrics::default()
+            }
+        }
+
+        // self.t_ref()
+        //     .size()
+        //     .try_into()
+        //     .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
+        //     .unwrap_or(Self::Metrics::default())
     }
 
     fn device(&self) -> usize {
-        ThoDevice::from(self.t_ref().device()).ordinal()
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                ThoDevice::from(t.device()).ordinal()
+            }
+            ThoTensorInner::Ref { key } => {
+                1
+            }
+        }
     }
 
     fn mem_size(&self) -> u64 {
-        self.size().iter().fold(1u64, | a, v| a * (*v as u64)) * self.t_ref().kind().elt_size_in_bytes() as u64
+
+
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                t.size().iter().fold(1u64, | a, v| a * (*v as u64)) * t.kind().elt_size_in_bytes() as u64
+            }
+            ThoTensorInner::Ref { key } => {
+                1000
+            }
+        }
     }
 }
 
