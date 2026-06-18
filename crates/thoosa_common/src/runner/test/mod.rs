@@ -8,6 +8,7 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
+use serde::{Deserialize, Serialize};
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, WithId};
 use tokio::task::JoinSet;
@@ -21,7 +22,7 @@ use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunC
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub enum FailUntil {
     MemLimit(u64),
     NaxParallel(MaxParallel),

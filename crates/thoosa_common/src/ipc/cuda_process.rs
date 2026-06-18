@@ -1524,7 +1524,7 @@ mod tests {
         let args:Vec<&str> = vec![test_name.clone().leak(), "--exact", "--nocapture"];
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices_2(2, args).await?;
+        RealGlobalCtx::init_devices_ipc(2, args).await?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         // let (mut child, mut stream) = spawn_test_worker(test_name).await?;
@@ -1573,7 +1573,7 @@ mod tests {
         let args: Vec<&str> = vec![test_name.clone().leak(), "--exact", "--nocapture", "--ignored"];
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices_2(2, args).await?;
+        RealGlobalCtx::init_devices_ipc(2, args).await?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let tho_device_idx = 1;
@@ -1598,7 +1598,7 @@ mod tests {
         let args: Vec<&str> = vec![test_name.clone().leak(), "--exact", "--nocapture"];
 
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices_2(2, args).await?;
+        RealGlobalCtx::init_devices_ipc(2, args).await?;
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let tho_device_idx = 1;

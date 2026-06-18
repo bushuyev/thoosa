@@ -58,7 +58,7 @@ async fn init_ipc_test(test_name: &str) -> Result<impl Drop, ThoError> {
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices_2(2, test_worker_args(test_name)).await?;
+    RealGlobalCtx::init_devices_ipc(2, test_worker_args(test_name)).await?;
     let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
     Ok(ctx)

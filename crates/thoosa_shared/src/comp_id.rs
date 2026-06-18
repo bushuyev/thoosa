@@ -5,10 +5,11 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
+use serde::{Deserialize, Serialize};
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum ElvVal {
     Str(String),
     Num(usize),
@@ -68,7 +69,7 @@ impl From<bool> for ElvVal {
     }
 }
 
-#[derive(Debug, Clone, Ord, Named)]
+#[derive(Debug, Clone, Ord, Named, Serialize, Deserialize)]
 pub struct MonoKey {
     val: ElvVal,
 
@@ -181,7 +182,7 @@ impl Hash for MonoKey {
 
 
 /// ✅ Dynamic-length key, stored as a boxed slice (one allocation, no capacity slack).
-#[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named)]
+#[derive(Eq, PartialEq, Hash, Clone, Ord, PartialOrd, Named, Serialize, Deserialize)]
 pub struct SynKey {
     pub vals: Box<[MonoKey]>,
 }

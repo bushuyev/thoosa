@@ -73,6 +73,8 @@ pub(crate) mod tests {
     use std::ops::Add;
     use std::time::Duration;
     use futures_util::StreamExt;
+    use serde::{Deserialize, Serialize};
+    use tch::Device::Cuda;
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
     use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
@@ -261,6 +263,19 @@ pub(crate) mod tests {
         use_matmul: bool,
     }
 
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct SyncClcTaskInit {
+        id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>, use_matmul: bool
+    }
+
+    impl SyncClcTaskInit {
+        pub fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>, use_matmul: bool) ->Self {
+            Self {
+                id, k, dim, fail_until,  use_matmul
+            }
+        }
+    }
+
     impl SyncClcTask {
         pub fn new(id: SynKey,k: impl Into<Scalar>, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Self {
             let k =
@@ -283,6 +298,12 @@ pub(crate) mod tests {
             debug!("ClcTask::new: use_matmul={use_matmul} i.size={:?}", k.size());
 
             Self { id, k, fail_until, use_matmul }
+        }
+        pub fn init(init: SyncClcTaskInit) -> SyncClcTask{
+            let SyncClcTaskInit{id, k, dim, fail_until, use_matmul} = init;
+            SyncClcTask::new(
+                id, k, dim, fail_until, Float, Cuda(0), use_matmul
+            )
         }
     }
 
