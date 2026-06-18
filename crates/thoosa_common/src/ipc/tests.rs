@@ -76,14 +76,14 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
     let _ctx = init_ipc_test(test_name).await?;
 
     let tho_device_idx = 1;
-    let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
+    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
     let size = [3, 10];
     const MUL_K: f64 = 2.;
 
     let mut tasks = JoinSet::new();
     for resource in resources {
         let resource = *resource;
-        let cuda_actor = cuda_actor.clone();
+        let cuda_actor = cuda_actor;
         tasks.spawn(async move {
             let input_id = SynKey::new([mono_key!(resource, "resource key")]);
             let self_k = parse_numeric_part(resource).unwrap_or(1.0);
@@ -132,7 +132,7 @@ async fn run_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu(test_name: &str) -> Re
     let _ctx = init_ipc_test(test_name).await?;
 
     let tho_device_idx = 1;
-    let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
+    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
 
     let result = async {
         let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);

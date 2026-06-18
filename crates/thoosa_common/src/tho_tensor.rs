@@ -403,6 +403,7 @@ where
                 dst_device,
             )).await?;
 
+        let copy = copy.t();
         debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device:?} copy.device={:?}",self.id,  self.t_ref().size(), self.t_ref().device(), copy.device());
         trace!("CopyToDevice for ThoTensor: self.id={:?} self.t=\n{} copy=\n{copy}", self.id, self.t_ref());
 
