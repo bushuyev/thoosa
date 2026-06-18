@@ -25,6 +25,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Named;
 use crate::dims::Dims;
 use crate::runner::common::cachable::WithDataRef;
+use crate::runner::common::runnable::SyncStage;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -61,10 +62,15 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
+
     fn exec_sync_stage_boxed<'a>(
         &'a self,
         action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>>;
+
+    async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
+        Ok(())
+    }
 }
 
 impl dyn CudaActorHandle + '_ {
