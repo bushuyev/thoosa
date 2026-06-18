@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::c_void;
 use std::fmt::Debug;
+use std::future::Future;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -28,7 +29,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::copy_ctx::{CopyCtx, CudaActorMessage};
+use crate::copy_ctx::{CopyCtx, ExecSyncStageActionResult};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -609,13 +610,6 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
 
 pub enum CudaIPCActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
-    SyncStream {
-        stream:Guard<ThoCudaStream>,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
-    GetExecStream {
-        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
-    },
     Reset {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
@@ -985,10 +979,7 @@ impl CudaIPCActor {
                     let _ = respond_to.send(result);
                 });
 
-
             }
-            CudaIPCActorMessage::SyncStream { .. } => {}
-            CudaIPCActorMessage::GetExecStream { .. } => {}
             CudaIPCActorMessage::Reset { .. } => {}
             CudaIPCActorMessage::Shutdown { respond_to } => {
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -1331,18 +1322,6 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
-    pub async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::SyncStream {
-                stream,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
-    }
-
     pub async fn reset(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -1365,16 +1344,13 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    //TODO these are 'exec' streams, not for copy
-    pub async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::GetExecStream {
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    pub async fn exec_sync_stage<R, F, Fut>(&self, _action: F) -> Result<R, ThoError>
+    where
+        R: Send,
+        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send,
+        Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send,
+    {
+        todo!("CudaIPCActorHandle::exec_sync_stage")
     }
 
 }

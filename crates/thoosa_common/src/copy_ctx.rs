@@ -4,6 +4,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
@@ -40,6 +41,11 @@ pub enum CudaActorMessage {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     }
 
+}
+
+pub enum ExecSyncStageActionResult<T> {
+    Sync { stream: Guard<ThoCudaStream>, out: T },
+    NoSync(T),
 }
 
 
@@ -235,7 +241,7 @@ impl CudaActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
-    pub async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
+    async fn sync_stream(&self, stream:Guard<ThoCudaStream>) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaActorMessage::SyncStream {
@@ -259,7 +265,7 @@ impl CudaActorHandle {
     }
 
     //TODO these are 'exec' streams, not for copy
-    pub async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
+    async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaActorMessage::GetExecStream {
@@ -268,6 +274,22 @@ impl CudaActorHandle {
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    }
+
+    pub async fn exec_sync_stage<R, F, Fut>(&self, action: F) -> Result<R, ThoError>
+    where
+        R: Send,
+        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send,
+        Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send,
+    {
+        let stream = self.acquire_exec_stream().await?;
+        match action(stream).await? {
+            ExecSyncStageActionResult::Sync { stream, out } => {
+                self.sync_stream(stream).await?;
+                Ok(out)
+            }
+            ExecSyncStageActionResult::NoSync(out) => Ok(out),
+        }
     }
 
 }
