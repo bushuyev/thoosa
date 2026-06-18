@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::task::spawn_blocking;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
+use thoosa_common::copy_ctx::ExecSyncStageActionResult;
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
@@ -278,9 +279,10 @@ where
             let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
             let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
             let cuda_actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx());
-            let stream = cuda_actor.acquire_exec_stream().await?;
 
-            let res = with_data!(ctx.branch(false), input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
+            let ctx_for_data = ctx.branch(false);
+            let res = track_await(cuda_actor.exec_sync_stage(move |stream| async move {
+                let res = with_data!(ctx_for_data, input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");
                 let _guard = ThoStreamGuard::new(&stream)?;
                 let motifs_applied = self_clone.conv2d_tensors.iter().enumerate().map(|(tensors_idx, tensors)|{
@@ -355,13 +357,13 @@ where
 
                 Ok(motifs_applied)
             })?;
-
-            track_await(cuda_actor.sync_stream(stream)).await?;
+                Ok(ExecSyncStageActionResult::Sync { stream, out: res })
+            })).await?;
 
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));
 
-            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(input.id()), res, ctx.tho_device_idx()), ctx.branch(false)) {
+            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(&input_id), res, ctx.tho_device_idx()), ctx.branch(false)) {
                 ConsumeResult::Failed { input, error } => {
                     Err(ThoError::from(error))
                 }

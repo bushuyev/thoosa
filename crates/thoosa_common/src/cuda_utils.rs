@@ -18,6 +18,7 @@ use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
 use crate as thoosa_common;
+use crate::copy_ctx::ExecSyncStageActionResult;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
@@ -720,21 +721,18 @@ pub async fn with_pooled_cuda_stream<F, R>(
     f: F,
 ) -> Result<R, ThoError>
 where
-    F: FnOnce(Option<&ThoCudaStream>) -> Result<R, ThoError>,
+    F: FnOnce(Option<&ThoCudaStream>) -> Result<R, ThoError> + Send,
+    R: Send,
 {
     if tho_device_idx == 0 {
         return f(None);
     }
 
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-    let stream = cuda_actor.acquire_exec_stream().await?;
-
-    let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))?;
-
-    track_await(cuda_actor.sync_stream(stream)).await?;
-
-
-    out
+    track_await(cuda_actor.exec_sync_stage(move |stream| async move {
+        let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))??;
+        Ok(ExecSyncStageActionResult::Sync { stream, out })
+    })).await
 }
 
 #[cfg(test)]
