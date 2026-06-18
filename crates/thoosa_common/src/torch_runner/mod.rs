@@ -76,7 +76,9 @@ pub(crate) mod tests {
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
     use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
+    use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::oom_handler::{Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 
     #[ctor::ctor]
     fn init() {
@@ -438,13 +440,17 @@ pub(crate) mod tests {
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let device_idx = ctx.tho_device_idx();
 
-            let stage = Arc::clone(&self.sync_clc);
-            let ctx = ctx;
-            let output = input
-                .with_data_ref(device_idx, ctx, None, move |tensor: &ThoTensor<LoadedTensor, SynKey>, run_ctx| {
-                    Arc::clone(&stage).do_run(tensor, run_ctx)
-                })
-                .await?;
+            let output = OOMHandler::new(vec![], None).run(
+                &self.sync_clc,
+                input,
+                ctx,
+                Contexts::new(
+                    NoopInputContext(None),
+                    NoopRunnableContext {},
+                    NoopRunCtxContext {},
+                )
+            ).await?;
+
 
             Ok(Arc::new(DevicesWrap::wrap(output)))
         }

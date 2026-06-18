@@ -7,11 +7,13 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{mono_key, ThoError};
+use thoosa_with_data::with_data;
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::runner::adjusters::max_parallel::MAX_PARALLEL;
-use crate::runner::common::OutId;
-use crate::runner::common::runnable::SyncStage;
+use crate::runner::common::cachable::DevicesWrap;
+use crate::runner::common::{OutId, RunCtx};
+use crate::runner::common::runnable::{AsyncStage, SyncStage};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -94,19 +96,24 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
             assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
 
             let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
-            let loaded = ThoTensor::<LoadedTensor, SynKey>::new(input_id, cpu_copy.t())?;
+            let loaded = Arc::new(DevicesWrap::wrap(ThoTensor::<LoadedTensor, SynKey>::new(input_id, cpu_copy.t())?));
 
             let clc_dim = if use_matmul { size[0] } else { size[1] };
 
             let clc_task = Arc::new(ClcTask::new(SynKey::new([mono_key!(0, "mul_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
-            let out = Arc::clone(&clc_task.sync_clc).do_run(&loaded, &RunCtxImpl::new(0, "ipc_load_and_mul"))?;
+            let mut ctx = RunCtxImpl::new(0, "ipc_load_and_mul");
+            let out = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
 
-            assert_eq!(out.id(), &clc_task.out_id(loaded.id()));
-            if use_matmul {
-                check_sum_result(MUL_K, size, resource, &out);
-            } else {
-                mul_check(MUL_K, size.into(), resource, &out, 0.1, 0.1);
-            }
+            with_data!(ctx, out; |_ctx, out:&ThoTensor::<ClcTaskOutput, SynKey>|{
+                assert_eq!(out.id(), &clc_task.out_id(loaded.id()));
+                if use_matmul {
+                    check_sum_result(MUL_K, size, resource, out);
+                } else {
+                    mul_check(MUL_K, size.into(), resource, out, 0.1, 0.1);
+                }
+                Ok(())
+            });
+
 
             Ok::<(), ThoError>(())
         });
