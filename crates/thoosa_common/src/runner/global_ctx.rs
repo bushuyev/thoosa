@@ -16,14 +16,14 @@ use tokio::sync::RwLock as AsyncRwLock;
 use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
 use crate::runner::purger::Purger;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use crate::copy_ctx::{CopyCtx, CudaActorHandle};
+use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
 use crate::runner::dyn_mpsc::DynamicTaskExecutor;
 use crate::tho_device::ThoDevice;
 use futures::FutureExt;
 use thoosa_shims::context::ThoCudaContext;
 use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
-use crate::ipc::cuda_process::{CudaIPCActor, CudaIPCActorHandle};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -38,8 +38,7 @@ pub struct GlobalCtx {
     purger: Purger,
     shutting_down:AtomicBool,//TODO not needed if tokio's shutdown_background in project main,
 
-    cuda_actors:Vec<CudaActorHandle>,
-    cuda_ipc_actors:Vec<CudaIPCActorHandle>,
+    cuda_actors:Vec<Box<dyn CudaActorHandle>>,
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
 }
@@ -105,8 +104,7 @@ impl GlobalCtx {
             shutting_down: false.into(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
-            cuda_actors: (1..num_devices).map(|tho_device_idx|CudaActorHandle::new(tho_device_idx)).collect(),
-            cuda_ipc_actors: vec![],
+            cuda_actors: (1..num_devices).map(|tho_device_idx|Box::new(CudaLocalActorHandle::new(tho_device_idx)) as Box<dyn CudaActorHandle>).collect(),
         }
     }
 
@@ -115,6 +113,11 @@ impl GlobalCtx {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
+
+        let mut cuda_actors = Vec::with_capacity(num_devices.saturating_sub(1));
+        for tho_device_idx in 1..num_devices {
+            cuda_actors.push(Box::new(CudaIPCActorHandle::new(tho_device_idx, cuda_worker_args.clone()).await?) as Box<dyn CudaActorHandle>);
+        }
 
         Ok(Self {
             num_devices,
@@ -133,8 +136,7 @@ impl GlobalCtx {
             shutting_down: false.into(),
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
-            cuda_actors: vec![],
-            cuda_ipc_actors: vec![CudaIPCActorHandle::new(1, cuda_worker_args).await?],//TODO should be merged with cuda_actors when ipc refactoring is completed - each device should be used either in-process or through IPC
+            cuda_actors,
         })
     }
 
@@ -406,16 +408,10 @@ impl GlobalCtx {
 
 impl GlobalCtx {
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> CudaActorHandle {
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
         let device:ThoDevice = device.into();
         let gpu_device_ordinal = device.gpu_ordinal();
-        self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
-    }
-
-    pub fn cuda_ipc_actor<D:Into<ThoDevice>+ 'static>(&self, device:D) -> CudaIPCActorHandle {
-        let device:ThoDevice = device.into();
-        let gpu_device_ordinal = device.gpu_ordinal();
-        self.cuda_ipc_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}")).clone()
+        self.cuda_actors.get(gpu_device_ordinal).expect(&format!("No CudaActor for device={gpu_device_ordinal}"))
     }
 }
 
@@ -657,9 +653,9 @@ impl MockGlobalCtx {
         track_await(COPY_CTX_ONCE.get_or_init(|| tokio::sync::RwLock::new(CopyCtx::make_instance(0.2, 16))).read()).await
     }
 
-    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> CudaActorHandle {
-        static COPY_CTX_ONCE: std::sync::OnceLock<CudaActorHandle> = std::sync::OnceLock::new();
-        COPY_CTX_ONCE.get_or_init(|| CudaActorHandle::new(device.into().ordinal())).clone()
+    pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
+        static COPY_CTX_ONCE: std::sync::OnceLock<Box<dyn CudaActorHandle>> = std::sync::OnceLock::new();
+        COPY_CTX_ONCE.get_or_init(|| Box::new(CudaLocalActorHandle::new(device.into().ordinal())) as Box<dyn CudaActorHandle>)
     }
 
 
@@ -875,7 +871,7 @@ mod tests {
             tokio::task::spawn(async move {
                 let kind = Float;
                 let cpu_input = Tensor::ones(&[n, n], FLOAT_CPU);
-                let cuda_input = GlobalCtx::global().cuda_actor(Cuda(0)).copy(cpu_input.into(), 1.into()).await?;
+                let cuda_input = GlobalCtx::global().cuda_actor(Cuda(0)).copy(cpu_input.into(), 1.into()).await?.t();
                 // let cuda_input = cpu_input.to(Cuda(0));
 
                 let cuda_t =
@@ -885,7 +881,7 @@ mod tests {
                 ?;
 
 
-                GlobalCtx::global().cuda_actor(Cuda(0)).copy(cuda_t.into(), 0.into()).await
+                Ok(GlobalCtx::global().cuda_actor(Cuda(0)).copy(cuda_t.into(), 0.into()).await?.t())
                 // Ok(cuda_t.to(Cpu))
             })
         })

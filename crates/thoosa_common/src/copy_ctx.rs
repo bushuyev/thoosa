@@ -1,8 +1,10 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
 use crate::ipc::ipc_cuda_utils::{IpcBufsPool, SharedMemfdBuffer, ipc_copy_d2h_from_ptr, ipc_copy_h2d_from_ptr};
+use async_trait::async_trait;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
+use std::any::Any;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::sync::Arc;
@@ -10,6 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
 use std::time::Duration;
 use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+use futures_util::future::BoxFuture;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -46,6 +49,46 @@ pub enum CudaActorMessage {
 pub enum ExecSyncStageActionResult<T> {
     Sync { stream: Guard<ThoCudaStream>, out: T },
     NoSync(T),
+}
+
+#[async_trait]
+pub trait CudaActorHandle: Debug + Send + Sync {
+    async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
+
+    async fn reset(&self) -> Result<(), ThoError>;
+
+    async fn shutdown(&self) -> Result<(), ThoError> {
+        Ok(())
+    }
+
+    fn exec_sync_stage_boxed<'a>(
+        &'a self,
+        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+    ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>>;
+}
+
+impl dyn CudaActorHandle + '_ {
+    pub fn exec_sync_stage<'a, R, F, Fut>(&'a self, action: F) -> BoxFuture<'a, Result<R, ThoError>>
+    where
+        R: Send + 'static,
+        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send + 'a,
+        Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
+    {
+        Box::pin(async move {
+            let out = self.exec_sync_stage_boxed(Box::new(move |stream| {
+                Box::pin(async move {
+                    match action(stream).await? {
+                        ExecSyncStageActionResult::Sync { stream, out } => Ok(ExecSyncStageActionResult::Sync { stream, out: Box::new(out) as Box<dyn Any + Send> }),
+                        ExecSyncStageActionResult::NoSync(out) => Ok(ExecSyncStageActionResult::NoSync(Box::new(out) as Box<dyn Any + Send>)),
+                    }
+                })
+            })).await?;
+
+            out.downcast::<R>()
+                .map(|out| *out)
+                .map_err(|_| ThoError::new("CudaActorHandle::exec_sync_stage result type mismatch"))
+        })
+    }
 }
 
 
@@ -210,14 +253,14 @@ impl CudaActor {
 }
 
 #[derive(Debug, Clone)]
-pub struct CudaActorHandle {
+pub struct CudaLocalActorHandle {
     sender: mpsc::Sender<CudaActorMessage>,
 }
 
 
-impl CudaActorHandle {
+impl CudaLocalActorHandle {
     pub fn new(tho_device_id:usize) -> Self {
-        debug!("CudaActorHandle::new: tho_device_id={tho_device_id}");
+        debug!("CudaLocalActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);
         let actor = CudaActor::new(tho_device_id, receiver);
@@ -228,7 +271,7 @@ impl CudaActorHandle {
         }
     }
 
-    pub async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
+    async fn copy_tensor(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<Tensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaActorMessage::Copy {
@@ -253,7 +296,7 @@ impl CudaActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
-    pub async fn reset(&self) -> Result<(), ThoError> {
+    async fn reset_inner(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaActorMessage::Reset {
@@ -276,22 +319,33 @@ impl CudaActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
-    pub async fn exec_sync_stage<R, F, Fut>(&self, action: F) -> Result<R, ThoError>
-    where
-        R: Send,
-        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send,
-        Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send,
-    {
-        let stream = self.acquire_exec_stream().await?;
-        match action(stream).await? {
-            ExecSyncStageActionResult::Sync { stream, out } => {
-                self.sync_stream(stream).await?;
-                Ok(out)
-            }
-            ExecSyncStageActionResult::NoSync(out) => Ok(out),
-        }
+}
+
+#[async_trait]
+impl CudaActorHandle for CudaLocalActorHandle {
+    async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+        Ok(self.copy_tensor(src, dst_device).await?.into())
     }
 
+    async fn reset(&self) -> Result<(), ThoError> {
+        self.reset_inner().await
+    }
+
+    fn exec_sync_stage_boxed<'a>(
+        &'a self,
+        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+    ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
+        Box::pin(async move {
+            let stream = self.acquire_exec_stream().await?;
+            match action(stream).await? {
+                ExecSyncStageActionResult::Sync { stream, out } => {
+                    self.sync_stream(stream).await?;
+                    Ok(out)
+                }
+                ExecSyncStageActionResult::NoSync(out) => Ok(out),
+            }
+        })
+    }
 }
 
 //TODO to be renamed to StreamCtx?
@@ -558,7 +612,7 @@ mod tests {
     use tch::Tensor;
     use thoosa_shared::ThoError;
     use thoosa_shims::context::ThoCudaContext;
-    use crate::copy_ctx::CudaActorHandle;
+    use crate::copy_ctx::{CudaActorHandle, CudaLocalActorHandle};
     use crate::tho_device::ThoDevice;
 
     // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -578,7 +632,7 @@ mod tests {
         rt.block_on(async {
 
 
-            let actor = CudaActorHandle::new(1);
+            let actor = CudaLocalActorHandle::new(1);
 
             let t = Tensor::rand(&[10, 1000], FLOAT_CPU);
 

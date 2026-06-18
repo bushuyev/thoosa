@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::any::Any;
 use std::ffi::c_void;
 use std::fmt::Debug;
-use std::future::Future;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+use async_trait::async_trait;
 use dashmap::DashMap;
+use futures_util::future::BoxFuture;
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use tch::Device::{Cpu, Cuda};
@@ -29,7 +31,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::copy_ctx::{CopyCtx, ExecSyncStageActionResult};
+use crate::copy_ctx::{CopyCtx, CudaActorHandle, ExecSyncStageActionResult};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -1298,7 +1300,7 @@ pub struct CudaIPCActorHandle {
 
 impl CudaIPCActorHandle {
     pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>) -> Result<Self, ThoError> {
-        debug!("CudaActorHandle::new: tho_device_id={tho_device_id}");
+        debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);
         let actor = CudaIPCActor::new(tho_device_id, cuda_worker_args, receiver).await?;
@@ -1309,7 +1311,7 @@ impl CudaIPCActorHandle {
         })
     }
 
-    pub async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<ThoTensor, ThoError> {
+    async fn copy_inner(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<ThoTensor, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Copy {
@@ -1322,7 +1324,7 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
-    pub async fn reset(&self) -> Result<(), ThoError> {
+    async fn reset_inner(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Reset {
@@ -1333,7 +1335,7 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
-    pub async fn shutdown(&self) -> Result<(), ThoError> {
+    async fn shutdown_inner(&self) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::Shutdown {
@@ -1344,15 +1346,30 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    pub async fn exec_sync_stage<R, F, Fut>(&self, _action: F) -> Result<R, ThoError>
-    where
-        R: Send,
-        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send,
-        Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send,
-    {
-        todo!("CudaIPCActorHandle::exec_sync_stage")
+}
+
+#[async_trait]
+impl CudaActorHandle for CudaIPCActorHandle {
+    async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+        self.copy_inner(src, dst_device).await
     }
 
+    async fn reset(&self) -> Result<(), ThoError> {
+        self.reset_inner().await
+    }
+
+    async fn shutdown(&self) -> Result<(), ThoError> {
+        self.shutdown_inner().await
+    }
+
+    fn exec_sync_stage_boxed<'a>(
+        &'a self,
+        _action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+    ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
+        Box::pin(async move {
+            todo!("CudaIPCActorHandle::exec_sync_stage")
+        })
+    }
 }
 
 pub(crate) async fn write_text_frame<W>(
@@ -1449,6 +1466,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::tracked_await::track_await;
+    use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, speed_gb_per_s};
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
     use crate::runner::common::cachable::DevicesWrap;
@@ -1460,7 +1478,7 @@ mod tests {
     use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ipc::cuda_process::{read_text_frame, write_text_frame, CudaIPCActor, CudaIPCActorHandle, IPC_SOCK_ENV};
+    use crate::ipc::cuda_process::{read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor};
@@ -1518,7 +1536,7 @@ mod tests {
         let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
 
 
-        let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let cuda_ref = track_await(cuda_actor
             .copy(
                 main_process_cpu_tensor.into(),
@@ -1559,8 +1577,8 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let tho_device_idx = 1;
-        let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
-        let result = run_ipc_copy_perf(cuda_actor.clone(), threads, runs).await;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let result = run_ipc_copy_perf(cuda_actor, threads, runs).await;
         let shutdown_result = cuda_actor.shutdown().await;
 
         match (result, shutdown_result) {
@@ -1584,7 +1602,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
         let tho_device_idx = 1;
-        let cuda_actor = GlobalCtx::global().cuda_ipc_actor(tho_device_idx);
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
         let (free_mem, _total_mem) = cuda_mem();
         let oversize_bytes = free_mem.saturating_add(256 * 1024 * 1024);
         let elements = oversize_bytes / Float.elt_size_in_bytes() + 1;
@@ -1618,7 +1636,7 @@ mod tests {
         Ok(())
     }
 
-    async fn run_ipc_copy_perf(cuda_actor: CudaIPCActorHandle, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
+    async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Float;
         let dim_1 = 4u64;
@@ -1639,7 +1657,7 @@ mod tests {
                 init_type,
                 Arc::clone(&d2h_time),
                 Arc::clone(&h2d_time),
-                cuda_actor.clone(),
+                cuda_actor,
             ));
         }
 
@@ -1663,7 +1681,7 @@ mod tests {
         init_type: tch::Kind,
         d2h_time: Arc<AtomicU64>,
         h2d_time: Arc<AtomicU64>,
-        cuda_actor: CudaIPCActorHandle,
+        cuda_actor: &'static Box<dyn CudaActorHandle>,
     ) -> Result<(), ThoError> {
         let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64).max(1.0) as i64;
         let mut src_t = Tensor::rand([dim_0, dim_1], FLOAT_CPU);

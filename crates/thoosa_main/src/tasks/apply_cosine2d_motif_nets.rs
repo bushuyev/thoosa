@@ -814,7 +814,7 @@ async fn move_cosine_tensor_to_cpu(tensor: CosineConv2dTensor) -> Result<Arc<Dev
         let device = ThoDevice::from(mask.device());
         let kind = mask.kind();
 
-        track_await(GlobalCtx::global().cuda_actor(device).copy(mask.into(), 0.into())).await?
+        track_await(GlobalCtx::global().cuda_actor(device).copy(mask.into(), 0.into())).await?.t()
     };
     Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(id, mask)?)))
 }
