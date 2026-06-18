@@ -855,6 +855,12 @@ pub fn plot_spectrogram<P: AsRef<Path>>(
 
     let range = (max_v - min_v).max(1e-12);
 
+    if let Some(parent) = path.as_ref().parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+
     let root = BitMapBackend::new(path.as_ref(), (width, height)).into_drawing_area();
     root.fill(&WHITE)?;
 
