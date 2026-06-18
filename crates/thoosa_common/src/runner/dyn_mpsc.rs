@@ -12,7 +12,7 @@ use std::{
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
-use log::{error, info, Level};
+use log::{error, info};
 use parking_lot::{Mutex, RwLock};
 use tokio::{
     runtime::Handle,
@@ -24,7 +24,6 @@ use tracing::{debug, warn, Instrument};
 use thoosa_shared::{Cause, CudaActivityPauseTicket, ThoError, LOCK_TIMEOUT, cuda_activity_gate};
 use thoosa_shared::futures_limits::{FuturesLimits, SyncExecutionPermit, futures_limits};
 use thoosa_shared::tracked_await::track_await;
-use crate::runner::global_ctx::GlobalCtx;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum JobFeedback {
@@ -721,21 +720,10 @@ impl DynamicTaskExecutor {
         // Declared after ResetPauseGuard so it is released before the gate is reopened.
         let _accept_guard = accept_guard;
 
-        if tho_device_idx > 0 {
-            debug!("DynamicTaskExecutor::run_cuda_reset: sleep before running reset");
-
-            log::logger().flush();
-            // if log::log_enabled!(Level::Debug) {
-                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-            // }
-
-            if let Err(e) = track_await(GlobalCtx::global().cuda_actor(tho_device_idx).reset()).await {
-                error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
-            } else {
-                info!("DynamicTaskExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
-            }
+        if let Err(e) = track_await((reset_fn)(tho_device_idx)).await {
+            error!("DynamicTaskExecutor::run_cuda_reset: CUDA context reset failed for source={source} tho_device_idx={tho_device_idx}: e={e:?}");
         } else {
-            warn!("DynamicTaskExecutor::run_cuda_reset: reset requested on CPU/test executor source={source}");
+            info!("DynamicTaskExecutor::run_cuda_reset: CUDA context was reset for source={source} tho_device_idx={tho_device_idx}");
         }
     }
 
@@ -1055,7 +1043,7 @@ impl DynamicTaskExecutor {
             purged += 1;
         }
 
-/*        if !*input_closed {
+        if !*input_closed {
             loop {
                 match rx.try_recv() {
                     Ok(job) => {
@@ -1070,7 +1058,7 @@ impl DynamicTaskExecutor {
                 }
             }
         }
-*/
+
         if purged > 0 {
             debug!("DynamicTaskExecutor::purge_pending_jobs: purged={purged}");
         }

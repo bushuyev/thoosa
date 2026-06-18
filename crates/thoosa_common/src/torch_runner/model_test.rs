@@ -31,9 +31,9 @@ mod tests {
     use mockall_double::double;
     use crate::tho_device::ThoDevice;
     use crate::dims::Dims;
-    use thoosa_shared::{simple_id, CopyToDevice};
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::traits::{CachableIdTr, Metrics, SimpleId, WithId};
+    use thoosa_shared::traits::{CachableIdTr, Metrics, WithId};
     use thoosa_shared::{Cause, ThoError};
     use thoosa_shared::copy_mode::CpuOnly;
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MAX_PARALLEL};
@@ -67,6 +67,9 @@ mod tests {
     // ---------------- File Input / A/B Loader ----------------
     #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
     struct FileInputId(&'static str);
+
+    #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
+    struct ModelTestId(&'static str);
 
     #[derive(Debug, Clone)]
     struct FileInput {
@@ -131,8 +134,8 @@ mod tests {
 
     impl Adjustable for ABRange {}
 
-    impl Select<ABRange> for ThoTensor<ABData, SimpleId> {
-        type Output = ThoTensor<ABData, SimpleId>;
+    impl Select<ABRange> for ThoTensor<ABData, ModelTestId> {
+        type Output = ThoTensor<ABData, ModelTestId>;
 
         fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoError> {
             use std::cmp::min;
@@ -272,13 +275,13 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            simple_id!(format!("features_{}", input_id.0))
+            ModelTestId(format!("features_{}", input_id.0).leak())
         }
     }
 
     impl Stage for ABLoader {
         type In<'a> = FileInput;
-        type Out = ThoTensor<ABData, SimpleId>;
+        type Out = ThoTensor<ABData, ModelTestId>;
         type Ctx = RunCtxImpl;
     }
 
@@ -375,13 +378,13 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            simple_id!(format!("batch_{}", input_id))
+            ModelTestId(format!("batch_{}", input_id.0).leak())
         }
     }
 
     impl Stage for BatchBuilder {
         type In<'a> = FileListInput;
-        type Out = ThoTensor<ABData, SimpleId>;
+        type Out = ThoTensor<ABData, ModelTestId>;
         type Ctx = RunCtxImpl;
     }
 
@@ -392,11 +395,10 @@ mod tests {
             input: Arc<DevicesWrap<Self::In<'static>>>,
             mut ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            // Look up the files and labels by input id
-            let id_key = format!("{}", input.id());
-            let files = registry()
-                .get(&id_key)
-                .ok_or_else(|| Cause::SomethingElse("file list not found".into()))?;
+            let (id_key, files) = {
+                let input_ref = input.load_from_any_device_(0).await?;
+                (input_ref.id.0.to_string(), input_ref.files.clone())
+            };
 
             // Ensure at least 2 files are present
             if files.is_empty() {
@@ -435,7 +437,7 @@ mod tests {
 
             // Load features for all files in the list via cached loader
             let mut label_vec: Vec<f64> = Vec::with_capacity(self.batch_size);
-            let mut feats: Vec<Arc<DevicesWrap<ThoTensor<ABData, SimpleId>>>> =
+            let mut feats: Vec<Arc<DevicesWrap<ThoTensor<ABData, ModelTestId>>>> =
                 Vec::with_capacity(self.batch_size);
 
             let loader_device_idx = ctx.tho_device_idx();
@@ -461,15 +463,14 @@ mod tests {
             // let feat_refs: Vec<&DataCacheWrapper<ThoTensor2<ABData, SimpleId>>> = feats.iter().map(|a| &**a).collect();
 
             let ctx_for_data = ctx.branch(false);
-            let output = with_data!(ctx_for_data, [feats];|_ctx, data:&[&ThoTensor<ABData, SimpleId>]|{
+            let output = with_data!(ctx_for_data, [feats];|_ctx, data:&[&ThoTensor<ABData, ModelTestId>]|{
 
-                let ax_id = simple_id!(format!("ax_{}", input.id()));
                 let first = data
                     .first()
                     .ok_or_else(|| Cause::SomethingElse("no tensors".into()))?;
 
                 let first_t: &Tensor = first.as_ref();
-                let params:&[&ThoTensor<ABData, SimpleId>] = &data[1..];
+                let params:&[&ThoTensor<ABData, ModelTestId>] = &data[1..];
 
                     let batch_size = first_t.size()[0];
                     let kind = first_t.kind();
@@ -496,9 +497,8 @@ mod tests {
 
             })?;
 
-
-
-            Ok(Arc::new(DevicesWrap::wrap(output.into())))
+            let output_id = self.out_id(input.id());
+            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(output_id, output)?)))
         }
     }
 
@@ -558,7 +558,7 @@ mod tests {
     }
 
     impl ClsOut {
-        fn accuracy(t: &ThoTensor<ClsOut, SimpleId>) -> f64 {
+        fn accuracy(t: &ThoTensor<ClsOut, ModelTestId>) -> f64 {
             t.double_value(&[0])
         }
     }
@@ -566,7 +566,7 @@ mod tests {
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "ClsOutId"]
     struct Classifier {
-        id: SimpleId,
+        id: ModelTestId,
         in_dim: i64,
         epochs: i64,
         lr: f64,
@@ -574,7 +574,7 @@ mod tests {
     }
     impl Classifier {
         fn new(
-            id: SimpleId,
+            id: ModelTestId,
             in_dim: i64,
             epochs: i64,
             lr: f64,
@@ -597,13 +597,13 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            simple_id!(format!("cls_{}_inp_{}", self.id, input_id))
+            ModelTestId(format!("cls_{}_inp_{}", self.id.0, input_id.0).leak())
         }
     }
 
     impl Stage for Classifier {
-        type In<'a> = ThoTensor<ABData, SimpleId>;
-        type Out = ThoTensor<ClsOut, SimpleId>;
+        type In<'a> = ThoTensor<ABData, ModelTestId>;
+        type Out = ThoTensor<ClsOut, ModelTestId>;
         type Ctx = RunCtxImpl;
     }
 
@@ -704,16 +704,16 @@ mod tests {
     #[derive(Debug)]
     struct FileListInput {
         files: Vec<(&'static str, f64)>,
-        id: SimpleId,
+        id: ModelTestId,
     }
     impl FileListInput {
-        fn new(files: Vec<(&'static str, f64)>, id: SimpleId) -> Self {
+        fn new(files: Vec<(&'static str, f64)>, id: ModelTestId) -> Self {
             Self { files, id }
         }
     }
     impl Input for FileListInput {  }
     impl WithId for FileListInput {
-        type ID = SimpleId;
+        type ID = ModelTestId;
         fn id(&self) -> &Self::ID {
             &self.id
         }
@@ -775,13 +775,13 @@ mod tests {
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
-            simple_id!(format!("cls_{}_inp_{}", self.clf.id, input_id))
+            ModelTestId(format!("cls_{}_inp_{}", self.clf.id.0, input_id.0).leak())
         }
     }
 
     impl Stage for JoinAndClassifyTask {
         type In<'a> = FileListInput;
-        type Out = ThoTensor<ClsOut, SimpleId>;
+        type Out = ThoTensor<ClsOut, ModelTestId>;
         type Ctx = RunCtxImpl;
     }
 
@@ -836,7 +836,7 @@ mod tests {
                 Contexts::new(
                     SplitsAdjusterContextImpl::new(
                         size,
-                        SingleDimTensorOutputBuilder::<SimpleId, ClsOut>::new(
+                        SingleDimTensorOutputBuilder::<ModelTestId, ClsOut>::new(
                             out_id,
                             1,
                             &[1, 1],
@@ -873,7 +873,7 @@ mod tests {
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
-            simple_id!("lin_cls"),
+            ModelTestId("lin_cls"),
             4,
             200,
             0.1,
@@ -889,7 +889,7 @@ mod tests {
         // Register file list (top-level owns labels) in registry keyed by input id
         let files = vec![("file_0", 1.0), ("file_1", 0.0)];
         registry().insert("files_0_1".to_string(), files.clone());
-        let input = FileListInput::new(files, simple_id!("files_0_1"));
+        let input = FileListInput::new(files, ModelTestId("files_0_1"));
 
         let input_cache = new_file_list_input_cache(input, ctx.tho_device_idx());
         let acc = Arc::clone(&join_and_cls)
@@ -899,7 +899,7 @@ mod tests {
         debug!("acc={acc:?}");
 
         acc.with_data_ref(0,
-                          ctx.branch(false), None, |acc_t: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(false), None, |acc_t: &ThoTensor<ClsOut, ModelTestId>, _ctx| {
                   debug!("acc_t={acc_t:?} t=\n{}", acc_t.t_ref());
 
                   // Dim impls are to define domain-specific operations on tensors
@@ -922,7 +922,7 @@ mod tests {
 
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         let clf = Arc::new(Classifier::new(
-            simple_id!("lin_cls_many"),
+            ModelTestId("lin_cls_many"),
             4,
             100,
             0.1,
@@ -943,7 +943,7 @@ mod tests {
             ("file_3", 0.0),
         ];
         registry().insert("files_0_1_2_3".to_string(), files.clone());
-        let input = FileListInput::new(files, simple_id!("files_0_1_2_3"));
+        let input = FileListInput::new(files, ModelTestId("files_0_1_2_3"));
 
         let input_cache = new_file_list_input_cache(input, ctx.tho_device_idx());
         let acc = Arc::clone(&join_and_cls)
@@ -952,7 +952,7 @@ mod tests {
 
         let ctx_for_data = ctx.branch(false);
         acc.with_data_ref(1,
-                          ctx_for_data, None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx_for_data, None, |acc: &ThoTensor<ClsOut, ModelTestId>, _ctx| {
                                       let v = ClsOut::accuracy(acc);
                                       assert!(v > 0.8, "training accuracy too low (4 files): {v}");
                                       Ok(())
@@ -976,7 +976,7 @@ mod tests {
         let loader = Arc::new(ABLoader::new(64, 4, Kind::Float));
         // Require MAX_PERMITS to proceed and also enforce MemLimit until splits reduce size
         let clf = Arc::new(Classifier::new(
-            simple_id!("lin_cls_oom"),
+            ModelTestId("lin_cls_oom"),
             4,
             50,
             0.1,
@@ -1002,7 +1002,7 @@ mod tests {
         })
         .collect();
         registry().insert("files_oom_permits".to_string(), files.clone());
-        let input = FileListInput::new(files, simple_id!("files_oom_permits"));
+        let input = FileListInput::new(files, ModelTestId("files_oom_permits"));
 
         let input_cache = new_file_list_input_cache(input, ctx.tho_device_idx());
 
@@ -1013,7 +1013,7 @@ mod tests {
         // ctx.add_permit(GlobalCtx::global().acquire_many(1, 1, Arc::new(simple_id!("zzz"))).await?);
 
         acc.with_data_ref(1,
-                          ctx.branch(false), None, |acc: &ThoTensor<ClsOut, SimpleId>, _ctx| {
+                          ctx.branch(false), None, |acc: &ThoTensor<ClsOut, ModelTestId>, _ctx| {
               debug!("acc={}", acc.t_ref());
 
               let v = ClsOut::accuracy(acc);

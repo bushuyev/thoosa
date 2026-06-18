@@ -64,6 +64,7 @@ struct FuturesLimitsState {
     feedback_window: VecDeque<bool>,
     feedback_window_ooms: usize,
     consecutive_ok: usize,
+    increase_blocked_for: usize,
 
 }
 
@@ -270,6 +271,7 @@ impl FuturesLimits {
     pub fn on_oom(&self) {
         let mut state = self.state.lock();
         state.consecutive_ok = 0;
+        state.increase_blocked_for = OOM_RATE_MIN_EXECUTIONS;
 
         Self::push_feedback(&mut state, true);
         self.decrease_if_oom_rate_high(&mut state);
@@ -279,6 +281,11 @@ impl FuturesLimits {
         let mut state = self.state.lock();
         Self::push_feedback(&mut state, false);
 
+        if state.increase_blocked_for > 0 {
+            state.increase_blocked_for -= 1;
+            state.consecutive_ok = 0;
+            return;
+        }
 
         state.consecutive_ok += 1;
 
