@@ -4,6 +4,7 @@ use crate::runner::common::{MaxParallelCtx, RunCtx};
 use crate::runner::common::cachable::{ConsumeData, WithDataRef, WithSelectDataRef};
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
+use crate::copy_ctx::ExecSyncStageActionResult;
 use crate as thoosa_common;
 use mockall_double::double;
 #[double]
@@ -362,44 +363,34 @@ where
                     run_ctx.max_other_parallel().into(),
                     async move {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        let stream = cuda_actor.acquire_exec_stream().await?;
+                        track_await(cuda_actor.exec_sync_stage(move |stream| async move {
+                            let out = if let Some(selector) = selector {
+                                track_await(input
+                                    .with_selected_data_ref(
+                                        tho_device_idx,
+                                        run_ctx,
+                                        selector,
+                                        None,
+                                        |data, ctx| {
+                                            let _guard = ThoStreamGuard::new(&stream)?;
+                                            Arc::clone(&task).do_run(data.borrow(), ctx)
+                                        },
+                                    )).await
+                            } else {
+                                track_await(input
+                                    .with_data_ref(
+                                        tho_device_idx,
+                                        run_ctx,
+                                        None,
+                                        |data, ctx| {
+                                            let _guard = ThoStreamGuard::new(&stream)?;
+                                            Arc::clone(&task).do_run(data.borrow(), ctx)
+                                        },
+                                    )).await
+                            };
 
-                        let out = if let Some(selector) = selector {
-                            track_await(input
-                                .with_selected_data_ref(
-                                    tho_device_idx,
-                                    run_ctx,
-                                    selector,
-                                    None,
-                                    |data, ctx| {
-                                        let _guard = ThoStreamGuard::new(&stream)?;
-                                        Arc::clone(&task).do_run(data.borrow(), ctx)
-                                    },
-                                )).await
-                        } else {
-                            track_await(input
-                                .with_data_ref(
-                                    tho_device_idx,
-                                    run_ctx,
-                                    None,
-                                    |data, ctx| {
-                                        let _guard = ThoStreamGuard::new(&stream)?;
-                                        Arc::clone(&task).do_run(data.borrow(), ctx)
-                                    },
-                                )).await
-                        };
-
-                        match out {
-                            Ok(out) => {
-                                track_await(cuda_actor.sync_stream(stream)).await?;
-                                Ok(out)
-                            }
-                            Err(e) => {
-                                Err(e)
-                            }
-                        }
-
-
+                            out.map(|out| ExecSyncStageActionResult::Sync { stream, out })
+                        })).await
                     },
                     job_id_to_rerun
                 )).await
@@ -437,27 +428,23 @@ where
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
                     } else {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        let stream = cuda_actor.acquire_exec_stream().await?;
+                        track_await(cuda_actor.exec_sync_stage(move |stream| async move {
+                            let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
+                                match ThoStreamGuard::new(&stream) {
+                                    Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
+                                    Err(error) => ConsumeResult::Failed { input, error },
+                                }
+                            })).await;
 
-                        let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
-                            match ThoStreamGuard::new(&stream) {
-                                Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
-                                Err(error) => ConsumeResult::Failed { input, error },
-                            }
-                        })).await;
-
-                        match consume_result {
-                            ConsumeResult::Failed { input, error } => {
-                                // if error.needs_cuda_ctx_reset() {
-                                //     cuda_actor.reset().await;
-                                // }
-                                ConsumeResult::Failed {input, error}
-                            }
-                            ConsumeResult::Ok(out) => {
-                                track_await(cuda_actor.sync_stream(stream)).await?;
-                                ConsumeResult::Ok(out)
-                            }
-                        }
+                            Ok(match consume_result {
+                                ConsumeResult::Failed { input, error } => {
+                                    ExecSyncStageActionResult::NoSync(ConsumeResult::Failed { input, error })
+                                }
+                                ConsumeResult::Ok(out) => {
+                                    ExecSyncStageActionResult::Sync { stream, out: ConsumeResult::Ok(out) }
+                                }
+                            })
+                        })).await?
 
                     };
 
