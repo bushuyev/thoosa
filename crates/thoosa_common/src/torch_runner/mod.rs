@@ -308,6 +308,19 @@ pub(crate) mod tests {
                 id, k, fail_until, dim, Float, Cuda(0), use_matmul
             )
         }
+
+        pub async fn new_proxy(
+            id: SynKey,
+            k: f64,
+            fail_until: Vec<FailUntil>,
+            dim: i64,
+            kind: Kind,
+            device: Device,
+            use_matmul: bool,
+        ) -> Result<ProxySyncClcTask, ThoError> {
+
+            ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul).await
+        }
     }
 
     #[derive(Debug)]
@@ -327,6 +340,7 @@ pub(crate) mod tests {
         fn do_run(&self, input: String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
             let input_ref = serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&input)?;
             let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("SyncClcTaskJsonWrapper expected ThoTensor ref input, got {input_ref:?}")))?;
+
             let input_tensor = tokio::task::block_in_place(|| {
                 let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
                 Ok::<_, ThoError>(tensors
@@ -334,11 +348,13 @@ pub(crate) mod tests {
                     .ok_or_else(|| ThoError::new(format!("SyncClcTaskJsonWrapper could not find worker tensor ref key={input_key}")))?
                     .shallow_clone())
             })?;
+
             let loaded = ThoTensor::new(input_ref.id().clone(), input_tensor)?;
             let ctx = RunCtxImpl::new(1, "ipc_sync_clc_task");
             let out = Arc::clone(&self.sync_clc).do_run(&loaded, &ctx)?;
             let out_id = out.id().clone();
             let out_tensor = out.t();
+            //TODO preallocate ids
             let out_key = tokio::task::block_in_place(|| {
                 let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
                 let mut key = tensors
@@ -388,7 +404,7 @@ pub(crate) mod tests {
         ) -> Result<Self, ThoError> {
 
             Ok(Self {
-                sync_clc: Arc::new(ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul).await?),
+                sync_clc: Arc::new(SyncClcTask::new_proxy(id, k, fail_until, dim, kind, device, use_matmul).await?),
             })
         }
 
