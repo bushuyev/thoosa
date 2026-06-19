@@ -444,39 +444,57 @@ where
     Id: Named + Debug + Clone + Send + Sync,
 {
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
-        debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device}", self.id, self.t_ref().size(), self.t_ref().device());
+        debug!("CopyToDevice for ThoTensor: self.id={:?} self={self:?} dst_device={dst_device}", self.id);
 
         //should not copy device to itself
         let dst_device = ThoDevice::from(dst_device);
 
-        assert!(!dst_device.eq(&ThoDevice::from(self.t_ref().device())));
+        let src_device = match &self.inner {
+            ThoTensorInner::Val { t } => ThoDevice::from(t.device()),
+            ThoTensorInner::Ref { .. } => ThoDevice::from(self.device()),
+        };
+
+        assert!(!dst_device.eq(&src_device));
         let id = self.id.clone();
 
         let ctx_device = if dst_device.is_cuda() {
             dst_device
         }  else {
-            self.tho_device()
+            src_device
         };
-
-        let src_tensor = self.t_ref();
-        let src = if src_tensor.is_contiguous() { None } else {
-            warn!("CopyToDevice for ThoTensor: tensor was not contiguous, self.id={:?}", self.id);
-            Some(src_tensor.f_contiguous()?)
-        };
-        let src_ref = src.as_ref().unwrap_or(src_tensor);
-        debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
-
 
         let cuda_actor = GlobalCtx::global().cuda_actor(ctx_device);
-        let copy = track_await(cuda_actor
-            .copy(
-                src_ref.shallow_clone().into(),
-                dst_device,
-            )).await?;
+        let copy = match &self.inner {
+            ThoTensorInner::Val { t: src_tensor } => {
+                let src = if src_tensor.is_contiguous() { None } else {
+                    warn!("CopyToDevice for ThoTensor: tensor was not contiguous, self.id={:?}", self.id);
+                    Some(src_tensor.f_contiguous()?)
+                };
+                let src_ref = src.as_ref().unwrap_or(src_tensor);
+                debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
+                track_await(cuda_actor
+                    .copy(
+                        src_ref.shallow_clone().into(),
+                        dst_device,
+                    )).await?
+            }
+            ThoTensorInner::Ref { key } => {
+                debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key} dst_device.ordinal={:?}", self.id, dst_device.ordinal());
+                track_await(cuda_actor
+                    .copy(
+                        ThoTensor::new_ref((), *key),
+                        dst_device,
+                    )).await?
+            }
+        };
+
+        if let Some(key) = copy.ref_key() {
+            debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copied to out-of-process ref key={key}", self.id);
+            return Ok(ThoTensor::new_ref(id, key));
+        }
 
         let copy = copy.t();
-        debug!("CopyToDevice for ThoTensor: self.id={:?} self.t.size={:?} self.t.device={:?} dst_device={dst_device:?} copy.device={:?}",self.id,  self.t_ref().size(), self.t_ref().device(), copy.device());
-        trace!("CopyToDevice for ThoTensor: self.id={:?} self.t=\n{} copy=\n{copy}", self.id, self.t_ref());
+        debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copy.device={:?}", self.id, copy.device());
 
         Ok(ThoTensor::new(id, copy)?)
     }

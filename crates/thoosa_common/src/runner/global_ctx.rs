@@ -593,6 +593,7 @@ pub mod mock_global_ctx {
                 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
                 let real: &'static RealGlobalCtx = RealGlobalCtx::real_global();
+                mock_global_ctx::set_manual_method_real_ctx(Some(real));
 
 
                 ctx.expect().returning(move || {
@@ -603,6 +604,7 @@ pub mod mock_global_ctx {
                 return ctx;
             }
 
+            mock_global_ctx::set_manual_method_real_ctx(None);
             ctx.expect().returning(|| {
                 Box::leak(Box::new(
                     mock_global_ctx::build_default(),
@@ -651,6 +653,15 @@ pub mod mock_global_ctx {
     }
 
     pub static mut USE_REAL_CTX:bool = false;
+    static MANUAL_METHOD_REAL_CTX: std::sync::OnceLock<parking_lot::RwLock<Option<&'static GlobalCtx>>> = std::sync::OnceLock::new();
+
+    pub fn set_manual_method_real_ctx(real: Option<&'static GlobalCtx>) {
+        *MANUAL_METHOD_REAL_CTX.get_or_init(|| parking_lot::RwLock::new(None)).write() = real;
+    }
+
+    pub fn manual_method_real_ctx() -> Option<&'static GlobalCtx> {
+        *MANUAL_METHOD_REAL_CTX.get_or_init(|| parking_lot::RwLock::new(None)).read()
+    }
 }
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -661,8 +672,13 @@ impl MockGlobalCtx {
     }
 
     pub fn cuda_actor<D:Into<ThoDevice>+ 'static>(&self, device:D)-> &Box<dyn CudaActorHandle> {
+        let device = device.into();
+        if let Some(real) = mock_global_ctx::manual_method_real_ctx() {
+            return real.cuda_actor(device);
+        }
+
         static COPY_CTX_ONCE: std::sync::OnceLock<Box<dyn CudaActorHandle>> = std::sync::OnceLock::new();
-        COPY_CTX_ONCE.get_or_init(|| Box::new(CudaLocalActorHandle::new(device.into().ordinal())) as Box<dyn CudaActorHandle>)
+        COPY_CTX_ONCE.get_or_init(|| Box::new(CudaLocalActorHandle::new(device.ordinal())) as Box<dyn CudaActorHandle>)
     }
 
 

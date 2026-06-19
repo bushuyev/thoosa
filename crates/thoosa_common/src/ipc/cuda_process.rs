@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::any::Any;
+use std::error::Error;
 use std::ffi::c_void;
 use std::fmt::Debug;
+use std::io::ErrorKind;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -59,6 +61,16 @@ pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
 pub(crate) const INVOKE_ENDPOINT_PREFIX: &str = "invoke_endpoint:";
 const WORKER_COPY_STREAMS: usize = 16;
 pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
+pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
+pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
+
+pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
+    format!("{endpoint_name}\t{payload}")
+}
+
+pub(crate) fn split_endpoint_payload(payload: &str) -> (&str, &str) {
+    payload.split_once('\t').unwrap_or((DEFAULT_ENDPOINT_NAME, payload))
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerCopyDonePayload {
@@ -292,7 +304,16 @@ where
 {
     while let Some(reply) = reply_rx.recv().await {
         let frame = encode_wire_msg(reply.id, &reply.payload)?;
-        write_text_frame(&mut writer, &frame).await?;
+        if let Err(error) = write_text_frame(&mut writer, &frame).await {
+            if Error::source(&error)
+                .and_then(|source| source.downcast_ref::<std::io::Error>())
+                .is_some_and(|source| matches!(source.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof))
+            {
+                debug!("worker_response_writer_loop: parent IPC stream closed");
+                break;
+            }
+            return Err(error);
+        }
     }
 
     Ok(())
@@ -614,6 +635,13 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
 
 pub enum CudaIPCActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
+    SyncStream {
+        stream: Guard<ThoCudaStream>,
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
+    GetExecStream {
+        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
+    },
     Reset {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
@@ -690,16 +718,20 @@ impl CudaIPCActor {
 
         debug!("spawn_worker, exe={exe:?}");
 
+        let dir = tempfile::tempdir()?;
+        let sock_path = dir.path().join("worker.sock");
+
+        debug!("spawn_worker, dir={dir:?} sock_path={sock_path:?}");
+
+        let listener = UnixListener::bind(&sock_path)?;
+
+        debug!("spawn_worker, listener={listener:?}");
+
         let mut command = &mut Command::new(exe);
 
         for arg in args {
             command = command.arg(arg);
         }
-
-        let dir = tempfile::tempdir()?;
-        let sock_path = dir.path().join("worker.sock");
-
-        debug!("spawn_worker, dir={dir:?} sock_path={sock_path:?}");
 
         let mut child = command
 
@@ -708,10 +740,6 @@ impl CudaIPCActor {
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?;
-
-        let listener = UnixListener::bind(&sock_path)?;
-
-        debug!("spawn_worker, listener={listener:?}");
 
         let accepted = tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -993,6 +1021,22 @@ impl CudaIPCActor {
                 });
 
             }
+            CudaIPCActorMessage::SyncStream { stream, respond_to } => {
+                tokio::spawn(async move {
+                    let result = tokio::task::spawn_blocking(move || stream.synchronize())
+                        .await
+                        .map_err(|e| ThoError::new(format!("IPC exec stream sync task join error: {e}")))
+                        .and_then(|result| result);
+                    let _ = respond_to.send(result);
+                });
+            }
+            CudaIPCActorMessage::GetExecStream { respond_to } => {
+                let copy_ctx = Arc::clone(&self.copy_ctx);
+                tokio::spawn(async move {
+                    let stream = copy_ctx.read().await.acquire_exec_stream().await;
+                    let _ = respond_to.send(Ok(stream));
+                });
+            }
             CudaIPCActorMessage::Reset { .. } => {}
             CudaIPCActorMessage::Shutdown { respond_to } => {
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -1035,22 +1079,27 @@ impl CudaIPCActor {
             CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {
                 let self_tx = self.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.pending);
 
                 tokio::spawn(async move {
 
-                    if self_tx.send(
-
+                    let response = send_request_and_wait(
+                        self_tx,
+                        pending,
                         OutgoingRequest {
-                                id: next_id,
-                                payload: OutgoingRequestPayload::Msg(format!("{INSTALL_ENDPOINT_PREFIX}{init_msg}")),
-                            }
-                    ).await.is_err() {
-
-                        return Err(ThoError::new("worker IPC writer task is closed"));
-                    }
-
-                    //TODO
-                    let _ = respond_to.send(Ok(()));
+                            id: next_id,
+                            payload: OutgoingRequestPayload::Msg(format!("{INSTALL_ENDPOINT_PREFIX}{init_msg}")),
+                        },
+                    ).await.and_then(|response| {
+                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                            Err(parse_worker_copy_error_payload(error))
+                        } else if response == ENDPOINT_OK_PAYLOAD {
+                            Ok(())
+                        } else {
+                            Err(ThoError::new(format!("unexpected endpoint install response: {response:?}")))
+                        }
+                    });
+                    let _ = respond_to.send(response);
 
                     Ok::<_, ThoError>(())
                 });
@@ -1406,6 +1455,29 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
+    async fn sync_stream(&self, stream: Guard<ThoCudaStream>) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::SyncStream {
+                stream,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
+    async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::GetExecStream {
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
 }
 
 #[async_trait]
@@ -1424,10 +1496,17 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        _action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
         Box::pin(async move {
-            todo!("CudaIPCActorHandle::exec_sync_stage")
+            let stream = self.acquire_exec_stream().await?;
+            match action(stream).await? {
+                ExecSyncStageActionResult::Sync { stream, out } => {
+                    self.sync_stream(stream).await?;
+                    Ok(out)
+                }
+                ExecSyncStageActionResult::NoSync(out) => Ok(out),
+            }
         })
     }
 

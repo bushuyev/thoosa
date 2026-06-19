@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt::Debug;
+use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::{Arc};
 use dashmap::DashMap;
@@ -11,7 +13,7 @@ use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
 use tokio::task::JoinHandle;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX};
+use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::common::runnable::SyncStage;
 
@@ -54,10 +56,22 @@ impl CudaWorker {
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
-        let mut installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageJsonWrapper>>::new()));
+        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageJsonWrapper>>::new()));
 
         loop {
-            let frame = cuda_process::read_text_frame(&mut reader).await?;
+            let frame = match cuda_process::read_text_frame(&mut reader).await {
+                Ok(frame) => frame,
+                Err(error) => {
+                    if Error::source(&error)
+                        .and_then(|source| source.downcast_ref::<std::io::Error>())
+                        .is_some_and(|source| source.kind() == ErrorKind::UnexpectedEof)
+                    {
+                        debug!("run_worker: parent IPC stream closed");
+                        break;
+                    }
+                    return Err(error);
+                }
+            };
             let (id, payload) = cuda_process::parse_wire_msg(&frame)?;
 
             debug!("run_worker: worker received: id={id}, payload={payload:?}");
@@ -194,18 +208,41 @@ impl CudaWorker {
             }
 
             if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {
-                let endpoint_wrapper = endpoint_inits.get("SyncClcTask").expect("no SyncClcTask")(init_msg.to_string()).expect("SyncClcTask");
-                debug!("run_worker: install endpoint init_msg={init_msg} endpoint_wrapper={endpoint_wrapper:?}");
+                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload(init_msg);
+                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg={init_msg}");
 
-                installed_endpoints.write().insert("SyncClcTask".to_string(), endpoint_wrapper);//TODO key, check if installed
+                let payload = match endpoint_inits.get(endpoint_name) {
+                    Some(init_endpoint) => {
+                        match init_endpoint(init_msg.to_string()) {
+                            Ok(endpoint_wrapper) => {
+                                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
+                                installed_endpoints.write().insert(endpoint_name.to_string(), endpoint_wrapper);
+                                ENDPOINT_OK_PAYLOAD.to_string()
+                            }
+                            Err(error) => cuda_process::encode_worker_copy_error(&error),
+                        }
+                    }
+                    None => cuda_process::encode_worker_copy_error(&ThoError::new(format!("no endpoint init for {endpoint_name:?}"))),
+                };
+                reply_tx
+                    .send(WorkerReply {
+                        id,
+                        payload: OutgoingRequestPayload::Msg(payload),
+                    })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
                 continue;
             }
 
             if let Some(input) = payload.strip_prefix(INVOKE_ENDPOINT_PREFIX) {
-                debug!("run_worker: invoke endpoint input={input:?}");
+                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input);
+                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} input={input:?}");
 
-                let response = installed_endpoints.read().get("SyncClcTask").unwrap().do_run(input.to_string(), &all_cuda_tensors);//TODO key, check if installed
+                let response = match installed_endpoints.read().get(endpoint_name) {
+                    Some(endpoint) => endpoint.do_run(input.to_string(), &all_cuda_tensors),
+                    None => Err(ThoError::new(format!("endpoint {endpoint_name:?} is not installed"))),
+                };
 
                 debug!("run_worker: invoke endpoint  response={response:?}");
 
