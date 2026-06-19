@@ -184,15 +184,27 @@ pub(crate) mod tests {
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        size: MonoMetrics<1, 2>,
-        kind: Kind,
+        sync_loader: Arc<SyncTestTensorLoader>
     }
 
     impl TestTensorLoader {
         pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
-            Self { size, kind }
+            Self {
+                sync_loader:Arc::new(SyncTestTensorLoader::new(size, kind))
+            }
         }
     }
+
+    impl OutId for SyncTestTensorLoader {
+        fn out_id(
+            &self,
+            input_id: &<Self::In<'static> as WithId>::ID,
+        ) -> <Self::Out as WithId>::ID {
+            debug!("SyncTestTensorLoader::out_id: input_id={input_id:?}");
+            SynKey::new([mono_key!(input_id.0, "resource key")])
+        }
+    }
+
 
     impl OutId for TestTensorLoader {
         fn out_id(
@@ -200,7 +212,7 @@ pub(crate) mod tests {
             input_id: &<Self::In<'static> as WithId>::ID,
         ) -> <Self::Out as WithId>::ID {
             debug!("TestTensorLoader::out_id: input_id={input_id:?}");
-            SynKey::new([mono_key!(input_id.0, "resource key")])
+            self.sync_loader.out_id(input_id)
         }
     }
 
@@ -210,20 +222,33 @@ pub(crate) mod tests {
         type Ctx = RunCtxImpl;
     }
 
-    // #[async_trait]
-    impl AsyncStage for TestTensorLoader {
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
-            ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-            let k = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(1.0);
+    #[derive(Debug)]
+    struct SyncTestTensorLoader {
+        size: MonoMetrics<1, 2>,
+        kind: Kind,
+    }
+
+    impl SyncTestTensorLoader {
+        pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
+            Self { size, kind }
+        }
+    }
+
+    impl Stage for SyncTestTensorLoader {
+        type In<'a> = LoaderInput;
+        type Out = ThoTensor<LoadedTensor, SynKey>;
+        type Ctx = RunCtxImpl;
+    }
+
+    impl SyncStage for SyncTestTensorLoader {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            let k = parse_numeric_part(WithId::id(input).0).unwrap_or(1.0);
 
             let device_idx = ctx.tho_device_idx();
 
 
             let tensor = ThoTensor::new(
-                self.out_id(WithId::id(input.as_ref())),
+                self.out_id(WithId::id(input)),
                 lin_for_size(
                     k,
                     (&self.size).into(),
@@ -232,7 +257,26 @@ pub(crate) mod tests {
                 ),
             )?;
 
-            Ok(Arc::new(DevicesWrap::wrap(tensor)))
+            Ok(tensor)
+        }
+    }
+
+
+    // #[async_trait]
+    impl AsyncStage for TestTensorLoader {
+        async fn run(
+            self: Arc<Self>,
+            input: Arc<DevicesWrap<Self::In<'static>>>,
+            ctx: Self::Ctx,
+        ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+            let sync_loader = Arc::clone(&self.sync_loader);
+
+            let r=    input.with_data_ref(ctx.tho_device_idx(), ctx, None, |input, ctx|{
+                Ok(sync_loader.do_run(input, ctx))
+            }).await??;
+
+            Ok(Arc::new(DevicesWrap::wrap(r)))
+
         }
 
     }
