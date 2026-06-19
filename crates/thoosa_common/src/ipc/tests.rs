@@ -268,7 +268,7 @@ async fn test_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu() {
     debug!("test_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(HashMap::new()).await.unwrap()
+        CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
     } else {
         run_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu("test_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu").await.unwrap();
     }
@@ -281,7 +281,6 @@ async fn test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor() {
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
     } else {
-        // run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
-        run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1"], true).await.unwrap();
+        run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
     }
 }
