@@ -57,7 +57,7 @@ pub(crate) mod tests {
     use thoosa_shared::comp_id::{MonoKey, SynKey};
     use thoosa_shared::copy_mode::CpuOnly;
     use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
-    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
     use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use crate::runner::run_ctx_2::RunCtxImpl;
     use thoosa_named_derive::Named;
@@ -73,6 +73,7 @@ pub(crate) mod tests {
     use std::ops::Add;
     use std::time::Duration;
     use futures_util::StreamExt;
+    use num_traits::ToPrimitive;
     use serde::{Deserialize, Serialize};
     use tch::Device::Cuda;
     use tokio::sync::Mutex;
@@ -244,18 +245,16 @@ pub(crate) mod tests {
         type Metrics = MonoMetrics<1, 2>;
     }
 
+    type ClcDynSyncStage = DynSyncStageBox<
+        ThoTensor<LoadedTensor, SynKey>,
+        ThoTensor<ClcTaskOutput, SynKey>,
+        RunCtxImpl,
+    >;
+
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
-    pub(crate) struct ClcTask<S = SyncClcTask>
-    where
-        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
-        for<'a> S: Stage<
-            In<'a> = ThoTensor<LoadedTensor, SynKey>,
-            Out = ThoTensor<ClcTaskOutput, SynKey>,
-            Ctx = RunCtxImpl,
-        >,
-    {
-        pub(crate) sync_clc: Arc<S>,
+    pub(crate) struct ClcTask {
+        pub(crate) sync_clc: Arc<ClcDynSyncStage>,
     }
 
     #[derive(Debug)]
@@ -280,7 +279,25 @@ pub(crate) mod tests {
     }
 
     impl SyncClcTask {
-        pub fn new(id: SynKey, k: impl Into<Scalar>, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: Device, use_matmul: bool) -> Self {
+        pub fn new<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: Device, use_matmul: bool) -> ClcDynSyncStage
+        where
+            K: Into<Scalar> + ToPrimitive + Copy,
+        {
+            if GlobalCtx::global().is_ipc() {
+                let k = k.to_f64().expect("SyncClcTask::new: IPC task multiplier must convert to f64");
+                let proxy = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul))
+                }).expect("SyncClcTask::new: install IPC proxy sync task");
+                ClcDynSyncStage::new(Arc::new(proxy))
+            } else {
+                ClcDynSyncStage::new(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))
+            }
+        }
+
+        fn new_local<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: Device, use_matmul: bool) -> Self
+        where
+            K: Into<Scalar> + Copy,
+        {
             let k =
                 if use_matmul {
                     ThoTensor::new(
@@ -304,7 +321,7 @@ pub(crate) mod tests {
         }
         pub fn init(init: SyncClcTaskInit) -> SyncClcTask{
             let SyncClcTaskInit{id, k, dim, fail_until, use_matmul} = init;
-            SyncClcTask::new(
+            SyncClcTask::new_local(
                 id, k, fail_until, dim, Float, Cuda(0), use_matmul
             )
         }
@@ -374,25 +391,25 @@ pub(crate) mod tests {
         }
     }
 
-    impl ClcTask<SyncClcTask>
-    {
-        pub fn new(
+    impl ClcTask {
+        pub fn new<K>(
             id: SynKey,
-            k: impl Into<Scalar>,
+            k: K,
             fail_until: Vec<FailUntil>,
             dim: i64,
             kind: Kind,
             device: Device,
             use_matmul: bool,
-        ) -> Self {
+        ) -> Self
+        where
+            K: Into<Scalar> + ToPrimitive + Copy,
+        {
 
             Self {
                 sync_clc: Arc::new(SyncClcTask::new(id, k, fail_until, dim, kind, device, use_matmul)),
             }
         }
-    }
 
-    impl ClcTask<ProxySyncClcTask> {
         pub async fn new_proxy(
             id: SynKey,
             k: f64,
@@ -404,34 +421,18 @@ pub(crate) mod tests {
         ) -> Result<Self, ThoError> {
 
             Ok(Self {
-                sync_clc: Arc::new(SyncClcTask::new_proxy(id, k, fail_until, dim, kind, device, use_matmul).await?),
+                sync_clc: Arc::new(ClcDynSyncStage::new(Arc::new(SyncClcTask::new_proxy(id, k, fail_until, dim, kind, device, use_matmul).await?))),
             })
         }
 
     }
 
-    impl<S> Adjustable for ClcTask<S>
-    where
-        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
-        for<'a> S: Stage<
-            In<'a> = ThoTensor<LoadedTensor, SynKey>,
-            Out = ThoTensor<ClcTaskOutput, SynKey>,
-            Ctx = RunCtxImpl,
-        >,
-    {}
+    impl Adjustable for ClcTask {}
     impl Adjustable for SyncClcTask {}
 
 
 
-    impl<S> OutId for ClcTask<S>
-    where
-        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
-        for<'a> S: Stage<
-            In<'a> = ThoTensor<LoadedTensor, SynKey>,
-            Out = ThoTensor<ClcTaskOutput, SynKey>,
-            Ctx = RunCtxImpl,
-        >,
-    {
+    impl OutId for ClcTask {
         fn out_id(&self, input_id: &SynKey) -> SynKey {
 
             self.sync_clc.out_id(input_id)
@@ -487,15 +488,7 @@ pub(crate) mod tests {
         }
     }
 
-    impl<S> Stage for ClcTask<S>
-    where
-        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
-        for<'a> S: Stage<
-            In<'a> = ThoTensor<LoadedTensor, SynKey>,
-            Out = ThoTensor<ClcTaskOutput, SynKey>,
-            Ctx = RunCtxImpl,
-        >,
-    {
+    impl Stage for ClcTask {
         type In<'a> = ThoTensor<LoadedTensor, SynKey>;
         type Out = ThoTensor<ClcTaskOutput, SynKey>;
         type Ctx = RunCtxImpl;
@@ -617,15 +610,7 @@ pub(crate) mod tests {
     }
 
     // #[async_trait]
-    impl<S> AsyncStage for ClcTask<S>
-    where
-        S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
-        for<'a> S: Stage<
-            In<'a> = ThoTensor<LoadedTensor, SynKey>,
-            Out = ThoTensor<ClcTaskOutput, SynKey>,
-            Ctx = RunCtxImpl,
-        >,
-    {
+    impl AsyncStage for ClcTask {
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
@@ -663,8 +648,8 @@ pub(crate) mod tests {
         id: LoadAndClcTaskId,
 
         loader: Arc<TestTensorLoader>,
-        clc_task: Arc<SyncClcTask>,
-        clc_oom_runner: ClcOOMRunner<SyncClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
+        clc_task: Arc<ClcDynSyncStage>,
+        clc_oom_runner: ClcOOMRunner<ClcDynSyncStage, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
     }
 
     impl Stage for LoadAndClcTask {
@@ -741,17 +726,21 @@ pub(crate) mod tests {
     }
 
     impl LoadAndClcTask {
-        pub fn new(
+        pub fn new<K>(
             id: LoadAndClcTaskId,
-            k: impl Into<Scalar>,
+            k: K,
             fail_until: Vec<FailUntil>,
             dim: MonoMetrics<1, 2>,
-            oom_runner: ClcOOMRunner<SyncClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
+            oom_runner: ClcOOMRunner<ClcDynSyncStage, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
             kind: Kind,
             device: Device,
             use_matmul: bool,
-        ) -> Self {
+        ) -> Self
+        where
+            K: Into<Scalar> + ToPrimitive + Copy,
+        {
             let dim_1 = if use_matmul {dim.dim_0()} else {dim.dim_1()};
+
             Self {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
