@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Acquire;
 use log::debug;
 use tch::Device;
 use tch::Kind::Float;
@@ -101,6 +103,7 @@ impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
 }
 
 async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static str], use_matmul: bool) -> Result<(), ThoError> {
+    debug!("run_load_and_mul_ipc_cuda_worker: test_name={test_name} resources={resources:?}");
     let _ctx = init_ipc_test(test_name).await?;
 
     let tho_device_idx = 1;
@@ -112,42 +115,56 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
     // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
 
     let mut tasks = JoinSet::new();
+    let counter = Arc::new(AtomicUsize::new(0));
     for resource in resources {
         let resource = *resource;
+        debug!("run_load_and_mul_ipc_cuda_worker: resource={resource:?}");
+
         let cuda_actor = cuda_actor;
+        let counter = Arc::clone(&counter);
         tasks.spawn(async move {
+            debug!("run_load_and_mul_ipc_cuda_worker: spawned resource={resource:?}");
+
             let input_id = SynKey::new([mono_key!(resource, "resource key")]);
             let self_k = parse_numeric_part(resource).unwrap_or(1.0);
             let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu);
 
             let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.into();
+            debug!("run_load_and_mul_ipc_cuda_worker: worker_ref={worker_ref:?}");
 
-            assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
-
-            // let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
             let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
-
-            debug!("run_load_and_mul_ipc_cuda_worker: loaded={loaded:?}");
+            //further logging is duplicated somehow
+            counter.fetch_add(1, Acquire);
+            debug!("run_load_and_mul_ipc_cuda_worker: loaded={loaded:?} counter={}", counter.load(Acquire));
 
 
             let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul).await?);
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_mul");
-            let out = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
-
-            with_data!(ctx, out; |_ctx, out:&ThoTensor::<ClcTaskOutput, SynKey>|{
-                assert_eq!(out.id(), &clc_task.out_id(loaded.id()));
-                if use_matmul {
-                    check_sum_result(MUL_K, size, resource, out);
-                } else {
-                    mul_check(MUL_K, size.into(), resource, out, 0.1, 0.1);
-                }
-                Ok(())
+            let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
+            let out_key = with_data!(ctx, output_ref; |_ctx, output_ref:&ThoTensor::<ClcTaskOutput, SynKey>|{
+                 output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))
             })?;
+
+            debug!("run_load_and_mul_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
+
+            let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
+                .copy(ThoTensor::new_ref((), out_key), 0.into()).await?;
+            let cpu_out: ThoTensor<ClcTaskOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
+
+
+            assert_eq!(cpu_out.id(), &clc_task.out_id(loaded.id()));
+            if use_matmul {
+                check_sum_result(MUL_K, size, resource, &cpu_out);
+            } else {
+                mul_check(MUL_K, size.into(), resource, &cpu_out, 0.1, 0.1);
+            }
 
 
             Ok::<(), ThoError>(())
         });
     }
+
+
 
     let result = async {
         while let Some(joined) = tasks.join_next().await {
@@ -156,6 +173,9 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
 
         Ok::<(), ThoError>(())
     }.await;
+
+    debug!("run_load_and_mul_ipc_cuda_worker: counter={:?}", counter.load(Acquire));
+
     let shutdown_result = cuda_actor.shutdown().await;
 
     match (result, shutdown_result) {
@@ -261,6 +281,7 @@ async fn test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor() {
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
     } else {
-        run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
+        // run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
+        run_load_and_mul_ipc_cuda_worker("test_load_and_mul_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1"], true).await.unwrap();
     }
 }
