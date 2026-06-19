@@ -42,6 +42,8 @@ pub(crate) mod tests {
     use log::debug;
     use parking_lot::RwLock;
     use std::collections::{HashMap, HashSet};
+    use std::fmt::Debug;
+    use std::marker::PhantomData;
     use std::ops::Mul;
     use std::sync::Arc;
     use async_trait::async_trait;
@@ -74,12 +76,13 @@ pub(crate) mod tests {
     use std::time::Duration;
     use futures_util::StreamExt;
     use num_traits::ToPrimitive;
-    use serde::{Deserialize, Serialize};
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use tch::Device::Cuda;
     use tokio::sync::Mutex;
     use crate::runner::tmp_cache::TmpCached;
     use crate as thoosa_common;
-    use crate::ipc::cuda_process::WorkerH2dStartPayload;
+    use crate::ipc::cuda_process::{encode_endpoint_payload, WorkerH2dStartPayload};
     use crate::ipc::cuda_wokrer::SyncStageJsonWrapper;
     use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
     use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
@@ -95,7 +98,26 @@ pub(crate) mod tests {
     #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
     pub struct LoaderInputId(&'static str);
 
-    #[derive(Debug, Clone)]
+    impl Serialize for LoaderInputId {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            serializer.serialize_str(self.0)
+        }
+    }
+
+    impl<'de> Deserialize<'de> for LoaderInputId {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let id = String::deserialize(deserializer)?;
+            Ok(Self(Box::leak(id.into_boxed_str())))
+        }
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     pub struct LoaderInput {
         id: LoaderInputId,
     }
@@ -180,17 +202,128 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) const SYNC_CLC_ENDPOINT: &str = "SyncClcTask";
+    pub(crate) const SYNC_TEST_TENSOR_LOADER_ENDPOINT: &str = "SyncTestTensorLoader";
+
+    pub(crate) trait WorkerStageInput: Debug + Sized {
+        fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
+    }
+
+    pub(crate) trait WorkerStageOutput: Debug + Sized {
+        fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError>;
+    }
+
+    impl WorkerStageInput for LoaderInput {
+        fn decode_for_worker(input: String, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+            Ok(serde_json::from_str(&input)?)
+        }
+    }
+
+    impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
+    where
+        D: Dims,
+        Id: Named + Debug + Clone + DeserializeOwned,
+    {
+        fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+            let input_ref = serde_json::from_str::<Self>(&input)?;
+            let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
+            let input_tensor = tokio::task::block_in_place(|| {
+                let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+                Ok::<_, ThoError>(tensors
+                    .get(&input_key)
+                    .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?
+                    .shallow_clone())
+            })?;
+            ThoTensor::new(input_ref.id().clone(), input_tensor)
+        }
+    }
+
+    fn insert_worker_tensor(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
+        tokio::task::block_in_place(|| {
+            let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+            let mut key = tensors
+                .keys()
+                .copied()
+                .max()
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+            while tensors.contains_key(&key) {
+                key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+            }
+            tensors.insert(key, tensor);
+            Ok(key)
+        })
+    }
+
+    impl<D, Id> WorkerStageOutput for ThoTensor<D, Id>
+    where
+        D: Dims,
+        Id: Named + Debug + Clone + Serialize,
+    {
+        fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+            let out_id = self.id().clone();
+            let out_tensor = self.t();
+            let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
+            Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key))?)
+        }
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct JsonSyncStageWrapper<S, I, O> {
+        sync_stage: Arc<S>,
+        endpoint_name: &'static str,
+        pd: PhantomData<fn(I) -> O>,
+    }
+
+    impl<S, I, O> JsonSyncStageWrapper<S, I, O> {
+        fn new(endpoint_name: &'static str, sync_stage: S) -> Self {
+            Self {
+                sync_stage: Arc::new(sync_stage),
+                endpoint_name,
+                pd: PhantomData,
+            }
+        }
+    }
+
+    impl<S, I, O> SyncStageJsonWrapper for JsonSyncStageWrapper<S, I, O>
+    where
+        S: SyncStage + Debug + 'static,
+        for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
+        I: WorkerStageInput + 'static,
+        O: WorkerStageOutput + 'static,
+    {
+        fn do_run(&self, input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+            let input = I::decode_for_worker(input, all_cuda_tensors)?;
+            let ctx = RunCtxImpl::new(1, self.endpoint_name);
+            let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
+            out.encode_from_worker(all_cuda_tensors)
+        }
+    }
+
+    pub(crate) fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageJsonWrapper>
+    where
+        S: SyncStage + Debug + 'static,
+        for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
+        I: WorkerStageInput + 'static,
+        O: WorkerStageOutput + 'static,
+    {
+        Box::new(JsonSyncStageWrapper::<S, I, O>::new(endpoint_name, sync_stage))
+    }
+
+    type LoaderDynSyncStage = DynSyncStageBox<LoaderInput, ThoTensor<LoadedTensor, SynKey>, RunCtxImpl>;
+
 
     #[derive(Debug, cached_derive::Cached, Named)]
     #[cache_name = "LoadedTensorId"]
     struct TestTensorLoader {
-        sync_loader: Arc<SyncTestTensorLoader>
+        sync_loader: Arc<LoaderDynSyncStage>
     }
 
     impl TestTensorLoader {
         pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
             Self {
-                sync_loader:Arc::new(SyncTestTensorLoader::new(size, kind))
+                sync_loader: Arc::new(SyncTestTensorLoader::new(size, kind))
             }
         }
     }
@@ -228,9 +361,110 @@ pub(crate) mod tests {
         kind: Kind,
     }
 
+    #[derive(Debug, Serialize, Deserialize)]
+    pub(crate) struct SyncTestTensorLoaderInit {
+        size: [i64; 2],
+        kind: String,
+    }
+
+    impl SyncTestTensorLoaderInit {
+        fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
+            Self {
+                size: (&size).into(),
+                kind: kind_to_worker_name(kind).to_string(),
+            }
+        }
+    }
+
+    fn kind_to_worker_name(kind: Kind) -> &'static str {
+        match kind {
+            Kind::Float => "Float",
+            Kind::Double => "Double",
+            Kind::Half => "Half",
+            Kind::BFloat16 => "BFloat16",
+            Kind::Int => "Int",
+            Kind::Int64 => "Int64",
+            Kind::Bool => "Bool",
+            _ => "Unsupported",
+        }
+    }
+
+    fn kind_from_worker_name(kind: &str) -> Result<Kind, ThoError> {
+        match kind {
+            "Float" => Ok(Kind::Float),
+            "Double" => Ok(Kind::Double),
+            "Half" => Ok(Kind::Half),
+            "BFloat16" => Ok(Kind::BFloat16),
+            "Int" => Ok(Kind::Int),
+            "Int64" => Ok(Kind::Int64),
+            "Bool" => Ok(Kind::Bool),
+            _ => Err(ThoError::new(format!("unsupported worker tensor loader kind {kind:?}"))),
+        }
+    }
+
     impl SyncTestTensorLoader {
-        pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
+        pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> LoaderDynSyncStage {
+            if GlobalCtx::global().is_ipc() {
+                let proxy = tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(ProxySyncTestTensorLoader::new(size, kind))
+                }).expect("SyncTestTensorLoader::new: install IPC proxy loader");
+                LoaderDynSyncStage::new(Arc::new(proxy))
+            } else {
+                LoaderDynSyncStage::new(Arc::new(Self::new_local(size, kind)))
+            }
+        }
+
+        fn new_local(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
             Self { size, kind }
+        }
+
+        pub(crate) fn init(init: SyncTestTensorLoaderInit) -> Result<Self, ThoError> {
+            Ok(Self::new_local(init.size.into(), kind_from_worker_name(&init.kind)?))
+        }
+    }
+
+    #[derive(Debug)]
+    struct ProxySyncTestTensorLoader {
+        size: MonoMetrics<1, 2>,
+    }
+
+    impl ProxySyncTestTensorLoader {
+        async fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Result<Self, ThoError> {
+            debug!("ProxySyncTestTensorLoader::new: size={size:?} kind={kind:?}");
+            GlobalCtx::global().cuda_actor(1)
+                .install_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(&SyncTestTensorLoaderInit::new(size.clone(), kind))?)).await?;
+
+            Ok(Self {
+                size,
+            })
+        }
+    }
+
+    impl Stage for ProxySyncTestTensorLoader {
+        type In<'a> = LoaderInput;
+        type Out = ThoTensor<LoadedTensor, SynKey>;
+        type Ctx = RunCtxImpl;
+    }
+
+    impl OutId for ProxySyncTestTensorLoader {
+        fn out_id(
+            &self,
+            input_id: &<Self::In<'static> as WithId>::ID,
+        ) -> <Self::Out as WithId>::ID {
+            debug!("ProxySyncTestTensorLoader::out_id: input_id={input_id:?}");
+            SynKey::new([mono_key!(input_id.0, "resource key")])
+        }
+    }
+
+    impl SyncStage for ProxySyncTestTensorLoader {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            debug!("ProxySyncTestTensorLoader::do_run: input={input:?} size={:?}", self.size);
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+                let response = GlobalCtx::global().cuda_actor(1)
+                    .invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?)).await?;
+                serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&response)
+                    .map_err(ThoError::from)
+            }))
         }
     }
 
@@ -435,6 +669,22 @@ pub(crate) mod tests {
         }
     }
 
+    pub(crate) fn sync_clc_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
+        let init = serde_json::from_str::<SyncClcTaskInit>(&init_msg)?;
+        Ok(make_json_sync_stage_wrapper::<SyncClcTask, ThoTensor<LoadedTensor, SynKey>, ThoTensor<ClcTaskOutput, SynKey>>(
+            SYNC_CLC_ENDPOINT,
+            SyncClcTask::init(init),
+        ))
+    }
+
+    pub(crate) fn sync_test_tensor_loader_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
+        let init = serde_json::from_str::<SyncTestTensorLoaderInit>(&init_msg)?;
+        Ok(make_json_sync_stage_wrapper::<SyncTestTensorLoader, LoaderInput, ThoTensor<LoadedTensor, SynKey>>(
+            SYNC_TEST_TENSOR_LOADER_ENDPOINT,
+            SyncTestTensorLoader::init(init)?,
+        ))
+    }
+
     impl ClcTask {
         pub fn new<K>(
             id: SynKey,
@@ -610,6 +860,7 @@ pub(crate) mod tests {
     #[derive(Debug)]
     pub struct ProxySyncClcTask {
         id: SynKey,
+        fail_until: Vec<FailUntil>,
     }
 
     impl Stage for ProxySyncClcTask {
@@ -631,20 +882,47 @@ pub(crate) mod tests {
         pub async fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Result<Self, ThoError> {
             debug!("ProxySyncClcTask::new: id={id:?} k={k:?}");
             GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(id.clone(), k, dim, vec![], use_matmul))?).await?;
+                .install_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &serde_json::to_string(&SyncClcTaskInit::new(id.clone(), k, dim, vec![], use_matmul))?)).await?;
 
             Ok(Self {
                 id,
+                fail_until,
             })
         }
     }
 
     impl SyncStage for ProxySyncClcTask {
-        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             debug!("ProxySyncClcTask::new: input={input:?}");
+            for fail_until in &self.fail_until {
+                match fail_until {
+                    FailUntil::MemLimit(mem_limit) => {
+                        if input.ref_key().is_none() && input.size()[0] > *mem_limit as i64 {
+                            debug!("ProxySyncClcTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
+                            return Err(ThoError::oom());
+                        }
+                    }
+                    FailUntil::NaxParallel(max_other_parallel_threshold) => {
+                        let max_other_parallel = ctx.max_other_parallel();
+                        debug!("ProxySyncClcTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
+                        if max_other_parallel > *max_other_parallel_threshold {
+                            return Err(ThoError::oom());
+                        }
+                    }
+                    FailUntil::DumpedToCpu => {
+                        let device_idx = ctx.tho_device_idx();
+                        let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
+                        debug!("ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}");
+                        if !is_all_on_cpu {
+                            return Err(ThoError::oom());
+                        }
+                    }
+                    FailUntil::Never => {}
+                }
+            }
             let output_ref = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
                 let response = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                    .invoke_endpoint(serde_json::to_string(input)?).await?;
+                    .invoke_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &serde_json::to_string(input)?)).await?;
                 serde_json::from_str::<ThoTensor<ClcTaskOutput, SynKey>>(&response)
                     .map_err(ThoError::from)
             }))?;
@@ -935,6 +1213,7 @@ pub(crate) mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
+            device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
@@ -1020,6 +1299,7 @@ pub(crate) mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
+            device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
@@ -1071,6 +1351,7 @@ pub(crate) mod tests {
         run_mul_task_invocations(
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
+            device_idx,
             device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
@@ -1128,6 +1409,7 @@ pub(crate) mod tests {
                 "resource_5",
             ], //,
             device_idx,
+            device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
@@ -1182,6 +1464,7 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>()
                 .as_slice(), //&["resource_1", "resource_2", "resource_3"],
             device_idx,
+            device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
@@ -1234,6 +1517,7 @@ pub(crate) mod tests {
                 .map(|i| &*format!("resource_{i}").leak())
                 .collect::<Vec<_>>()
                 .as_slice(), //&["resource_1","resource_2",  "resource_3"], //,
+            device_idx,
             device_idx,
             |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
             move |res, out| {

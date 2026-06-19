@@ -25,7 +25,7 @@ use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor, mul_check, SyncClcTask, SyncClcTaskJsonWrapper, SyncClcTaskInit};
+use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor, mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::utils::lin_for_size;
 
 macro_rules! pure_module_path {
@@ -80,11 +80,13 @@ fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<
 fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
     HashMap::from([
         (
-            "SyncClcTask".to_string(),
-            Box::new(|init_msg| {
-                Ok(Box::new(SyncClcTaskJsonWrapper::new(init_msg)) as Box<dyn SyncStageJsonWrapper>)
-            }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-        )
+            SYNC_CLC_ENDPOINT.to_string(),
+            Box::new(sync_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+        ),
+        (
+            SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
+            Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+        ),
     ])
 }
 
@@ -212,9 +214,9 @@ async fn run_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu(test_name: &str) -> Re
                         id,
                         1,
                         &size,
-                        (Float, Device::Cuda(0)),
+                        (Float, Device::Cpu),
                         BuildAs::Append,
-                    ).expect("single dim output builder")
+                    ).expect("single dim output builder").copy_partial_outputs_to_device(0)
                 }),
             ),
             Float,
@@ -232,6 +234,7 @@ async fn run_load_and_mul_ipc_cuda_worker_oom_dump_to_cpu(test_name: &str) -> Re
                 "resource_5",
             ],
             tho_device_idx,
+            0,
             |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
             move |res, out| {
                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);

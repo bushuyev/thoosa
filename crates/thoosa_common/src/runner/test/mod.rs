@@ -235,13 +235,14 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     load_and_mul: Arc<R>,
     resources: &[&'static str],
     device_idx: usize,
+    check_device_idx: usize,
     ctx_fac: F,
     check: CF,
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
     for<'a> <R as Stage>::In<'a>: Data + CopyToDevice + WithId+ Send + Sync,
-    for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<R::In<'a>>,
+    for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<<R as Stage>::In<'a>>,
     R::Out: Data + CopyToDevice + Send + Sync,
     <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
     StageInStatic<R>: From<&'static str>,
@@ -281,7 +282,7 @@ where
                     .await?;
 
                 multed
-                    .with_data_ref(device_idx,
+                    .with_data_ref(check_device_idx,
                                    ctx_device.branch(false), None, |guard: &<R as Stage>::Out, _ctx| {
                            // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
 
@@ -308,7 +309,7 @@ where
         .collect::<Result<(), ThoError>>();
 
     debug!("test result={r:?} res_cnt={res_cnt:?}");
-    assert!(r.is_ok());
+    r?;
 
     assert_eq!(resources.len() as u32, res_cnt.load(Relaxed));
 
@@ -1130,6 +1131,7 @@ mod tests {
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
             device_idx,
+            device_idx,
             |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
                 mul_check(MUL_K, res, out);
@@ -1165,6 +1167,7 @@ mod tests {
         run_mul_task_invocations(
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
+            device_idx,
             device_idx,
             |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
@@ -1205,6 +1208,7 @@ mod tests {
                 "resource_5",
             ], //,
             device_idx,
+            device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
                 mul_check(MUL_K, res, out);
@@ -1237,6 +1241,7 @@ mod tests {
         super::run_mul_task_invocations(
             Arc::clone(&load_and_mut),
             &["resource_1", "resource_2", "resource_3"],
+            device_idx,
             device_idx,
             |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
