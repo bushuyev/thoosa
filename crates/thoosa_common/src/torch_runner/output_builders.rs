@@ -7,7 +7,8 @@ use tch::Kind;
 use crate::runner::adjusters::splits::OutputBuilder;
 use crate::dims::Dims;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Named, WithId};
+use thoosa_shared::CopyToDevice;
+use thoosa_shared::traits::{Data, Named, WithId};
 
 #[allow(dead_code)]
 #[derive(Debug)]
@@ -26,7 +27,9 @@ where
     output: ThoTensor<D, Id>,
     added_partial_output_len: i64,
     add: BuildAs,
-    dim: i64
+    dim: i64,
+    partial_output_device_idx: Option<usize>,
+    error: Option<ThoError>,
 }
 
 impl<Id, D: Dims> SingleDimTensorOutputBuilder<Id, D>
@@ -47,8 +50,15 @@ where
             output: ThoTensor::zeros(id, size, options)?,
             added_partial_output_len: 0,
             add,
-            dim
+            dim,
+            partial_output_device_idx: None,
+            error: None,
         })
+    }
+
+    pub fn copy_partial_outputs_to_device(mut self, device_idx: usize) -> Self {
+        self.partial_output_device_idx = Some(device_idx);
+        self
     }
 }
 
@@ -60,6 +70,26 @@ where
     type O = ThoTensor<D, Id>;
 
     async fn add_partial_output(&mut self, partial: Self::O) {
+        if self.error.is_some() {
+            return;
+        }
+
+        let partial = if let Some(device_idx) = self.partial_output_device_idx {
+            if partial.device() == device_idx {
+                partial
+            } else {
+                match partial.copy_to_device(device_idx).await {
+                    Ok(partial) => partial,
+                    Err(error) => {
+                        self.error = Some(error);
+                        return;
+                    }
+                }
+            }
+        } else {
+            partial
+        };
+
         let partial_size = partial.size();
 
 
@@ -84,7 +114,11 @@ where
     }
 
     async fn build(self: Self) -> Result<Self::O, ThoError> {
-        Ok(self.output)
+        if let Some(error) = self.error {
+            Err(error)
+        } else {
+            Ok(self.output)
+        }
     }
 }
 
