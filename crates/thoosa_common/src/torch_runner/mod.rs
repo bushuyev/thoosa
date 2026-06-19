@@ -280,7 +280,7 @@ pub(crate) mod tests {
     }
 
     impl SyncClcTask {
-        pub fn new(id: SynKey,k: impl Into<Scalar>, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Self {
+        pub fn new(id: SynKey, k: impl Into<Scalar>, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: Device, use_matmul: bool) -> Self {
             let k =
                 if use_matmul {
                     ThoTensor::new(
@@ -305,7 +305,7 @@ pub(crate) mod tests {
         pub fn init(init: SyncClcTaskInit) -> SyncClcTask{
             let SyncClcTaskInit{id, k, dim, fail_until, use_matmul} = init;
             SyncClcTask::new(
-                id, k, dim, fail_until, Float, Cuda(0), use_matmul
+                id, k, fail_until, dim, Float, Cuda(0), use_matmul
             )
         }
     }
@@ -371,11 +371,9 @@ pub(crate) mod tests {
         ) -> Self {
 
             Self {
-                sync_clc: Arc::new(SyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul)),
+                sync_clc: Arc::new(SyncClcTask::new(id, k, fail_until, dim, kind, device, use_matmul)),
             }
         }
-
-
     }
 
     impl ClcTask<ProxySyncClcTask> {
@@ -597,13 +595,8 @@ pub(crate) mod tests {
                 serde_json::from_str::<ThoTensor<ClcTaskOutput, SynKey>>(&response)
                     .map_err(ThoError::from)
             }))?;
-            let out_id = output_ref.id().clone();
-            let out_key = output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))?;
-            let cpu_output = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-                GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                    .copy(ThoTensor::new_ref((), out_key), 0.into()).await
-            }))?;
-            Ok(ThoTensor::new(out_id, cpu_output.t())?)
+
+            Ok(output_ref)//proxy tasks return tensor refs
         }
     }
 
@@ -654,7 +647,7 @@ pub(crate) mod tests {
         id: LoadAndClcTaskId,
 
         loader: Arc<TestTensorLoader>,
-        clc_task: Arc<ClcTask>,
+        clc_task: Arc<SyncClcTask>,
         clc_oom_runner: ClcOOMRunner<SyncClcTask, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
     }
 
@@ -700,7 +693,7 @@ pub(crate) mod tests {
 
             let result = self
                 .clc_oom_runner
-                .run(&self.clc_task.sync_clc, loaded, ctx.branch(false), &required_ids)
+                .run(&self.clc_task, loaded, ctx.branch(false), &required_ids)
                 .await?;
 
             let device_idx = ctx.tho_device_idx();
@@ -746,7 +739,7 @@ pub(crate) mod tests {
             Self {
                 id,
                 loader: Arc::new(TestTensorLoader::new(dim, kind)),
-                clc_task: Arc::new(ClcTask::new(
+                clc_task: Arc::new(SyncClcTask::new(
                     SynKey::new([mono_key!(0, "mul_task_0")]),
                     k,
                     fail_until,
