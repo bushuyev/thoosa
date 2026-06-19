@@ -138,7 +138,7 @@ async fn run_load_and_mul_ipc_cuda_worker(test_name: &str, resources: &[&'static
             debug!("run_load_and_mul_ipc_cuda_worker: loaded={loaded:?} counter={}", counter.load(Acquire));
 
 
-            let clc_task = Arc::new(ClcTask::new_proxy(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul).await?);
+            let clc_task = Arc::new(ClcTask::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cpu, use_matmul));
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_mul");
             let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
             let out_key = with_data!(ctx, output_ref; |_ctx, output_ref:&ThoTensor::<ClcTaskOutput, SynKey>|{
