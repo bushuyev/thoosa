@@ -41,6 +41,7 @@ pub struct GlobalCtx {
     cuda_actors:Vec<Box<dyn CudaActorHandle>>,
 
     reset_mutex:Vec<parking_lot::Mutex<bool>>,
+    is_ipc: bool,
 }
 
 static GLOBAL_CTX: OnceLock<GlobalCtx> = OnceLock::new();
@@ -105,6 +106,7 @@ impl GlobalCtx {
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors: (1..num_devices).map(|tho_device_idx|Box::new(CudaLocalActorHandle::new(tho_device_idx)) as Box<dyn CudaActorHandle>).collect(),
+            is_ipc: false,
         }
     }
 
@@ -137,6 +139,7 @@ impl GlobalCtx {
             reset_mutex: (1..num_devices).map(|device_idx|parking_lot::Mutex::new(false)).collect(),
 
             cuda_actors,
+            is_ipc: true,
         })
     }
 
@@ -403,6 +406,10 @@ impl GlobalCtx {
 
     pub fn is_shutting_down(&self)->bool {
         self.shutting_down.load(Relaxed)
+    }
+
+    pub fn is_ipc(&self) -> bool {
+        self.is_ipc
     }
 }
 
