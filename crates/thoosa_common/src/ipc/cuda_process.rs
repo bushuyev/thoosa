@@ -733,6 +733,8 @@ impl CudaIPCActor {
             command = command.arg(arg);
         }
 
+        debug!("spawn_worker, command={command:?}");
+
         let mut child = command
 
             .env(IPC_SOCK_ENV, &sock_path)
