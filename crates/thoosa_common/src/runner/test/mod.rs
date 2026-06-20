@@ -232,7 +232,7 @@ pub enum OOMRunnerConfig {
 }
 
 pub async fn run_mul_task_invocations<R, F, CF>(
-    load_and_mul: Arc<R>,
+    load_and_clc: Arc<R>,
     resources: &[&'static str],
     device_idx: usize,
     check_device_idx: usize,
@@ -259,7 +259,7 @@ where
         .iter()
         .enumerate()
         .map(|(idx, res)| {
-            let load_and_mul = Arc::clone(&load_and_mul);
+            let load_and_clc = Arc::clone(&load_and_clc);
             let thread_ids = Arc::clone(&thread_ids);
             let res = *res;
 
@@ -274,7 +274,7 @@ where
 
                 let mut ctx_device = ctx_fac_arc(device_idx, 0, name);
 
-                let multed = load_and_mul
+                let multed = load_and_clc
                     .run_cached(
                         Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res))),
                         ctx_device.branch(false),
@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_no_oom_dummy() -> Result<(), ThoError> {
+    async fn test_load_and_clc_no_oom_dummy() -> Result<(), ThoError> {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
         RealGlobalCtx::init_devices(2);
@@ -1055,7 +1055,7 @@ mod tests {
         let _device_idx = 0;
 
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
+            DLoadAndMulTaskId("load_and_clc_id"),
             2.,
             FailUntil::Never,
             100,
@@ -1110,14 +1110,14 @@ mod tests {
     }
 
     //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_max_parallel_dummy() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_till_max_parallel_dummy() -> Result<(), ThoError> {
         let _global_ctx = GlobalCtx::init_devices(3);
 
         let device_idx = 1;
         const MUL_K: f32 = 2.;
 
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
+            DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(20),
             100,
@@ -1143,7 +1143,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn test_load_and_mul_oom_compete_for_max_parallel_dummy() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_compete_for_max_parallel_dummy() -> Result<(), ThoError> {
         crate::runner::global_ctx::GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
@@ -1151,7 +1151,7 @@ mod tests {
 
         const MUL_K: f32 = 2.;
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
+            DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(MAX_PARALLEL),
             100,
@@ -1180,7 +1180,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_splits_dummy() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_splits_dummy() -> Result<(), ThoError> {
         crate::runner::global_ctx::GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
@@ -1188,7 +1188,7 @@ mod tests {
 
         const MUL_K: f32 = 2.;
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
+            DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::MemLimit(12),
             100,
@@ -1220,7 +1220,7 @@ mod tests {
     }
 
     //TODO #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_till_dump_all_to_cpu_dummy() -> Result<(), ThoError> {
         // let _ = *TELEMETRY;
 
         let _global_ctx = GlobalCtx::init_devices(2);
@@ -1228,7 +1228,7 @@ mod tests {
         let device_idx = 1;
         const MUL_K: f32 = 2.;
         let load_and_mut = Arc::new(DLoadAndMulTask::new(
-            DLoadAndMulTaskId("load_and_mul_id"),
+            DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::DumpedToCpu,
             100,
