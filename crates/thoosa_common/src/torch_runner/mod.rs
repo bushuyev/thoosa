@@ -457,13 +457,14 @@ pub(crate) mod tests {
     }
 
     impl SyncStage for ProxySyncTestTensorLoader {
-        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
             debug!("ProxySyncTestTensorLoader::do_run: input={input:?} size={:?}", self.size);
+
             tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-                let response = GlobalCtx::global().cuda_actor(1)
-                    .invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?)).await?;
-                serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&response)
-                    .map_err(ThoError::from)
+
+                let response = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?)).await?;
+
+                serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&response).map_err(ThoError::from)
             }))
         }
     }
@@ -1175,7 +1176,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_no_oom_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1188,7 +1189,7 @@ pub(crate) mod tests {
 
         let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![],
             size.into(),
@@ -1261,7 +1262,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_till_min_max_parallel_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1274,7 +1275,7 @@ pub(crate) mod tests {
 
         let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![FailUntil::NaxParallel(20)],
             size.into(),
@@ -1310,7 +1311,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_compete_for_max_parallel_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1324,7 +1325,7 @@ pub(crate) mod tests {
         const MUL_K: f64 = 2.;
         let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![FailUntil::NaxParallel(MAX_PARALLEL)],
             size.into(),
@@ -1364,7 +1365,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_splits_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1378,7 +1379,7 @@ pub(crate) mod tests {
         const MUL_K: f64 = 2.;
         let size = [3, 10];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![FailUntil::MemLimit(12)],
             size.into(),
@@ -1420,7 +1421,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1433,7 +1434,7 @@ pub(crate) mod tests {
         const MUL_K: f64 = 2.;
         let size = [3, 100];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![FailUntil::NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
             size.into(),
@@ -1476,7 +1477,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-    async fn test_load_and_mul_oom_dump_to_cpu() -> Result<(), ThoError> {
+    async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -1490,7 +1491,7 @@ pub(crate) mod tests {
         const MUL_K: f64 = 2.;
         let size = [3, 100];
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
             size.into(),
@@ -1541,7 +1542,7 @@ pub(crate) mod tests {
         let size = [3, 100000];
 
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![],
             size.clone().into(),
@@ -1687,7 +1688,7 @@ pub(crate) mod tests {
         let size = [dim_1, input_n];
 
         let load_and_mut = Arc::new(LoadAndClcTask::new(
-            LoadAndClcTaskId("load_and_mul_id"),
+            LoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             vec![],
             size.clone().into(),
