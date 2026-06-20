@@ -44,8 +44,8 @@ fn init() {
     thoosa_shared::test_utils::init_test_logging();
 }
 
-fn test_worker_args(test_name: &str) -> Vec<&'static str> {
-    let module = pure_module_path!();
+fn test_worker_args(test_name: &str, module: &str) -> Vec<&'static str> {
+    let module = module;
     let test_name = if module.is_empty() {
         test_name.to_string()
     } else {
@@ -55,14 +55,16 @@ fn test_worker_args(test_name: &str) -> Vec<&'static str> {
     vec![test_name.leak(), "--exact", "--nocapture"]
 }
 
-async fn init_ipc_test(test_name: &str) -> Result<impl Drop, ThoError> {
+pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, ThoError> {
     unsafe {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-    RealGlobalCtx::init_devices_ipc(2, test_worker_args(test_name)).await?;
+    RealGlobalCtx::init_devices_ipc(2, test_worker_args(test_name, module)).await?;
     let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+
+    debug!("init_ipc_test: don ok");
 
     Ok(ctx)
 }
@@ -106,7 +108,7 @@ impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
 
 async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static str], use_matmul: bool) -> Result<(), ThoError> {
     debug!("run_load_and_clc_ipc_cuda_worker: test_name={test_name} resources={resources:?}");
-    let _ctx = init_ipc_test(test_name).await?;
+    let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
 
     let tho_device_idx = 1;
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
@@ -188,7 +190,7 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
 }
 
 async fn run_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu(test_name: &str) -> Result<(), ThoError> {
-    let _ctx = init_ipc_test(test_name).await?;
+    let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
 
     let tho_device_idx = 1;
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
