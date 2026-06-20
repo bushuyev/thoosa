@@ -6,6 +6,7 @@ use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
 use log::debug;
 use tch::Device::Cpu;
 use tch::{Device, Kind, Tensor};
+use tch::Kind::Float;
 use tch::nn::VarStore;
 use tokio::task::{spawn_blocking, JoinError};
 use thoosa_shared::{collect_futures_with_progress, Cause, FuturesOrdering, ThoError};
@@ -733,6 +734,31 @@ where
         let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))??;
         Ok(ExecSyncStageActionResult::Sync { stream, out })
     })).await
+}
+
+pub fn fail_with_unrecoverable_error(){
+    debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run");
+    // run with: CUDA_LAUNCH_BLOCKING=1 RUST_BACKTRACE=1 cargo run
+    let device = Device::Cuda(0);
+
+    // Shape: [batch, classes] => 3 valid classes: 0, 1, 2.
+    let logits = Tensor::zeros([4, 3], (Float, device));
+
+    // Invalid target: class id 3 is out of range for 3 classes.
+    // Older tch versions may need Tensor::of_slice instead of from_slice.
+    let targets = Tensor::from_slice(&[0i64, 1, 2, 3]).to_device(device);
+    // let targets = Tensor::of_slice(&[0i64, 1, 2, 3]).to_device(device);
+
+    let loss = logits.cross_entropy_for_logits(&targets);
+
+    // Force synchronization / materialization.
+    // The actual CUDA error is often reported here, not necessarily at launch,
+    // because CUDA launches are asynchronous.
+    println!("loss = {}", loss.double_value(&[]));
+
+    // Usually this will also fail after the context is poisoned.
+    let x = Tensor::zeros([1], (Float, device));
+    println!("after poison = {}", x.double_value(&[0]));
 }
 
 #[cfg(test)]

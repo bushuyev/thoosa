@@ -7,7 +7,7 @@ use std::sync::{Arc};
 use dashmap::DashMap;
 use log::debug;
 use parking_lot::RwLock;
-use thoosa_shared::ThoError;
+use thoosa_shared::{panic_to_err, ThoError};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
@@ -39,7 +39,7 @@ impl CudaWorker {
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
 
-        debug!("running worker: sock_path={sock_path:?}");
+        debug!("running worker: sock_path={sock_path:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
@@ -208,11 +208,13 @@ impl CudaWorker {
             }
 
             if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {
-                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload(init_msg);
-                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg={init_msg}");
+                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload(init_msg)?;
+                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg={init_msg} endpoint_inits.contains_key={}", endpoint_inits.contains_key(endpoint_name));
 
                 let payload = match endpoint_inits.get(endpoint_name) {
+
                     Some(init_endpoint) => {
+
                         match init_endpoint(init_msg.to_string()) {
                             Ok(endpoint_wrapper) => {
                                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
@@ -236,11 +238,19 @@ impl CudaWorker {
             }
 
             if let Some(input) = payload.strip_prefix(INVOKE_ENDPOINT_PREFIX) {
-                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input);
+                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
                 debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} input={input:?}");
 
                 let response = match installed_endpoints.read().get(endpoint_name) {
-                    Some(endpoint) => endpoint.do_run(input.to_string(), &all_cuda_tensors),
+                    Some(endpoint) => {
+                        let r = panic_to_err!(endpoint.do_run(input.to_string(), &all_cuda_tensors));
+
+                        if let  Err(e) = &r {
+
+                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
+                        }
+                        r
+                    },
                     None => Err(ThoError::new(format!("endpoint {endpoint_name:?} is not installed"))),
                 };
 
