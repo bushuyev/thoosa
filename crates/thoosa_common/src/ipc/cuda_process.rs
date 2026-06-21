@@ -5,6 +5,7 @@ use std::error::Error;
 use std::ffi::c_void;
 use std::fmt::Debug;
 use std::io::ErrorKind;
+use std::mem;
 use std::os::fd::{AsFd, OwnedFd};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -26,6 +27,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tub::{Guard, Pool};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{Cause, mono_key, ThoError};
@@ -688,32 +690,52 @@ struct SpawnedState {
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
     tx:Sender<OutgoingRequest>,
     child:Child,
-}
+    writer_handle:JoinHandle<()>,
+    reader_handle:JoinHandle<()>,
+    cancel: CancellationToken,
 
-impl Drop for SpawnedState {
-    fn drop(&mut self) {
-        debug!("Drop for SpawnedState::drop");
-
-        match tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(async move {
-            self.child.kill().await
-        })) {
-            Ok(_) => {
-                debug!("Drop for SpawnedState::drop done");
-            }
-            Err(e) => {
-                debug!("Drop for SpawnedState::drop got error: {e}");
-            }
-        }
-
-
-    }
 }
 
 impl SpawnedState {
-    async fn kill(&mut self) -> Result<(), ThoError> {
-        self.child.kill().await?;
 
-        Ok(())
+    async fn shutdown(mut self, reason: impl Into<String>) {
+        let reason = reason.into();
+
+        // Tell reader/writer loops to stop.
+        self.cancel.cancel();
+
+        // All in-flight requests belong to the old child.
+        // fail_all_pending(&self.pending, reason).await;
+
+        // Close this sender. This only closes the rx if there are no other tx clones.
+        drop(self.tx);
+
+        // Make sure loops do not stay stuck in read/write forever.
+        self.reader_handle.abort();
+        self.writer_handle.abort();
+
+        let _ = self.reader_handle.await;
+        let _ = self.writer_handle.await;
+
+        match self.child.try_wait() {
+            Ok(Some(status)) => {
+                debug!("worker already exited with status={status}");
+            }
+
+            Ok(None) => {
+                if let Err(e) = self.child.kill().await {
+                    error!("failed to kill worker process: {e}");
+                }
+            }
+
+            Err(e) => {
+                error!("failed to query worker process status: {e}");
+
+                if let Err(e) = self.child.kill().await {
+                    error!("failed to kill worker process after try_wait error: {e}");
+                }
+            }
+        }
     }
 }
 
@@ -748,16 +770,19 @@ impl CudaIPCActor {
         let (tx, rx): (Sender<OutgoingRequest>, Receiver<OutgoingRequest>) = mpsc::channel::<OutgoingRequest>(1024);
 
         let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>> = Arc::new(Mutex::new(HashMap::new()));
-
-        let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending)));
-        let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending)));
+        let cancel = CancellationToken::new();
+        let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending), cancel.child_token()));
+        let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token()));
 
         debug!("CudaIPCActor::spawn_worker_and_loops, ok");
 
         Ok( SpawnedState {
             child,
             tx,
-            pending
+            pending,
+            writer_handle,
+            reader_handle,
+            cancel
         })
     }
 
@@ -944,7 +969,7 @@ impl CudaIPCActor {
         Ok(())
     }
 
-    fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
+    async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
                 if let Some(tensor_key) = src.ref_key() {
@@ -1088,10 +1113,10 @@ impl CudaIPCActor {
             CudaIPCActorMessage::Reset { respond_to } => {
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
                 let self_arc = Arc::clone(&self.cuda_worker_args);
-                self.spawned_state = tokio::task::block_in_place(move || tokio::runtime::Handle::current().block_on(async move {
+               
 
-                    Self::spawn_worker_and_loops(&self_arc).await
-                }))?;
+                let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(&self_arc).await?);
+                old_pawned_state.shutdown("ups").await;
 
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset done");
 
@@ -1196,7 +1221,7 @@ impl CudaIPCActor {
 
     async fn run(mut actor: CudaIPCActor) -> Result<(), ThoError> {
         while let Some(msg) = actor.receiver.recv().await {
-            actor.handle_message(msg)?;
+            actor.handle_message(msg).await?;
         }
 
         Ok(())
@@ -1207,10 +1232,24 @@ async fn writer_loop<W>(
     mut writer: W,
     mut rx: mpsc::Receiver<OutgoingRequest>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    cancel: CancellationToken,
 ) where
     W: AsyncWrite + Unpin + AsRef<UnixStream>,
 {
-    while let Some(req) = rx.recv().await {
+    loop {
+        let req = tokio::select! {
+            _ = cancel.cancelled() => {
+                break;
+            }
+
+            maybe_req = rx.recv() => {
+                match maybe_req {
+                    Some(req) => req,
+                    None => break,
+                }
+            }
+        };
+
         let frame = match encode_wire_msg(req.id, &req.payload) {
             Ok(frame) => frame,
             Err(e) => {
@@ -1250,19 +1289,34 @@ async fn writer_loop<W>(
 async fn reader_loop<R>(
     mut reader: R,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    cancel: CancellationToken,
 ) where
     R: AsyncRead + Unpin,
 {
     loop {
-        let frame = match read_text_frame(&mut reader).await {
-            Ok(frame) => frame,
-            Err(e) => {
-                debug!("worker IPC reader stopped: {e}");
-
-                fail_all_pending(&pending, format!("worker IPC reader stopped: {e}")).await;
+        let frame = tokio::select! {
+            _ = cancel.cancelled() => {
                 break;
             }
+
+            result = read_text_frame(&mut reader) => {
+                match result {
+                    Ok(frame) => frame,
+                    Err(e) => {
+                        debug!("worker IPC reader stopped: {e}");
+
+                        fail_all_pending(
+                            &pending,
+                            format!("worker IPC reader stopped: {e}"),
+                        )
+                        .await;
+
+                        break;
+                    }
+                }
+            }
         };
+
 
         let (id, payload) = match parse_wire_msg(&frame) {
             Ok(parsed) => parsed,

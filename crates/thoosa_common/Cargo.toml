@@ -69,6 +69,7 @@ mockall.workspace = true
 mockall_double.workspace = true
 ambassador.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tokio-utils.workspace = true
 
 anyhow = "1.0.99"
