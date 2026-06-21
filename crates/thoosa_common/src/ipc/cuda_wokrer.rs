@@ -32,8 +32,6 @@ pub trait Init {
 
 impl CudaWorker {
 
-
-
     pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>  >>) -> Result<(), ThoError> {
 
         let sock_path = std::env::var_os(IPC_SOCK_ENV)

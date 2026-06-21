@@ -95,7 +95,6 @@ impl Debug for ThoTensorInner {
     }
 }
 
-
 //D:Dims - is just a reminder of what dimensions a tensor has.
 pub struct ThoTensor<D = AnyDims, Id = ()>
 where
