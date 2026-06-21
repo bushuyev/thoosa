@@ -85,7 +85,8 @@ dashmap = "6"
 polars = { version = "0.54", features = ["lazy", "parquet", "csv", "streaming", "polars-ops", "random", "partition_by", "is_in", "list_sample", "list_gather", "list_count", "list_sets", "dtype-array", "strings"] }
 
 tokio = { version = "1.52", features = ["full", "test-util", "tracing"] }
-tokio-utils = "0.1"
+tokio-util = "0.7.18"
+tokio-utils = "0.1"#pool
 tracing = "0.1"
 tracing-subscriber = { version = "0", features = ["fmt", "env-filter", "chrono"] }
 tracing-appender = "0.2"
