@@ -30,7 +30,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tub::{Guard, Pool};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::{Cause, mono_key, ThoError};
+use thoosa_shared::{mono_key, Cause, ThoError};
 use thoosa_shared::traits::{Data, Named};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
@@ -49,7 +49,9 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::utils::tensor_digest;
 #[cfg(test)]
-use crate::torch_runner::tests::{ClcTask, LoadedTensor};
+use crate::torch_runner::tests::ClcTask;
+#[cfg(test)]
+use crate::torch_runner::tests::loader::LoadedTensor;
 
 pub(crate) const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
@@ -1760,9 +1762,10 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::{CudaWorker, SyncStageJsonWrapper};
-    use crate::ipc::tests::{init_ipc_test};
+    use crate::ipc::tests::init_ipc_test;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use crate::torch_runner::tests::{sync_clc_endpoint_init, ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor};
+    use crate::torch_runner::tests::{sync_clc_endpoint_init, ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId};
+    use crate::torch_runner::tests::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
 
 

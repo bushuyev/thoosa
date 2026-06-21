@@ -241,7 +241,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    for<'a> <R as Stage>::In<'a>: Data + CopyToDevice + WithId+ Send + Sync,
+    for<'a> <R as Stage>::In<'a>: Data   + WithId+ Send + Sync,
     for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<<R as Stage>::In<'a>>,
     R::Out: Data + CopyToDevice + Send + Sync,
     <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,

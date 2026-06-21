@@ -25,7 +25,8 @@ use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-use crate::torch_runner::tests::{ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, LoadedTensor, mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+use crate::torch_runner::tests::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+use crate::torch_runner::tests::loader::LoadedTensor;
 use crate::utils::lin_for_size;
 
 macro_rules! pure_module_path {
@@ -82,13 +83,13 @@ fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<
 fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
     HashMap::from([
         (
-            SYNC_CLC_ENDPOINT.to_string(),
-            Box::new(sync_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-        ),
-        (
             SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
             Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
         ),
+        (
+            SYNC_CLC_ENDPOINT.to_string(),
+            Box::new(sync_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+        )
     ])
 }
 
