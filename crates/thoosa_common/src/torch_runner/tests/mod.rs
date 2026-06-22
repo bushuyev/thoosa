@@ -1,7 +1,7 @@
 
 
 #[cfg(test)]
-mod model_test;
+pub(crate) mod model_test;
 pub mod load_and_clc;
 
 #[ctor::ctor]
