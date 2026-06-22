@@ -26,7 +26,6 @@ use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use thoosa_named_derive::Named;
 use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::cuda_utils::cuda_mem;
 use crate::dims::{AnyDims, Dims};
@@ -42,17 +41,20 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Device::Cuda;
 use tokio::sync::Mutex;
+use clc::{ClcStage, ClcStageOutput, SyncClcStage, SyncClcTaskInit};
 use loader::{LoadedRange, LoadedTensor, LoaderInput, SyncTestTensorLoader, SyncTestTensorLoaderInit, TestTensorLoader};
 use crate::runner::tmp_cache::TmpCached;
 use crate as thoosa_common;
 use crate::ipc::cuda_process::{encode_endpoint_payload, WorkerH2dStartPayload};
-use crate::ipc::cuda_wokrer::SyncStageJsonWrapper;
+use crate::ipc::json_ser;
+use crate::ipc::json_ser::{JsonSyncStageWrapper, SyncStageJsonWrapper};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::oom_handler::{Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 
 pub mod loader;
+pub mod clc;
 
 #[ctor::ctor]
 fn init() {
@@ -65,105 +67,6 @@ fn init() {
 pub(crate) const SYNC_CLC_ENDPOINT: &str = "SyncClcTask";
 pub(crate) const SYNC_TEST_TENSOR_LOADER_ENDPOINT: &str = "SyncTestTensorLoader";
 
-pub(crate) trait WorkerStageInput: Debug + Sized {
-    fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
-}
-
-pub(crate) trait WorkerStageOutput: Debug + Sized {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError>;
-}
-
-impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
-where
-    D: Dims,
-    Id: Named + Debug + Clone + DeserializeOwned,
-{
-    fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let input_ref = serde_json::from_str::<Self>(&input)?;
-        let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
-        let input_tensor = tokio::task::block_in_place(|| {
-            let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
-            Ok::<_, ThoError>(tensors
-                .get(&input_key)
-                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?
-                .shallow_clone())
-        })?;
-        ThoTensor::new(input_ref.id().clone(), input_tensor)
-    }
-}
-
-fn insert_worker_tensor(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
-    tokio::task::block_in_place(|| {
-        let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
-        let mut key = tensors
-            .keys()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-        while tensors.contains_key(&key) {
-            key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-        }
-        tensors.insert(key, tensor);
-        Ok(key)
-    })
-}
-
-impl<D, Id> WorkerStageOutput for ThoTensor<D, Id>
-where
-    D: Dims,
-    Id: Named + Debug + Clone + Serialize,
-{
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
-        let out_id = self.id().clone();
-        let out_tensor = self.t();
-        let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
-        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key))?)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct JsonSyncStageWrapper<S, I, O> {
-    sync_stage: Arc<S>,
-    endpoint_name: &'static str,
-    pd: PhantomData<fn(I) -> O>,
-}
-
-impl<S, I, O> JsonSyncStageWrapper<S, I, O> {
-    fn new(endpoint_name: &'static str, sync_stage: S) -> Self {
-        Self {
-            sync_stage: Arc::new(sync_stage),
-            endpoint_name,
-            pd: PhantomData,
-        }
-    }
-}
-
-impl<S, I, O> SyncStageJsonWrapper for JsonSyncStageWrapper<S, I, O>
-where
-    S: SyncStage + Debug + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    fn do_run(&self, input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
-        let input = I::decode_for_worker(input, all_cuda_tensors)?;
-        let ctx = RunCtxImpl::new(1, self.endpoint_name);
-        let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
-        out.encode_from_worker(all_cuda_tensors)
-    }
-}
-
-pub(crate) fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageJsonWrapper>
-where
-    S: SyncStage + Debug + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-{
-    Box::new(JsonSyncStageWrapper::<S, I, O>::new(endpoint_name, sync_stage))
-}
 
 
 fn kind_to_worker_name(kind: Kind) -> &'static str {
@@ -192,439 +95,53 @@ fn kind_from_worker_name(kind: &str) -> Result<Kind, ThoError> {
     }
 }
 
-
-// //////////////////////////////
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-struct MulK;
-
-impl Dims for MulK {
-    type Metrics = MonoMetrics<1, 2>;
-}
-
 type ClcDynSyncStage = DynSyncStageBox<
     ThoTensor<LoadedTensor, SynKey>,
-    ThoTensor<ClcTaskOutput, SynKey>,
+    ThoTensor<ClcStageOutput, SynKey>,
     RunCtxImpl,
 >;
 
-#[derive(Debug, cached_derive::Cached, Named)]
-#[cache_name = "MulTaskOutputId"]
-pub(crate) struct ClcTask {
-    pub(crate) sync_clc: Arc<ClcDynSyncStage>,
-}
-
-#[derive(Debug)]
-pub(crate) struct SyncClcTask {
-    id: SynKey,
-    k: ThoTensor<MulK, SimpleId>,
-    fail_until: Vec<FailUntil>,
-    use_matmul: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SyncClcTaskInit {
-    id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>, use_matmul: bool
-}
-
-impl SyncClcTaskInit {
-    pub fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>, use_matmul: bool) ->Self {
-        Self {
-            id, k, dim, fail_until,  use_matmul
-        }
-    }
-}
-
-impl SyncClcTask {
-    pub fn new<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: Device, use_matmul: bool) -> ClcDynSyncStage
-    where
-        K: Into<Scalar> + ToPrimitive + Copy,
-    {
-        if GlobalCtx::global().is_ipc() {
-            let k = k.to_f64().expect("SyncClcTask::new: IPC task multiplier must convert to f64");
-            let proxy = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul))
-            }).expect("SyncClcTask::new: install IPC proxy sync task");
-            ClcDynSyncStage::new(Arc::new(proxy))
-        } else {
-            ClcDynSyncStage::new(Arc::new(Self::new_local(id, k, fail_until, dim, kind, device, use_matmul)))
-        }
-    }
-
-    fn new_local<K>(id: SynKey, k: K, fail_until: Vec<FailUntil>, dim: i64, kind: Kind, device: Device, use_matmul: bool) -> Self
-    where
-        K: Into<Scalar> + Copy,
-    {
-        let k =
-            if use_matmul {
-                ThoTensor::new(
-                    simple_id!("mul_k"),
-                    Tensor::ones([dim, 1], (kind, device))
-                        .f_mul_scalar_(k)
-                        .unwrap(),
-                ).unwrap()
-            } else {
-                ThoTensor::new(
-                    simple_id!("mul_k"),
-                    Tensor::ones([dim], (kind, device))
-                        .f_mul_scalar_(k)
-                        .unwrap(),
-                ).unwrap()
-            };
-
-        debug!("ClcTask::new: use_matmul={use_matmul} i.size={:?}", k.size());
-
-        Self { id, k, fail_until, use_matmul }
-    }
-    pub fn init(init: SyncClcTaskInit) -> SyncClcTask{
-        let SyncClcTaskInit{id, k, dim, fail_until, use_matmul} = init;
-        SyncClcTask::new_local(
-            id, k, fail_until, dim, Float, Cuda(0), use_matmul
-        )
-    }
-
-    pub async fn new_proxy(
-        id: SynKey,
-        k: f64,
-        fail_until: Vec<FailUntil>,
-        dim: i64,
-        kind: Kind,
-        device: Device,
-        use_matmul: bool,
-    ) -> Result<ProxySyncClcTask, ThoError> {
-
-        ProxySyncClcTask::new(id, k, dim, fail_until, kind, device, use_matmul).await
-    }
-}
-
-#[derive(Debug)]
-pub struct SyncClcTaskJsonWrapper {
-    sync_clc:Arc<SyncClcTask>
-}
-
-impl SyncClcTaskJsonWrapper {
-    pub fn new(init_msg:String) -> Self {
-        Self {
-            sync_clc: Arc::new(SyncClcTask::init(serde_json::from_str::<SyncClcTaskInit>(&init_msg).unwrap()))
-        }
-    }
-}
-
-impl SyncStageJsonWrapper for SyncClcTaskJsonWrapper {
-    fn do_run(&self, input: String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
-        let input_ref = serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&input)?;
-        let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("SyncClcTaskJsonWrapper expected ThoTensor ref input, got {input_ref:?}")))?;
-
-        let input_tensor = tokio::task::block_in_place(|| {
-            let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
-            Ok::<_, ThoError>(tensors
-                .get(&input_key)
-                .ok_or_else(|| ThoError::new(format!("SyncClcTaskJsonWrapper could not find worker tensor ref key={input_key}")))?
-                .shallow_clone())
-        })?;
-
-        let loaded = ThoTensor::new(input_ref.id().clone(), input_tensor)?;
-        let ctx = RunCtxImpl::new(1, "ipc_sync_clc_task");
-        let out = Arc::clone(&self.sync_clc).do_run(&loaded, &ctx)?;
-        let out_id = out.id().clone();
-        let out_tensor = out.t();
-        //TODO preallocate ids
-        let out_key = tokio::task::block_in_place(|| {
-            let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
-            let mut key = tensors
-                .keys()
-                .copied()
-                .max()
-                .unwrap_or(0)
-                .checked_add(1)
-                .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-            while tensors.contains_key(&key) {
-                key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-            }
-            tensors.insert(key, out_tensor);
-            Ok::<_, ThoError>(key)
-        })?;
-        Ok(serde_json::to_string(&ThoTensor::<ClcTaskOutput, SynKey>::new_ref(out_id, out_key))?)
-    }
-}
-
 pub(crate) fn sync_clc_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
     let init = serde_json::from_str::<SyncClcTaskInit>(&init_msg)?;
-    Ok(make_json_sync_stage_wrapper::<SyncClcTask, ThoTensor<LoadedTensor, SynKey>, ThoTensor<ClcTaskOutput, SynKey>>(
+    Ok(json_ser::make_json_sync_stage_wrapper::<SyncClcStage, ThoTensor<LoadedTensor, SynKey>, ThoTensor<ClcStageOutput, SynKey>>(
         SYNC_CLC_ENDPOINT,
-        SyncClcTask::init(init),
+        SyncClcStage::init(init),
     ))
 }
 
 pub(crate) fn sync_test_tensor_loader_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
     let init = serde_json::from_str::<SyncTestTensorLoaderInit>(&init_msg)?;
-    Ok(make_json_sync_stage_wrapper::<SyncTestTensorLoader, LoaderInput, ThoTensor<LoadedTensor, SynKey>>(
+    Ok(json_ser::make_json_sync_stage_wrapper::<SyncTestTensorLoader, LoaderInput, ThoTensor<LoadedTensor, SynKey>>(
         SYNC_TEST_TENSOR_LOADER_ENDPOINT,
         SyncTestTensorLoader::init(init)?,
     ))
 }
 
-impl ClcTask {
-    pub fn new<K>(
-        id: SynKey,
-        k: K,
-        fail_until: Vec<FailUntil>,
-        dim: i64,
-        kind: Kind,
-        device: Device,
-        use_matmul: bool,
-    ) -> Self
-    where
-        K: Into<Scalar> + ToPrimitive + Copy,
-    {
-
-        Self {
-            sync_clc: Arc::new(SyncClcTask::new(id, k, fail_until, dim, kind, device, use_matmul)),
-        }
-    }
-
-    pub async fn new_proxy(
-        id: SynKey,
-        k: f64,
-        fail_until: Vec<FailUntil>,
-        dim: i64,
-        kind: Kind,
-        device: Device,
-        use_matmul: bool,
-    ) -> Result<Self, ThoError> {
-
-        Ok(Self {
-            sync_clc: Arc::new(ClcDynSyncStage::new(Arc::new(SyncClcTask::new_proxy(id, k, fail_until, dim, kind, device, use_matmul).await?))),
-        })
-    }
-
-}
-
-impl Adjustable for ClcTask {}
-impl Adjustable for SyncClcTask {}
-
-
-
-impl OutId for ClcTask {
-    fn out_id(&self, input_id: &SynKey) -> SynKey {
-
-        self.sync_clc.out_id(input_id)
-    }
-}
-
-impl OutId for SyncClcTask {
-    fn out_id(&self, input_id: &SynKey) -> SynKey {
-
-        &self.id + input_id
-    }
-}
-
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct ClcTaskOutput;
-impl Dims for ClcTaskOutput {
-    type Metrics = MonoMetrics<1, 2>;
-}
-
-impl Stage for ClcTask {
-    type In<'a> = ThoTensor<LoadedTensor, SynKey>;
-    type Out = ThoTensor<ClcTaskOutput, SynKey>;
-    type Ctx = RunCtxImpl;
-}
-
-impl Stage for SyncClcTask {
-    type In<'a> = ThoTensor<LoadedTensor, SynKey>;
-    type Out = ThoTensor<ClcTaskOutput, SynKey>;
-    type Ctx = RunCtxImpl;
-}
-
-impl SyncStage for SyncClcTask {
-    fn do_run<'a>(
-        self: Arc<Self>,
-        input: &Self::In<'a>,
-        ctx: &Self::Ctx,
-    ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-        // tokio::time::sleep(tokio::time::Duration::from_millis(random_range(0..10))).await;
-        debug!("MulTask::run: loaded.id={:?}", input.id());
-
-        let deive_idx = ctx.tho_device_idx();
-
-        for fail_until in &self.fail_until {
-            match fail_until {
-                FailUntil::MemLimit(mem_limit) => {
-                    let _device_idx = deive_idx;
-                    // debug!("MulTask::do_run: ctx={ctx:?} input.len={}", input.data.0.as_ref().unwrap().size()[0]);
-
-                    if input.size()[0] > *mem_limit as i64 {
-                        debug!(
-                            "MulTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}"
-                        );
-                        return Err(ThoError::oom());
-                    }
-                }
-                FailUntil::NaxParallel(max_other_parallel_threshold) => {
-                    let max_other_parallel = ctx.max_other_parallel();
-                    debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
-
-                    if max_other_parallel > *max_other_parallel_threshold {
-                        return Err(ThoError::oom());
-                    }
-                }
-
-                FailUntil::DumpedToCpu => {
-                    let device_idx = ctx.tho_device_idx();
-                    let is_all_on_cpu =
-                        GlobalCtx::global().is_all_on_cpu(device_idx);
-                    debug!(
-                        "MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}",
-                        "ctx.name()",
-                        device_idx
-                    );
-
-                    if !is_all_on_cpu {
-                        debug!("MulTask::do_run: MyError::OutOfMemory on DumpedToCpu is_all_on_cpu={is_all_on_cpu}");
-                        return Err(ThoError::oom());
-                    }
-                }
-                FailUntil::Never => {}
-            }
-        }
-
-        if self.use_matmul {
-            LoadedTensor::clc_sum(self.out_id(input.id()), input, &self.k)
-        } else {
-            LoadedTensor::clc_hadamard(self.out_id(input.id()), input, &self.k)
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct ProxySyncClcTask {
-    id: SynKey,
-    fail_until: Vec<FailUntil>,
-}
-
-impl Stage for ProxySyncClcTask {
-    type In<'a> = ThoTensor<LoadedTensor, SynKey>;
-    type Out = ThoTensor<ClcTaskOutput, SynKey>;
-    type Ctx = RunCtxImpl;
-}
-
-impl Adjustable for ProxySyncClcTask {}
-
-impl OutId for ProxySyncClcTask {
-    fn out_id(&self, input_id: &SynKey) -> SynKey {
-
-        &self.id + input_id
-    }
-}
-
-impl ProxySyncClcTask {
-    pub async fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, device: Device, use_matmul: bool) -> Result<Self, ThoError> {
-        debug!("ProxySyncClcTask::new: id={id:?} k={k:?}");
-        GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-            .install_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &serde_json::to_string(&SyncClcTaskInit::new(id.clone(), k, dim, vec![], use_matmul))?)).await?;
-
-        Ok(Self {
-            id,
-            fail_until,
-        })
-    }
-}
-
-impl SyncStage for ProxySyncClcTask {
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("ProxySyncClcTask::new: input={input:?}");
-        for fail_until in &self.fail_until {
-            match fail_until {
-                FailUntil::MemLimit(mem_limit) => {
-                    if input.ref_key().is_none() && input.size()[0] > *mem_limit as i64 {
-                        debug!("ProxySyncClcTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
-                        return Err(ThoError::oom());
-                    }
-                }
-                FailUntil::NaxParallel(max_other_parallel_threshold) => {
-                    let max_other_parallel = ctx.max_other_parallel();
-                    debug!("ProxySyncClcTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
-                    if max_other_parallel > *max_other_parallel_threshold {
-                        return Err(ThoError::oom());
-                    }
-                }
-                FailUntil::DumpedToCpu => {
-                    let device_idx = ctx.tho_device_idx();
-                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
-                    debug!("ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}");
-                    if !is_all_on_cpu {
-                        return Err(ThoError::oom());
-                    }
-                }
-                FailUntil::Never => {}
-            }
-        }
-        let output_ref = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-            let response = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .invoke_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &serde_json::to_string(input)?)).await?;
-            serde_json::from_str::<ThoTensor<ClcTaskOutput, SynKey>>(&response)
-                .map_err(ThoError::from)
-        }))?;
-
-        Ok(output_ref)//proxy tasks return tensor refs
-    }
-}
-
-// #[async_trait]
-impl AsyncStage for ClcTask {
-    async fn run(
-        self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
-        ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let device_idx = ctx.tho_device_idx();
-
-        debug!("AsyncStage for ClcTask::run: device_idx={device_idx} input={input:?}");
-
-        let output = OOMHandler::new(vec![], None).run(
-            &self.sync_clc,
-            input,
-            ctx,
-            Contexts::new(
-                NoopInputContext(None),
-                NoopRunnableContext {},
-                NoopRunCtxContext {},
-            )
-        ).await?;
-
-
-        Ok(Arc::new(DevicesWrap::wrap(output)))
-    }
-
-}
 
 //////////////////////////////
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub(crate) struct LoadAndClcTaskId(pub(crate) &'static str);
+pub(crate) struct LoadAndClcStageId(pub(crate) &'static str);
 
 #[derive(Debug, Named)]
-pub(crate) struct LoadAndClcTask {
+pub(crate) struct LoadAndClcStage {
     #[allow(dead_code)]
-    id: LoadAndClcTaskId,
+    id: LoadAndClcStageId,
 
     loader: Arc<TestTensorLoader>,
     clc_task: Arc<ClcDynSyncStage>,
 
-    clc_oom_runner: ClcOOMRunner<ClcDynSyncStage, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
+    clc_oom_runner: ClcOOMRunner<ClcDynSyncStage, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcStageOutput>>,
 }
 
-impl Stage for LoadAndClcTask {
+impl Stage for LoadAndClcStage {
     type In<'a> = LoaderInput;
-    type Out = ThoTensor<ClcTaskOutput, SynKey>;
+    type Out = ThoTensor<ClcStageOutput, SynKey>;
     type Ctx = RunCtxImpl;
 }
 
 // #[async_trait]
-impl AsyncStage for LoadAndClcTask {
+impl AsyncStage for LoadAndClcStage {
     async fn run(
         self: Arc<Self>,
         input: Arc<DevicesWrap<Self::In<'static>>>,
@@ -669,7 +186,7 @@ impl AsyncStage for LoadAndClcTask {
 }
 
 #[async_trait]
-impl Cached for LoadAndClcTask {
+impl Cached for LoadAndClcStage {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
         Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
@@ -677,11 +194,11 @@ impl Cached for LoadAndClcTask {
     where
         Self: Sized,
     {
-        <ClcTask as Cached>::cache().await
+        <ClcStage as Cached>::cache().await
     }
 }
 
-impl OutId for LoadAndClcTask {
+impl OutId for LoadAndClcStage {
     fn out_id(
         &self,
         input_id: &<Self::In<'static> as WithId>::ID,
@@ -690,15 +207,15 @@ impl OutId for LoadAndClcTask {
     }
 }
 
-impl LoadAndClcTask {
-    pub fn new<K>(
-        id: LoadAndClcTaskId,
+impl LoadAndClcStage {
+    pub async fn new<K>(
+        id: LoadAndClcStageId,
         k: K,
         fail_until: Vec<FailUntil>,
         dim: MonoMetrics<1, 2>,
-        oom_runner: ClcOOMRunner<ClcDynSyncStage, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcTaskOutput>>,
+        oom_runner: ClcOOMRunner<ClcDynSyncStage, LoadedRange, SingleDimTensorOutputBuilder<SynKey, ClcStageOutput>>,
         kind: Kind,
-        device: Device,
+        device: ThoDevice,
         use_matmul: bool,
     ) -> Self
     where
@@ -708,8 +225,8 @@ impl LoadAndClcTask {
 
         Self {
             id,
-            loader: Arc::new(TestTensorLoader::new(dim, kind)),
-            clc_task: Arc::new(SyncClcTask::new(
+            loader: Arc::new(TestTensorLoader::new(dim, kind, 1).await),
+            clc_task: Arc::new(SyncClcStage::new(
                 SynKey::new([mono_key!(0, "mul_task_0")]),
                 k,
                 fail_until,
@@ -717,7 +234,7 @@ impl LoadAndClcTask {
                 kind,
                 device,
                 use_matmul,
-            )),
+            ).await),
             clc_oom_runner: oom_runner,
         }
     }
@@ -735,7 +252,7 @@ async fn test_load_tensor_cuda_to_cuda() -> Result<(), ThoError> {
 
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-    let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
+    let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float, 1).await);
 
     do_test_loaded(1, 1, &loader).await
 }
@@ -751,7 +268,7 @@ async fn test_load_tensor_cpu_to_cuda() -> Result<(), ThoError> {
 
     let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
 
-    let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float));
+    let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float, 1).await);
 
     do_test_loaded(0, 1, &loader).await
 }
@@ -830,15 +347,15 @@ async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
     const MUL_K: f64 = 2.;
 
     let size = [3, 10];
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![],
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &size,
@@ -848,9 +365,9 @@ async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     run_mul_task_invocations(
         Arc::clone(&load_and_mut),
@@ -861,6 +378,7 @@ async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
         move |res, out| {
             mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
         },
+        true,
     )
         .await?;
 
@@ -871,7 +389,7 @@ pub(crate) fn mul_check(
     mul_k: f64,
     size: MonoMetrics<1, 2>,
     res: &str,
-    result: &ThoTensor<ClcTaskOutput, SynKey>,
+    result: &ThoTensor<ClcStageOutput, SynKey>,
     rtol: f64,
     atol: f64,
 ) {
@@ -883,7 +401,7 @@ pub(crate) fn mul_check(
 fn mul_check_with_exp_f<F>(
     mul_k: f64,
     res: &str,
-    result: &ThoTensor<ClcTaskOutput, SynKey>,
+    result: &ThoTensor<ClcStageOutput, SynKey>,
     rtol: f64,
     atol: f64,
     exp_f: F,
@@ -916,15 +434,15 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
     const MUL_K: f64 = 2.;
 
     let size = [3, 10];
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![FailUntil::NaxParallel(20)],
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &size,
@@ -934,9 +452,9 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     run_mul_task_invocations(
         Arc::clone(&load_and_mut),
@@ -947,6 +465,7 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
         move |res, out| {
             mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
         },
+        true,
     ).await?;
 
     Ok(())
@@ -966,8 +485,8 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
 
     const MUL_K: f64 = 2.;
     let size = [3, 10];
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![FailUntil::NaxParallel(MAX_PARALLEL)],
         size.into(),
@@ -977,7 +496,7 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
                 step: *MaxParallelStep::TEN,
             },
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &size,
@@ -987,9 +506,9 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     run_mul_task_invocations(
         Arc::clone(&load_and_mut),
@@ -1000,6 +519,7 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
         move |res, out| {
             mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
         },
+        true,
     )
         .await?;
 
@@ -1020,15 +540,15 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
 
     const MUL_K: f64 = 2.;
     let size = [3, 10];
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![FailUntil::MemLimit(12)],
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::Splits {},
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &size,
@@ -1038,9 +558,9 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     run_mul_task_invocations(
         Arc::clone(&load_and_mut),
@@ -1057,6 +577,7 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
         move |res, out| {
             mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
         },
+        true,
     ).await?;
 
     Ok::<_, ThoError>(())
@@ -1075,8 +596,8 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
     let device_idx = 1;
     const MUL_K: f64 = 2.;
     let size = [3, 100];
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![FailUntil::NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
         size.into(),
@@ -1086,7 +607,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
                 step: *MaxParallelStep::TEN,
             },
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &size,
@@ -1096,9 +617,9 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     run_mul_task_invocations(
         Arc::clone(&load_and_mut),
@@ -1112,6 +633,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
         move |res, out| {
             mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
         },
+        true,
     )
         .await?;
 
@@ -1132,15 +654,15 @@ async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
 
     const MUL_K: f64 = 2.;
     let size = [3, 100];
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
-        vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
+        vec![FailUntil::NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::DumpedToCpu {},
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &[3, 100],
@@ -1150,9 +672,9 @@ async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     run_mul_task_invocations(
         Arc::clone(&load_and_mut),
@@ -1166,6 +688,7 @@ async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
         move |res, out| {
             mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
         },
+        true,
     )
         .await?;
 
@@ -1183,15 +706,15 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
     const MUL_K: f64 = 2.;
     let size = [3, 100000];
 
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![],
         size.clone().into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::DumpedToCpu {},
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &size,
@@ -1201,9 +724,9 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
             }),
         ),
         Float,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         false,
-    ));
+    ).await);
 
     let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
 
@@ -1233,7 +756,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
 
         assert!(!reff.value().clone().await?.is_all_on_cpu().await);
 
-        let cached_multed = <ClcTask as Cached>::cache()
+        let cached_multed = <ClcStage as Cached>::cache()
             .await
             .get(
                 // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
@@ -1283,7 +806,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
             assert!(reff.value().clone().await?.is_all_on_cpu().await);
         }
 
-        let cached_multed = <ClcTask as Cached>::cache()
+        let cached_multed = <ClcStage as Cached>::cache()
             .await
             .get(
                 // &SimpleId::from(format!("mult_mul_task_0_inp_loaded_resource_{i}"))
@@ -1329,15 +852,15 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
     const MUL_K: i64 = 1;
     let size = [dim_1, input_n];
 
-    let load_and_mut = Arc::new(LoadAndClcTask::new(
-        LoadAndClcTaskId("load_and_clc_id"),
+    let load_and_mut = Arc::new(LoadAndClcStage::new(
+        LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
         vec![],
         size.clone().into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::DumpedToCpu {},
             Box::new(move |id| {
-                SingleDimTensorOutputBuilder::<SynKey, ClcTaskOutput>::new(
+                SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
                     1,
                     &[dim_1, 1],
@@ -1347,9 +870,9 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
             }),
         ),
         Kind::Int64,
-        Device::Cuda(0),
+        Device::Cuda(0).into(),
         true,
-    ));
+    ).await);
 
     let ctx_device = Arc::new(RwLock::new(RunCtxImpl::new(1, "test")));
 
@@ -1366,7 +889,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     multed
         .with_data_ref(1,
-                       ctx_device.write().branch(false), None, |r: &ThoTensor<ClcTaskOutput, SynKey>, _ctx| {
+                       ctx_device.write().branch(false), None, |r: &ThoTensor<ClcStageOutput, SynKey>, _ctx| {
                 mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
                     lin_for_size(k, size, t.kind(), &t.device())
                         .sum_dim_intlist(1, false, t.kind())

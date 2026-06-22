@@ -18,7 +18,7 @@ use crate::dims::Dims;
 use crate::ipc::cuda_process::encode_endpoint_payload;
 use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
+use crate::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test_utils::parse_numeric_part;
@@ -27,7 +27,9 @@ use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests;
 use crate::utils::lin_for_size;
 use crate as thoosa_common;
-use crate::torch_runner::tests::load_and_clc::{kind_from_worker_name, kind_to_worker_name, ClcTaskOutput, MulK, WorkerStageInput, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+use crate::ipc::cuda_wokrer::WorkerStageInput;
+use crate::torch_runner::tests::load_and_clc::{kind_from_worker_name, kind_to_worker_name, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+use crate::torch_runner::tests::load_and_clc::clc::{ClcStageOutput, MulK};
 
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -127,7 +129,7 @@ impl LoadedTensor {
         id: SynKey,
         loaded: &ThoTensor<LoadedTensor, SynKey>,
         k: &ThoTensor<MulK, SimpleId>,
-    ) -> Result<ThoTensor<ClcTaskOutput, SynKey>, ThoError> {
+    ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
 
         ThoTensor::new( id,loaded.t_ref().multiply(&k.as_ref()))
 
@@ -137,7 +139,7 @@ impl LoadedTensor {
         id: SynKey,
         loaded: &ThoTensor<LoadedTensor, SynKey>,
         k: &ThoTensor<MulK, SimpleId>,
-    ) -> Result<ThoTensor<ClcTaskOutput, SynKey>, ThoError> {
+    ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
         debug!("LoadedTensor::clc_sum: loaded={:?} k.t={:?}",loaded.t_ref(),k.t_ref());
 
         let multed = loaded.t_ref().f_multiply(&k.as_ref());
@@ -165,9 +167,9 @@ pub struct TestTensorLoader {
 }
 
 impl TestTensorLoader {
-    pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
+    pub async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> Self {
         Self {
-            sync_loader: Arc::new(SyncTestTensorLoader::new(size, kind))
+            sync_loader: Arc::new(SyncTestTensorLoader::new(size, kind, tho_device_idx).await)
         }
     }
 }
@@ -239,12 +241,10 @@ impl SyncTestTensorLoaderInit {
 }
 
 impl SyncTestTensorLoader {
-    pub fn new(size: MonoMetrics<1, 2>, kind: Kind) -> LoaderDynSyncStage {
+    pub async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> LoaderDynSyncStage {
         if GlobalCtx::global().is_ipc() {
-            let proxy = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(ProxySyncTestTensorLoader::new(size, kind))
-            }).expect("SyncTestTensorLoader::new: install IPC proxy loader");
-            LoaderDynSyncStage::new(Arc::new(proxy))
+
+            LoaderDynSyncStage::new(Arc::new(ProxySyncTestTensorLoader::new(size, kind, tho_device_idx).await.expect("ProxySyncTestTensorLoader::new")) as Arc<dyn DynSyncStage<LoaderInput, ThoTensor<LoadedTensor, SynKey>,RunCtxImpl>>)
         } else {
             LoaderDynSyncStage::new(Arc::new(Self::new_local(size, kind)))
         }
@@ -265,10 +265,12 @@ struct ProxySyncTestTensorLoader {
 }
 
 impl ProxySyncTestTensorLoader {
-    async fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Result<Self, ThoError> {
+    async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> Result<Self, ThoError> {
         debug!("ProxySyncTestTensorLoader::new: size={size:?} kind={kind:?}");
-        GlobalCtx::global().cuda_actor(1)
-            .install_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(&SyncTestTensorLoaderInit::new(size.clone(), kind))?)).await?;
+        GlobalCtx::global()
+            .cuda_actor(tho_device_idx)
+            .install_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(&SyncTestTensorLoaderInit::new(size.clone(), kind))?))
+            .await?;
 
         Ok(Self {
             size,
@@ -298,7 +300,10 @@ impl SyncStage for ProxySyncTestTensorLoader {
 
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 
-            let response = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?)).await?;
+            let response = GlobalCtx::global()
+                .cuda_actor(ctx.tho_device_idx())
+                .invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?))
+                .await?;
 
             serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&response).map_err(ThoError::from)
         }))
