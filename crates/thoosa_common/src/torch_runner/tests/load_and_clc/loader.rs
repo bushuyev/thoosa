@@ -25,9 +25,9 @@ use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests;
-use crate::torch_runner::tests::{ClcTaskOutput, MulK, WorkerStageInput, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::utils::lin_for_size;
 use crate as thoosa_common;
+use crate::torch_runner::tests::load_and_clc::{kind_from_worker_name, kind_to_worker_name, ClcTaskOutput, MulK, WorkerStageInput, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -233,7 +233,7 @@ impl SyncTestTensorLoaderInit {
     fn new(size: MonoMetrics<1, 2>, kind: Kind) -> Self {
         Self {
             size: (&size).into(),
-            kind: tests::kind_to_worker_name(kind).to_string(),
+            kind: kind_to_worker_name(kind).to_string(),
         }
     }
 }
@@ -255,7 +255,7 @@ impl SyncTestTensorLoader {
     }
 
     pub(crate) fn init(init: SyncTestTensorLoaderInit) -> Result<Self, ThoError> {
-        Ok(Self::new_local(init.size.into(), tests::kind_from_worker_name(&init.kind)?))
+        Ok(Self::new_local(init.size.into(), kind_from_worker_name(&init.kind)?))
     }
 }
 

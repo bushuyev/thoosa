@@ -25,8 +25,8 @@ use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-use crate::torch_runner::tests::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
-use crate::torch_runner::tests::loader::LoadedTensor;
+use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::utils::lin_for_size;
 
 macro_rules! pure_module_path {
@@ -70,7 +70,7 @@ pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, T
     Ok(ctx)
 }
 
-fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<crate::torch_runner::tests::ClcTaskOutput, SynKey>) {
+fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcTaskOutput, SynKey>) {
     let self_k = parse_numeric_part(resource).unwrap_or(1.0);
     let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())
         .sum_dim_intlist(1, false, out.t_ref().kind())
