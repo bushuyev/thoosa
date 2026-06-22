@@ -22,7 +22,7 @@ use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunC
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub enum FailUntil {
     MemLimit(u64),
     NaxParallel(MaxParallel),
@@ -238,6 +238,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
     check_device_idx: usize,
     ctx_fac: F,
     check: CF,
+    check_threads: bool,
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
@@ -314,7 +315,9 @@ where
     assert_eq!(resources.len() as u32, res_cnt.load(Relaxed));
 
     // assert_eq!(thread_ids.read().iter().collect::<HashSet<_>>().len(), thread_ids.read().len());
-    assert!(thread_ids.read().iter().collect::<HashSet<_>>().len() > 1);
+    if check_threads {
+        assert!(thread_ids.read().iter().collect::<HashSet<_>>().len() > 1);
+    }
 
     Ok(())
 }
@@ -846,7 +849,7 @@ mod tests {
     #[derive(Debug, Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
     #[allow(dead_code)]
-    struct DLoadAndMulTask {
+    struct DLoadAndMulStage {
         id: DLoadAndMulTaskId,
 
         loader: Arc<DummyLoader>,
@@ -854,7 +857,7 @@ mod tests {
         mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>,DMulTaskOutputBuilder>,
     }
 
-    impl OutId for DLoadAndMulTask {
+    impl OutId for DLoadAndMulStage {
         fn out_id(
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
@@ -863,7 +866,7 @@ mod tests {
         }
     }
 
-    impl DLoadAndMulTask {
+    impl DLoadAndMulStage {
         pub fn new(
             id: DLoadAndMulTaskId,
             k: f32,
@@ -881,14 +884,14 @@ mod tests {
     }
 
 
-    impl Stage for DLoadAndMulTask {
+    impl Stage for DLoadAndMulStage {
         type In<'a> = DLoaderInput;
         type Out = DMulTaskOutput;
         type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
-    impl AsyncStage for DLoadAndMulTask {
+    impl AsyncStage for DLoadAndMulStage {
 
 
         async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
@@ -1054,7 +1057,7 @@ mod tests {
 
         let _device_idx = 0;
 
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
+        let load_and_mut = Arc::new(DLoadAndMulStage::new(
             DLoadAndMulTaskId("load_and_clc_id"),
             2.,
             FailUntil::Never,
@@ -1116,7 +1119,7 @@ mod tests {
         let device_idx = 1;
         const MUL_K: f32 = 2.;
 
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
+        let load_and_mut = Arc::new(DLoadAndMulStage::new(
             DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(20),
@@ -1136,6 +1139,7 @@ mod tests {
             |res, out| {
                 mul_check(MUL_K, res, out);
             },
+            true,
         )
         .await?;
 
@@ -1150,7 +1154,7 @@ mod tests {
         let device_idx = 1;
 
         const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
+        let load_and_mut = Arc::new(DLoadAndMulStage::new(
             DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(MAX_PARALLEL),
@@ -1173,6 +1177,7 @@ mod tests {
             |res, out| {
                 mul_check(MUL_K, res, out);
             },
+            true,
         )
         .await?;
 
@@ -1187,7 +1192,7 @@ mod tests {
         let device_idx = 1;
 
         const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
+        let load_and_mut = Arc::new(DLoadAndMulStage::new(
             DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::MemLimit(12),
@@ -1213,6 +1218,7 @@ mod tests {
             move |res, out| {
                 mul_check(MUL_K, res, out);
             },
+            true,
         )
         .await?;
 
@@ -1227,7 +1233,7 @@ mod tests {
 
         let device_idx = 1;
         const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulTask::new(
+        let load_and_mut = Arc::new(DLoadAndMulStage::new(
             DLoadAndMulTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::DumpedToCpu,
@@ -1247,6 +1253,7 @@ mod tests {
             |res, out| {
                 mul_check(MUL_K, res, out);
             },
+            true,
         )
         .await?;
 

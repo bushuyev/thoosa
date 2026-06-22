@@ -49,9 +49,9 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::utils::tensor_digest;
 #[cfg(test)]
-use crate::torch_runner::tests::ClcTask;
+use crate::torch_runner::tests::load_and_clc::clc::ClcStage;
 #[cfg(test)]
-use crate::torch_runner::tests::loader::LoadedTensor;
+use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 
 pub(crate) const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
@@ -1805,11 +1805,11 @@ mod tests {
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
-    use crate::ipc::cuda_wokrer::{CudaWorker, SyncStageJsonWrapper};
+    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::json_ser::SyncStageJsonWrapper;
     use crate::ipc::tests::init_ipc_test;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use crate::torch_runner::tests::{sync_clc_endpoint_init, ClcTask, ClcTaskOutput, LoadAndClcTask, LoadAndClcTaskId};
-    use crate::torch_runner::tests::loader::LoadedTensor;
+    use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
 
 
