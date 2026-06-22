@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::copy_ctx::CudaActorHandle;
 use crate::dims::Dims;
 use crate::ipc::cuda_process::encode_endpoint_payload;
-use crate::ipc::json_ser::SyncStageJsonWrapper;
+use crate::ipc::json_ser::{encode_json_sync_stage_run_input, SyncStageJsonWrapper};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -315,7 +315,7 @@ impl SyncStage for ProxySyncClcStage {
 
             let response = GlobalCtx::global()
                 .cuda_actor(ctx.tho_device_idx())
-                .invoke_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &serde_json::to_string(input)?))
+                .invoke_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &encode_json_sync_stage_run_input(serde_json::to_string(input)?, ctx)?))
                 .await?;
 
 
