@@ -68,6 +68,7 @@ const WORKER_COPY_STREAMS: usize = 16;
 pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
 pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
 pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
+pub(crate) const DROP_THO_TENSOR: &str = "drop_tho_tensor:";
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
@@ -104,7 +105,7 @@ impl WorkerCopyErrorPayload {
     fn into_error(self) -> ThoError {
         ThoError::new_with_cause(
             "CudaWoker happened in the CudaWorker",
-            Cause::CudaWoker {
+            Cause::CudaWorker {
                 msg: self.msg,
                 is_oom: self.is_oom,
                 is_retryable_oom: self.is_retryable_oom,
@@ -647,6 +648,10 @@ pub enum CudaIPCActorMessage {
     GetExecStream {
         respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
     },
+    DropThoTensor {
+        key:u64,
+        respond_to: oneshot::Sender<Result<(), ThoError>>
+    },
     Reset {
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
@@ -1096,6 +1101,44 @@ impl CudaIPCActor {
                 });
 
             }
+            CudaIPCActorMessage::DropThoTensor { key, respond_to } => {
+                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let (reply_tx, reply_rx) = oneshot::channel();
+                let pending = Arc::clone(&self.spawned_state.pending);
+                let self_tx = self.spawned_state.tx.clone();
+
+                tokio::spawn(async move {
+                    {
+                        let mut pending = pending.lock().await;
+                        let old = pending.insert(id, reply_tx);
+                        debug_assert!(old.is_none());
+                    }
+
+                    if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg(encode_endpoint_payload(DROP_THO_TENSOR, &key.to_string())) }).await.is_err() {
+                        let mut pending = pending.lock().await;
+                        pending.remove(&id);
+                        let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                        return;
+                    }
+
+                    let reply = reply_rx
+                        .await
+                        .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped")))
+                        .and_then(|reply| reply);
+
+                    match reply {
+                        Ok(reply) if reply == "Ok" => {
+                            let _ = respond_to.send(Ok(()));
+                        }
+                        Ok(reply) => {
+                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected drop response: {reply:?}"))));
+                        }
+                        Err(error) => {
+                            let _ = respond_to.send(Err(error));
+                        }
+                    }
+                });
+            }
             CudaIPCActorMessage::SyncStream { stream, respond_to } => {
                 tokio::spawn(async move {
                     let result = tokio::task::spawn_blocking(move || stream.synchronize())
@@ -1115,7 +1158,7 @@ impl CudaIPCActor {
             CudaIPCActorMessage::Reset { respond_to } => {
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
                 let self_arc = Arc::clone(&self.cuda_worker_args);
-               
+
 
                 let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(&self_arc).await?);
                 old_pawned_state.shutdown("ups").await;
@@ -1216,6 +1259,7 @@ impl CudaIPCActor {
                     Ok::<_, ThoError>(())
                 });
             }
+
         }
 
         Ok(())
@@ -1535,41 +1579,6 @@ impl CudaIPCActorHandle {
         })
     }
 
-    async fn copy_inner(&self, src:ThoTensor, dst_device:ThoDevice) ->Result<ThoTensor, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::Copy {
-                src,
-                dst_device,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
-    }
-
-    async fn reset_inner(&self) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::Reset {
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
-    }
-
-    async fn shutdown_inner(&self) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::Shutdown {
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
     async fn sync_stream(&self, stream: Guard<ThoCudaStream>) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -1598,15 +1607,39 @@ impl CudaIPCActorHandle {
 #[async_trait]
 impl CudaActorHandle for CudaIPCActorHandle {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
-        self.copy_inner(src, dst_device).await
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::Copy {
+                src,
+                dst_device,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
     }
 
     async fn reset(&self) -> Result<(), ThoError> {
-        self.reset_inner().await
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::Reset {
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+
     }
 
     async fn shutdown(&self) -> Result<(), ThoError> {
-        self.shutdown_inner().await
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::Shutdown {
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
     fn exec_sync_stage_boxed<'a>(
@@ -1650,6 +1683,17 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     }
 
+    async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::DropThoTensor {
+                key: t.ref_key().ok_or_else(||ThoError::new(format!("Not a ref tensor: {t:?}")))?,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
 }
 
 pub(crate) async fn write_text_frame<W>(
@@ -1746,7 +1790,7 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio::task::JoinSet;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::{mono_key, ThoError};
+    use thoosa_shared::{mono_key, Cause, ThoError};
     use thoosa_shared::tracked_await::track_await;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
@@ -1793,83 +1837,6 @@ mod tests {
         let args:Vec<String> = vec![test_name, "--exact".to_string(), "--nocapture".to_string()];
 
         CudaIPCActor::spawn_worker(&args).await
-    }
-
-
-    async fn run_main(test_name: &str) -> Result<(), ThoError> {
-        debug!("run_main: test_name={test_name:?}");
-        let module = pure_module_path!();
-
-        let test_name = if module.is_empty() {
-            test_name.to_string()
-        } else {
-            format!("{module}::{test_name}")
-        };
-        let args:Vec<&str> = vec![test_name.clone().leak(), "--exact", "--nocapture"];
-
-        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices_ipc(2, args).await?;
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
-
-        // let (mut child, mut stream) = spawn_test_worker(test_name).await?;
-        debug!("run_main: test_name={test_name:?}, spawn_worker ok");
-
-        let tho_device_idx = 1;
-
-        let main_process_cpu_tensor = Tensor::rand(&[1000, 10000], FLOAT_CPU);
-        let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
-
-
-        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-        let cuda_ref = track_await(cuda_actor
-            .copy(
-                main_process_cpu_tensor.into(),
-                tho_device_idx.into(),//Cuda
-            )).await?;
-
-        debug!("run_main: cuda_ref={cuda_ref:?}");
-
-        let cpu_tensor = track_await(cuda_actor
-            .copy(
-                cuda_ref,
-                0.into(),//Cpu
-            )).await?;
-
-        debug!("run_main: cpu_tensor={cpu_tensor:?}");
-
-        let actual_digest = tensor_digest(cpu_tensor.t_ref())?;
-        if actual_digest.hex != expected_digest.hex {
-            return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
-        }
-
-        cuda_actor.shutdown().await?;
-
-        Ok(())
-    }
-
-    async fn run_ipc_copy_perf_main(test_name: &str, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
-        let module = pure_module_path!();
-        let test_name = if module.is_empty() {
-            test_name.to_string()
-        } else {
-            format!("{module}::{test_name}")
-        };
-        let args: Vec<&str> = vec![test_name.clone().leak(), "--exact", "--nocapture"];//, "--ignored"
-
-        use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
-        RealGlobalCtx::init_devices_ipc(2, args).await?;
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
-
-        let tho_device_idx = 1;
-        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-        let result = run_ipc_copy_perf(cuda_actor, threads, runs).await;
-        let shutdown_result = cuda_actor.shutdown().await;
-
-        match (result, shutdown_result) {
-            (Ok(speeds), Ok(())) => Ok(speeds),
-            (Err(e), _) => Err(e),
-            (Ok(_), Err(e)) => Err(e),
-        }
     }
 
 
@@ -1980,7 +1947,7 @@ mod tests {
             debug!("run_ipc_copy_oom: error={error:?}");
 
             match error.what() {
-                thoosa_shared::Cause::CudaWoker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
+                thoosa_shared::Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
                     assert!(*is_oom, "worker OOM flag was not propagated: {error:?}");
                     assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
                     assert!(!*needs_cuda_ctx_reset, "plain worker OOM should not request CUDA context reset: {error:?}");
@@ -2066,26 +2033,82 @@ mod tests {
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_copy_ipc_cuda_worker_once() {
+    async fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
         debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await.unwrap()
+            CudaWorker::run_worker(HashMap::new()).await
         } else {
-            let (d2h, h2d) = run_ipc_copy_perf_main("test_copy_ipc_cuda_worker_once", 3, 3).await.unwrap();
+            init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
+
+            let tho_device_idx = 1;
+            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+            let (d2h, h2d)  = run_ipc_copy_perf(cuda_actor, 3, 3).await?;
+
             info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
+
+            cuda_actor.shutdown().await?;
+
+            Ok(())
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker() {
+    async fn test_copy_ipc_cuda_worker() -> Result<(), ThoError> {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            // CudaProcess::new().unwrap();//will be called from run_cli //crates/thoosa_main/src/cli.rs:339, i.e. if app is started as "worker"
-            CudaWorker::run_worker(HashMap::new()).await.unwrap()
+            CudaWorker::run_worker(HashMap::new()).await
+
         } else {
-            run_main("test_copy_ipc_cuda_worker").await.unwrap();
+            init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
+
+            let tho_device_idx = 1;
+
+            let main_process_cpu_tensor = Tensor::rand(&[1000, 10000], FLOAT_CPU);
+            let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
+
+
+            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+            let cuda_ref = track_await(cuda_actor.copy(
+                    main_process_cpu_tensor.into(),
+                    tho_device_idx.into(),//Cuda
+                )).await?;
+
+            debug!("run_main: cuda_ref={cuda_ref:?}");
+
+            let reff = cuda_ref.ref_key().unwrap();
+
+            let cpu_tensor = track_await(cuda_actor.copy(
+                    cuda_ref,
+                    0.into(),//Cpu
+                )).await?;
+
+            debug!("run_main: cpu_tensor={cpu_tensor:?}");
+
+            let actual_digest = tensor_digest(cpu_tensor.t_ref())?;
+            if actual_digest.hex != expected_digest.hex {
+                return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
+            }
+
+            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff)).await?;
+
+            let r = track_await(cuda_actor
+                .copy(
+                    ThoTensor::new_ref((), reff),
+                    0.into(),//Cpu
+                )).await;
+
+            let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
+                panic!("Got r={r:?}, expected CudaWorker error");
+            } ;
+
+            assert_eq!("ThoError: Unknown error, cause=worker tensor key=1 not found", what_msg);
+
+
+            cuda_actor.shutdown().await?;
+
+            Ok(())
         }
     }
 

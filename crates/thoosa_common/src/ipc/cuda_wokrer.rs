@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
 use tokio::task::JoinHandle;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX};
+use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, DROP_THO_TENSOR};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::common::runnable::SyncStage;
 
@@ -260,6 +260,24 @@ impl CudaWorker {
                 };
                 reply_tx
                     .send(WorkerReply { id, payload })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                continue;
+            }
+            if let Some(input) = payload.strip_prefix(DROP_THO_TENSOR) {
+                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
+                debug!("run_worker: drop ther-tensor: input={input:?}");
+                let tensor_key = input.parse::<u64>()?;
+                debug!("run_worker: drop ther-tensor: tensor_key={tensor_key}");
+
+                let msg = match all_cuda_tensors.lock().await.remove(&tensor_key) {
+                    None => "Not found",
+                    Some(_) => "Ok"
+                };
+
+                reply_tx
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(msg.to_string()) })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
