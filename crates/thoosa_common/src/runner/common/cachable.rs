@@ -469,6 +469,20 @@ where
         Box::pin(async move {
             let permits_ctx = permits_ctx;
 
+            if to_tho_device_idx != 0 && wrap.is_resident_on_device(0) {
+                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(wrap.cached_data[0].read()).await;
+                if let Some(src) = source_read_guard.as_ref() {
+                    let sub_t: O = src.subview(selector.clone())?;
+
+                    debug!("CpuOrGpu::with_selected_data_ref: cpu sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
+
+                    let data = track_await(sub_t.copy_to_device(to_tho_device_idx)).await?;
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                }
+                drop(source_read_guard);
+                wrap.mark_not_resident_on_device(0);
+            }
+
             if wrap.is_resident_on_device(to_tho_device_idx) {
                 let lock = &wrap.cached_data[to_tho_device_idx];
                 let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
