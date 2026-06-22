@@ -73,7 +73,11 @@ pub trait CudaActorHandle: Debug + Send + Sync {
     }
 
     async fn invoke_endpoint(&self, _input:String)-> Result<String, ThoError> {
-        Ok("todo".to_string())
+        Ok("unimplemented".to_string())
+    }
+
+    async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError> {
+        Ok(())
     }
 }
 
