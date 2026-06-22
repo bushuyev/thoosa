@@ -620,61 +620,59 @@ mod tests {
             let feat = self.in_dim;
             let fails = &self.fail_until;
             let out_id = self.out_id(input.id());
-            Ok(
-                      ThoTensor::new(out_id, input.run_inner(|t: &Tensor| {
-                            debug!("t.size()={:?}", t.size());
-                        // Simulate OOM conditions based on batch size t.size()[0]
-                        for fail_until in fails {
-                            use crate::runner::test::FailUntil::{DumpedToCpu, MemLimit, NaxParallel, Never};
-                            match fail_until {
-                                MemLimit(m) => {
-                                    if t.size()[0] > *m as i64 {
-                                        debug!("Err(MyError::OutOfMemory) MemLimit");
-                                        return Err(ThoError::oom());
-                                    }
+            Ok(ThoTensor::new(out_id, input.run_inner(|t: &Tensor| {
+                        debug!("t.size()={:?}", t.size());
+                    // Simulate OOM conditions based on batch size t.size()[0]
+                    for fail_until in fails {
+                        use crate::runner::test::FailUntil::{DumpedToCpu, MemLimit, NaxParallel, Never};
+                        match fail_until {
+                            MemLimit(m) => {
+                                if t.size()[0] > *m as i64 {
+                                    debug!("Err(MyError::OutOfMemory) MemLimit");
+                                    return Err(ThoError::oom());
                                 }
-                                FailUntil::NaxParallel(max_other_parallel_threshold) => {
-                                    let max_other_parallel = ctx.max_other_parallel();
-                                    debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
-
-                                    if max_other_parallel > *max_other_parallel_threshold {
-                                        return Err(ThoError::oom());
-                                    }
-                                }
-                                DumpedToCpu => {
-                                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx());
-                                    if !is_all_on_cpu {
-                                        debug!("Err(MyError::OutOfMemory) DumpedToCpu");
-                                        return Err(ThoError::oom());
-                                    }
-                                }
-                                Never => {}
                             }
+                            FailUntil::NaxParallel(max_other_parallel_threshold) => {
+                                let max_other_parallel = ctx.max_other_parallel();
+                                debug!("MulTask::do_run: ctx={ctx:?} max_other_parallel={max_other_parallel} max_other_parallel_threshold={max_other_parallel_threshold}");
+
+                                if max_other_parallel > *max_other_parallel_threshold {
+                                    return Err(ThoError::oom());
+                                }
+                            }
+                            DumpedToCpu => {
+                                let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(ctx.tho_device_idx());
+                                if !is_all_on_cpu {
+                                    debug!("Err(MyError::OutOfMemory) DumpedToCpu");
+                                    return Err(ThoError::oom());
+                                }
+                            }
+                            Never => {}
                         }
-                        let xs = t.narrow(1, 0, feat);           // [batch, feat]
-                        let ys = t.narrow(1, feat, 1);           // [batch, 1]
-
-
-                    // tch-rs linear layer training (CPU)
-                        let vs = nn::VarStore::new(t.device());
-                        let root = &vs.root();
-                        let linear = nn::linear(root, feat, 1, Default::default());
-                        let mut opt = nn::Sgd::default().build(&vs, self.lr)?;
-
-                        for _epoch in 0..self.epochs {
-                            let logits = xs.apply(&linear);                 // [batch, 1]
-                            let loss = logits.binary_cross_entropy_with_logits::<&Tensor>(&ys, None, None, tch::Reduction::Mean);
-                            opt.backward_step(&loss);
-                        }
-
-                        // Evaluate training accuracy on the same batch
-                        let preds = xs.apply(&linear).sigmoid().ge(0.5).to_kind(Kind::Float); // [batch,1]
-                        let correct = preds.eq_tensor(&ys).to_kind(Kind::Float).mean(Kind::Float);
-                        debug!("Classifier::do_run: correct=\n{correct}");
-                        Ok(correct.view([1, 1]))
                     }
-                    )?
-                )?)
+                    let xs = t.narrow(1, 0, feat);           // [batch, feat]
+                    let ys = t.narrow(1, feat, 1);           // [batch, 1]
+
+
+                // tch-rs linear layer training (CPU)
+                    let vs = nn::VarStore::new(t.device());
+                    let root = &vs.root();
+                    let linear = nn::linear(root, feat, 1, Default::default());
+                    let mut opt = nn::Sgd::default().build(&vs, self.lr)?;
+
+                    for _epoch in 0..self.epochs {
+                        let logits = xs.apply(&linear);                 // [batch, 1]
+                        let loss = logits.binary_cross_entropy_with_logits::<&Tensor>(&ys, None, None, tch::Reduction::Mean);
+                        opt.backward_step(&loss);
+                    }
+
+                    // Evaluate training accuracy on the same batch
+                    let preds = xs.apply(&linear).sigmoid().ge(0.5).to_kind(Kind::Float); // [batch,1]
+                    let correct = preds.eq_tensor(&ys).to_kind(Kind::Float).mean(Kind::Float);
+                    debug!("Classifier::do_run: correct=\n{correct}");
+                    Ok(correct.view([1, 1]))
+                })?
+            )?)
         }
     }
 

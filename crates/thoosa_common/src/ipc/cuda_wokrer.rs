@@ -3,7 +3,7 @@ use std::error::Error;
 use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::sync::{Arc};
+use std::sync::Arc;
 use dashmap::DashMap;
 use log::debug;
 use parking_lot::RwLock;
@@ -12,10 +12,16 @@ use tokio::net::UnixStream;
 use tokio::sync::{mpsc, Mutex};
 use tch::Tensor;
 use tokio::task::JoinHandle;
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use thoosa_shared::traits::Named;
+use crate::dims::Dims;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{TENSOR_INFO_PAYLOAD_PREFIX, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, DROP_THO_TENSOR};
+use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
+use crate::ipc::json_ser::SyncStageJsonWrapper;
 use crate::runner::common::runnable::SyncStage;
+use crate::tho_tensor::ThoTensor;
 
 pub struct CudaWorker {
     all_cuda_tensors:DashMap<u64, Tensor>,
@@ -23,9 +29,6 @@ pub struct CudaWorker {
 }
 
 
-pub trait SyncStageJsonWrapper:Debug {
-    fn do_run(&self, _input:String, all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) ->Result<String, ThoError>;
-}
 pub trait Init {
     fn init() -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>;
 }
@@ -309,4 +312,64 @@ impl CudaWorker {
         Ok(())
     }
 
+}
+
+
+//TODO merge WorkerStageInput/Output, add 'encoder' GAT and move impl to json_er
+pub(crate) trait WorkerStageInput: Debug + Sized {
+    fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
+}
+
+pub(crate) trait WorkerStageOutput: Debug + Sized {
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError>;
+}
+
+impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone + DeserializeOwned,
+{
+    fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let input_ref = serde_json::from_str::<Self>(&input)?;
+        let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
+        let input_tensor = tokio::task::block_in_place(|| {
+            let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+            Ok::<_, ThoError>(tensors
+                .get(&input_key)
+                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?
+                .shallow_clone())
+        })?;
+        ThoTensor::new(input_ref.id().clone(), input_tensor)
+    }
+}
+
+impl<D, Id> WorkerStageOutput for ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Named + Debug + Clone + Serialize,
+{
+    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+        let out_id = self.id().clone();
+        let out_tensor = self.t();
+        let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
+        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key))?)
+    }
+}
+
+fn insert_worker_tensor(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
+    tokio::task::block_in_place(|| {
+        let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+        let mut key = tensors
+            .keys()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+        while tensors.contains_key(&key) {
+            key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+        }
+        tensors.insert(key, tensor);
+        Ok(key)
+    })
 }

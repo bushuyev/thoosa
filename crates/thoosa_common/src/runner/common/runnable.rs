@@ -43,7 +43,7 @@ pub enum ConsumeResult<I, O> {
 }
 
 pub trait SyncStage: Stage + Debug {
-    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
         unimplemented!()
     }
 
