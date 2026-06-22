@@ -13,7 +13,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use dashmap::DashSet;
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use mockall::{automock, Any};
 use std::any::TypeId;
 use std::fmt::Debug;
@@ -276,7 +276,8 @@ where
 
 #[cfg(test)]
 fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
-    warn!("OOMHandler::oom_executor: for mock");
+    #[cfg(not(test))]
+    error!("OOMHandler::oom_executor: for mock");
     static EXECUTOR: std::sync::OnceLock<crate::runner::dyn_mpsc::DynamicTaskExecutor> = std::sync::OnceLock::new();
     EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16))
 }
@@ -310,6 +311,7 @@ where
         }
     }
 
+    ///input should either implement WithSelectDataRef or be wrapped in DevicesWrap and implement Select<Selector>  - WithSelectDataRef makes it possible to use input structs with with more than one DevicesWraps inside.
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::run"))]
     pub async fn run<W>(
         &self,
@@ -346,7 +348,7 @@ where
             run_context,
             contexts,
             |task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun| async move {
-                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
+                debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
                 /*
                 SyncStage::do_run – executes operations on tensors synchronously, receive tensors or composite tensor types as references

@@ -1138,7 +1138,9 @@ pub trait WithDataRef: WithId + Debug + Send + Sync {
     }
 
 }
-
+///it's used when OOMHandler tries to execute a stage on subset of the input data. It usually makes
+/// to try to split input after dumping all other tensors to CPU thus it's important to avoid loading whole input to GPU and then spliting.
+/// Instead, current split should be fetched on CPU and then copied to GPU.
 pub trait WithSelectDataRef<S>: WithDataRef
 where
     S: Clone + Debug + Send + 'static,
