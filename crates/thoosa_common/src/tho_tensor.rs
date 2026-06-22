@@ -360,14 +360,9 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.t_ref().numel()
     }
 
-
-
     pub fn add(&self, rhs: &ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         ThoTensor::new(self.id.clone(), self.t_ref() + rhs.t_ref())
     }
-
-
-
 
     pub fn id(&self) -> &Id {
         &self.id
