@@ -284,7 +284,8 @@ where
             let res = track_await(cuda_actor.exec_sync_stage(move |stream| async move {
                 let res = with_data!(ctx_for_data, input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
                 debug!("ApplyCosine2DMotifNets::run: input={input:?}");
-                let _guard = ThoStreamGuard::new(&stream)?;
+                let stream_ref = stream.as_ref().ok_or_else(|| ThoError::new("ApplyCosine2DMotifNets::run requires a local CUDA stream"))?;
+                let _guard = ThoStreamGuard::new(stream_ref)?;
                 let motifs_applied = self_clone.conv2d_tensors.iter().enumerate().map(|(tensors_idx, tensors)|{
                     let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
                     debug!("ApplyCosine2DMotifNets::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);

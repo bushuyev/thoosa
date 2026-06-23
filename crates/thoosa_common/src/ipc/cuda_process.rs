@@ -1602,11 +1602,13 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        _action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
         Box::pin(async move {
-
-            Err(ThoError::new("CudaIPCActorHandle::exec_sync_stage_boxed is not supported; installed worker endpoints acquire and synchronize CUDA streams in CudaWorker"))
+            match action(None).await? {
+                ExecSyncStageActionResult::Sync { out, .. } => Ok(out),
+                ExecSyncStageActionResult::NoSync(out) => Ok(out),
+            }
         })
     }
 

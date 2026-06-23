@@ -48,7 +48,7 @@ pub enum CudaActorMessage {
 }
 
 pub enum ExecSyncStageActionResult<T> {
-    Sync { stream: Guard<ThoCudaStream>, out: T },
+    Sync { stream: Option<Guard<ThoCudaStream>>, out: T },
     NoSync(T),
 }
 
@@ -65,7 +65,7 @@ pub trait CudaActorHandle: Debug + Send + Sync {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>>;
 
     async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
@@ -85,7 +85,7 @@ impl dyn CudaActorHandle + '_ {
     pub fn exec_sync_stage<'a, R, F, Fut>(&'a self, action: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         R: Send + 'static,
-        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send + 'a,
+        F: FnOnce(Option<Guard<ThoCudaStream>>) -> Fut + Send + 'a,
         Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
     {
         Box::pin(async move {
@@ -347,12 +347,13 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
         Box::pin(async move {
             let stream = self.acquire_exec_stream().await?;
-            match action(stream).await? {
+            match action(Some(stream)).await? {
                 ExecSyncStageActionResult::Sync { stream, out } => {
+                    let stream = stream.ok_or_else(|| ThoError::new("CudaLocalActorHandle::exec_sync_stage_boxed requested sync without stream"))?;
                     self.sync_stream(stream).await?;
                     Ok(out)
                 }
