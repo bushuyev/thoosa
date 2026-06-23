@@ -2531,7 +2531,7 @@ mod cli_tests {
     async fn test_resource_tensor_two_easy_motifs() -> Result<(), ThoError>{
 
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let (pulse_triangle_t, intervals, _) = resource_tensor_two_easy_motifs(
             1000,

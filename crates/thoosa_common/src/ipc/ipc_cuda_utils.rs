@@ -39,7 +39,6 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 
-pub type IpcBufsPool = Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>;
 
 fn invalid(message: impl Into<String>) -> ThoError {
     Cause::SomethingElse(message.into()).into()
@@ -580,7 +579,7 @@ impl IpcBufferOwnership {
 pub async fn ipc_copy_h2d_from_ptr(
     kind: Kind,
     buf_size: usize,
-    ipc_bufs_pool: &Arc<IpcBufsPool>,
+    ipc_bufs_pool: &Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>>,
     dst_tho_device_idx: usize,
     src_ptr: usize,
     size: &[i64],
@@ -655,7 +654,7 @@ pub async fn ipc_copy_h2d_from_ptr(
 pub async fn ipc_copy_d2h_from_ptr(
     kind: Kind,
     buf_size: usize,
-    ipc_bufs_pool: &Arc<IpcBufsPool>,
+    ipc_bufs_pool: &Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>>,
     src_ptr: usize,
     size: &[i64],
 ) -> Result<Tensor, ThoError> {

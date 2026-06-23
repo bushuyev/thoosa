@@ -1,10 +1,12 @@
+pub mod tho_tensor;
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tch::Tensor;
+use tch::{Kind, Tensor};
 use thoosa_shared::ThoError;
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::runner::adjusters::max_parallel::MaxParallel;
@@ -77,3 +79,5 @@ where
 {
     Box::new(JsonSyncStageWrapper::<S, I, O>::new(endpoint_name, sync_stage))
 }
+
+

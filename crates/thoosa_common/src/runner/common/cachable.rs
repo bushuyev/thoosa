@@ -469,7 +469,8 @@ where
         Box::pin(async move {
             let permits_ctx = permits_ctx;
 
-            if to_tho_device_idx != 0 && wrap.is_resident_on_device(0) {
+            //TODO it's assumed dump_all_to_cpu was executed
+            if GlobalCtx::global().is_ipc() && to_tho_device_idx != 0 && wrap.is_resident_on_device(0) {
                 let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(wrap.cached_data[0].read()).await;
                 if let Some(src) = source_read_guard.as_ref() {
                     let sub_t: O = src.subview(selector.clone())?;
@@ -1389,7 +1390,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_copied_error_wakes_follower() -> Result<(), ThoError> {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (data, state) = ControlledCopyData::new(0, CopyBehavior::FailFirst);
         let tested = Arc::new(DevicesWrap::wrap(data));
 
@@ -1421,7 +1422,7 @@ mod tests {
 
     #[tokio::test]
     async fn ensure_copied_cancellation_wakes_follower() -> Result<(), ThoError> {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (data, state) = ControlledCopyData::new(0, CopyBehavior::BlockFirst);
         let tested = Arc::new(DevicesWrap::wrap(data));
 
@@ -1453,7 +1454,7 @@ mod tests {
 
     #[tokio::test]
     async fn dump_to_cpu_error_preserves_source_data() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
         let (data, state) = ControlledCopyData::new(1, CopyBehavior::FailAlways);
         let tested = DevicesWrap::wrap(data);
 
@@ -1469,7 +1470,7 @@ mod tests {
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoError> {
 
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let data = MockDataWithId::whatever();
         let tested = DevicesWrap::wrap(data);

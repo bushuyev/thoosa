@@ -296,6 +296,7 @@ pub trait Metrics:Default {//TODO remove Default
     }
 }
 
+
 impl Metrics for () {} //for stages without output
 
 impl Metrics for [usize; 1] {

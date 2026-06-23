@@ -95,7 +95,7 @@ async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
     init_devices_once();
-    let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+    let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
     run_model_test_pipeline(
         1,
@@ -116,7 +116,7 @@ async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> 
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
     init_devices_once();
-    let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+    let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
     run_model_test_pipeline(
         0,
@@ -143,7 +143,7 @@ async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
     init_devices_once();
-    let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+    let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
     let files: Vec<(&'static str, f64)> = (0..16)
         .map(|i| {
