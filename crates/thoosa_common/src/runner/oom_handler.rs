@@ -25,7 +25,7 @@ use tokio::task::spawn_blocking;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{Cause, ThoError};
-use thoosa_shims::stream::ThoStreamGuard;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug)]
@@ -374,7 +374,7 @@ where
                                         selector,
                                         None,
                                         |data, ctx| {
-                                            let _guard = ThoStreamGuard::new(&stream)?;
+                                            let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
                                             Arc::clone(&task).do_run(data.borrow(), ctx)
                                         },
                                     )).await
@@ -386,7 +386,7 @@ where
                                         run_ctx,
                                         None,
                                         |data, ctx| {
-                                            let _guard = ThoStreamGuard::new(&stream)?;
+                                            let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
                                             Arc::clone(&task).do_run(data.borrow(), ctx)
                                         },
                                     )).await
@@ -433,7 +433,7 @@ where
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                         track_await(cuda_actor.exec_sync_stage(move |stream| async move {
                             let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
-                                match ThoStreamGuard::new(&stream) {
+                                match stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose() {
                                     Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
                                     Err(error) => ConsumeResult::Failed { input, error },
                                 }

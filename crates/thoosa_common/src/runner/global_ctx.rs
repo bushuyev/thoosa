@@ -408,6 +408,7 @@ impl GlobalCtx {
         self.shutting_down.load(Relaxed)
     }
 
+    //for tests and temporary fixes - use CudaActors for ipc/no ipc implemenations
     pub fn is_ipc(&self) -> bool {
         self.is_ipc
     }
@@ -870,7 +871,7 @@ mod tests {
     //nsys profile   -t cuda,osrt,nvtx   -s cpu   --cuda-memory-usage=true   --cudabacktrace=sync:1000000,memory:1000000,kernel:1000000   --force-overwrite=true   -o /tmp/tch-heavy   cargo test test_parallel_load -- --nocapture
     //nsys profile   --trace=cuda,osrt,nvtx   --gpu-metrics-devices=all   --cuda-memory-usage=true   -f true   -o /tmp/tch-heavy   cargo test test_parallel_load -- --nocapture
     //nsys-ui /tmp/tch-heavy.nsys-rep
-    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+    // #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
     async fn test_parallel_load() -> Result<(), ThoError> {
         // let cu_ctx = ThoCudaContext::new(0 as i32).expect("failed to create CUDA context");
         // cu_ctx.bind_to_thread()?;

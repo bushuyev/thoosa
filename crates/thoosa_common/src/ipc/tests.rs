@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
 use log::{debug, LevelFilter};
 use tch::Device;
+use tch::Device::Cuda;
 use tch::Kind::Float;
 use tokio::task::JoinSet;
 use thoosa_shared::comp_id::SynKey;
@@ -24,6 +25,7 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
 use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
+use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
@@ -291,7 +293,7 @@ async fn test_load_and_clc_ipc_cuda_worker_no_oom_tensor() {
     debug!("test_load_and_clc_ipc_cuda_worker_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
     } else {
         run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await.unwrap();
     }
@@ -303,7 +305,7 @@ async fn test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor() {
     debug!("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await.unwrap()
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
     } else {
         run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
     }
@@ -314,7 +316,7 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor() ->
     debug!("test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_load_and_clc_ipc_cuda_worker_oom_stage(
             "test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor",
@@ -333,7 +335,7 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor()
     debug!("test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_load_and_clc_ipc_cuda_worker_oom_stage(
             "test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor",
@@ -355,7 +357,7 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), Tho
     debug!("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_load_and_clc_ipc_cuda_worker_oom_stage(
             "test_load_and_clc_ipc_cuda_worker_oom_splits_tensor",
@@ -380,7 +382,7 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor() 
     debug!("test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let resources = (0..3)
             .map(|i| &*format!("resource_{i}").leak())
@@ -406,7 +408,7 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu() -> Result<(), ThoEr
     debug!("test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits()).await
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_load_and_clc_ipc_cuda_worker_oom_stage(
             "test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu",
@@ -432,7 +434,7 @@ async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu() -> Result<(), ThoEr
     debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_model_test_endpoint_inits()).await
+        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu", || async {
             run_model_test_pipeline(
@@ -456,7 +458,7 @@ async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files() -> Resul
     debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_model_test_endpoint_inits()).await
+        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files", || async {
             run_model_test_pipeline(
@@ -485,7 +487,7 @@ async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<
     debug!("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_model_test_endpoint_inits()).await
+        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let files: Vec<(&'static str, f64)> = (0..16)
             .map(|i| {
