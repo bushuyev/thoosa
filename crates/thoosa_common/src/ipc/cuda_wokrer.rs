@@ -20,10 +20,11 @@ use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
 use crate::dims::Dims;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_CUDA_DEVICE_ENV, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::SyncStageJsonWrapper;
 use crate::runner::common::runnable::SyncStage;
+use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 
 const WORKER_EXEC_STREAMS: usize = 32;
@@ -40,15 +41,11 @@ pub trait Init {
 
 impl CudaWorker {
 
-    pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>  >>) -> Result<(), ThoError> {
+    pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>  >>, tho_device: ThoDevice) -> Result<(), ThoError> {
 
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
-        let cuda_device = std::env::var(IPC_CUDA_DEVICE_ENV)
-            .ok()
-            .map(|v| v.parse::<usize>().map_err(|e| ThoError::new(format!("bad {IPC_CUDA_DEVICE_ENV}={v:?}: {e}"))))
-            .transpose()?
-            .unwrap_or(0);
+        let cuda_device = tho_device.gpu_ordinal();
         let _exec_context = ThoCudaContext::new(cuda_device as i32)?;
         let exec_stream_pool = Arc::new(Pool::from_iter(
             (0..WORKER_EXEC_STREAMS)

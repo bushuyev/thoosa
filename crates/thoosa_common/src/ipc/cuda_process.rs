@@ -54,7 +54,6 @@ use crate::torch_runner::tests::load_and_clc::clc::ClcStage;
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 
 pub(crate) const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
-pub(crate) const IPC_CUDA_DEVICE_ENV: &str = "THOOSA_WORKER_CUDA_DEVICE";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 pub(crate) const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
 const COPY_DONE_PAYLOAD_PREFIX: &str = "copy-done:";
@@ -816,7 +815,6 @@ impl CudaIPCActor {
         let mut child = command
 
             .env(IPC_SOCK_ENV, &sock_path)
-            .env(IPC_CUDA_DEVICE_ENV, cuda_device.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -1867,7 +1865,7 @@ mod tests {
         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await.unwrap()
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await.unwrap()
         } else {
             run_ipc_copy_oom_main("test_copy_ipc_cuda_worker_propagates_oom").await.unwrap();
         }
@@ -1935,21 +1933,21 @@ mod tests {
 
                 }
 
-
                 Ok("ok".to_string())
             }
         }
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
             let r= CudaWorker::run_worker(HashMap::from([
-                (
-                    "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                    Box::new(|s|{
-                        debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                        Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
-                    }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-                )
-            ])).await;
+                            (
+                                "test_copy_ipc_unrecoverable_cuda_error".to_string(),
+                                Box::new(|s|{
+                                    debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
+                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
+                                }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+                            )
+                        ]),
+                                          ThoDevice::from(Cuda(0))).await;
 
             debug!("test_copy_ipc_cuda_worker_propagates_oom: run_worker r={r:?}");
 
@@ -1990,7 +1988,7 @@ mod tests {
         debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
         } else {
             init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
 
@@ -2011,7 +2009,7 @@ mod tests {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
 
         } else {
             init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
