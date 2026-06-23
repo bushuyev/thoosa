@@ -731,7 +731,10 @@ where
 
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
     track_await(cuda_actor.exec_sync_stage(move |stream| async move {
-        let out = thoosa_shims::stream::with_stream(&stream, || f(Some(&stream)))??;
+        let out = match stream.as_ref() {
+            Some(stream) => thoosa_shims::stream::with_stream(stream, || f(Some(stream)))??,
+            None => f(None)?,
+        };
         Ok(ExecSyncStageActionResult::Sync { stream, out })
     })).await
 }

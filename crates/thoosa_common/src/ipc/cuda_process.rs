@@ -641,13 +641,6 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
 
 pub enum CudaIPCActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
-    SyncStream {
-        stream: Guard<ThoCudaStream>,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
-    GetExecStream {
-        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
-    },
     DropThoTensor {
         key:u64,
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -750,10 +743,10 @@ impl CudaIPCActor {
     pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
         let cuda_worker_args = Arc::new(cuda_worker_args.into_iter().map(|s| s.to_string()).collect());
 
-        let spawned_state = Self::spawn_worker_and_loops(&cuda_worker_args).await?;
+        let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args).await?;
 
 
-        let copy_ctx = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
+        let copy_ctx = CopyCtx::make_ipc_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
         let buf_size = copy_ctx.buf_size;
 
         Ok(Self {
@@ -767,10 +760,10 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_and_loops(cuda_worker_args: &Vec<String>) -> Result<SpawnedState, ThoError> {
+    async fn spawn_worker_and_loops(tho_device_idx: usize, cuda_worker_args: &Vec<String>) -> Result<SpawnedState, ThoError> {
         debug!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
 
-        let (mut child, stream) = Self::spawn_worker(cuda_worker_args).await?;
+        let (mut child, stream) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args).await?;
 
         let (reader, writer) = stream.into_split();
 
@@ -794,6 +787,10 @@ impl CudaIPCActor {
     }
 
     async fn spawn_worker(args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
+        Self::spawn_worker_for_cuda_device(0, args).await
+    }
+
+    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
         let exe = std::env::current_exe()?;
 
         debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
@@ -1139,28 +1136,12 @@ impl CudaIPCActor {
                     }
                 });
             }
-            CudaIPCActorMessage::SyncStream { stream, respond_to } => {
-                tokio::spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || stream.synchronize())
-                        .await
-                        .map_err(|e| ThoError::new(format!("IPC exec stream sync task join error: {e}")))
-                        .and_then(|result| result);
-                    let _ = respond_to.send(result);
-                });
-            }
-            CudaIPCActorMessage::GetExecStream { respond_to } => {
-                let copy_ctx = Arc::clone(&self.copy_ctx);
-                tokio::spawn(async move {
-                    let stream = copy_ctx.read().await.acquire_exec_stream().await;
-                    let _ = respond_to.send(Ok(stream));
-                });
-            }
             CudaIPCActorMessage::Reset { respond_to } => {
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
                 let self_arc = Arc::clone(&self.cuda_worker_args);
 
 
-                let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(&self_arc).await?);
+                let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(self.tho_device_idx, &self_arc).await?);
                 old_pawned_state.shutdown("ups").await;
 
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset done");
@@ -1579,29 +1560,6 @@ impl CudaIPCActorHandle {
         })
     }
 
-    async fn sync_stream(&self, stream: Guard<ThoCudaStream>) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::SyncStream {
-                stream,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
-    async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::GetExecStream {
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
 }
 
 #[async_trait]
@@ -1644,15 +1602,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
         Box::pin(async move {
-            let stream = self.acquire_exec_stream().await?;
-            match action(stream).await? {
-                ExecSyncStageActionResult::Sync { stream, out } => {
-                    self.sync_stream(stream).await?;
-                    Ok(out)
-                }
+            match action(None).await? {
+                ExecSyncStageActionResult::Sync { out, .. } => Ok(out),
                 ExecSyncStageActionResult::NoSync(out) => Ok(out),
             }
         })
@@ -1914,7 +1868,7 @@ mod tests {
         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await.unwrap()
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await.unwrap()
         } else {
             run_ipc_copy_oom_main("test_copy_ipc_cuda_worker_propagates_oom").await.unwrap();
         }
@@ -1982,21 +1936,21 @@ mod tests {
 
                 }
 
-
                 Ok("ok".to_string())
             }
         }
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
             let r= CudaWorker::run_worker(HashMap::from([
-                (
-                    "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                    Box::new(|s|{
-                        debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                        Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
-                    }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-                )
-            ])).await;
+                            (
+                                "test_copy_ipc_unrecoverable_cuda_error".to_string(),
+                                Box::new(|s|{
+                                    debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
+                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
+                                }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+                            )
+                        ]),
+                                          ThoDevice::from(Cuda(0))).await;
 
             debug!("test_copy_ipc_cuda_worker_propagates_oom: run_worker r={r:?}");
 
@@ -2037,7 +1991,7 @@ mod tests {
         debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
         } else {
             init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
 
@@ -2058,7 +2012,7 @@ mod tests {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new()).await
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
 
         } else {
             init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;

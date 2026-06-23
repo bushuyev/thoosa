@@ -48,7 +48,7 @@ pub enum CudaActorMessage {
 }
 
 pub enum ExecSyncStageActionResult<T> {
-    Sync { stream: Guard<ThoCudaStream>, out: T },
+    Sync { stream: Option<Guard<ThoCudaStream>>, out: T },
     NoSync(T),
 }
 
@@ -65,7 +65,7 @@ pub trait CudaActorHandle: Debug + Send + Sync {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>>;
 
     async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
@@ -85,7 +85,7 @@ impl dyn CudaActorHandle + '_ {
     pub fn exec_sync_stage<'a, R, F, Fut>(&'a self, action: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         R: Send + 'static,
-        F: FnOnce(Guard<ThoCudaStream>) -> Fut + Send + 'a,
+        F: FnOnce(Option<Guard<ThoCudaStream>>) -> Fut + Send + 'a,
         Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
     {
         Box::pin(async move {
@@ -347,12 +347,13 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
         Box::pin(async move {
             let stream = self.acquire_exec_stream().await?;
-            match action(stream).await? {
+            match action(Some(stream)).await? {
                 ExecSyncStageActionResult::Sync { stream, out } => {
+                    let stream = stream.ok_or_else(|| ThoError::new("CudaLocalActorHandle::exec_sync_stage_boxed requested sync without stream"))?;
                     self.sync_stream(stream).await?;
                     Ok(out)
                 }
@@ -394,13 +395,16 @@ impl CopyCtx {
     }
 
     fn new_with_buf_size(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
+        Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, false)
+    }
+
+    fn new_with_buf_size_inner(cuda_device: usize, buffs: usize, buf_size: usize, is_ipc: bool) -> Self {
         debug!("CopyCtx::new_with_buf_size: cuda_device={cuda_device} buffs={buffs} buf_size={buf_size}");
 
         let cuda_context = ThoCudaContext::new(cuda_device as i32).unwrap();
         cuda_context.bind_to_thread().unwrap();
         // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
         //TODO all state from CopyCtx should be moved into ActorHandles
-        let is_ipc = GlobalCtx::global().is_ipc();
 
         Self {
             cu_ctx: cuda_context,
@@ -415,7 +419,7 @@ impl CopyCtx {
 
     #[cfg(test)]
     pub(crate) fn make_instance_with_buffer_size(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
-        Self::new_with_buf_size(cuda_device, buffs, buf_size)
+        Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, true)
     }
 
     fn build_ipc_pool(
@@ -519,6 +523,13 @@ impl CopyCtx {
         debug!("make_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
 
         CopyCtx::new(cuda_device, mem_k, buffs)
+    }
+
+    pub(crate) fn make_ipc_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> CopyCtx {
+        debug!("make_ipc_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
+
+        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
+        Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, true)
     }
 
     fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize) -> usize {
