@@ -1565,7 +1565,7 @@ pub struct CudaIPCActorHandle {
     sender: mpsc::Sender<CudaIPCActorMessage>,
 }
 
-
+///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
     pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>) -> Result<Self, ThoError> {
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");

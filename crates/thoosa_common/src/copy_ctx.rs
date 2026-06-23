@@ -1,5 +1,5 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
-use crate::ipc::ipc_cuda_utils::{IpcBufsPool, SharedMemfdBuffer, ipc_copy_d2h_from_ptr, ipc_copy_h2d_from_ptr};
+use crate::ipc::ipc_cuda_utils::{SharedMemfdBuffer, ipc_copy_d2h_from_ptr, ipc_copy_h2d_from_ptr};
 use async_trait::async_trait;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -370,7 +370,7 @@ pub struct CopyCtx {
     exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
     bufs_pool_d2h: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
     bufs_pool_h2d: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
-    pub(crate)  ipc_bufs_pool: Option<Arc<IpcBufsPool>>,
+    pub(crate)  ipc_bufs_pool: Option<Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>>>,
 }
 
 impl Debug for CopyCtx {
@@ -399,16 +399,17 @@ impl CopyCtx {
         let cuda_context = ThoCudaContext::new(cuda_device as i32).unwrap();
         cuda_context.bind_to_thread().unwrap();
         // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-
+        //TODO all state from CopyCtx should be moved into ActorHandles
+        let is_ipc = GlobalCtx::global().is_ipc();
 
         Self {
             cu_ctx: cuda_context,
             buffs,
             buf_size,
-            exec_stream_pool: Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
-            bufs_pool_d2h: Some(Self::build_pool(buffs/2, buf_size, cuda_device, 0)),//TODO unwrap)),
-            bufs_pool_h2d: Some(Self::build_pool(buffs/2, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
-            ipc_bufs_pool: Some(Self::build_ipc_pool(buffs, buf_size, cuda_device)),
+            exec_stream_pool: (!is_ipc).then(||Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
+            bufs_pool_d2h: (!is_ipc).then(||Self::build_pool(buffs/2, buf_size, cuda_device, 0)),//TODO unwrap)),
+            bufs_pool_h2d: (!is_ipc).then(||Self::build_pool(buffs/2, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
+            ipc_bufs_pool: is_ipc.then( || Self::build_ipc_pool(buffs, buf_size, cuda_device)),
         }
     }
 
@@ -421,7 +422,7 @@ impl CopyCtx {
         num_buffs: usize,
         buf_size: usize,
         cuda_device: usize,
-    ) -> Arc<IpcBufsPool> {
+    ) -> Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>> {
         Arc::new(Pool::from_iter((0..num_buffs).map(|_| {
             let buffer_id = NEXT_IPC_BUFFER_ID.fetch_add(1, Relaxed);
             (
@@ -616,47 +617,4 @@ impl CopyCtx {
     }
 
 
-}
-
-#[cfg(test)]
-mod tests {
-    use log::debug;
-    use tch::Device::Cuda;
-    use tch::kind::FLOAT_CPU;
-    use tch::Tensor;
-    use thoosa_shared::ThoError;
-    use thoosa_shims::context::ThoCudaContext;
-    use crate::copy_ctx::{CudaActorHandle, CudaLocalActorHandle};
-    use crate::tho_device::ThoDevice;
-
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[test]
-    fn test_cuda_actor_copy() -> Result<(), ThoError> {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .on_thread_start(|| {
-                if tch::Cuda::is_available() {
-                    //runs cuCtxSetCurrent
-                    if let Err(err) = ThoCudaContext::new(0) {
-                        panic!("Failed to create context: {err:?}"); //TODO device
-                    }
-                }
-            })
-            .enable_all()
-            .build()?;
-        rt.block_on(async {
-
-
-            let actor = CudaLocalActorHandle::new(1);
-
-            let t = Tensor::rand(&[10, 1000], FLOAT_CPU);
-
-            let r = actor.copy(t.into(), ThoDevice::from(Cuda(0))).await;
-
-            debug!("r={r:?}");
-            // panic!("ok")
-
-        });
-
-        Ok(())
-    }
 }
