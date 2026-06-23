@@ -924,7 +924,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_dummy() -> Result<(), ThoError> {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let device_idx = 0;
 
@@ -1001,7 +1001,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_purge_cpu() -> Result<(), ThoError> {
 
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let device_idx = 0;
 
@@ -1053,7 +1053,7 @@ mod tests {
         use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
         RealGlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let _device_idx = 0;
 
@@ -1149,7 +1149,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn test_load_and_clc_oom_compete_for_max_parallel_dummy() -> Result<(), ThoError> {
         crate::runner::global_ctx::GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let device_idx = 1;
 
@@ -1187,7 +1187,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
     async fn test_load_and_clc_oom_splits_dummy() -> Result<(), ThoError> {
         crate::runner::global_ctx::GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let device_idx = 1;
 

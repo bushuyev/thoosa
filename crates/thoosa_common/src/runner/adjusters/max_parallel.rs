@@ -176,7 +176,7 @@ mod tests {
 
     #[tokio::test]
     async fn adjust_adds_dummy_max_parallel() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let adjustable = RunCtxImpl::new(0, "permits_adjust_dummy");
         let adjuster = MaxParallelAdjuster::<RunCtxImpl>::new(100, 10);
@@ -190,7 +190,7 @@ mod tests {
 
     #[tokio::test]
     async fn adjust_is_noop_when_max_parallel_already_set() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let mut adjustable = RunCtxImpl::new(0, "permits_adjust_noop");
         adjustable.set_max_other_parallel(10);

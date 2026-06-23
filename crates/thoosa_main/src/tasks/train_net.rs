@@ -835,7 +835,7 @@ mod tests {
 
 
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let opt_config = Arc::new(OptConfig::new(10, 3));
         let run_config = Arc::new(

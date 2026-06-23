@@ -250,7 +250,7 @@ async fn test_load_tensor_cuda_to_cuda() -> Result<(), ThoError> {
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
 
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float, 1).await);
 
@@ -266,7 +266,7 @@ async fn test_load_tensor_cpu_to_cuda() -> Result<(), ThoError> {
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
 
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let loader = Arc::new(TestTensorLoader::new([10, 3].into(), Float, 1).await);
 
@@ -341,7 +341,7 @@ async fn test_load_and_clc_no_oom_tensor() -> Result<(), ThoError> {
     }
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
     const MUL_K: f64 = 2.;
@@ -428,7 +428,7 @@ async fn test_load_and_clc_oom_till_min_max_parallel_tensor() -> Result<(), ThoE
     }
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
     const MUL_K: f64 = 2.;
@@ -479,7 +479,7 @@ async fn test_load_and_clc_oom_compete_for_max_parallel_tensor() -> Result<(), T
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
 
@@ -534,7 +534,7 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
 
@@ -591,7 +591,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
     const MUL_K: f64 = 2.;
@@ -648,7 +648,7 @@ async fn test_load_and_clc_oom_dump_to_cpu() -> Result<(), ThoError> {
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let device_idx = 1;
 
@@ -838,7 +838,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let (free_mem, _total_mem) = cuda_mem();
     let init_type = Kind::Int64;
@@ -911,7 +911,7 @@ async fn test_with_tho_tensor() -> Result<(), ThoError> {
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices(2);
-    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
     let tmp_cache: TmpCached<ThoTensor<AnyDims, SimpleId>> = TmpCached::new("test").await;
 

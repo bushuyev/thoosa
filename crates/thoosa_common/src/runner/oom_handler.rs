@@ -1346,7 +1346,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_task_context_once() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let input_adj_calls = Arc::new(AtomicUsize::new(0));
         let mut input_adj = MockInputAdjuster::new();
@@ -1420,7 +1420,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_task_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
@@ -1459,7 +1459,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_input_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::oom()),
@@ -1498,7 +1498,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_only_run_ctx_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let (task, task_calls) = mock_runnable([
             Err(ThoError::oom()),
@@ -1539,7 +1539,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_tasks() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
 
         let (init_task1, init_calls1) =
             mock_runnable([Err(ThoError::oom())]);

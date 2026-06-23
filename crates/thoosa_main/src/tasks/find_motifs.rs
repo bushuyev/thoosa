@@ -638,7 +638,7 @@ mod tests {
         // set_max_level(Trace);
         // reset_print_options();
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 3, 100, 10000)));
         let find_motifs_run_config_id = 1;

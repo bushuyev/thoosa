@@ -757,7 +757,7 @@ mod tests {
         batch_chunks: usize,
     ) -> Result<(Vec<i64>, Vec<f32>), ThoError> {
         GlobalCtx::init_devices(1);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         let find_motifs_run_config_id = 300;
         let device = Device::Cpu;
         let slices_len = slices_len(motif_width, step);

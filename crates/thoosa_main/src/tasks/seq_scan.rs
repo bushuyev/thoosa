@@ -722,7 +722,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_seq_scan_stage_runs() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let resources = vec![Resource::new(1, 1, "r0", 6), Resource::new(2, 1, "r1", 6)];
         let resources_group = ResourceType::List(resources.iter().map(|resource| resource.file_stem().to_string()).collect());
