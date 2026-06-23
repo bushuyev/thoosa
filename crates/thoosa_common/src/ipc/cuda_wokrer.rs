@@ -352,7 +352,7 @@ where
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
-        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key))?)
+        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key, vec![], tch::Kind::Float))?)
     }
 }
 

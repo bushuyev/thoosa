@@ -167,7 +167,7 @@ impl Select<ABRange> for ThoTensor<ABData, ModelTestId> {
 
     fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoError> {
         use std::cmp::min;
-        let size = ABMetrics::from(self.t_ref().size());
+        let size = ABMetrics::from(self.size());
         let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
 
         ThoTensor::new(self.id().clone(), self.t_ref().i((d0, ..)))

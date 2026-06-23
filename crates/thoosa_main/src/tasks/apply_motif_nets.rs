@@ -1352,7 +1352,7 @@ pub(crate) mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 1;
         let select_motifs_run_config_id: RunConfigId = 2;
@@ -1519,7 +1519,7 @@ pub(crate) mod tests {
         // log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 1;
         let select_motifs_run_config_id: RunConfigId = 2;
@@ -1623,7 +1623,7 @@ pub(crate) mod tests {
         log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let find_motifs_run_config_id: RunConfigId = 1;
         let select_motifs_run_config_id: RunConfigId = 2;

@@ -576,16 +576,30 @@ pub mod mock_global_ctx {
             self
         }
 
+        pub fn with_is_ipc(mut self, is_ipc:bool) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_is_ipc().times(0..).returning({
+                    move || {
+                        real.is_ipc
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_is_ipc().times(0..).returning(move || is_ipc);
+            }
+
+            self
+        }
+
         pub fn finish(self) -> MockGlobalCtx {
             self.mock
         }
 
         pub fn build(self) -> MockGlobalCtx {
-            build_with_params_inner(self, MockGlobalCtxBuildParams::default())
+            build_with_params_inner(self, MockGlobalCtxBuildParams::default(), true)
         }
 
         #[cfg(any(test, feature = "mock_global_ctx"))]
-        pub fn install_global_ctx_mock(use_real_ctx: bool) -> impl Drop {
+        pub fn install_global_ctx_mock(use_real_ctx: bool, is_ipc: bool) -> impl Drop {
             debug!("install_global_ctx_mock");
             use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
             let ctx = MockGlobalCtx::global_context();
@@ -605,9 +619,9 @@ pub mod mock_global_ctx {
             }
 
             mock_global_ctx::set_manual_method_real_ctx(None);
-            ctx.expect().returning(|| {
+            ctx.expect().returning(move || {
                 Box::leak(Box::new(
-                    mock_global_ctx::build_default(),
+                    build_with_params(MockGlobalCtxBuildParams::default(), is_ipc),
                 )) as &'static MockGlobalCtx
             });
 
@@ -616,7 +630,7 @@ pub mod mock_global_ctx {
 
     }
 
-    fn build_with_params_inner(builder: MockGlobalCtxBuilder, params: MockGlobalCtxBuildParams) -> MockGlobalCtx {
+    fn build_with_params_inner(builder: MockGlobalCtxBuilder, params: MockGlobalCtxBuildParams, is_ipc: bool) -> MockGlobalCtx {
         builder
             .with_age(params.age)
             .with_dump_all_to_cpu()
@@ -625,11 +639,12 @@ pub mod mock_global_ctx {
             .with_register_cache()
             .with_remove_cache()
             .with_run_purge_gpu()
+            .with_is_ipc(is_ipc)
             .finish()
     }
 
-    pub fn build_with_params(params: MockGlobalCtxBuildParams) -> MockGlobalCtx {
-        build_with_params_inner(build(), params)
+    pub fn build_with_params(params: MockGlobalCtxBuildParams, is_ipc: bool) -> MockGlobalCtx {
+        build_with_params_inner(build(), params, is_ipc)
     }
 
     pub fn build() -> MockGlobalCtxBuilder {
@@ -649,7 +664,7 @@ pub mod mock_global_ctx {
 
 
     pub fn build_default() -> MockGlobalCtx {
-        build_with_params(MockGlobalCtxBuildParams::default())
+        build_with_params(MockGlobalCtxBuildParams::default(), false)
     }
 
     pub static mut USE_REAL_CTX:bool = false;
@@ -802,7 +817,7 @@ mod tests {
         // cu_ctx.reset()?;
 
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let tmp_cache:TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;
 

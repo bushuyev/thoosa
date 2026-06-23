@@ -457,7 +457,7 @@ mod tests {
     async fn test_train_final_net_smoke() -> Result<(), ThoError> {
         reset_print_options();
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let train_motif_nets_run_config_id: RunConfigId = 2;
         let train_label_nets_run_config_id: RunConfigId = 3;

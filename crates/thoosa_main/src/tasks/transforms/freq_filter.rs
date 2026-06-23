@@ -709,7 +709,7 @@ mod tests {
 
     async fn run_freq_filter(filter_configs: Vec<InputFilter>) -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
 

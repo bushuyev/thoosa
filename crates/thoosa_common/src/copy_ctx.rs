@@ -406,8 +406,8 @@ impl CopyCtx {
             buffs,
             buf_size,
             exec_stream_pool: Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
-            bufs_pool_d2h: Some(Self::build_pool(16, buf_size, cuda_device, 0)),//TODO unwrap)),
-            bufs_pool_h2d: Some(Self::build_pool(16, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
+            bufs_pool_d2h: Some(Self::build_pool(buffs/2, buf_size, cuda_device, 0)),//TODO unwrap)),
+            bufs_pool_h2d: Some(Self::build_pool(buffs/2, buf_size, cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED)),
             ipc_bufs_pool: Some(Self::build_ipc_pool(buffs, buf_size, cuda_device)),
         }
     }

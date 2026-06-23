@@ -67,7 +67,7 @@ pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, T
 
     use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
     RealGlobalCtx::init_devices_ipc(2, test_worker_args(test_name, module)).await?;
-    let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true);
+    let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
     debug!("init_ipc_test: don ok");
 
@@ -104,8 +104,8 @@ impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
             ThoTensorInner::Val { .. } => {
                 todo!()
             }
-            ThoTensorInner::Ref { key } => {
-                ThoTensor::new_ref(mono_key!(0, "todo").into(), key)
+            ThoTensorInner::Ref { key, size, kind } => {
+                ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float)
             }
         }
     }
@@ -157,7 +157,7 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
             debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
 
             let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .copy(ThoTensor::new_ref((), out_key), 0.into()).await?;
+                .copy(ThoTensor::new_ref((), out_key, vec![], tch::Kind::Float), 0.into()).await?;
             let cpu_out: ThoTensor<ClcStageOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
 
 
