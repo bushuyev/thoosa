@@ -15,13 +15,18 @@ use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use thoosa_shared::traits::Named;
+use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
+use tub::Pool;
 use crate::dims::Dims;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_CUDA_DEVICE_ENV, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::SyncStageJsonWrapper;
 use crate::runner::common::runnable::SyncStage;
 use crate::tho_tensor::ThoTensor;
+
+const WORKER_EXEC_STREAMS: usize = 32;
 
 pub struct CudaWorker {
     all_cuda_tensors:DashMap<u64, Tensor>,
@@ -39,8 +44,19 @@ impl CudaWorker {
 
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
+        let cuda_device = std::env::var(IPC_CUDA_DEVICE_ENV)
+            .ok()
+            .map(|v| v.parse::<usize>().map_err(|e| ThoError::new(format!("bad {IPC_CUDA_DEVICE_ENV}={v:?}: {e}"))))
+            .transpose()?
+            .unwrap_or(0);
+        let _exec_context = ThoCudaContext::new(cuda_device as i32)?;
+        let exec_stream_pool = Arc::new(Pool::from_iter(
+            (0..WORKER_EXEC_STREAMS)
+                .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
+                .collect::<Result<Vec<_>, _>>()?,
+        ));
 
-        debug!("running worker: sock_path={sock_path:?} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
+        debug!("running worker: sock_path={sock_path:?} cuda_device={cuda_device} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
@@ -242,17 +258,28 @@ impl CudaWorker {
                 let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
                 debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} input={input:?}");
 
-                let response = match installed_endpoints.read().get(endpoint_name) {
-                    Some(endpoint) => {
-                        let r = panic_to_err!(endpoint.do_run(input.to_string(), &all_cuda_tensors));
+                let response = {
+                    let stream = exec_stream_pool.acquire().await;
+                    match installed_endpoints.read().get(endpoint_name) {
+                        Some(endpoint) => {
+                            let r = panic_to_err!({
+                                let _thread_context = ThoCudaContext::new(stream.device())?;
+                                let _guard = ThoStreamGuard::new(&stream)?;
+                                let response = endpoint.do_run(input.to_string(), &all_cuda_tensors);
+                                if response.is_ok() {
+                                    stream.synchronize()?;
+                                }
+                                response
+                            });
 
-                        if let  Err(e) = &r {
+                            if let  Err(e) = &r {
 
-                            debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
-                        }
-                        r
-                    },
-                    None => Err(ThoError::new(format!("endpoint {endpoint_name:?} is not installed"))),
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
+                            }
+                            r
+                        },
+                        None => Err(ThoError::new(format!("endpoint {endpoint_name:?} is not installed"))),
+                    }
                 };
 
                 debug!("run_worker: invoke endpoint  response={response:?}");

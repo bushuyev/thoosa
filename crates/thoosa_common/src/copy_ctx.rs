@@ -394,13 +394,16 @@ impl CopyCtx {
     }
 
     fn new_with_buf_size(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
+        Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, false)
+    }
+
+    fn new_with_buf_size_inner(cuda_device: usize, buffs: usize, buf_size: usize, is_ipc: bool) -> Self {
         debug!("CopyCtx::new_with_buf_size: cuda_device={cuda_device} buffs={buffs} buf_size={buf_size}");
 
         let cuda_context = ThoCudaContext::new(cuda_device as i32).unwrap();
         cuda_context.bind_to_thread().unwrap();
         // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
         //TODO all state from CopyCtx should be moved into ActorHandles
-        let is_ipc = GlobalCtx::global().is_ipc();
 
         Self {
             cu_ctx: cuda_context,
@@ -415,7 +418,7 @@ impl CopyCtx {
 
     #[cfg(test)]
     pub(crate) fn make_instance_with_buffer_size(cuda_device: usize, buffs: usize, buf_size: usize) -> Self {
-        Self::new_with_buf_size(cuda_device, buffs, buf_size)
+        Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, true)
     }
 
     fn build_ipc_pool(
@@ -519,6 +522,13 @@ impl CopyCtx {
         debug!("make_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
 
         CopyCtx::new(cuda_device, mem_k, buffs)
+    }
+
+    pub(crate) fn make_ipc_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> CopyCtx {
+        debug!("make_ipc_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
+
+        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
+        Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, true)
     }
 
     fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize) -> usize {

@@ -364,6 +364,28 @@ where
                 track_await(oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
+                        if GlobalCtx::global().is_ipc() {
+                            return if let Some(selector) = selector {
+                                track_await(input
+                                    .with_selected_data_ref(
+                                        tho_device_idx,
+                                        run_ctx,
+                                        selector,
+                                        None,
+                                        |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                    )).await
+                            } else {
+                                debug!("OOMHandler::run: input={input:?}");
+                                track_await(input
+                                    .with_data_ref(
+                                        tho_device_idx,
+                                        run_ctx,
+                                        None,
+                                        |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                                    )).await
+                            };
+                        }
+
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                         track_await(cuda_actor.exec_sync_stage(move |stream| async move {
                             let out = if let Some(selector) = selector {
@@ -428,6 +450,8 @@ where
 
                 track_await(oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     let consume_result = if tho_device_idx == 0 {
+                        track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
+                    } else if GlobalCtx::global().is_ipc() {
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
                     } else {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);

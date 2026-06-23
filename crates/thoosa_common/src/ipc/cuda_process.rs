@@ -54,6 +54,7 @@ use crate::torch_runner::tests::load_and_clc::clc::ClcStage;
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 
 pub(crate) const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
+pub(crate) const IPC_CUDA_DEVICE_ENV: &str = "THOOSA_WORKER_CUDA_DEVICE";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 pub(crate) const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
 const COPY_DONE_PAYLOAD_PREFIX: &str = "copy-done:";
@@ -641,13 +642,6 @@ pub(crate) async fn handle_worker_request(payload: String) -> String {
 
 pub enum CudaIPCActorMessage {
     Copy{ src:ThoTensor, dst_device:ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>},
-    SyncStream {
-        stream: Guard<ThoCudaStream>,
-        respond_to: oneshot::Sender<Result<(), ThoError>>
-    },
-    GetExecStream {
-        respond_to: oneshot::Sender<Result<Guard<ThoCudaStream>, ThoError>>
-    },
     DropThoTensor {
         key:u64,
         respond_to: oneshot::Sender<Result<(), ThoError>>
@@ -750,10 +744,10 @@ impl CudaIPCActor {
     pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
         let cuda_worker_args = Arc::new(cuda_worker_args.into_iter().map(|s| s.to_string()).collect());
 
-        let spawned_state = Self::spawn_worker_and_loops(&cuda_worker_args).await?;
+        let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args).await?;
 
 
-        let copy_ctx = CopyCtx::make_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
+        let copy_ctx = CopyCtx::make_ipc_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
         let buf_size = copy_ctx.buf_size;
 
         Ok(Self {
@@ -767,10 +761,10 @@ impl CudaIPCActor {
         })
     }
 
-    async fn spawn_worker_and_loops(cuda_worker_args: &Vec<String>) -> Result<SpawnedState, ThoError> {
+    async fn spawn_worker_and_loops(tho_device_idx: usize, cuda_worker_args: &Vec<String>) -> Result<SpawnedState, ThoError> {
         debug!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
 
-        let (mut child, stream) = Self::spawn_worker(cuda_worker_args).await?;
+        let (mut child, stream) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args).await?;
 
         let (reader, writer) = stream.into_split();
 
@@ -794,6 +788,10 @@ impl CudaIPCActor {
     }
 
     async fn spawn_worker(args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
+        Self::spawn_worker_for_cuda_device(0, args).await
+    }
+
+    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
         let exe = std::env::current_exe()?;
 
         debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
@@ -818,6 +816,7 @@ impl CudaIPCActor {
         let mut child = command
 
             .env(IPC_SOCK_ENV, &sock_path)
+            .env(IPC_CUDA_DEVICE_ENV, cuda_device.to_string())
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -1139,28 +1138,12 @@ impl CudaIPCActor {
                     }
                 });
             }
-            CudaIPCActorMessage::SyncStream { stream, respond_to } => {
-                tokio::spawn(async move {
-                    let result = tokio::task::spawn_blocking(move || stream.synchronize())
-                        .await
-                        .map_err(|e| ThoError::new(format!("IPC exec stream sync task join error: {e}")))
-                        .and_then(|result| result);
-                    let _ = respond_to.send(result);
-                });
-            }
-            CudaIPCActorMessage::GetExecStream { respond_to } => {
-                let copy_ctx = Arc::clone(&self.copy_ctx);
-                tokio::spawn(async move {
-                    let stream = copy_ctx.read().await.acquire_exec_stream().await;
-                    let _ = respond_to.send(Ok(stream));
-                });
-            }
             CudaIPCActorMessage::Reset { respond_to } => {
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset");
                 let self_arc = Arc::clone(&self.cuda_worker_args);
 
 
-                let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(&self_arc).await?);
+                let mut old_pawned_state = mem::replace(&mut self.spawned_state, Self::spawn_worker_and_loops(self.tho_device_idx, &self_arc).await?);
                 old_pawned_state.shutdown("ups").await;
 
                 debug!("CudaIPCActor::handle_message, CudaIPCActorMessage::Reset done");
@@ -1579,29 +1562,6 @@ impl CudaIPCActorHandle {
         })
     }
 
-    async fn sync_stream(&self, stream: Guard<ThoCudaStream>) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::SyncStream {
-                stream,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
-    async fn acquire_exec_stream(&self) -> Result<Guard<ThoCudaStream>, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::GetExecStream {
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
-    }
-
 }
 
 #[async_trait]
@@ -1644,17 +1604,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     fn exec_sync_stage_boxed<'a>(
         &'a self,
-        action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
+        _action: Box<dyn FnOnce(Guard<ThoCudaStream>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
     ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
         Box::pin(async move {
-            let stream = self.acquire_exec_stream().await?;
-            match action(stream).await? {
-                ExecSyncStageActionResult::Sync { stream, out } => {
-                    self.sync_stream(stream).await?;
-                    Ok(out)
-                }
-                ExecSyncStageActionResult::NoSync(out) => Ok(out),
-            }
+            Err(ThoError::new("CudaIPCActorHandle::exec_sync_stage_boxed is not supported; installed worker endpoints acquire and synchronize CUDA streams in CudaWorker"))
         })
     }
 
