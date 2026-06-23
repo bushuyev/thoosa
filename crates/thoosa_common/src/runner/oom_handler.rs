@@ -25,7 +25,7 @@ use tokio::task::spawn_blocking;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{Cause, ThoError};
-use thoosa_shims::stream::ThoStreamGuard;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug)]
