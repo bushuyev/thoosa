@@ -408,6 +408,7 @@ impl GlobalCtx {
         self.shutting_down.load(Relaxed)
     }
 
+    //for tests and temporary fixes - use CudaActors for ipc/no ipc implemenations
     pub fn is_ipc(&self) -> bool {
         self.is_ipc
     }
