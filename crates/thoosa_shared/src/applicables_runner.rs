@@ -3,7 +3,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 
-pub trait Input: Data + Debug {
+pub trait Input: Debug {
 
 }
 

@@ -7,6 +7,38 @@ use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::ThoError;
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 
+pub type WrappedStageRunInput<S> = Arc<DevicesWrap<<S as Stage>::In<'static>>>;
+
+pub trait AsyncStageRunInput<I>: Send + 'static
+where
+    I: WithId,
+{
+}
+
+impl<I, T> AsyncStageRunInput<I> for T
+where
+    I: WithId,
+    T: Send + 'static,
+{
+}
+
+pub trait WrappedRunInputStage: AsyncStage<RunInput = WrappedStageRunInput<Self>>
+where
+    for<'a> Self::In<'a>: Data + WithId + Send + Sync,
+    Self::Out: Data + WithId + Send + Sync,
+    <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
+{
+}
+
+impl<T> WrappedRunInputStage for T
+where
+    T: AsyncStage<RunInput = WrappedStageRunInput<T>>,
+    for<'a> T::In<'a>: Data + WithId + Send + Sync,
+    T::Out: Data + WithId + Send + Sync,
+    <T::Out as Data>::M: DevicesWrapCopyMode<T::Out>,
+{
+}
+
 pub trait Stage: Debug {
     type Ctx: RunCtx;
 
@@ -19,15 +51,20 @@ pub trait Stage: Debug {
 // #[async_trait] - it's anyway not obj safe, and it forces Output to be Send
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
-        for <'a> Self::In<'a>: Data + WithId + Send + Sync,
+        for <'a> Self::In<'a>: WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync,
         <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>
 {
+    type RunInput: AsyncStageRunInput<Self::In<'static>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<Self::In<'static> as WithId>::ID {
+        unimplemented!()
+    }
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)
-    //it means 'plain' inputs like resource ID should have dummy Data impl, TODO look for the better way (enum based solution appear to be essentially same dummy wrapper)
+    //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
     // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
-    fn run(self: Arc<Self>, _input: Arc<DevicesWrap<Self::In<'static>>>, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    fn run(self: Arc<Self>, _input: Self::RunInput, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
 
     {
         async {

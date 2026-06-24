@@ -352,6 +352,11 @@ impl Stage for FindAndSelectMotifsStage {
 }
 
 impl AsyncStage for FindAndSelectMotifsStage {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindAndSelectMotifsStage::run"))]
     async fn run(
         self: Arc<Self>,

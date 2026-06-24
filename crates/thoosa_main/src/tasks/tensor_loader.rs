@@ -67,6 +67,11 @@ impl<C> AsyncStage for RawTensorLoader<C>
 where
     C: RunCtx + 'static,
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RawTensorLoader::run"))]
     async fn run(
@@ -155,7 +160,9 @@ pub(crate) mod mock_tensor_loader {
         }
 
         // #[async_trait]
-        impl AsyncStage for TensorLoader {}
+        impl AsyncStage for TensorLoader {
+            type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+        }
 
         #[async_trait]
         impl Cached for TensorLoader {

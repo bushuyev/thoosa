@@ -119,6 +119,11 @@ impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {

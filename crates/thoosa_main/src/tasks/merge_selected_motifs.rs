@@ -154,7 +154,7 @@ fn find_motifs_aggr_to_stats(aggr: FindMotifsAggr) -> Aggr {
 #[derive(Named)]
 pub struct MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -166,7 +166,7 @@ where
 
 impl<MS, C> Debug for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -176,7 +176,7 @@ where
 
 impl<MS, C> MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
@@ -274,7 +274,7 @@ where
 
 impl<MS, C> Stage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -284,9 +284,14 @@ where
 
 impl<MS, C> AsyncStage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MergeSelectedMotifs::run"))]
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
     where
