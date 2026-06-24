@@ -20,10 +20,26 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::composite_input::dims::BStageOutputDims;
 use crate as thoosa_common;
+use crate::torch_runner::tests::composite_input::B_STAGE_ID;
+
 #[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
 #[dummy_data(clone)]
 pub(super) struct BStageInput {
+    id:MonoKey,
+    db_id:u32,
     token:String,
+}
+
+impl BStageInput {
+    pub(super) fn new<S:Into<String>>(db_id: u32, token:S) -> Self {
+        let token = token.into();
+        Self {
+            id: mono_key!(db_id, &token),
+            db_id,
+            token
+        }
+    }
+
 }
 
 impl From<&BStageInput> for ElvVal {
@@ -33,10 +49,10 @@ impl From<&BStageInput> for ElvVal {
 }
 
 impl WithId for BStageInput {
-    type ID = BStageInput;
+    type ID = MonoKey;
 
-    fn id(&self) -> &BStageInput {
-        &self
+    fn id(&self) -> &MonoKey {
+        &self.id
     }
 }
 
@@ -47,7 +63,7 @@ impl Input for BStageInput{}
 #[derive(Debug, Named)]
 pub(super) struct BStageOutput {
     id: SynKey,
-    value:ThoTensor<BStageOutputDims, ()>,
+    pub(super) value:ThoTensor<BStageOutputDims, ()>,
 }
 
 impl WithId for BStageOutput {
@@ -94,7 +110,6 @@ pub(super) struct BStage {
     id: MonoKey,
 }
 
-
 impl Stage for BStage  {
     type Ctx = RunCtxImpl;
     type In<'a> = BStageInput;
@@ -103,7 +118,7 @@ impl Stage for BStage  {
 
 impl BStage {
     pub(super) fn new() -> Self {
-        Self { id: mono_key!(1, "BStage") }
+        Self { id: mono_key!(B_STAGE_ID, "BStage") }
     }
 }
 
@@ -113,11 +128,11 @@ impl AsyncStage for BStage  {
 
         with_data!(ctx.branch(false), input; |ctx:RunCtxImpl, input: &BStageInput| {
             let tensor = match input.token.as_str() {
-                "a100" => Tensor::from_slice(&[100.1]),
+                "b100" => Tensor::from_slice(&[100.2]),
                 _ => Tensor::rand(&[1], FLOAT_CPU)
             };
 
-            let id = self.out_id(&input);
+            let id = self.out_id(input.id());
 
             Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(
                 BStageOutput{
@@ -132,6 +147,6 @@ impl AsyncStage for BStage  {
 
 impl OutId for BStage {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.id + mono_key!(input_id.id(), format!("b_stage_out_{:?}", input_id.id()))
+        self.id.clone() + input_id
     }
 }

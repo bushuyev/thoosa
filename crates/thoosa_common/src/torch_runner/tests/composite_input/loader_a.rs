@@ -20,10 +20,25 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::composite_input::dims::AStageOutputDims;
 use crate as thoosa_common;
+use crate::torch_runner::tests::composite_input::A_STAGE_ID;
+
 #[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
 #[dummy_data(clone)]
 pub(super) struct AStageInput {
+    id:MonoKey,
+    db_id:u32,
     token:String,
+}
+
+impl AStageInput {
+    pub(super) fn new<S:Into<String>>(db_id: u32, token:S) -> Self {
+        let token = token.into();
+        Self {
+            id: mono_key!(db_id, &token),
+            db_id,
+            token
+        }
+    }
 }
 
 impl From<&AStageInput> for ElvVal {
@@ -33,10 +48,10 @@ impl From<&AStageInput> for ElvVal {
 }
 
 impl WithId for AStageInput {
-    type ID = AStageInput;
+    type ID = MonoKey;
 
-    fn id(&self) -> &AStageInput {
-        &self
+    fn id(&self) -> &MonoKey {
+        &self.id
     }
 }
 
@@ -97,7 +112,7 @@ pub(super) struct AStage {
 
 impl AStage {
     pub(super) fn new() -> Self {
-        Self { id: mono_key!(0, "AStage") }
+        Self { id: mono_key!(A_STAGE_ID, "AStage") }
     }
 }
 
@@ -117,7 +132,7 @@ impl AsyncStage for AStage  {
                 _ => Tensor::rand(&[1], FLOAT_CPU)
             };
 
-            let id = self.out_id(&input);
+            let id = self.out_id(input.id());
 
             Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(
                 AStageOutput{
@@ -132,6 +147,6 @@ impl AsyncStage for AStage  {
 
 impl OutId for AStage {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        &self.id + mono_key!(input_id.id(), format!("a_stage_out_{:?}", input_id.id()))
+        self.id.clone() + input_id
     }
 }

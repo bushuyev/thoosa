@@ -2,6 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use async_trait::async_trait;
 use tch::Kind;
+use tracing::debug;
 use cached_derive::Cached;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
@@ -19,6 +20,7 @@ use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::composite_input::dims::{ABDims, AStageOutputDims};
 use crate::torch_runner::tests::composite_input::loader_a::{AStage, AStageInput, AStageOutput};
 use crate as thoosa_common;
+use crate::ipc::ipc_cuda_utils::IpcTensorKind::Float;
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::{OutId, RunCtx};
@@ -26,11 +28,12 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use crate::tho_device::ThoDevice;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
+use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_STAGE_ID};
 use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput, BStageOutput};
 use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
 
 #[derive(Debug, Named, Clone, DummyData)]
-struct ABClcStageInput {
+pub(super) struct ABClcStageInput {
     id:SynKey,
     from_a:Arc<DevicesWrap<AStageInput>>,
     from_b:Arc<DevicesWrap<BStageInput>>,
@@ -39,7 +42,7 @@ struct ABClcStageInput {
 impl ABClcStageInput {
     pub fn new(from_a: Arc<DevicesWrap<AStageInput>>, from_b: Arc<DevicesWrap<BStageInput>>) -> Self {
         Self {
-            id: mono_key!(0, "zzz").into(),
+            id: from_a.id().clone() + from_b.id(),
             from_a,
             from_b
         }
@@ -59,9 +62,9 @@ impl WithId for ABClcStageInput {
 impl Input for ABClcStageInput {}
 
 #[derive(Debug, Named, Clone, DummyData)]
-struct ABClcStageOutput {
+pub(super) struct ABClcStageOutput {
     id:SynKey,
-    value:f32
+    pub(super) value:f32
 }
 
 
@@ -87,7 +90,8 @@ impl thoosa_shared::CopyToDevice for ABClcStageOutput {
 
 
 #[derive(Debug, Named, Cached)]
-struct ABClcStage {
+pub(super) struct ABClcStage {
+    id:MonoKey,
     a_stage:Arc<AStage>,
     b_stage:Arc<BStage>,
     ab_clc_sync:Arc<ABClcSyncStage>
@@ -102,10 +106,17 @@ impl Stage for ABClcStage {
 impl ABClcStage {
     pub fn new() -> Self {
         Self {
+            id: mono_key!(AB_CLC_STAGE_ID, "ABClcStage"),
             a_stage: Arc::new(AStage::new()),
             b_stage: Arc::new(BStage::new()),
             ab_clc_sync: Arc::new(ABClcSyncStage::new())
         }
+    }
+}
+
+impl OutId for ABClcStage {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
     }
 }
 
@@ -129,17 +140,20 @@ impl ABClcSyncStageInputWrapper {
 impl WithDataRef for ABClcSyncStageInputWrapper {
     type O<'o> = ABClcSyncStageInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
     where
             for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
             P: RunCtx + 'a
     {
         async {
-            todo!()
+            with_data!(ctx, self.a_out, self.b_out; |ctx, a, b|{
+                do_run(&ABClcSyncStageInput::new(a, b), &ctx)
+            })
         }
     }
 }
 
+//required only when SplitAdjuster is used
 impl WithSelectDataRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
     fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, _permits_ctx: P, selector: ABClcSyncStageInputWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
     where
@@ -160,15 +174,8 @@ impl WithId for ABClcSyncStageInputWrapper {
     }
 }
 #[derive(Debug, Clone, Default)]
-struct ABClcSyncStageInputWrapperSelector {
+struct ABClcSyncStageInputWrapperSelector {}
 
-}
-
-impl From<std::ops::Range<MonoMetrics<2, 1>>> for ABClcSyncStageInputWrapperSelector {
-    fn from(value: Range<MonoMetrics<2, 1>>) -> Self {
-        todo!()
-    }
-}
 
 impl Adjustable for ABClcSyncStageInputWrapperSelector {}
 
@@ -201,27 +208,21 @@ impl AsyncStage for ABClcStage {
             )
             .await?;
 
-
-
-
-        Ok(Arc::new(DevicesWrap::wrap( ABClcStageOutput {
-            id: out_id,
-            value: 0.0
-        })))
+        Ok(Arc::new(DevicesWrap::wrap( result)))
 
     }
 }
 
 
 #[derive(Debug, Named)]
-struct ABClcSyncStage {
+pub(super) struct ABClcSyncStage {
     id:MonoKey
 }
 
 impl ABClcSyncStage {
     pub fn new() -> Self {
         Self {
-            id: mono_key!(3, "ABClcSyncStage"),
+            id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
         }
     }
 }
@@ -237,7 +238,7 @@ impl WithId for ABClcSyncStageInput<'_> {
 }
 
 #[derive(Debug)]
-struct ABClcSyncStageInput<'a> {
+pub(super) struct ABClcSyncStageInput<'a> {
     id:SynKey,
     from_a:&'a AStageOutput,
     from_b:&'a BStageOutput,
@@ -286,8 +287,16 @@ impl Stage for ABClcSyncStage {
 }
 
 impl SyncStage for ABClcSyncStage {
-    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("ABClcSyncStage::do_run: input.from_a.value={:?} input.from_b.value={:?}", input.from_a.value, input.from_b.value);
 
-        todo!()
+        let value = (input.from_a.value.as_ref()+ input.from_b.value.as_ref()).mean_dim(0, false, None).double_value(&[]) as f32;
+
+        debug!("ABClcSyncStage::do_run: value={value}");
+
+        Ok(ABClcStageOutput{
+            id: self.out_id(input.id()),
+            value,
+        })
     }
 }
