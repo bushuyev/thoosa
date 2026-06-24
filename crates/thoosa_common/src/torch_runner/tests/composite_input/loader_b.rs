@@ -6,7 +6,7 @@ use cached_derive::Cached;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::{ElvVal, SynKey};
+use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
@@ -45,7 +45,7 @@ impl Input for BStageInput{}
 
 
 #[derive(Debug, Named)]
-struct BStageOutput {
+pub(super) struct BStageOutput {
     id: SynKey,
     value:ThoTensor<BStageOutputDims, ()>,
 }
@@ -90,8 +90,8 @@ impl Output for BStageOutput{}
 
 
 #[derive(Debug, Named, Cached)]
-struct BStage {
-    id: SynKey,
+pub(super) struct BStage {
+    id: MonoKey,
 }
 
 
@@ -99,6 +99,12 @@ impl Stage for BStage  {
     type Ctx = RunCtxImpl;
     type In<'a> = BStageInput;
     type Out = BStageOutput;
+}
+
+impl BStage {
+    pub(super) fn new() -> Self {
+        Self { id: mono_key!(1, "BStage") }
+    }
 }
 
 impl AsyncStage for BStage  {

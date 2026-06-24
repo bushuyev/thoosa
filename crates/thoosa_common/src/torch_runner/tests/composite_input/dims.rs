@@ -18,3 +18,11 @@ impl Dims for BStageOutputDims {
 
 }
 
+#[derive(Clone, Debug)]
+pub struct ABDims;
+
+impl Dims for ABDims {
+    type Metrics = MonoMetrics<1, 2>;
+
+}
+

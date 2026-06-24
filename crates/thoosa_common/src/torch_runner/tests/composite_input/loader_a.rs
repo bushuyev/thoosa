@@ -6,7 +6,7 @@ use cached_derive::Cached;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::comp_id::{ElvVal, SynKey};
+use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
@@ -90,10 +90,16 @@ impl Output for AStageOutput{}
 
 
 #[derive(Debug, Named, Cached)]
-struct AStage {
-    id: SynKey,
+pub(super) struct AStage {
+    id: MonoKey,
 }
 
+
+impl AStage {
+    pub(super) fn new() -> Self {
+        Self { id: mono_key!(0, "AStage") }
+    }
+}
 
 impl Stage for AStage  {
     type Ctx = RunCtxImpl;
