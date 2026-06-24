@@ -1128,12 +1128,6 @@ pub trait WithDataRef: WithId + Debug + Send + Sync {
         P:RunCtx + 'a;
 
 
-
-    //shouldn't be here, used only in ClcOOMRunner which is test-only util
-    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics{
-        Default::default()
-    }
-
     fn mem_size(&self) ->u64{
         0
     }
@@ -1196,10 +1190,7 @@ where
     fn mem_size(&self) -> u64 {
         self.mem_size
     }
-
-    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
-        self.size.clone()
-    }
+    
 }
 
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>

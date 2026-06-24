@@ -87,7 +87,7 @@ where
         runnable: &Arc<R>,
         input: Arc<W>,
         mut ctx: <R as Stage>::Ctx,
-        required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
+        required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>, size: <R::In<'z> as Data>::Metrics,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
         for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
@@ -107,8 +107,8 @@ where
         <R as Stage>::In<'z>: Select<S, Output=<R as Stage>::In<'z>>
     {
 
-        let size = input._size().clone();
-        let mut min_split_len = input._size().clone();
+        let size = size.clone();
+        let mut min_split_len = size.clone();
         min_split_len /= 10;
 
         // debug!("ClcOOMRUnner::run: min_split_len={min_split_len:?} size={size:?}");
@@ -844,20 +844,20 @@ mod tests {
 
     ////////////
     #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-    struct DLoadAndMulTaskId(&'static str);
+    struct DLoadAndClcTaskId(&'static str);
 
     #[derive(Debug, Cached, Named)]
     #[cache_name = "MulTaskOutputId"]
     #[allow(dead_code)]
-    struct DLoadAndMulStage {
-        id: DLoadAndMulTaskId,
+    struct DLoadAndClcStage {
+        id: DLoadAndClcTaskId,
 
         loader: Arc<DummyLoader>,
         mul: Arc<DMulTask>,
         mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>,DMulTaskOutputBuilder>,
     }
 
-    impl OutId for DLoadAndMulStage {
+    impl OutId for DLoadAndClcStage {
         fn out_id(
             &self,
             input_id: &<Self::In<'static> as WithId>::ID,
@@ -866,9 +866,9 @@ mod tests {
         }
     }
 
-    impl DLoadAndMulStage {
+    impl DLoadAndClcStage {
         pub fn new(
-            id: DLoadAndMulTaskId,
+            id: DLoadAndClcTaskId,
             k: f32,
             fail_until: FailUntil,
             len: usize,
@@ -884,14 +884,14 @@ mod tests {
     }
 
 
-    impl Stage for DLoadAndMulStage {
+    impl Stage for DLoadAndClcStage {
         type In<'a> = DLoaderInput;
         type Out = DMulTaskOutput;
         type Ctx = RunCtxImpl;
     }
 
     // #[async_trait]
-    impl AsyncStage for DLoadAndMulStage {
+    impl AsyncStage for DLoadAndClcStage {
 
 
         async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
@@ -904,18 +904,21 @@ mod tests {
 
 
             async move {
-
-                Ok(Arc::new(DevicesWrap::wrap(self.mul_oom_runner
-                                    .run(
-                                        &self.mul,
-                                        loaded,
-                                        ctx.branch(false),
-                                        &HashMap::from([("", &HashSet::new())]),
-                                    )
-                                    .await.map_err(|e|{
-                                        error!("DLoadAndMulTask::run: e={e:?}");
-                                        e
-                                     })?)))
+                let size = *loaded.size();
+                Ok(Arc::new(DevicesWrap::wrap(
+                    self.mul_oom_runner
+                        .run(
+                            &self.mul,
+                            loaded,
+                            ctx.branch(false),
+                            &HashMap::from([("", &HashSet::new())]),
+                            size,
+                        )
+                        .await.map_err(|e|{
+                            error!("DLoadAndMulTask::run: e={e:?}");
+                            e
+                         })?
+                )))
             }
             .await
         }
@@ -1057,8 +1060,8 @@ mod tests {
 
         let _device_idx = 0;
 
-        let load_and_mut = Arc::new(DLoadAndMulStage::new(
-            DLoadAndMulTaskId("load_and_clc_id"),
+        let load_and_mut = Arc::new(DLoadAndClcStage::new(
+            DLoadAndClcTaskId("load_and_clc_id"),
             2.,
             FailUntil::Never,
             100,
@@ -1119,8 +1122,8 @@ mod tests {
         let device_idx = 1;
         const MUL_K: f32 = 2.;
 
-        let load_and_mut = Arc::new(DLoadAndMulStage::new(
-            DLoadAndMulTaskId("load_and_clc_id"),
+        let load_and_mut = Arc::new(DLoadAndClcStage::new(
+            DLoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(20),
             100,
@@ -1154,8 +1157,8 @@ mod tests {
         let device_idx = 1;
 
         const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulStage::new(
-            DLoadAndMulTaskId("load_and_clc_id"),
+        let load_and_mut = Arc::new(DLoadAndClcStage::new(
+            DLoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::NaxParallel(MAX_PARALLEL),
             100,
@@ -1192,8 +1195,8 @@ mod tests {
         let device_idx = 1;
 
         const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulStage::new(
-            DLoadAndMulTaskId("load_and_clc_id"),
+        let load_and_mut = Arc::new(DLoadAndClcStage::new(
+            DLoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::MemLimit(12),
             100,
@@ -1233,8 +1236,8 @@ mod tests {
 
         let device_idx = 1;
         const MUL_K: f32 = 2.;
-        let load_and_mut = Arc::new(DLoadAndMulStage::new(
-            DLoadAndMulTaskId("load_and_clc_id"),
+        let load_and_mut = Arc::new(DLoadAndClcStage::new(
+            DLoadAndClcTaskId("load_and_clc_id"),
             MUL_K,
             FailUntil::DumpedToCpu,
             100,

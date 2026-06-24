@@ -174,9 +174,10 @@ impl AsyncStage for LoadAndClcStage {
             (output_id_name, &set_mul),
         ]);
 
+        let size = loaded.size().clone();
         let result = self
             .clc_oom_runner
-            .run(&self.clc_task, loaded, ctx.branch(false), &required_ids)
+            .run(&self.clc_task, loaded, ctx.branch(false), &required_ids, size)
             .await?;
 
         let device_idx = ctx.tho_device_idx();
