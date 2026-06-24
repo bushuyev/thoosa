@@ -30,8 +30,14 @@ async fn test_ab_clc() -> Result<(), ThoError> {
 
 pub async fn run_ab_clc() -> Result<Result<(), ThoError>, ThoError> {
     GlobalCtx::init_devices(2);
-    let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
+    run_ab_clc_with_current_ctx().await?;
+
+    Ok(Ok(()))
+}
+
+pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
     let ab_stage = Arc::new(ABClcStage::new());
     let mut ctx = RunCtxImpl::new(1, "root");
 
@@ -72,5 +78,5 @@ pub async fn run_ab_clc() -> Result<Result<(), ThoError>, ThoError> {
     assert_eq!(value, 200.3);
     assert_eq!(ab_stage.num_calls(), 1);
 
-    Ok(Ok(()))
+    Ok(())
 }
