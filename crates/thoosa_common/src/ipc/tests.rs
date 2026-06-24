@@ -516,16 +516,134 @@ async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<
 
 mod composite_input {
     use std::collections::HashMap;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering::Acquire;
     use log::debug;
+    use serde::{Deserialize, Serialize};
     use tch::Device::Cuda;
-    use thoosa_shared::ThoError;
-    use crate::ipc::cuda_process::IPC_SOCK_ENV;
-    use crate::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_shared::{mono_key, ThoError};
+    use thoosa_shared::comp_id::{MonoKey, SynKey};
+    use thoosa_shared::traits::{Adjustable, WithId};
+    use crate::copy_ctx::CudaActorHandle;
+    use crate::ipc::cuda_process::{encode_endpoint_payload, IPC_SOCK_ENV};
+    use crate::ipc::cuda_wokrer::{CudaWorker, WorkerStageInput};
     use crate::ipc::json_ser::SyncStageJsonWrapper;
+    use crate::runner::common::{OutId, RunCtx};
+    use crate::runner::common::runnable::{Stage, SyncStage};
     use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::tho_device::ThoDevice;
-    use crate::torch_runner::tests::composite_input::ab_clc::{sync_ab_clc_endpoint_init, SYNC_AB_CLC_ENDPOINT};
-    use crate::torch_runner::tests::composite_input::run_ab_clc_with_current_ctx;
+    use crate::tho_tensor::ThoTensor;
+    use crate::torch_runner::tests::composite_input::AB_SYNC_CLC_STAGE_ID;
+    use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageOutput, ABClcSyncStage, ABClcSyncStageInput};
+    use crate::torch_runner::tests::composite_input::dims::{AStageOutputDims, BStageOutputDims};
+    use crate::torch_runner::tests::composite_input::run_ab_clc_with_stage;
+
+    const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
+
+    #[derive(Debug)]
+    struct ProxyABClcSyncStage {
+        id: MonoKey,
+        num_calls: AtomicUsize,
+    }
+
+    impl ProxyABClcSyncStage {
+        async fn new() -> Result<Self, ThoError> {
+            GlobalCtx::global()
+                .cuda_actor(1)
+                .install_endpoint(encode_endpoint_payload(SYNC_AB_CLC_ENDPOINT, ""))
+                .await?;
+
+            Ok(Self {
+                id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
+                num_calls: Default::default(),
+            })
+        }
+
+        fn num_calls(&self) -> usize {
+            self.num_calls.load(Acquire)
+        }
+
+        fn do_run_inner<'f>(&self, input: &ABClcSyncStageInput<'f>, ctx: &RunCtxImpl) -> Result<ABClcStageOutput, ThoError> {
+            self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+            tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+                let response = GlobalCtx::global()
+                    .cuda_actor(ctx.tho_device_idx())
+                    .invoke_endpoint(encode_endpoint_payload(SYNC_AB_CLC_ENDPOINT, &serde_json::to_string(&ABClcSyncStageIpcInputRef::new(input))?))
+                    .await?;
+
+                serde_json::from_str::<ABClcStageOutput>(&response).map_err(ThoError::from)
+            }))
+        }
+    }
+
+    impl Adjustable for ProxyABClcSyncStage {}
+
+    impl OutId for ProxyABClcSyncStage {
+        fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+            &self.id + input_id
+        }
+    }
+
+    impl Stage for ProxyABClcSyncStage {
+        type Ctx = RunCtxImpl;
+        type In<'a> = ABClcSyncStageInput<'a>;
+        type Out = ABClcStageOutput;
+    }
+
+    impl SyncStage for ProxyABClcSyncStage {
+        fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            self.do_run_inner(input, ctx)
+        }
+    }
+
+    #[derive(Serialize)]
+    struct ABClcSyncStageIpcInputRef<'a, 'f> {
+        id: &'a SynKey,
+        from_a: &'f ThoTensor<AStageOutputDims, ()>,
+        from_b: &'f ThoTensor<BStageOutputDims, ()>,
+    }
+
+    impl<'a, 'f> ABClcSyncStageIpcInputRef<'a, 'f> {
+        fn new(input: &'a ABClcSyncStageInput<'f>) -> Self {
+            Self {
+                id: input.id(),
+                from_a: input.from_a_value(),
+                from_b: input.from_b_value(),
+            }
+        }
+    }
+
+    #[derive(Deserialize)]
+    struct ABClcSyncStageIpcInput {
+        id: SynKey,
+        from_a: ThoTensor<AStageOutputDims, ()>,
+        from_b: ThoTensor<BStageOutputDims, ()>,
+    }
+
+    #[derive(Debug)]
+    struct ABClcSyncStageJsonWrapper {
+        stage: ABClcSyncStage,
+    }
+
+    impl SyncStageJsonWrapper for ABClcSyncStageJsonWrapper {
+        fn do_run(&self, input: String, all_cuda_tensors: &Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>) -> Result<String, ThoError> {
+            let input = serde_json::from_str::<ABClcSyncStageIpcInput>(&input)?;
+            let from_a = ThoTensor::<AStageOutputDims, ()>::decode_for_worker(serde_json::to_string(&input.from_a)?, all_cuda_tensors)?;
+            let from_b = ThoTensor::<BStageOutputDims, ()>::decode_for_worker(serde_json::to_string(&input.from_b)?, all_cuda_tensors)?;
+            let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?;
+
+            serde_json::to_string(&out).map_err(ThoError::from)
+        }
+    }
+
+    fn sync_ab_clc_endpoint_init(_init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
+        Ok(Box::new(ABClcSyncStageJsonWrapper {
+            stage: ABClcSyncStage::new(),
+        }))
+    }
 
     fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
         HashMap::from([
@@ -546,8 +664,11 @@ mod composite_input {
         } else {
             let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
+            let sync_stage = Arc::new(ProxyABClcSyncStage::new().await?);
+            let sync_stage_calls = Arc::clone(&sync_stage);
+            let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
 
-            let result = run_ab_clc_with_current_ctx().await;
+            let result = run_ab_clc_with_stage(ab_stage, move || sync_stage_calls.num_calls()).await;
             let shutdown_result = cuda_actor.shutdown().await;
 
             match (result, shutdown_result) {

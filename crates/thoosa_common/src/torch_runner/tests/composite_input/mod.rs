@@ -8,7 +8,7 @@ use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx_2::RunCtxImpl;
-use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStage};
+use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
 use crate::torch_runner::tests::composite_input::loader_a::AStageInput;
 use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
 use crate::torch_runner::tests::load_and_clc::LoadAndClcStage;
@@ -39,6 +39,20 @@ pub async fn run_ab_clc() -> Result<Result<(), ThoError>, ThoError> {
 
 pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
     let ab_stage = Arc::new(ABClcStage::new());
+    let calls_stage = Arc::clone(&ab_stage);
+
+    run_ab_clc_with_stage(ab_stage, move || calls_stage.num_calls()).await
+}
+
+pub(crate) async fn run_ab_clc_with_stage<S, F>(ab_stage: Arc<ABClcStage<S>>, num_calls: F) -> Result<(), ThoError>
+where
+    for<'a> ABClcStage<S>: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = ABClcStageOutput>,
+    ABClcStage<S>: Cached + crate::runner::common::OutId,
+    S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
+    S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
+    for<'f> S: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+    F: Fn() -> usize,
+{
     let mut ctx = RunCtxImpl::new(1, "root");
 
     let out = Arc::clone(&ab_stage).run_cached(
@@ -56,7 +70,7 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
     debug!("test_ab_clc: value={value:?}");
 
     assert_eq!(value, 200.3);
-    assert_eq!(ab_stage.num_calls(), 1);
+    assert_eq!(num_calls(), 1);
 
     GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test_ab_clc").await?;
     assert!(GlobalCtx::global().is_all_on_cpu(1, true));
@@ -76,7 +90,7 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
     debug!("test_ab_clc: value={value:?}");
 
     assert_eq!(value, 200.3);
-    assert_eq!(ab_stage.num_calls(), 1);
+    assert_eq!(num_calls(), 1);
 
     Ok(())
 }
