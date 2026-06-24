@@ -924,6 +924,10 @@ where
     pub fn is_on_device(&self, tho_device_idx: usize) -> bool {
         self.resident_devices.get(tho_device_idx).map(|resident| resident.load(Ordering::Acquire)).unwrap_or(false)
     }
+
+    pub fn mem_size(&self) -> u64 {
+        self.mem_size
+    }
 }
 
 
@@ -1128,9 +1132,6 @@ pub trait WithDataRef: WithId + Debug + Send + Sync {
         P:RunCtx + 'a;
 
 
-    fn mem_size(&self) ->u64{
-        0
-    }
 
 }
 ///it's used when OOMHandler tries to execute a stage on subset of the input data. It usually makes
@@ -1187,10 +1188,8 @@ where
         O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run)
     }
 
-    fn mem_size(&self) -> u64 {
-        self.mem_size
-    }
-    
+
+
 }
 
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
