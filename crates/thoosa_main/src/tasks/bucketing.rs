@@ -224,7 +224,7 @@ impl PatchTempStore {
 pub struct BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -245,7 +245,7 @@ where
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -924,7 +924,7 @@ pub fn patch_sample_ranges_flat(
 impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -939,11 +939,16 @@ where
 impl<RC, L, D, Id, C> AsyncStage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &BucketingInput<RC>| {

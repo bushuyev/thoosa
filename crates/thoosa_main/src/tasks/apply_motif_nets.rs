@@ -434,6 +434,11 @@ impl <C>AsyncStage for ApplyMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNets::run"))]
     async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
@@ -1337,7 +1342,7 @@ pub(crate) mod tests {
 
     pub async fn apply_motif_nets_3_channels_2_motifs<F,A, MF>(trigger_oom_len: Option<usize>, input_n_0: usize, apply_motif_net_step: u32, apply_motif_net_fn: F, motif_net_fn_: MF, stft_config: StftRunConfig/*shouldn't be here, needed only for cosine 2d*/, motif_len: usize, sample_rate: u32) -> Result<(), ThoError>
     where
-        for <'a> A:AsyncStage<In<'a>=ThoTensor<ChannelsData, SynKey>, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=MockRunCtx>,
+        for <'a> A:AsyncStage<In<'a>=ThoTensor<ChannelsData, SynKey>, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=MockRunCtx> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
         F:AsyncFn(Option<usize>, u32, RunConfigId, &Arc<RwLock<Box<dyn Workspace>>>, &mut Arc<Box<dyn Store>>) -> Result<Arc<A>, ThoError>,
         MF:Fn(Device, Arc<ThoTensor<Batch<Slice>, SynKey>>) -> (Box<dyn Fn() -> MotifNetParams + Sync + Send>, Box<dyn Fn() -> ThoModuleWithStore<Batch<Slice>, MotifProbability> + Sync + Send>)
     {

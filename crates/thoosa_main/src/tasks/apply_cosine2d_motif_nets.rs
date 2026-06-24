@@ -269,6 +269,11 @@ impl<C> AsyncStage for ApplyCosine2DMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
     fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
         let input_id = input.id().clone();
 

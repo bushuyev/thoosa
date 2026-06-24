@@ -26,7 +26,7 @@ use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
+use crate::runner::common::runnable::{AsyncStage, AsyncStageRunInput, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
@@ -36,7 +36,8 @@ use thoosa_shared::tracked_await::track_await;
 #[async_trait]
 pub trait Cached: AsyncStage + Named
 where
-    for <'i> Self::In<'i>: Data + WithId + Send + Sync,
+    for <'i> Self::In<'i>: WithId + Send + Sync,
+    Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
     <<Self as Stage>::Out as Data>::M: DevicesWrapCopyMode<<Self as Stage>::Out>
 {
@@ -50,18 +51,19 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::RunInput,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
+        Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
         Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
     {
-        let key = self.out_id(WithId::id(input.as_ref()));
+        let key = self.out_id(Self::run_input_id(&input));
         let device_idx = ctx.tho_device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());

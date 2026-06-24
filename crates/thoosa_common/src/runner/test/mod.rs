@@ -17,7 +17,7 @@ use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustConte
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{Stage, SyncStage};
+use crate::runner::common::runnable::{Stage, SyncStage, WrappedStageRunInput};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
@@ -242,6 +242,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
+    R: crate::runner::common::runnable::AsyncStage<RunInput = WrappedStageRunInput<R>>,
     for<'a> <R as Stage>::In<'a>: Data   + WithId+ Send + Sync,
     for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<<R as Stage>::In<'a>>,
     R::Out: Data + CopyToDevice + Send + Sync,
@@ -509,6 +510,11 @@ pub mod fixtures {
 
     // #[async_trait]
     impl AsyncStage for DummyLoader {
+        type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+        fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+            thoosa_shared::traits::WithId::id(input)
+        }
 
         async fn run(
             self: Arc<Self>,
@@ -652,6 +658,11 @@ mod tests {
     }
 
     impl AsyncStage for DummyLoader {
+        type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+        fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+            thoosa_shared::traits::WithId::id(input)
+        }
         async fn run(
             self: Arc<Self>,
             input: Arc<DevicesWrap<Self::In<'static>>>,
@@ -892,6 +903,11 @@ mod tests {
 
     // #[async_trait]
     impl AsyncStage for DLoadAndClcStage {
+        type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+        fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+            thoosa_shared::traits::WithId::id(input)
+        }
 
 
         async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {

@@ -70,7 +70,7 @@ type DistsTrackerStage<C> = DistsTracker<C>;
 enum FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     CrossLoader {
@@ -93,7 +93,7 @@ where
 impl<RC, L, C> Clone for FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     fn clone(&self) -> Self {
@@ -107,7 +107,7 @@ where
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new_cross_loader(
@@ -213,7 +213,7 @@ fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
 pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L, C>, C>>,
@@ -223,7 +223,7 @@ where
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync+ Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>  + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
@@ -479,8 +479,8 @@ where
 impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -495,10 +495,15 @@ where
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> +  'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> +  'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindMotifsStage::run"))]
     async fn run(
@@ -544,7 +549,7 @@ where
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C>
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_deref() {
         None | Some([]) => {
