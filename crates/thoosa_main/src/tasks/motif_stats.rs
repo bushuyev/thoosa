@@ -162,13 +162,6 @@ impl Data for MotifStatsInput {
     }
 }
 
-impl Select<()> for MotifStatsInput {
-    type Output = MotifStatsInput;
-
-    fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
-        Ok(self.clone())
-    }
-}
 
 impl Adjustable for MotifStatsInput {}
 

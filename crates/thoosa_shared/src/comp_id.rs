@@ -363,6 +363,34 @@ impl Add<&MonoKey> for MonoKey {
     }
 }
 
+impl Add<MonoKey> for MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: MonoKey) -> Self::Output {
+        SynKey {
+            vals: Box::new([
+                self.clone(),
+                rhs
+            ]),
+        }
+    }
+}
+
+
+impl Add<MonoKey> for &MonoKey {
+    type Output = SynKey;
+
+    fn add(self, rhs: MonoKey) -> Self::Output {
+        SynKey {
+            vals: Box::new([
+                self.clone(),
+                rhs
+            ]),
+        }
+    }
+}
+
+
 impl Add<&SynKey> for &MonoKey {
     type Output = SynKey;
 
