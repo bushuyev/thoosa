@@ -28,6 +28,7 @@ use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
+use crate::torch_runner::tests::composite_input::run_ab_clc;
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
@@ -512,4 +513,16 @@ async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<
             ).await
         }).await
     }
+}
+
+mod composite_input {
+    use thoosa_shared::ThoError;
+
+    //IPC version of crates/thoosa_common/src/torch_runner/tests/composite_input/mod.rs:27
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_ipc_ab_clc() -> Result<(), ThoError> {
+        // run_ab_clc().await? TODO run as IPC
+        todo!()
+    }
+
 }
