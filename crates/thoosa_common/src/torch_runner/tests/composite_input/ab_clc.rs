@@ -33,7 +33,7 @@ use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_S
 use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput, BStageOutput};
 use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
 
-#[derive(Debug, Named, Clone, DummyData)]
+#[derive(Debug, Named, Clone)]
 pub(crate) struct ABClcStageInput {
     id:SynKey,
     from_a:Arc<DevicesWrap<AStageInput>>,
@@ -217,10 +217,13 @@ where
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    type RunInput = ABClcStageInput;
 
-        let input = Arc::into_inner(input).unwrap().take_data(0).await?;
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
 
+    async fn run(self: Arc<Self>, input: Self::RunInput, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let a_out = Arc::clone(&self.a_stage).run_cached(Arc::clone(&input.from_a), ctx.branch(false)).await?;
         let b_out = Arc::clone(&self.b_stage).run_cached(Arc::clone(&input.from_b), ctx.branch(false)).await?;
 

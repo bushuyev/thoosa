@@ -1,4 +1,4 @@
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, WrappedRunInputStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -128,15 +128,18 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    A: WrappedRunInputStage,
     for <'i> A::In<'i>: Data + WithId + Send + Sync,
     A::Out: Data + WithId + Send + Sync + 'static,
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
+    B: WrappedRunInputStage,
     B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>
 {
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    type RunInput = Arc<DevicesWrap<A::In<'static>>>;
+    async fn run(self: Arc<Self>, input: Self::RunInput, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
@@ -159,15 +162,18 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    A: WrappedRunInputStage,
+    for <'i> A::In<'i>: Data + WithId + Send + Sync,
     A::Out: Data + WithId + Send + Sync + 'static,
     <A::Out as Data>::M: DevicesWrapCopyMode<A::Out>,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
+    B: WrappedRunInputStage,
     B::Out: Data + WithId<ID = SynKey> + Send + Sync + CopyToDevice + 'static,
     <B::Out as Data>::M: DevicesWrapCopyMode<B::Out>,
-    for<'i> ABStage<A, B, C>: Stage<In<'i>=A::In<'i>>,
     ABStage<A, B, C>: Stage<Out=B::Out, Ctx=C>,
-    for<'i> <ABStage<A, B, C> as Stage>::In<'i>: Data + WithId + Send + Sync,
+    for<'i> <ABStage<A, B, C> as Stage>::In<'i>: WithId + Send + Sync,
+    <<ABStage<A, B, C> as Stage>::Out as Data>::M: DevicesWrapCopyMode<<ABStage<A, B, C> as Stage>::Out>,
 {
     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>>
     where
@@ -179,7 +185,7 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::RunInput,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let input_a: Arc<DevicesWrap<A::In<'static>>> = input;
@@ -248,15 +254,18 @@ where
 impl<A, B> AsyncStage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
+    A: WrappedRunInputStage,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync + CopyToDevice,
     <<A as Stage>::Out as Data>::M: DevicesWrapCopyMode<<A as Stage>::Out>,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
+    B: WrappedRunInputStage,
 {
+    type RunInput = Arc<DevicesWrap<<A as Stage>::In<'static>>>;
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::RunInput,
         ctx: <A as Stage>::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         match &*self {
@@ -287,12 +296,14 @@ where
 impl<A, B> Cached for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    <A as Stage>::Out: CopyToDevice,
+    A: WrappedRunInputStage,
+    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
+    <A as Stage>::Out: Data + WithId + Send + Sync + CopyToDevice,
+    <<A as Stage>::Out as Data>::M: DevicesWrapCopyMode<<A as Stage>::Out>,
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
-    for<'i> StageChainOption<A, B>: Stage<In<'i>=<A as Stage>::In<'i>>,
+    B: WrappedRunInputStage,
     StageChainOption<A, B>: Stage<Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx>,
-    for<'i> <StageChainOption<A, B> as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <StageChainOption<A, B> as Stage>::Out: Data + WithId + Send + Sync + 'static,
+    for<'i> <StageChainOption<A, B> as Stage>::In<'i>: WithId + Send + Sync,
     <<StageChainOption<A, B> as Stage>::Out as Data>::M: DevicesWrapCopyMode<<StageChainOption<A, B> as Stage>::Out>,
 {
     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoosaError>>>>
@@ -305,12 +316,12 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::RunInput,
         ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
         Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: Send + Sync,
+        for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,

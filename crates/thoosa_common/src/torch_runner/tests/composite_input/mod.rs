@@ -47,6 +47,7 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
 pub(crate) async fn run_ab_clc_with_stage<S, F>(ab_stage: Arc<ABClcStage<S>>, num_calls: F) -> Result<(), ThoError>
 where
     for<'a> ABClcStage<S>: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = ABClcStageOutput>,
+    ABClcStage<S>: crate::runner::common::runnable::AsyncStage<RunInput = ABClcStageInput>,
     ABClcStage<S>: Cached + crate::runner::common::OutId,
     S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
     S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
@@ -56,10 +57,10 @@ where
     let mut ctx = RunCtxImpl::new(1, "root");
 
     let out = Arc::clone(&ab_stage).run_cached(
-        Arc::new(DevicesWrap::wrap(ABClcStageInput::new(
+        ABClcStageInput::new(
             Arc::new(DevicesWrap::wrap(AStageInput::new(0, "a100"))),
             Arc::new(DevicesWrap::wrap(BStageInput::new(1, "b100"))),
-        ))),
+        ),
         ctx.branch(false)
     ).await?;
 
@@ -76,10 +77,10 @@ where
     assert!(GlobalCtx::global().is_all_on_cpu(1, true));
 
     let out = Arc::clone(&ab_stage).run_cached(
-        Arc::new(DevicesWrap::wrap(ABClcStageInput::new(
+        ABClcStageInput::new(
             Arc::new(DevicesWrap::wrap(AStageInput::new(0, "a100"))),
             Arc::new(DevicesWrap::wrap(BStageInput::new(1, "b100"))),
-        ))),
+        ),
         ctx.branch(false)
     ).await?;
 

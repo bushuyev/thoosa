@@ -188,7 +188,7 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -202,7 +202,7 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -426,7 +426,7 @@ impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
@@ -449,11 +449,16 @@ where
     Self::Out: Data + WithId + Send + Sync,
     <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
+    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+        thoosa_shared::traits::WithId::id(input)
+    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossLoader::run"))]
     async fn run(
         self: Arc<Self>,
@@ -689,6 +694,7 @@ where
 pub enum CrossSplitterContextState<'a, R>
 where
     R:Stage<Out=CrossUnfoldClcOutput<DistsMask>> + Adjustable + 'a,
+    <R as Stage>::In<'a>: Data,
 
 {
     Batch0(SplitsAdjusterContextImpl<'a, R, CrossUnfoldClcOutputBuilder<DistsMask>>),
