@@ -59,7 +59,7 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
     assert_eq!(ab_stage.num_calls(), 1);
 
     GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test_ab_clc").await?;
-    assert!(GlobalCtx::global().is_all_on_cpu(1));
+    assert!(GlobalCtx::global().is_all_on_cpu(1, true));
 
     let out = Arc::clone(&ab_stage).run_cached(
         Arc::new(DevicesWrap::wrap(ABClcStageInput::new(

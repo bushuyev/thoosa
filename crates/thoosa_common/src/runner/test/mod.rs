@@ -726,7 +726,7 @@ mod tests {
 
                 FailUntil::DumpedToCpu => {
                     let device_idx = ctx.tho_device_idx();
-                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
+                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
                     debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
                     if !is_all_on_cpu {
