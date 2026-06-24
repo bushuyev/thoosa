@@ -28,7 +28,6 @@ use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-use crate::torch_runner::tests::composite_input::run_ab_clc;
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
@@ -516,13 +515,47 @@ async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<
 }
 
 mod composite_input {
+    use std::collections::HashMap;
+    use log::debug;
+    use tch::Device::Cuda;
     use thoosa_shared::ThoError;
+    use crate::ipc::cuda_process::IPC_SOCK_ENV;
+    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::json_ser::SyncStageJsonWrapper;
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::tho_device::ThoDevice;
+    use crate::torch_runner::tests::composite_input::ab_clc::{sync_ab_clc_endpoint_init, SYNC_AB_CLC_ENDPOINT};
+    use crate::torch_runner::tests::composite_input::run_ab_clc_with_current_ctx;
+
+    fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
+        HashMap::from([
+            (
+                SYNC_AB_CLC_ENDPOINT.to_string(),
+                Box::new(sync_ab_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+            )
+        ])
+    }
 
     //IPC version of crates/thoosa_common/src/torch_runner/tests/composite_input/mod.rs:27
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_ipc_ab_clc() -> Result<(), ThoError> {
-        // run_ab_clc().await? TODO run as IPC
-        todo!()
+        debug!("test_ipc_ab_clc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+        if std::env::var_os(IPC_SOCK_ENV).is_some() {
+            CudaWorker::run_worker(sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+        } else {
+            let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+            let result = run_ab_clc_with_current_ctx().await;
+            let shutdown_result = cuda_actor.shutdown().await;
+
+            match (result, shutdown_result) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), _) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+            }
+        }
     }
 
 }
