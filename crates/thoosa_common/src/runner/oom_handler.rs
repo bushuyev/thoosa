@@ -392,8 +392,8 @@ where
                                     )).await
                             };
 
-                            out.map(|out| ExecSyncStageActionResult::Sync { stream, out })
-                        })).await
+                            Ok(ExecSyncStageActionResult::Sync { stream, out })
+                        })).await?
                     },
                     job_id_to_rerun
                 )).await
@@ -439,14 +439,7 @@ where
                                 }
                             })).await;
 
-                            Ok(match consume_result {
-                                ConsumeResult::Failed { input, error } => {
-                                    ExecSyncStageActionResult::NoSync(ConsumeResult::Failed { input, error })
-                                }
-                                ConsumeResult::Ok(out) => {
-                                    ExecSyncStageActionResult::Sync { stream, out: ConsumeResult::Ok(out) }
-                                }
-                            })
+                            Ok(ExecSyncStageActionResult::Sync { stream, out: consume_result })
                         })).await?
 
                     };

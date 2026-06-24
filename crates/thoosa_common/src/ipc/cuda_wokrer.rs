@@ -263,10 +263,14 @@ impl CudaWorker {
                                 let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
                                 let response = endpoint.do_run(input.to_string(), &all_cuda_tensors);
-                                if response.is_ok() {
-                                    stream.synchronize()?;
+                                let sync_result = stream.synchronize();
+                                match (response, sync_result) {
+                                    (Ok(response), Ok(())) => Ok(response),
+                                    (Err(error), Ok(())) => Err(error),
+                                    (Ok(_), Err(error)) => Err(error),
+                                    (Err(error), Err(sync_error)) if sync_error.is_oom() || sync_error.needs_cuda_ctx_reset() => Err(sync_error),
+                                    (Err(error), Err(_)) => Err(error),
                                 }
-                                response
                             });
 
                             if let  Err(e) = &r {
