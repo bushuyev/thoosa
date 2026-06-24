@@ -525,7 +525,7 @@ where
                             apply_motif_net_ctx,
                             Contexts::new(
                                 ApplyMotifNetSplitsContext::new(
-                                    input._size(),
+                                    input.size().clone(),
                                     out_id.clone(),
                                     slices,
                                     (Float, ThoDevice::from(device_idx).into()),
@@ -948,10 +948,6 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
                 r
             })
         }
-    }
-
-    fn _size<'f>(&self) -> <Self::O<'f> as Data>::Metrics {
-        self.batch.size().clone()
     }
 
     fn mem_size(&self) -> u64 {
