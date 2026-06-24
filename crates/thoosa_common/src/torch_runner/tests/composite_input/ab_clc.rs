@@ -324,19 +324,20 @@ impl <'a> ABClcSyncStageInput<'a> {
 }
 
 impl Data for ABClcSyncStageInput<'_> {
-    type Metrics = MonoMetrics<1, 2>;
+    type Metrics = MonoMetrics<0, 1>;
     type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
-        todo!()
+        &self.from_a.size() + &self.from_b.size()
     }
 
     fn device(&self) -> usize {
-        todo!()
+        assert_eq!(self.from_a.device(), self.from_b.device());
+        self.from_a.device()
     }
 
     fn mem_size(&self) -> u64 {
-        todo!()
+        self.from_a.mem_size() + self.from_b.mem_size()
     }
 }
 
