@@ -339,12 +339,7 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
         async move { track_await(self.with_calc_input(permits_ctx, do_run)).await }
     }
 
-    fn mem_size(&self) -> u64 {
-        match &self.data {
-            MotifStatsCalcInputDataWrapper::Managed(motif) => motif.mem_size(),
-            MotifStatsCalcInputDataWrapper::Motifs(motifs) => motifs.iter().map(|motif| motif.mem_size()).sum(),
-        }
-    }
+
 }
 
 impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifStatsCalcInputWrapper {

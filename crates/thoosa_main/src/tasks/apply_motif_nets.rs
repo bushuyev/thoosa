@@ -949,10 +949,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
             })
         }
     }
-
-    fn mem_size(&self) -> u64 {
-        self.batch.mem_size() + self.motif_net.mem_size()
-    }
+    
 
 }
 
