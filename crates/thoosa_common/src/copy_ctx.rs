@@ -177,10 +177,13 @@ impl CudaActor {
                 let is_resetting = Arc::clone(&self.is_resetting);
                 let tho_device_idx = self.tho_device_idx;
                 tokio::spawn(async move {
-                    let result= tokio::task::spawn_blocking(move || {
+                    let result = match tokio::task::spawn_blocking(move || {
                         stream.synchronize()
 
-                    }).await?;
+                    }).await {
+                        Ok(result) => result,
+                        Err(e) => Err(ThoError::new(format!("CudaActor failed to join stream synchronization task: {e}"))),
+                    };
 
                     if let Err(e) = &result  && e.needs_cuda_ctx_reset() {
                         if let Err(e) =Self::do_reset(copy_ctx, is_resetting, tho_device_idx, "SyncStream").await {
@@ -188,7 +191,7 @@ impl CudaActor {
                         }
                     }
 
-                    let _ = respond_to.send(Ok(()));
+                    let _ = respond_to.send(result);
 
                     Ok::<(), ThoError>(())
                 });
