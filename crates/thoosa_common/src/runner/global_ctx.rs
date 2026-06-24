@@ -263,8 +263,33 @@ impl GlobalCtx {
         self.num_devices
     }
 
-    pub fn is_all_on_cpu(&self, device_idx: usize) -> bool {
-        self.is_all_on_cpu[device_idx].load(Relaxed)
+    pub fn is_all_on_cpu(&self, device_idx: usize, force_check: bool) -> bool {
+        if !force_check {
+            return self.is_all_on_cpu[device_idx].load(Relaxed);
+        }
+
+        let is_all_on_cpu = match tokio::runtime::Handle::try_current() {
+            Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+                tokio::task::block_in_place(|| handle.block_on(self.is_all_on_cpu_force_check(device_idx)))
+            }
+            _ => futures::executor::block_on(self.is_all_on_cpu_force_check(device_idx)),
+        };
+        self.is_all_on_cpu[device_idx].store(is_all_on_cpu, Relaxed);
+        is_all_on_cpu
+    }
+
+    async fn is_all_on_cpu_force_check(&self, device_idx: usize) -> bool {
+        let maps = self.caches_snapshot("GlobalCtx::is_all_on_cpu_force_check: timed out waiting for caches read lock");
+
+        for (type_name, entry) in maps.iter() {
+            let _cache_guard = track_await(Self::lock_cache_shared(entry, "GlobalCtx::is_all_on_cpu_force_check: timed out waiting for cache gate read lock")).await;
+            if track_await(entry.purger.has_gpu_data(device_idx)).await {
+                debug!("GlobalCtx::is_all_on_cpu_force_check: type_name={type_name} has data on device_idx={device_idx}");
+                return false;
+            }
+        }
+
+        true
     }
 
     pub async fn reset_all_on_cpu(&self, device_idx: usize) {

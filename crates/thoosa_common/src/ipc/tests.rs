@@ -254,7 +254,7 @@ async fn run_load_and_clc_ipc_cuda_worker_oom_stage(
         ).await?;
 
         if assert_all_on_cpu {
-            assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
+            assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
         }
 
         Ok::<(), ThoError>(())
