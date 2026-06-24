@@ -234,7 +234,7 @@ impl SyncStage for SyncClcStage {
 
                 FailUntil::DumpedToCpu => {
                     let device_idx = ctx.tho_device_idx();
-                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
+                    let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
                     debug!("MulTask::do_run: ctx.name={:?} device_idx={} is_all_on_cpu={is_all_on_cpu}","ctx.name()",device_idx);
 
                     if !is_all_on_cpu {
@@ -303,7 +303,7 @@ impl SyncStage for ProxySyncClcStage {
 
         if self.fail_until_dump_to_cpu {
             let device_idx = ctx.tho_device_idx();
-            let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx);
+            let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
             debug!("ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}");
             if !is_all_on_cpu {
                 return Err(ThoError::oom());
