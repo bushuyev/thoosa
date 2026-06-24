@@ -1,5 +1,7 @@
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering::Acquire;
 use async_trait::async_trait;
 use tch::Kind;
 use tracing::debug;
@@ -112,6 +114,10 @@ impl ABClcStage {
             ab_clc_sync: Arc::new(ABClcSyncStage::new())
         }
     }
+
+    pub fn num_calls(&self) -> usize {
+        self.ab_clc_sync.num_calls()
+    }
 }
 
 impl OutId for ABClcStage {
@@ -216,14 +222,20 @@ impl AsyncStage for ABClcStage {
 
 #[derive(Debug, Named)]
 pub(super) struct ABClcSyncStage {
-    id:MonoKey
+    id:MonoKey,
+    num_calls:AtomicUsize,
 }
 
 impl ABClcSyncStage {
     pub fn new() -> Self {
         Self {
             id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
+            num_calls: Default::default(),
         }
+    }
+
+    pub fn num_calls(&self) -> usize {
+        self.num_calls.load(Acquire)
     }
 }
 
@@ -288,7 +300,8 @@ impl Stage for ABClcSyncStage {
 
 impl SyncStage for ABClcSyncStage {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("ABClcSyncStage::do_run: input.from_a.value={:?} input.from_b.value={:?}", input.from_a.value, input.from_b.value);
+        let call_nr = self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        debug!("ABClcSyncStage::do_run: input.from_a.value={:?} input.from_b.value={:?} call_nr={call_nr}", input.from_a.value, input.from_b.value);
 
         let value = (input.from_a.value.as_ref()+ input.from_b.value.as_ref()).mean_dim(0, false, None).double_value(&[]) as f32;
 
@@ -299,4 +312,5 @@ impl SyncStage for ABClcSyncStage {
             value,
         })
     }
+
 }

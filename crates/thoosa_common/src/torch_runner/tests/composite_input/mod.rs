@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use log::debug;
 use thoosa_shared::ThoError;
 use thoosa_with_data::with_data;
 use crate::runner::common::cachable::{Cached, DevicesWrap};
 use crate::runner::common::RunCtx;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStage};
@@ -22,14 +24,38 @@ pub const B_STAGE_ID:u32 = 2;
 pub const AB_SYNC_CLC_STAGE_ID:u32 = 3;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_ab_clc() -> Result<(), ThoError>{
-    crate::runner::global_ctx::GlobalCtx::init_devices(2);
+async fn test_ab_clc() -> Result<(), ThoError> {
+    run_ab_clc().await?
+}
+
+pub async fn run_ab_clc() -> Result<Result<(), ThoError>, ThoError> {
+    GlobalCtx::init_devices(2);
     let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
-    let ab_stage  = Arc::new(ABClcStage::new());
+    let ab_stage = Arc::new(ABClcStage::new());
     let mut ctx = RunCtxImpl::new(1, "root");
 
-    let out = ab_stage.run_cached(
+    let out = Arc::clone(&ab_stage).run_cached(
+        Arc::new(DevicesWrap::wrap(ABClcStageInput::new(
+            Arc::new(DevicesWrap::wrap(AStageInput::new(0, "a100"))),
+            Arc::new(DevicesWrap::wrap(BStageInput::new(1, "b100"))),
+        ))),
+        ctx.branch(false)
+    ).await?;
+
+    let value = with_data!(ctx.branch(false), out; |ctx, out:&ABClcStageOutput|{
+        Ok(out.value)
+    })?;
+
+    debug!("test_ab_clc: value={value:?}");
+
+    assert_eq!(value, 200.3);
+    assert_eq!(ab_stage.num_calls(), 1);
+
+    GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test_ab_clc").await?;
+    assert!(GlobalCtx::global().is_all_on_cpu(1));
+
+    let out = Arc::clone(&ab_stage).run_cached(
         Arc::new(DevicesWrap::wrap(ABClcStageInput::new(
             Arc::new(DevicesWrap::wrap(AStageInput::new(0, "a100"))),
             Arc::new(DevicesWrap::wrap(BStageInput::new(1, "b100"))),
@@ -38,13 +64,13 @@ async fn test_ab_clc() -> Result<(), ThoError>{
     ).await?;
 
     let value = with_data!(ctx, out; |ctx, out:&ABClcStageOutput|{
-
         Ok(out.value)
     })?;
 
     debug!("test_ab_clc: value={value:?}");
 
     assert_eq!(value, 200.3);
+    assert_eq!(ab_stage.num_calls(), 1);
 
-    Ok(())
+    Ok(Ok(()))
 }
