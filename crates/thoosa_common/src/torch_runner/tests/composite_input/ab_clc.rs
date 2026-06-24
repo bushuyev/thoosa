@@ -140,12 +140,12 @@ impl ABClcSyncStageInputWrapper {
 impl WithDataRef for ABClcSyncStageInputWrapper {
     type O<'o> = ABClcSyncStageInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
             for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
-            P: RunCtx + 'a
+            P: RunCtx + 'a,
     {
-        async {
+        async move {
             with_data!(ctx, self.a_out, self.b_out; |ctx, a, b|{
                 do_run(&ABClcSyncStageInput::new(a, b), &ctx)
             })
@@ -155,13 +155,13 @@ impl WithDataRef for ABClcSyncStageInputWrapper {
 
 //required only when SplitAdjuster is used
 impl WithSelectDataRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, _permits_ctx: P, selector: ABClcSyncStageInputWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, ctx: P, selector: ABClcSyncStageInputWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
     where
             for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
             P: RunCtx + 'a
     {
-        async {
-            todo!()
+        async move {
+            track_await(self.with_data_ref(to_device_idx, ctx, None, do_run)).await
         }
     }
 }

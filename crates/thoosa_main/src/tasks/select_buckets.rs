@@ -424,7 +424,9 @@ impl WithSelectDataRef<()> for SelectBucketsSyncInputWrapper {
         for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P: RunCtx + 'a,
     {
-        async move { track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).await }
+        async move {
+            track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).await
+        }
     }
 }
 
