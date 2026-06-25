@@ -415,6 +415,7 @@ where
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     type RunInput = Arc<Self::In<'static>>;
+    type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)

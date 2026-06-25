@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::DevicesWrap;
+use crate::runner::common::cachable::{CachedPurgeOutput, DevicesWrap};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::StreamExt;
@@ -156,14 +156,14 @@ where
 }
 
 #[async_trait]
-impl<K, O> FuturesRunnerMapPurger
-    for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>>
+impl<K, CO> FuturesRunnerMapPurger
+    for DashMap<K, Shared<BoxFuture<'static, Result<CO, ThoError>>>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
-    O: Data + Output + Send + Sync + 'static,
+    CO: CachedPurgeOutput + Debug,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        self.iter().any(|entry| entry.value().peek().and_then(|value| value.as_ref().ok()).is_some_and(|wrapper| wrapper.is_on_device(device_idx)))
+        self.iter().any(|entry| entry.value().peek().and_then(|value| value.as_ref().ok()).is_some_and(|output| output.is_on_device(device_idx)))
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
@@ -172,9 +172,7 @@ where
             debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?}");
             if v.peek()
                 .and_then(|v| v.as_ref().map(|r| {
-                    let strong_count = Arc::strong_count(r);
-                    debug!("FuturesRunnerMapPurger::purge_cpu: key={k:?} strong_count={}", Arc::strong_count(r));
-                    r.is_on_cpu_before(purge_until) && strong_count == 1
+                    r.is_on_cpu_before(purge_until) && r.is_uniquely_held()
                 }).ok())
                 .unwrap_or(false)
             {
@@ -200,7 +198,7 @@ where
 
         let items: Vec<(
             K,
-            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
+            Shared<BoxFuture<'static, Result<CO, ThoError>>>,
         )> = self.iter()
             .filter(|entry| {
                 check_ids_to_keep(ids_to_keep, entry)
@@ -239,21 +237,22 @@ where
 
     #[cfg(any(debug_assertions, tho_debug))]
     async fn debug_gpu(&self, device_idx: usize) -> Result<u64, ThoError> {
-        let items: Vec<(K, Arc<DevicesWrap<O>>)> = self
+        let items: Vec<(K, CO)> = self
             .iter()
             .filter_map(|entry| {
                 entry
                     .value()
                     .peek()
                     .and_then(|value| value.as_ref().ok())
-                    .map(|wrapper| (entry.key().clone(), Arc::clone(wrapper)))
+                    .cloned()
+                    .map(|output| (entry.key().clone(), output))
             })
             .collect();
 
         let mut gpu_size = 0;
-        for (key, wrapper) in items {
-            if !track_await(wrapper.is_all_on_cpu()).await {
-                let size = wrapper.mem_size();
+        for (key, output) in items {
+            if output.is_on_device(device_idx) {
+                let size = output.mem_size();
                 trace!("key={key:?} size={size:?}");
                 gpu_size += size;
             }
@@ -270,7 +269,7 @@ where
         //because of "implementation of `dashmap::Map` is not general enough"
         let items: Vec<(
             K,
-            Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>,
+            Shared<BoxFuture<'static, Result<CO, ThoError>>>,
         )> = self.iter()
             .map(|entry| (entry.key().clone(), entry.value().clone()))
             .collect();

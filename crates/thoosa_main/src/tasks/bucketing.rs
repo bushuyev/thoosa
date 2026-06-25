@@ -144,6 +144,8 @@ impl Data for BucketingOutput {
 
 impl Output for BucketingOutput {}
 
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for BucketingOutput {}
+
 
 #[derive(Debug)]
 pub struct PatchTempStore {//TODO it's similar to FileMotifTrackerStore  but saves single slices instead of pairs. Rename and put together with FileMotifTrackerStore in same mod
@@ -224,7 +226,7 @@ impl PatchTempStore {
 pub struct BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -245,7 +247,7 @@ where
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -924,7 +926,7 @@ pub fn patch_sample_ranges_flat(
 impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -939,18 +941,19 @@ where
 impl<RC, L, D, Id, C> AsyncStage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type RunInput = Arc<Self::In<'static>>;
+    type RunOutput = Arc<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError> {
         let resources_config = input.resources_config().clone();
         let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
@@ -1050,7 +1053,7 @@ where
 
         info!("BucketingStage::run: run_config_id={run_config_id:?} done");
 
-        Ok(Arc::new(DevicesWrap::wrap_plain(BucketingOutput::new((run_config_id, motif_ids)))))
+        Ok(Arc::new(BucketingOutput::new((run_config_id, motif_ids))))
     }
 }
 
@@ -1616,7 +1619,7 @@ mod tests {
             let mut motif_load_ctx = ctx.branch(false);
             async move {
                 let norm_thickness = Metrics::NormThickness(NormThicknessRunConfig::default());
-                let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+                let metrics: Arc<MotifStatsOutput> = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                     norm_thickness.clone()
                 ])), motif_load_ctx.branch(false)).await?;
 
