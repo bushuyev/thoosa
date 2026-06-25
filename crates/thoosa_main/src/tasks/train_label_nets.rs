@@ -51,7 +51,7 @@ use tokio::{join, try_join};
 use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
-use crate::tasks::stages_seq::ABStage;
+use thoosa_common::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
 use thoosa_shared::comp_id::SynKey;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;

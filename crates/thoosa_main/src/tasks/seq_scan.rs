@@ -1,7 +1,7 @@
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
-use crate::tasks::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use log::{debug, info};
 use parking_lot::RwLock;

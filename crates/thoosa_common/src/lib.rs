@@ -36,3 +36,4 @@ pub mod runner;
 pub mod audio;
 pub mod nodes;
 pub mod ipc;
+pub mod stages_seq;
