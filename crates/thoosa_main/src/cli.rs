@@ -658,7 +658,7 @@ where
             let seq_scan_run_config_range_or_value: SeqScanRunConfigRangeOrValue =
                 serde_json5::from_str(&seq_scan_args.run_config_cnt).expect("SeqScanRunConfig");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(seq_scan_args.resource_config())));
+            let input_wrapper = Arc::new(ResourcesConfigInput::new(seq_scan_args.resource_config()));
 
             let run_config_ids = track_await(run_grid(
                 None,
@@ -686,7 +686,7 @@ where
 
             let select_motifs_run_config_range_or_value: SelectMotifsRunConfigRangeOrValue = serde_json5::from_str(&select_motifs_args.run_config_cnt).expect("SelectMotifs2");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(select_motifs_args.resource_config()))));
+            let input_wrapper = Arc::new(SelectMotifsInput::standalone(ResourcesConfigInput::new(select_motifs_args.resource_config())));
             //TODO move it into SelectMotifsStage
             let motif_loader = Arc::new(MotifLoader::new(
                 Arc::clone(&store),
@@ -733,7 +733,7 @@ where
             ));
 
             let output_wrap = track_await(Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
-                Arc::new(DevicesWrap::wrap_plain(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone()))),
+                Arc::new(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone())),
                 root_ctx.branch(true)
             )).await?;
 
@@ -777,7 +777,7 @@ where
 
             let train_motif_nets_run_config_range_or_value: TrainLabelNetRunConfigRangeOrValue = serde_json5::from_str(&train_label_nets_args.run_config_cnt).expect("TrainLabelNets");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(train_label_nets_args.resource_config())));
+            let input_wrapper = Arc::new(ResourcesConfigInput::new(train_label_nets_args.resource_config()));
 
             let opt_config = Arc::new(train_label_nets_args.opt_config.clone());
             let mut init_ctx = root_ctx.branch(true);
@@ -824,8 +824,8 @@ where
             debug!("TrainFinalNet: train_motif_nets_args.run_config_cnt={:?}",train_final_net_args.run_config_cnt);
             let train_final_net_run_config_range_or_value: TrainFinalNetRunConfigRangeOrValue = serde_json5::from_str(&train_final_net_args.run_config_cnt).expect("TrainFinalNet");
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(
-               train_final_net_args.resource_config())));
+            let input_wrapper = Arc::new(ResourcesConfigInput::new(
+               train_final_net_args.resource_config()));
 
             let opt_config = Arc::new(train_final_net_args.opt_config.clone());
             let init_ctx = root_ctx.branch(true);
@@ -860,7 +860,7 @@ where
             debug!("ConvertPrecision: convert_precision_args={convert_precision_args:?}");
             let output = track_await(Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, convert_precision_args.clone()))
                 .run(
-                    Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
+                    ConvertPrecisionInput::new(),
                     root_ctx.branch(true),
                 )).await?;
             let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).await?;
@@ -871,7 +871,7 @@ where
             debug!("Export: export_args={export_args:?}");
             let output = track_await(Arc::new(ExportStage::<RunCtxImpl>::new(&ws, &store, export_args.clone()))
                 .run(
-                    Arc::new(DevicesWrap::wrap_plain(ExportInput::new())),
+                    ExportInput::new(),
                     root_ctx.branch(true),
                 )).await?;
             let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).await?;
@@ -1582,7 +1582,7 @@ where
 
     track_await(Arc::clone(loader)
         .run_cached(
-            Arc::new(DevicesWrap::wrap_plain(resource)),
+            Arc::new(resource),
             ctx.branch(false),
         )).await
 }
@@ -1816,9 +1816,9 @@ where
     C:RunCtx + Adjustable{
     let select_motif_run_config_ids_sfx = select_motif_run_config_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_loader_input = MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), select_motif_run_config_ids);
-    let motif_id_arc = Arc::new(DevicesWrap::wrap_plain(motif_loader_input.clone()));
+    let motif_id_arc = Arc::new(motif_loader_input.clone());
     let metrics = Metrics::all();
-    let clc_input = Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone())));
+    let clc_input = Arc::new(MotifStatsInput::from_motif_input(motif_loader_input, metrics.clone()));
 
     let motif = track_await(Arc::clone(&motif_loader_impl).run_cached(
         Arc::clone(&motif_id_arc),

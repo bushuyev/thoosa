@@ -56,14 +56,14 @@ impl Stage for JoinAndClassifyTask {
 }
 
 impl AsyncStage for JoinAndClassifyTask {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Arc<Self::In<'static>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.tho_device_idx();

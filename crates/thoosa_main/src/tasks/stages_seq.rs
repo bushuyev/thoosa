@@ -118,7 +118,6 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    A: WrappedRunInputStage,
     for <'i> A::In<'i>: Data + WithId + Send + Sync,
     A::Out: Data + WithId + Send + Sync + 'static,
 
@@ -126,9 +125,9 @@ where
     B: WrappedRunInputStage,
     B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-    type RunInput = Arc<DevicesWrap<A::In<'static>>>;
+    type RunInput = A::RunInput;
     async fn run(self: Arc<Self>, input: Self::RunInput, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let input_id = input.id().clone();
+        let input_id = A::run_input_id(&input).clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
         let output_a = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx.branch(false))).await?;
@@ -150,7 +149,6 @@ where
     C:RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
-    A: WrappedRunInputStage,
     for <'i> A::In<'i>: Data + WithId + Send + Sync,
     A::Out: Data + WithId + Send + Sync + 'static,
 
@@ -173,9 +171,8 @@ where
         input: Self::RunInput,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let input_a: Arc<DevicesWrap<A::In<'static>>> = input;
         let mut ctx_c: C = ctx;
-        let output_a: Arc<DevicesWrap<A::Out>> = track_await(Arc::clone(&self.stage_a).run_cached(input_a, ctx_c.branch(false))).await?;
+        let output_a: Arc<DevicesWrap<A::Out>> = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx_c.branch(false))).await?;
         let output_b: Arc<DevicesWrap<B::Out>> = track_await(Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).await?;
         let output: Arc<DevicesWrap<Self::Out>> = output_b;
         Ok(output)
@@ -236,14 +233,13 @@ where
 impl<A, B> AsyncStage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    A: WrappedRunInputStage,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
-    B: WrappedRunInputStage,
+    B: AsyncStage<RunInput=A::RunInput>,
 {
-    type RunInput = Arc<DevicesWrap<<A as Stage>::In<'static>>>;
+    type RunInput = A::RunInput;
     async fn run(
         self: Arc<Self>,
         input: Self::RunInput,
@@ -276,11 +272,10 @@ where
 impl<A, B> Cached for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    A: WrappedRunInputStage,
     for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
     <A as Stage>::Out: Data + WithId + Send + Sync,
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
-    B: WrappedRunInputStage,
+    B: AsyncStage<RunInput=A::RunInput>,
     StageChainOption<A, B>: Stage<Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx>,
     for<'i> <StageChainOption<A, B> as Stage>::In<'i>: WithId + Send + Sync,
 {
@@ -305,12 +300,11 @@ where
         <Self as Stage>::Out: 'static,
         Self::Out: Data,
     {
-        let input_a: Arc<DevicesWrap<<A as Stage>::In<'static>>> = input;
         let ctx_a: <A as Stage>::Ctx = ctx;
 
         let output_a: Arc<DevicesWrap<<A as Stage>::Out>> = match &*self {
-            StageChainOption::Single(stage) => track_await(Arc::clone(stage).run_cached(input_a, ctx_a)).await?,
-            StageChainOption::Chained(stage) => track_await(Arc::clone(stage).run_cached(input_a, ctx_a)).await?,
+            StageChainOption::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
+            StageChainOption::Chained(stage) => track_await(Arc::clone(stage).run_cached(input, ctx_a)).await?,
         };
 
         let output: Arc<DevicesWrap<Self::Out>> = output_a;

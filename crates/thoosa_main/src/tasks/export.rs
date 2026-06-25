@@ -159,13 +159,13 @@ impl<C> AsyncStage for Export<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Self::In<'static>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Export::run"))]
-    async fn run(self: Arc<Self>, _input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let target_ws = self.create_target_workspace()?;
         let target_store_path = { target_ws.read().store_path().clone() };
         {
@@ -183,7 +183,7 @@ where
 
         let converted = if let Some(target_precision) = self.args.target_precision {
             let output = track_await(Arc::new(ConvertPrecisionStage::<C>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::All), target_precision)))
-                .run(Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())), ctx.branch(true))).await?;
+                .run(ConvertPrecisionInput::new(), ctx.branch(true))).await?;
             track_await(Arc::into_inner(output).expect("export convert precision output should not be shared").take_data(0)).await?.converted().to_vec()
         } else {
             Vec::new()

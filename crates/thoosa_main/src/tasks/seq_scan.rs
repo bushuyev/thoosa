@@ -113,7 +113,7 @@ fn ensure_channel_buckets(buckets_by_channel: &mut SeqScanBucketsByChannel, chan
 #[derive(Debug)]
 struct SeqScanConfiguredStage<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     run_config: Arc<SeqScanRunConfig>,
@@ -126,7 +126,7 @@ const DEFAULT_SEQ_SCAN_CHUNK_SIZE: usize = 20_000;
 pub struct SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     store: Arc<Box<dyn Store>>,
@@ -138,7 +138,7 @@ where
 impl<RC, L, C> SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(
@@ -185,8 +185,8 @@ where
 impl<RC, L, C> Stage for SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -199,21 +199,19 @@ where
 impl<RC, L, C> AsyncStage for SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SeqScanStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let max_chunk_len = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
-        let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &ResourcesConfigInput<RC>| {
-            Ok::<_, ThoError>(input.resources_config().clone())
-        })?;
+        let resources_config = input.resources_config().clone();
         let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
         for configured_stage in &self.run_config_stages {
@@ -225,7 +223,7 @@ where
             for resource in &resources {
                 let loaded = track_await(Arc::clone(&configured_stage.configured_loader)
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap_plain(resource.clone())),
+                        Arc::new(resource.clone()),
                         ctx.branch(false),
                     )).await?;
                 let resource_len = loaded.size().dim_1();
@@ -552,7 +550,7 @@ fn reduce_slice_scores(values: &Tensor) -> Result<Tensor, ThoError> {
 pub fn config_to_stage<L, C>(loader: &Arc<L>, run_config: &SeqScanRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>>,
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match run_config.freq_filter.as_deref() {
         None | Some([]) => Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Single(Arc::clone(loader))),
@@ -779,7 +777,7 @@ mod tests {
 
         let out = stage
             .run(
-                Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?)),
+                Arc::new(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?),
                 mock_run_ctx::default(0),
             )
             .await?;

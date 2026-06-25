@@ -45,8 +45,8 @@ use thoosa_shared::tracked_await::track_await;
 #[derive(Debug)]
 pub struct TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     train_label_nets_run_config_ids: Vec<RunConfigId>,
@@ -72,7 +72,7 @@ pub async fn new_train_final_net<L, C, R>(
     selected_motif_nets_limit: Option<usize>,
 ) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
     R: RunCtx + Adjustable + 'static,
 {
@@ -90,8 +90,8 @@ where
 
 impl<L, LL, C> TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
@@ -169,8 +169,8 @@ impl SavableResult for TrainFinalNetOutput {
 
 impl<L, LL, C> Stage for TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -180,17 +180,17 @@ where
 
 impl<L, LL, C> AsyncStage for TrainFinalNet<L, LL, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    LL: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "TrainFinalNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
 
         let train_final_run_configs = Arc::clone(&self.run_configs);
         let label_loader = Arc::clone(&self.label_loader);
@@ -201,9 +201,7 @@ where
 
         async move {
             //gpt Load train/valid logits resources and validate label vector sizes.
-            let resources_config = with_data!(ctx.branch(false), input; |_ctx, input:&ResourcesConfigInput<NetResources<Logits>>|{
-                Ok::<_, ThoError>(input.resources_config().clone())
-            })?;
+            let resources_config = input.resources_config().clone();
             let (train_resources, valid_resources): (Vec<(Resource, Vec<f32>)>, Vec<(Resource, Vec<f32>)>) =
                 track_await(resources_config.to_resources(&store)).await?;
 
@@ -250,7 +248,7 @@ where
             ));
 
             let result = track_await(Arc::into_inner(track_await(train_net.run(
-                Arc::new(DevicesWrap::wrap_plain(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
+                Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
                 ctx.branch(false))).await?
             ).unwrap()
                 .take_data(0)).await?;
@@ -265,7 +263,7 @@ where
 
 struct LogitsResourcesBatch<L, C>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     C: RunCtx + 'static,
 {
     batch_size: u32,
@@ -277,7 +275,7 @@ where
 
 impl<L, C> Debug for LogitsResourcesBatch<L, C>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     C: RunCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -287,7 +285,7 @@ where
 
 impl<L, C> LogitsResourcesBatch<L, C>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     C: RunCtx + 'static,
 {
     pub fn new(loader: Arc<L>, batch_size: u32, train_resources: Arc<Vec<(Resource, Vec<f32>)>>, valid_resources: Arc<Vec<(Resource, Vec<f32>)>>, labels_len: usize) -> Result<Self, ThoError> {
@@ -324,7 +322,7 @@ where
                     let ctx_for_loader = ctx_for_batch.branch(false);
 
                     async move {
-                        let out = track_await(Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_plain(resource)), ctx_for_loader)).await?;
+                        let out = track_await(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
                         Ok::<_, ThoError>((out, labels))
                     }
                 });
@@ -383,7 +381,7 @@ where
 
 impl<L, C> AsyncDataBatch<LabelProbability, LabelsProbabilities, C> for LogitsResourcesBatch<L, C>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<LabelProbability, SynKey>, Ctx = C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     C: RunCtx + 'static,
 {
     fn train_batch_stream<'a>(&'a self, ctx: C) -> BoxStream<'a, Result<(ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>), ThoError>> {
@@ -567,7 +565,7 @@ mod tests {
         let mut run_ctx = mock_run_ctx::default(1);
         let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
 
-        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string())))));
+        let input = Arc::new(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string()))));
 
         let r = train_final_net.run(input, run_ctx.branch(false)).await?;
         with_data!(run_ctx.branch(false), r; |_ctx, r:&TrainFinalNetOutput|{

@@ -259,13 +259,13 @@ impl<C> AsyncStage for ConvertPrecisionStage<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Self::In<'static>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ConvertPrecisionStage::run"))]
-    async fn run(self: Arc<Self>, _input: Arc<DevicesWrap<Self::In<'static>>>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let entries = {
             let ws_guard = self.ws.read();
             selected_entries(ws_guard.as_ref(), self.args.nets_by())?
@@ -552,7 +552,7 @@ mod tests {
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
+                ConvertPrecisionInput::new(),
                 RunCtxImpl::new(0, "convert_precision_test"),
             )
             .await?;
@@ -583,7 +583,7 @@ mod tests {
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
+                ConvertPrecisionInput::new(),
                 RunCtxImpl::new(0, "convert_precision_test"),
             )
             .await?;
@@ -626,7 +626,7 @@ mod tests {
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
+                ConvertPrecisionInput::new(),
                 RunCtxImpl::new(0, "convert_precision_names_test"),
             )
             .await?;

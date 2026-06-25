@@ -154,7 +154,7 @@ fn find_motifs_aggr_to_stats(aggr: FindMotifsAggr) -> Aggr {
 #[derive(Named)]
 pub struct MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -166,7 +166,7 @@ where
 
 impl<MS, C> Debug for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -176,7 +176,7 @@ where
 
 impl<MS, C> MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
@@ -226,7 +226,7 @@ where
     async fn run_metric(&self, motif_stats_input: MotifStatsInput, metric: Metrics, mut ctx: C) -> Result<f32, ThoError> {
         let stats = track_await(Arc::clone(&self.motif_stats)
             .run_cached(
-                Arc::new(DevicesWrap::wrap_plain(motif_stats_input)),
+                Arc::new(motif_stats_input),
                 ctx.branch(false),
             )).await?;
 
@@ -274,7 +274,7 @@ where
 
 impl<MS, C> Stage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -284,23 +284,21 @@ where
 
 impl<MS, C> AsyncStage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MergeSelectedMotifs::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
         async move {
-            let mut run_config_ids = with_data!(ctx.branch(false), input; |_ctx, input: &MergeSelectedMotifsInput| {
-                Ok::<_, ThoError>(input.run_config_ids().clone())
-            })?;
+            let mut run_config_ids = input.run_config_ids().clone();
             if run_config_ids.is_empty() {
                 return Err(ThoError::new("MergeSelectedMotifs::run: run_config_ids is empty"));
             }
@@ -491,7 +489,7 @@ mod tests {
 
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap_plain(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1]))),
+                Arc::new(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1])),
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(false),
             )
