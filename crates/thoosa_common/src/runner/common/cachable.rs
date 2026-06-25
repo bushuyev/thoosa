@@ -111,7 +111,7 @@ where
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
-    fn dump_to_cpu_if_unique<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
+    fn dump_to_cpu_if_last_ref<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
     fn drop_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
 
@@ -140,7 +140,7 @@ where
         DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
     }
 
-    fn dump_to_cpu_if_unique<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+    fn dump_to_cpu_if_last_ref<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async move {
             if Arc::strong_count(self) == 1 {
                 track_await(self.dump_to_cpu(device_idx)).await?;
@@ -191,7 +191,7 @@ where
         async { Ok(()) }.boxed()
     }
 
-    fn dump_to_cpu_if_unique<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+    fn dump_to_cpu_if_last_ref<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async { Ok(()) }.boxed()
     }
 
@@ -290,7 +290,7 @@ where
                         .peek()  //to avoid locking on itself
                         .and_then(|peeked| peeked.as_ref().ok())
                         .cloned() {
-                        track_await(data.dump_to_cpu_if_unique(device_idx)).await?;
+                        track_await(data.dump_to_cpu_if_last_ref(device_idx)).await?;
 
                         debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                     }
@@ -341,6 +341,9 @@ where
         }
     }
 
+    // fn run_input_id(input: &Self::RunInput) -> &<Self::In<'static> as WithId>::ID {
+    //     unimplemented!()
+    // }
 }
 
 
