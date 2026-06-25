@@ -1,4 +1,5 @@
 use std::fmt::Debug;
+use log::warn;
 use serde::de::Error as DeError;
 use serde::ser::{Error as SerError, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -113,8 +114,6 @@ pub fn kind_to_str(kind: &Kind) -> Result<&'static str, String> {
         Kind::Float8e4m3fn => Ok("Float8e4m3fn"),
         Kind::Float8e5m2fnuz => Ok("Float8e5m2fnuz"),
         Kind::Float8e4m3fnuz => Ok("Float8e4m3fnuz"),
-
-        other => Err(format!("unsupported tch::Kind variant: {other:?}")),
     }
 }
 
@@ -144,7 +143,10 @@ pub fn str_to_kind(s: &str) -> Option<Kind> {
         "Float8e4m3fn" => Kind::Float8e4m3fn,
         "Float8e5m2fnuz" => Kind::Float8e5m2fnuz,
         "Float8e4m3fnuz" => Kind::Float8e4m3fnuz,
-        _ => return None,
+        unexpected => {
+            warn!("unexpected kind: {unexpected}");
+            return None
+        },
     })
 }
 
