@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
+use crate::runner::common::cachable::DevicesWrap;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::StreamExt;
@@ -160,8 +160,7 @@ impl<K, O> FuturesRunnerMapPurger
     for DashMap<K, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<O>>, ThoError>>>>
 where
     K: CachableIdTr + Clone + Send + Sync + 'static + Eq + Hash,
-    O: Data + CopyToDevice + Output + Send + Sync + 'static,
-    <O as Data>::M: DevicesWrapCopyMode<O>,
+    O: Data + Output + Send + Sync + 'static,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         self.iter().any(|entry| entry.value().peek().and_then(|value| value.as_ref().ok()).is_some_and(|wrapper| wrapper.is_on_device(device_idx)))

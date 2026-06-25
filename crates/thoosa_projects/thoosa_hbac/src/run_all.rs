@@ -75,18 +75,18 @@ pub(crate) async fn run_all(
 ) -> Result<(), ThoError> {
 
     //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
-    let find_motifs_input = Arc::new(DevicesWrap::wrap(track_await(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?));
+    let find_motifs_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?));
 
     //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
-    let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).await?)));
+    let select_motifs_input = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).await?)));
 
     //gpt Build the input for label training: this is typically a labeled resource set.
-    let train_labels_input = Arc::new(DevicesWrap::wrap(track_await(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
+    let train_labels_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
        run_all_args.train_resource_config()
     ).check(&store)).await?));
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
-    let _train_final_input = Arc::new(DevicesWrap::wrap(track_await(ResourcesConfigInput::new(
+    let _train_final_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new(
         run_all_args.train_final_resource_config()).check(&store)).await?));
 
 
@@ -96,7 +96,7 @@ pub(crate) async fn run_all(
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
-    let find_and_select_input = Arc::new(DevicesWrap::wrap(FindAndSelectMotifsInput::new(
+    let find_and_select_input = Arc::new(DevicesWrap::wrap_plain(FindAndSelectMotifsInput::new(
         run_all_args.find_resources.clone(),
         run_all_args.select_resources.clone(),
     )));
@@ -231,7 +231,7 @@ pub(crate) async fn run_all(
     info!("find and select motifs  done: select_motifs_run_config_ids={select_motifs_run_config_ids:?}");
 
     //gpt Train motif nets needs a custom input wrapper (motif ids + opt config) rather than a resource config.
-    let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config))));
+    let input_wrapper = Arc::new(DevicesWrap::wrap_plain(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, Arc::clone(&all_config.train_motifs_opt_config))));
 
     //gpt Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
     let train_motif_nets_run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(

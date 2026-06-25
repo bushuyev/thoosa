@@ -153,7 +153,7 @@ pub(crate) async fn run_all(
                 async move {
                     panic_to_err_async!(async move {
 
-                        let find_motifs_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
+                        let find_motifs_input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
                         let find_motifs_run_config_rov = Arc::clone(&find_motifs_run_config);
 
                         let fixed_find_motif_config = fixed_find_motif_config.clone();
@@ -187,7 +187,7 @@ pub(crate) async fn run_all(
 
                         info!("run_all: label={label} find_motifs_run_config_ids={find_motifs_run_config_ids:?}");
 
-                        let select_motifs_input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
+                        let select_motifs_input = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
                         let init_ctx_select_buckets = label_ctx.branch(true);
                         let ws_for_select_buckets = Arc::clone(&ws);
                         let store_for_select_buckets = Arc::clone(&store);
@@ -232,7 +232,7 @@ pub(crate) async fn run_all(
                             }
                         }
 
-                        let input_wrapper = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, train_motifs_opt_config)));
+                        let input_wrapper = Arc::new(DevicesWrap::wrap_plain(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: select_motifs_run_config_ids.clone() }, train_motifs_opt_config)));
 
                         // Run a grid over motif-net training configs; output is a set of run ids for trained motif nets.
                         let train_motif_net_run_config_ids = run_opt::</*Labeled,*/ _, _, TrainMotifNetRunConfig, _, _>(
@@ -263,7 +263,7 @@ pub(crate) async fn run_all(
                         let loader_in_train_labels = Arc::clone(&loader);
 
 
-                        let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
+                        let train_labels_input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(
                             run_all_args.train_resource_config()
                         )/*.check(&store).await?*/));
 
@@ -397,7 +397,7 @@ pub(crate) async fn run_all(
                 let ws_in_train_labels = Arc::clone(&ws);
                 let store_in_train_labels = Arc::clone(&store);
                 let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
-                let train_labels_input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(
+                let train_labels_input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(
                     run_all_args.train_resource_config()
                 )));
 

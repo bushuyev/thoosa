@@ -183,14 +183,14 @@ where
 
         let converted = if let Some(target_precision) = self.args.target_precision {
             let output = track_await(Arc::new(ConvertPrecisionStage::<C>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::All), target_precision)))
-                .run(Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())), ctx.branch(true))).await?;
+                .run(Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())), ctx.branch(true))).await?;
             track_await(Arc::into_inner(output).expect("export convert precision output should not be shared").take_data(0)).await?.converted().to_vec()
         } else {
             Vec::new()
         };
 
         info!("Export::run: exported target_dir={:?} label_net_run_config_ids={label_net_run_config_ids:?} motif_net_run_config_ids={motif_net_run_config_ids:?} copied_models={} converted={}", self.args.target_dir, copied_models.len(), converted.len());
-        Ok(Arc::new(DevicesWrap::wrap(ExportOutput::new(self.args.target_dir.clone(), label_net_run_config_ids, motif_net_run_config_ids, copied_models, converted))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(ExportOutput::new(self.args.target_dir.clone(), label_net_run_config_ids, motif_net_run_config_ids, copied_models, converted))))
     }
 }
 

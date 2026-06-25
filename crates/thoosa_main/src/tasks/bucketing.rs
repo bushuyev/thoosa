@@ -971,7 +971,7 @@ where
 
                 let loaded = track_await(loader
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(resource.clone())),
+                        Arc::new(DevicesWrap::wrap_plain(resource.clone())),
                         sync_bucketing_ctx.branch(false),
                     )).await?;
 
@@ -1052,7 +1052,7 @@ where
 
         info!("BucketingStage::run: run_config_id={run_config_id:?} done");
 
-        Ok(Arc::new(DevicesWrap::wrap(BucketingOutput::new((run_config_id, motif_ids)))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(BucketingOutput::new((run_config_id, motif_ids)))))
     }
 }
 
@@ -1594,7 +1594,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap_plain(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
@@ -1618,7 +1618,7 @@ mod tests {
             let mut motif_load_ctx = ctx.branch(false);
             async move {
                 let norm_thickness = Metrics::NormThickness(NormThicknessRunConfig::default());
-                let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+                let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                     norm_thickness.clone()
                 ]))), motif_load_ctx.branch(false)).await?;
 
@@ -1648,7 +1648,7 @@ mod tests {
             }),
         };
 
-        let find_and_select_input = Arc::new(DevicesWrap::wrap(BucketingInput::new(
+        let find_and_select_input = Arc::new(DevicesWrap::wrap_plain(BucketingInput::new(
             Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
         )));
 
@@ -1658,7 +1658,7 @@ mod tests {
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap_plain(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
@@ -1848,7 +1848,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
+        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap_plain(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
@@ -1890,7 +1890,7 @@ mod tests {
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap_plain(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
@@ -1904,7 +1904,7 @@ mod tests {
             })?;
 
 
-            let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+            let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                 Metrics::NormThickness(NormThicknessRunConfig::default())
             ]))), ctx.branch(false)).await?;
 

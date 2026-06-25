@@ -14,7 +14,7 @@ use parking_lot::{Mutex, RwLock};
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
 use cached_derive::Cached;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::{ThoTensor};
@@ -215,13 +215,6 @@ pub struct TrainLabelNetsInput {
 impl TrainLabelNetsInput {
     pub fn new(id: SynKey) -> Self {
         Self { id }
-    }
-}
-
-#[async_trait]
-impl CopyToDevice for TrainLabelNetsInput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> where Self:Sized {
-        todo!()
     }
 }
 
@@ -520,7 +513,7 @@ where
                     ));
 
                     let result = track_await(train_net.run(
-                        Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
+                        Arc::new(DevicesWrap::wrap_plain(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
                         ctx_for_task
                     )).await?;
 
@@ -549,13 +542,13 @@ where
                 "train labels",
             )).await;
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results))))
+            Ok(Arc::new(DevicesWrap::wrap_plain(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results))))
         }
     }
 }
 
 #[allow(type_alias_bounds)]
-type BuildBatchFn<LD:Data + WithId + Send + Sync + 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Arc<dyn Fn(
+type BuildBatchFn<LD: Data + CopyToDevice + WithId + Send + Sync + 'static, X:Dims+ 'static, Y:Dims+ 'static, C> = Arc<dyn Fn(
     Vec<Arc<DevicesWrap<LD>>>,
     Vec<Arc<DevicesWrap<LD>>>, C
 
@@ -566,8 +559,7 @@ struct ResourcesBatch<L, C, LD, X, Y>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C:RunCtx+'static,
-    LD:Data + WithId + Send + Sync + 'static,
-    <LD as Data>::M: DevicesWrapCopyMode<LD>,
+    LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -585,8 +577,7 @@ impl <L, C, LD, X, Y> Debug for  ResourcesBatch<L, C, LD, X, Y>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C:RunCtx+'static,
-    LD:Data + WithId + Send + Sync + 'static,
-    <LD as Data>::M: DevicesWrapCopyMode<LD>,
+    LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -599,8 +590,7 @@ impl <L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C:RunCtx+'static,
-    LD:Data + WithId + Send + Sync + 'static,
-    <LD as Data>::M: DevicesWrapCopyMode<LD>,
+    LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -646,8 +636,7 @@ impl <L,C, LD, X, Y> AsyncDataBatch<X, Y, C> for ResourcesBatch<L, C, LD, X, Y>
 where
     L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C:RunCtx+'static,
-    LD:Data + WithId + Send + Sync + 'static,
-    <LD as Data>::M: DevicesWrapCopyMode<LD>,
+    LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -692,8 +681,7 @@ impl<L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
     C: 'static + RunCtx,
     L: 'static + OutId + for<'i> Cached<In<'i>=Resource, Out=LD, Ctx=C>+ 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    LD:Data + WithId + Send + Sync + 'static,
-    <LD as Data>::M: DevicesWrapCopyMode<LD>,
+    LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
     Y:Dims+ 'static,
 {
@@ -721,8 +709,8 @@ where
 
                     async move {
                         try_join!(
-                            Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_1[index].clone())), ctx_x1),
-                            Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(x_0[index].clone())), ctx_x0)
+                            Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_plain(x_1[index].clone())), ctx_x1),
+                            Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_plain(x_0[index].clone())), ctx_x0)
                         )
                     }
                 });
@@ -1028,7 +1016,7 @@ mod tests {
         ).await?);
 
 
-        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Labeled::new(train_group.to_string()), Labeled::new("valid_group".to_string())))));
+        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(NetResources::new(Labeled::new(train_group.to_string()), Labeled::new("valid_group".to_string())))));
 
 
         let mut run_ctx = mock_run_ctx::default(1);

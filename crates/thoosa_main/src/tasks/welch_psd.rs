@@ -343,7 +343,7 @@ where
 
             let loaded = track_await(Arc::clone(&self.loader)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap(resource.clone())),
+                    Arc::new(DevicesWrap::wrap_plain(resource.clone())),
                     ctx.branch(false),
                 )).await?;
 
@@ -351,7 +351,7 @@ where
                 .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 })).await?;
-            let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
+            let welch_input = Arc::new(DevicesWrap::wrap_plain(welch_input));
 
             let welch_input_size = welch_input.size().clone();
             let out_id = welch_stage.out_id(welch_input.id());

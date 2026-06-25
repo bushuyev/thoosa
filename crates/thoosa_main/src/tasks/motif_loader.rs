@@ -796,7 +796,7 @@ where
 
         // TODO(perf): load raw resource tensors with bounded concurrency; this loop is sequential and sits under the MotifLoader critical path.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
-        let resource_cache = Arc::new(DevicesWrap::wrap(resource));
+        let resource_cache = Arc::new(DevicesWrap::wrap_plain(resource));
         let raw_tensor = track_await(Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(false))).await?;
         let channel_tensor = with_data!(ctx.branch(false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
@@ -921,7 +921,7 @@ where
 
         // TODO(perf): load_random_slices repeats the same sequential raw-resource loading pattern; use a bounded concurrent loader once memory pressure is modeled.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
-        let resource_cache = Arc::new(DevicesWrap::wrap(resource));
+        let resource_cache = Arc::new(DevicesWrap::wrap_plain(resource));
         let raw_tensor = track_await(Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(false))).await?;
         let size = raw_tensor.size();
@@ -1165,7 +1165,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
 
         // TODO: replace the test-only u32 -> MotifLoaderInput conversion with explicit constructors.
-        let input_id = Arc::new(DevicesWrap::wrap(10u32.into()));
+        let input_id = Arc::new(DevicesWrap::wrap_plain(10u32.into()));
 
         let motif = motif_loader
             .run_cached(
@@ -1245,7 +1245,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
 
-        let input = Arc::new(DevicesWrap::wrap(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }));
+        let input = Arc::new(DevicesWrap::wrap_plain(SlicesLoaderInput{ motif_id: DataId::from(&motif_id), limit: 10 }));
 
         let slices:Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = random_slices_loader
             .run(

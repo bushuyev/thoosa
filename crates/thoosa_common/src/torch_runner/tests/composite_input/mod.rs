@@ -58,8 +58,8 @@ where
 
     let out = Arc::clone(&ab_stage).run_cached(
         ABClcStageInput::new(
-            Arc::new(DevicesWrap::wrap(AStageInput::new(0, "a100"))),
-            Arc::new(DevicesWrap::wrap(BStageInput::new(1, "b100"))),
+            Arc::new(DevicesWrap::wrap_plain(AStageInput::new(0, "a100"))),
+            Arc::new(DevicesWrap::wrap_plain(BStageInput::new(1, "b100"))),
         ),
         ctx.branch(false)
     ).await?;
@@ -78,8 +78,8 @@ where
 
     let out = Arc::clone(&ab_stage).run_cached(
         ABClcStageInput::new(
-            Arc::new(DevicesWrap::wrap(AStageInput::new(0, "a100"))),
-            Arc::new(DevicesWrap::wrap(BStageInput::new(1, "b100"))),
+            Arc::new(DevicesWrap::wrap_plain(AStageInput::new(0, "a100"))),
+            Arc::new(DevicesWrap::wrap_plain(BStageInput::new(1, "b100"))),
         ),
         ctx.branch(false)
     ).await?;
