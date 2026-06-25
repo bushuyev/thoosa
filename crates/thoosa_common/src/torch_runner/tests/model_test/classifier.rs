@@ -143,8 +143,8 @@ impl AsyncStage for Classifier {
     type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
     type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
+    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as WithId>::ID {
+        WithId::id(input)
     }
     async fn run(
         self: Arc<Self>,
