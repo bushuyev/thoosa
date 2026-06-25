@@ -92,6 +92,8 @@ impl WithId for MergeSelectedMotifsOutput {
 
 impl Output for MergeSelectedMotifsOutput {}
 
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for MergeSelectedMotifsOutput {}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SelectedMotifKey {
     select_run_config_id: RunConfigId,
@@ -154,7 +156,7 @@ fn find_motifs_aggr_to_stats(aggr: FindMotifsAggr) -> Aggr {
 #[derive(Named)]
 pub struct MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -166,7 +168,7 @@ where
 
 impl<MS, C> Debug for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -176,7 +178,7 @@ where
 
 impl<MS, C> MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
@@ -274,7 +276,7 @@ where
 
 impl<MS, C> Stage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -284,16 +286,17 @@ where
 
 impl<MS, C> AsyncStage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type RunInput = Arc<Self::In<'static>>;
+    type RunOutput = Arc<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MergeSelectedMotifs::run"))]
-    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<Self::Out>, ThoError>> + Send
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -384,7 +387,7 @@ where
             motif_ids.sort_by_key(|(motif_id, _)| *motif_id);
             let select_motifs_run_config_id = track_await(self.store.save_selected_motifs(merge_run_config_id, motif_ids)).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap_plain(MergeSelectedMotifsOutput::new(select_motifs_run_config_id, merged_groups_by_channel))))
+            Ok(Arc::new(MergeSelectedMotifsOutput::new(select_motifs_run_config_id, merged_groups_by_channel)))
         }
     }
 }

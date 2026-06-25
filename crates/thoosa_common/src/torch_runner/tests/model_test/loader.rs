@@ -54,6 +54,7 @@ impl Stage for ABLoader {
 
 impl AsyncStage for ABLoader {
     type RunInput = Arc<Self::In<'static>>;
+    type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)

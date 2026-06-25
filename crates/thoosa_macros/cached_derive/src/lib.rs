@@ -19,9 +19,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
             <<Self as thoosa_common::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID,
             futures_util::future::Shared<
                 futures_util::future::BoxFuture<'static, Result<
-                    std::sync::Arc<thoosa_common::runner::common::cachable::DevicesWrap<
-                        <Self as thoosa_common::runner::common::runnable::Stage>::Out
-                    >>,
+                    <Self as thoosa_common::runner::common::runnable::AsyncStage>::RunOutput,
                     thoosa_shared::ThoosaError
                 >>
             >,
@@ -44,6 +42,7 @@ pub fn derive_cached(input: TokenStream) -> TokenStream {
             async fn cache() -> &'static #map_type
             where
                 Self: Sized,
+                Self::RunOutput: thoosa_common::runner::common::cachable::CachedStageOutput<Self::Out>,
             {
                 use mockall_double::double;
                 #[double]

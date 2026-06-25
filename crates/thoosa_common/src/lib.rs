@@ -7,6 +7,7 @@
 #![allow(deprecated)]
 #![allow(unused_imports, unused_variables, unused_mut, dead_code)]
 extern crate core;
+extern crate self as thoosa_common;
 
 pub mod utils;
 mod acquisitions;

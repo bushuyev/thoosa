@@ -97,6 +97,8 @@ impl FindAndSelectMotifsResult {
 
 impl Output for FindAndSelectMotifsResult {}
 
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for FindAndSelectMotifsResult {}
+
 #[derive(Debug)]
 struct FindAndSelectEvalMetrics {
     score_sum: f64,
@@ -270,15 +272,14 @@ impl FindAndSelectMotifsStage {
             )).await?,
         );
 
-        let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = track_await(Arc::clone(&select_stage)
+        let select_stage_output: Arc<SelectMotifsSavableResult> = track_await(Arc::clone(&select_stage)
             .run(
                 Arc::new(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?)),
                 ctx.branch(true)
             )).await?;
 
-        let mut select_savable:SelectMotifsSavableResult = track_await(Arc::into_inner(select_stage_output)
-            .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared")
-            .take_data(device_idx)).await?;
+        let mut select_savable: SelectMotifsSavableResult = Arc::into_inner(select_stage_output)
+            .expect("FindAndSelectMotifsStage::run_find_and_select: select output still shared");
         let score_sum = select_savable.score_sum();
         track_await(select_savable.save(store, ws, ())).await?;
 
@@ -353,6 +354,7 @@ impl Stage for FindAndSelectMotifsStage {
 
 impl AsyncStage for FindAndSelectMotifsStage {
     type RunInput = Self::In<'static>;
+    type RunOutput = Arc<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
@@ -362,7 +364,7 @@ impl AsyncStage for FindAndSelectMotifsStage {
         self: Arc<Self>,
         input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    ) -> Result<Arc<Self::Out>, ThoError> {
         let find_resources = parse_resources(&input.find_resources)
             .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse find_resources", e))?;
 
@@ -450,6 +452,6 @@ impl AsyncStage for FindAndSelectMotifsStage {
             .filter_map(|(_, config)| config)
             .collect::<Vec<_>>();
 
-        Ok(Arc::new(DevicesWrap::wrap_plain(FindAndSelectMotifsResult::new(best_configs))))
+        Ok(Arc::new(FindAndSelectMotifsResult::new(best_configs)))
     }
 }

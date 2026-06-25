@@ -46,6 +46,188 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct PlainDataGuard<'a, O>(&'a O)
+where
+    O: Data + WithId + Send + Sync;
+
+impl<'a, O> Deref for PlainDataGuard<'a, O>
+where
+    O: Data + WithId + Send + Sync,
+{
+    type Target = O;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+    }
+}
+
+pub trait PlainCachedOutput: Data + WithId + Send + Sync + 'static {}
+
+impl PlainCachedOutput for () {}
+
+pub trait LoadDataFromAnyDevice<O>: Debug + Send + Sync
+where
+    O: Data + WithId + Send + Sync,
+{
+    type Guard<'a>: Deref<Target = O> + Debug + Send
+    where
+        Self: 'a,
+        O: 'a;
+
+    fn load_from_any_device_<'a>(&'a self, to_tho_device_idx: usize) -> BoxFuture<'a, Result<Self::Guard<'a>, ThoError>>;
+}
+
+impl<O> LoadDataFromAnyDevice<O> for Arc<O>
+where
+    O: PlainCachedOutput,
+{
+    type Guard<'a>
+        = PlainDataGuard<'a, O>
+    where
+        Self: 'a,
+        O: 'a;
+
+    fn load_from_any_device_<'a>(&'a self, _to_tho_device_idx: usize) -> BoxFuture<'a, Result<Self::Guard<'a>, ThoError>> {
+        async move { Ok(PlainDataGuard(self.as_ref())) }.boxed()
+    }
+}
+
+impl<O> LoadDataFromAnyDevice<O> for Arc<DevicesWrap<O>>
+where
+    O: Data + WithId + Send + Sync,
+{
+    type Guard<'a>
+        = RwLockReadGuard<'a, O>
+    where
+        Self: 'a,
+        O: 'a;
+
+    fn load_from_any_device_<'a>(&'a self, to_tho_device_idx: usize) -> BoxFuture<'a, Result<Self::Guard<'a>, ThoError>> {
+        DevicesWrap::load_from_any_device_(self.as_ref(), to_tho_device_idx).boxed()
+    }
+}
+
+pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
+    fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
+
+    fn dump_to_cpu_if_unique<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
+
+    fn drop_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
+
+    fn is_on_device(&self, device_idx: usize) -> bool;
+
+    fn is_on_cpu_before(&self, purge_until: u64) -> bool;
+
+    fn is_uniquely_held(&self) -> bool;
+
+    fn mem_size(&self) -> u64;
+}
+
+pub trait CachedStageOutput<O>: CachedPurgeOutput
+where
+    O: Data + WithId + Send + Sync + 'static,
+{
+
+    fn take_data(self, to_device_idx: usize) -> BoxFuture<'static, Result<O, ThoError>>;
+}
+
+impl<O> CachedPurgeOutput for Arc<DevicesWrap<O>>
+where
+    O: Data + WithId + Send + Sync + 'static,
+{
+    fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        DevicesWrap::dump_to_cpu(self.as_ref(), device_idx).boxed()
+    }
+
+    fn dump_to_cpu_if_unique<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        async move {
+            if Arc::strong_count(self) == 1 {
+                track_await(self.dump_to_cpu(device_idx)).await?;
+            }
+            Ok(())
+        }.boxed()
+    }
+
+    fn drop_device<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        DevicesWrap::drop_device(self.as_ref(), device_idx).boxed()
+    }
+
+    fn is_on_device(&self, device_idx: usize) -> bool {
+        DevicesWrap::is_on_device(self.as_ref(), device_idx)
+    }
+
+    fn is_on_cpu_before(&self, purge_until: u64) -> bool {
+        DevicesWrap::is_on_cpu_before(self.as_ref(), purge_until)
+    }
+
+    fn is_uniquely_held(&self) -> bool {
+        Arc::strong_count(self) == 1
+    }
+
+    fn mem_size(&self) -> u64 {
+        DevicesWrap::mem_size(self.as_ref())
+    }
+}
+
+impl<O> CachedStageOutput<O> for Arc<DevicesWrap<O>>
+where
+    O: Data + WithId + Send + Sync + 'static,
+{
+
+    fn take_data(self, to_device_idx: usize) -> BoxFuture<'static, Result<O, ThoError>> {
+        async move {
+            let data = Arc::into_inner(self).ok_or_else(|| ThoError::new("CachedStageOutput::take_data: stage output should not be shared"))?;
+            track_await(data.take_data(to_device_idx)).await
+        }.boxed()
+    }
+}
+
+impl<O> CachedPurgeOutput for Arc<O>
+where
+    O: PlainCachedOutput,
+{
+    fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn dump_to_cpu_if_unique<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn drop_device<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn is_on_device(&self, device_idx: usize) -> bool {
+        device_idx == 0
+    }
+
+    fn is_on_cpu_before(&self, _purge_until: u64) -> bool {
+        true
+    }
+
+    fn is_uniquely_held(&self) -> bool {
+        Arc::strong_count(self) == 1
+    }
+
+    fn mem_size(&self) -> u64 {
+        0
+    }
+}
+
+impl<O> CachedStageOutput<O> for Arc<O>
+where
+    O: PlainCachedOutput,
+{
+
+    fn take_data(self, _to_device_idx: usize) -> BoxFuture<'static, Result<O, ThoError>> {
+        async move {
+            Arc::into_inner(self).ok_or_else(|| ThoError::new("CachedStageOutput::take_data: plain stage output should not be shared"))
+        }.boxed()
+    }
+}
+
 
 
 #[async_trait]
@@ -54,20 +236,22 @@ where
     for <'i> Self::In<'i>: WithId + Send + Sync,
     Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
+    Self::RunOutput: CachedStageOutput<Self::Out>,
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
+        Shared<BoxFuture<'static, Result<Self::RunOutput, ThoError>>>,
     >
     where
         Self: Sized,
-        Self::Out: Data + Sync + Send;
+        Self::Out: Data + Sync + Send,
+        Self::RunOutput: CachedStageOutput<Self::Out>;
 
     async fn run_cached(
         self: Arc<Self>,
         input: Self::RunInput,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    ) -> Result<Self::RunOutput, ThoError>
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
@@ -75,7 +259,8 @@ where
         <Self as Stage>::Out: Send + Sync,
         <<Self as Stage>::Out as WithId>::ID: 'static,
         <Self as Stage>::Out: 'static,
-        Self::Out: Data // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
+        Self::RunOutput: CachedStageOutput<Self::Out>,
     {
         let key = self.out_id(Self::run_input_id(&input));
         let device_idx = ctx.tho_device_idx();
@@ -104,13 +289,10 @@ where
                     if let Some(data) = shared_fut
                         .peek()  //to avoid locking on itself
                         .and_then(|peeked| peeked.as_ref().ok())
-                        .map(Arc::clone) {
-                        debug!("Cachable::purge_gpu_cache_area: 3 key={key_for_purger:?} Arc::strong_count={:?}", Arc::strong_count(&data));
-                        if Arc::strong_count(&data) == 1 {
-                            track_await(data.dump_to_cpu(device_idx)).await?;
+                        .cloned() {
+                        track_await(data.dump_to_cpu_if_unique(device_idx)).await?;
 
-                            debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
-                        }
+                        debug!("Cachable::purge_gpu_cache_area: 4  key={key_for_purger:?} done");
                     }
 
                     Ok(())
@@ -596,7 +778,7 @@ where
     pub async fn load_from_any_device_(
         &self,
         to_tho_device_idx: usize,
-    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError>
+    ) -> Result<RwLockReadGuard<'_, O>, ThoError>
     {
         //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
         debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
@@ -941,6 +1123,23 @@ where
 
 
 
+}
+
+impl<O> WithDataRef for Arc<O>
+where
+    O: PlainCachedOutput,
+{
+    type O<'o> = O;
+
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    where
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
+    {
+        async move {
+            DevicesWrap::<O>::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), self.as_ref())
+        }
+    }
 }
 
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
