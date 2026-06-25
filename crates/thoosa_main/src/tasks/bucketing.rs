@@ -944,16 +944,14 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let resources_config = with_data!(ctx.branch(false), input; |_ctx, input: &BucketingInput<RC>| {
-            Ok::<_, ThoError>(input.resources_config().clone())
-        })?;
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        let resources_config = input.resources_config().clone();
         let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
         debug!("BucketingStage::run: resources_config={resources_config:?} resources={resources:?}");
@@ -1594,7 +1592,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap_plain(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
+        let res = mel_patch_stage.run(Arc::new(BucketingInput::new(Simple::new(ResourceType::Group("all group".into())))), ctx.branch(false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 
@@ -1848,7 +1846,7 @@ mod tests {
 
         let mel_patch_stage = Arc::new(BucketingStage::new(&ws, &store, Arc::clone(&loader), patch_run_config, window, step)?);
 
-        let res = mel_patch_stage.run(Arc::new(DevicesWrap::wrap_plain(BucketingInput::new(Simple::new(ResourceType::Group("all group".into()))))), ctx.branch(false)).await?;
+        let res = mel_patch_stage.run(Arc::new(BucketingInput::new(Simple::new(ResourceType::Group("all group".into())))), ctx.branch(false)).await?;
 
         let motifs = store.list_motifs(id).await?;
 

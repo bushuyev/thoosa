@@ -452,7 +452,7 @@ where
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
@@ -460,16 +460,13 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CrossLoader::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Arc<Self::In<'static>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         // let chunk_size = self.chunk_size;
         let max_batch = i64::try_from(self.chunk_size).unwrap_or(i64::MAX);
 
-        let resources_config = track_await(input
-            .with_data_ref(0, ctx.branch(false), None, |input: &ResourcesConfigInput<ResC>, _ctx| {
-                Ok(input.resources_config.clone())
-            })).await?;
+        let resources_config = input.resources_config.clone();
         let resources = track_await(resources_config
             .to_resources(&self.store)).await?
             .into_iter()
@@ -1801,7 +1798,7 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys)))));
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys))));
 
         let output:Arc<DevicesWrap<()>> = cross_loader
             .run(input, ctx.branch(false))
@@ -1972,10 +1969,10 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
             "resource_a".to_string(),
             "resource_b".to_string(),
-        ])))));
+        ]))));
 
         let _ = cross_loader
             .run(input, ctx.branch(false))
@@ -2113,10 +2110,10 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
             "resource_small".to_string(),
             "resource_large".to_string(),
-        ])))));
+        ]))));
 
         let _ = cross_loader.run(input, ctx.branch(false)).await?;
 
@@ -2252,9 +2249,9 @@ mod tests {
             1,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+        let input = Arc::new(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
             "resource_a".to_string(),
-        ])))));
+        ]))));
 
         let _ = cross_loader.run(input, ctx.branch(false)).await?;
 

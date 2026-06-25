@@ -218,7 +218,7 @@ impl FindAndSelectMotifsStage {
         device_idx: usize,
         mut ctx: C
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
-        let find_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).await?));
+        let find_input = Arc::new(track_await(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).await?);
         //code in FindMotifsStage and SelectMotifsStage expects pre saved run configurations
         let find_run_config_id = track_await(Self::save_run_config_with_input(
             store,

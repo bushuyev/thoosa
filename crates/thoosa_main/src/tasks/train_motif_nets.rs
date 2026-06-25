@@ -334,25 +334,22 @@ where
     C: RunCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = TrainMotifNetInput;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainMotifNets::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: TrainMotifNetInput, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
         let device_idx = ctx.tho_device_idx();
 
-        let (motifs_by, opt_config) = with_data!(ctx.branch(false), input; |_ctx, input: &TrainMotifNetInput| {
-            Ok::<(MotifsBy, Arc<OptConfig>), ThoError>((input.motifs_by.clone(), input.opt_config.clone()))
-        })?;
 
         let channels = perf_log!(sync_read_lock!(self.ws)).channels();
 
-        debug!("TrainMotifNets::run: motifs_by={motifs_by:?} opt_config={opt_config:?}");
+        debug!("TrainMotifNets::run: input={input:?}");
 
-        let (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids) = match motifs_by {
+        let (select_motifs_run_config_ids, motifs_rates_selected_motifs_run_config_ids) = match input.motifs_by {
 
             MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids } => {
 
@@ -402,7 +399,7 @@ where
 
             let motif_loader = Arc::clone(&self.motif_loader);
             let random_slices_loader = Arc::clone(&self.random_slices_loader);
-            let opt_config = Arc::clone(&opt_config);
+            let opt_config = Arc::clone(&input.opt_config);
             let train_motifs_nodes_run_configs = Arc::clone(&self.run_configs);
             let store = Arc::clone(&self.store);
             let epoch_size = self.epoch_size;
@@ -968,7 +965,7 @@ mod tests {
             None
         )?);
 
-        let input = Arc::new(DevicesWrap::wrap_plain(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)))));
+        let input = TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(false);
