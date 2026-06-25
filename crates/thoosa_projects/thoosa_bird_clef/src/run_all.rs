@@ -31,7 +31,7 @@ use thoosa_main::tasks::motif_loader::MotifLoader;
 use thoosa_main::tasks::motif_stats::{MotifStats, MotifStatsInput};
 use thoosa_main::tasks::select_buckets::{BestSelectionModeRangeOrValue, FilterSelectionModeRangeOrValue, SelectBucketsRunConfigRangeOrValue, SelectBucketsStage, SelectionModeRangeOrValue};
 use thoosa_main::tasks::select_motifs::{SelectMotifsInput};
-use thoosa_main::tasks::stages_seq::ABStage;
+use thoosa_common::stages_seq::ABStage;
 use thoosa_main::tasks::stft::Stft;
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};

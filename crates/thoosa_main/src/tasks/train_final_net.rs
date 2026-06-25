@@ -1,7 +1,7 @@
 use crate::tasks::apply_label_nets::ApplyLabelNets;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::stages_seq::ABStage;
+use thoosa_common::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 use async_trait::async_trait;
 use futures::FutureExt;

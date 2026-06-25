@@ -51,7 +51,7 @@ use thoosa_named_derive::Named;
 use crate::tasks::cross_dims::ChannelsMotifsDists;
 use crate::tasks::slices_stats::{Aggr as StatsAggr, Metrics};
 use crate::tasks::transforms::freq_filter::FreqFilter;
-use crate::tasks::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_with_data::with_data;
