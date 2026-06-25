@@ -17,7 +17,7 @@ use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustConte
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{Stage, SyncStage, WrappedStageRunInput};
+use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 type StageInStatic<S> = StageIn<'static, S>;
@@ -242,7 +242,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    R: crate::runner::common::runnable::AsyncStage<RunInput = WrappedStageRunInput<R>>,
+    R: crate::runner::common::runnable::AsyncStage<RunInput = Arc<StageInStatic<R>>>,
     for<'a> <R as Stage>::In<'a>: Data + WithId + Send + Sync,
     R::Out: Data + CopyToDevice + Send + Sync,
     StageInStatic<R>: From<&'static str>,
@@ -276,7 +276,7 @@ where
 
                 let multed = load_and_clc
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap_plain(<&str as Into<StageInStatic<R>>>::into(res))),
+                        Arc::new(<&str as Into<StageInStatic<R>>>::into(res)),
                         ctx_device.branch(false),
                     )
                     .await?;
@@ -501,7 +501,7 @@ pub mod fixtures {
 
     // #[async_trait]
     impl AsyncStage for DummyLoader {
-        type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+        type RunInput = Arc<Self::In<'static>>;
 
         fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
             thoosa_shared::traits::WithId::id(input)
@@ -509,7 +509,7 @@ pub mod fixtures {
 
         async fn run(
             self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
+            input: Arc<Self::In<'static>>,
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             self.run_count.fetch_add(1, Relaxed);
@@ -649,14 +649,14 @@ mod tests {
     }
 
     impl AsyncStage for DummyLoader {
-        type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+        type RunInput = Arc<Self::In<'static>>;
 
         fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
             thoosa_shared::traits::WithId::id(input)
         }
         async fn run(
             self: Arc<Self>,
-            input: Arc<DevicesWrap<Self::In<'static>>>,
+            input: Arc<Self::In<'static>>,
             ctx: Self::Ctx,
         ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             self.run_count.fetch_add(1, Relaxed);
@@ -894,14 +894,14 @@ mod tests {
 
     // #[async_trait]
     impl AsyncStage for DLoadAndClcStage {
-        type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+        type RunInput = Arc<Self::In<'static>>;
 
         fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
             thoosa_shared::traits::WithId::id(input)
         }
 
 
-        async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+        async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
             let ctx_for_loader = ctx.branch(false);
             let loaded = Arc::clone(&self.loader)
                 .run_cached(input, ctx_for_loader)
@@ -946,9 +946,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
+                Arc::new(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                })),
+                                }),
                 ctx_device_0_0,
             )
             .await;
@@ -957,9 +957,9 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
+                Arc::new(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                })),
+                                }),
                 ctx_device_0_1,
             )
             .await;
@@ -980,9 +980,9 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
+                Arc::new(DLoaderInput {
                                                     id: DLoaderInputId("resource_1"),
-                                                })),
+                                                }),
                 ctx_device_1_0,
             )
             .await?;
@@ -1022,9 +1022,9 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
+                Arc::new(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
-                                })),
+                                }),
                 ctx_device_0_0,
             )
             .await?;
@@ -1085,9 +1085,9 @@ mod tests {
         let ctx_device_0_data = ctx_device_0.branch(false);
 
         let multed = load_and_mut.run_cached(
-            Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
+            Arc::new(DLoaderInput {
                                                 id: DLoaderInputId("resource_1"),
-                                            })),
+                                            }),
             ctx_device_0_run,
             )
             .await?;

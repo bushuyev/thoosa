@@ -214,8 +214,8 @@ where
 // satisfies its own minimum threshold.
 pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
 
@@ -234,8 +234,8 @@ where
 
 impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectMotifsStage")
@@ -248,8 +248,8 @@ where
 
 impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     type ID = SynKey;
@@ -262,8 +262,8 @@ where
 
 impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
 
@@ -346,10 +346,10 @@ where
             async move {
                 let motif_stats_output = track_await(Arc::clone(&motif_stats)
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(
+                        Arc::new(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::new((motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                             criteria_metrics.clone(),
-                        ))),
+                        )),
                         ctx.branch(false),
                     )).await?;
 
@@ -407,8 +407,8 @@ where
 
 impl <L,ML, C> Stage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
@@ -420,22 +420,20 @@ where
 
 impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("SelectMotifsStage::run: input={input:?}");
 
-        let (resources_config, output_mode) = with_data!(ctx.branch(false), input; |_ctx, input: &SelectMotifsInput| {
-            Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
-        })?;
+        let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
         let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
         debug!("SelectMotifsStage::run: resources={resources:?}");
@@ -558,12 +556,12 @@ pub mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    fn standalone_select_input(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
-        Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
+    fn standalone_select_input(resources_group: &str) -> Arc<SelectMotifsInput> {
+        Arc::new(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))
     }
 
-    fn select_input_with_constraint_metrics(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
-        Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
+    fn select_input_with_constraint_metrics(resources_group: &str) -> Arc<SelectMotifsInput> {
+        Arc::new(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))
     }
 
     fn find_motifs_run_config_descr(run_config_id: RunConfigId) -> (RunConfigId, Result<RunConfigRow, ThoError>) {
@@ -655,7 +653,7 @@ pub mod tests {
             None,
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(1)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
@@ -733,7 +731,7 @@ pub mod tests {
             None
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(0)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }
@@ -814,7 +812,7 @@ pub mod tests {
             None
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(0)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }
@@ -962,7 +960,7 @@ pub mod tests {
             Some(801) //TODO check if ran through OOMHandler
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(1)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }

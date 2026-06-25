@@ -272,7 +272,7 @@ impl FindAndSelectMotifsStage {
 
         let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = track_await(Arc::clone(&select_stage)
             .run(
-                Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?))),
+                Arc::new(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?)),
                 ctx.branch(true)
             )).await?;
 
@@ -352,7 +352,7 @@ impl Stage for FindAndSelectMotifsStage {
 }
 
 impl AsyncStage for FindAndSelectMotifsStage {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Self::In<'static>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
@@ -360,13 +360,9 @@ impl AsyncStage for FindAndSelectMotifsStage {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindAndSelectMotifsStage::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let input = track_await(Arc::into_inner(input)
-            .expect("FindAndSelectMotifsStage::run: input still shared")
-            .take_data(ctx.tho_device_idx())).await?;
-
         let find_resources = parse_resources(&input.find_resources)
             .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse find_resources", e))?;
 

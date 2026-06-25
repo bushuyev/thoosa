@@ -414,14 +414,14 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
 
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.tho_device_idx();
@@ -914,7 +914,7 @@ mod tests {
 
         let output = train_net
             .run(
-                Arc::new(DevicesWrap::wrap_plain(TrainNetInput::new(SynKey::new([mono_key!("test", "test")])))),
+                Arc::new(TrainNetInput::new(SynKey::new([mono_key!("test", "test")]))),
                 ctx,
             )
             .await?;

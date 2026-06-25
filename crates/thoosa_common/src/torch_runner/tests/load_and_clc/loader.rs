@@ -192,21 +192,19 @@ impl Stage for TestTensorLoader {
 
 // #[async_trait]
 impl AsyncStage for TestTensorLoader {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Arc<Self::In<'static>>,
         ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let sync_loader = Arc::clone(&self.sync_loader);
 
-        let r=    input.with_data_ref(ctx.tho_device_idx(), ctx, None, |input, ctx|{
-            Ok(sync_loader.do_run(input, ctx))
-        }).await??;
+        let r = sync_loader.do_run(input.as_ref(), &ctx)?;
 
         Ok(Arc::new(DevicesWrap::wrap(r)))
 

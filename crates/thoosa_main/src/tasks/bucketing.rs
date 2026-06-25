@@ -224,7 +224,7 @@ impl PatchTempStore {
 pub struct BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -245,7 +245,7 @@ where
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -924,7 +924,7 @@ pub fn patch_sample_ranges_flat(
 impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -939,7 +939,7 @@ where
 impl<RC, L, D, Id, C> AsyncStage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -969,7 +969,7 @@ where
 
                 let loaded = track_await(loader
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap_plain(resource.clone())),
+                        Arc::new(resource.clone()),
                         sync_bucketing_ctx.branch(false),
                     )).await?;
 
@@ -1616,9 +1616,9 @@ mod tests {
             let mut motif_load_ctx = ctx.branch(false);
             async move {
                 let norm_thickness = Metrics::NormThickness(NormThicknessRunConfig::default());
-                let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+                let metrics: Arc<DevicesWrap<MotifStatsOutput>> = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                     norm_thickness.clone()
-                ]))), motif_load_ctx.branch(false)).await?;
+                ])), motif_load_ctx.branch(false)).await?;
 
                 let norm_thickness = with_data!(motif_load_ctx.branch(false), metrics; |ctx, metrics:&MotifStatsOutput|{
                     Ok::<_, ThoError>(metrics.channel_metric_value(&norm_thickness, 0)?.value())
@@ -1646,9 +1646,9 @@ mod tests {
             }),
         };
 
-        let find_and_select_input = Arc::new(DevicesWrap::wrap_plain(BucketingInput::new(
+        let find_and_select_input = Arc::new(BucketingInput::new(
             Simple::new(ResourceType::Group("all group".into())), //run_all_args.find_resources.clone(),
-        )));
+        ));
 
        /*plot_test_resources(&store, &ws, &loader, &mut ctx).await?;
 
@@ -1656,7 +1656,7 @@ mod tests {
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap_plain(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
@@ -1888,7 +1888,7 @@ mod tests {
         let mut best_reference_distances = vec![f64::INFINITY; all_motifs.len()];
 
         for motif_id in &motifs {
-            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(DevicesWrap::wrap_plain(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None))), ctx.branch(false)).await?;
+            let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
@@ -1902,9 +1902,9 @@ mod tests {
             })?;
 
 
-            let metrics = Arc::clone(&motif_stats).run(Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
+            let metrics = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
                 Metrics::NormThickness(NormThicknessRunConfig::default())
-            ]))), ctx.branch(false)).await?;
+            ])), ctx.branch(false)).await?;
 
             debug!("heavy_run_mel_path: metrics={metrics:?}");
 

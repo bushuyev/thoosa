@@ -188,7 +188,7 @@ impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     R: Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -202,7 +202,7 @@ impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
@@ -330,7 +330,7 @@ where
 
         for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
             let t_1 = track_await(Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap_plain(resource_1.as_ref().clone())), ctx.branch(false))).await?;
+                .run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await?;
             let t_1_len = t_1.size().dim_1();
 
             if t_1_len > max_batch {
@@ -426,7 +426,7 @@ impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
     C: RunCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
@@ -447,7 +447,7 @@ where
     ResourcesConfigInput<ResC>: Data<M=CpuOnly<ResourcesConfigInput<ResC>>> + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
     RSV: for<'i> SyncStage<In<'i> = CrossUnfoldClcOutput<R>, Ctx=C> + Stage<Ctx=C, Out = ()> + Send + Sync + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
@@ -490,7 +490,7 @@ where
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
             let t_0 = track_await(Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap_plain(resource_0.as_ref().clone())), ctx.branch(false))).await?;
+                .run_cached(Arc::new(resource_0.as_ref().clone()), ctx.branch(false))).await?;
             let t_0_len = t_0.size().dim_1();
 
             if t_0_len > max_batch {

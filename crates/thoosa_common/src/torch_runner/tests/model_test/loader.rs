@@ -33,8 +33,8 @@ impl ABLoader {
     }
 }
 
-pub(crate) fn new_file_input_cache(value: impl Into<FileInput>) -> Arc<DevicesWrap<FileInput>> {
-    Arc::new(DevicesWrap::wrap_plain(value.into()))
+pub(crate) fn new_file_input_cache(value: impl Into<FileInput>) -> Arc<FileInput> {
+    Arc::new(value.into())
 }
 
 impl OutId for ABLoader {
@@ -53,14 +53,14 @@ impl Stage for ABLoader {
 }
 
 impl AsyncStage for ABLoader {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Arc<Self::In<'static>>,
         _ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let idx = parse_numeric_part(WithId::id(input.as_ref()).0).unwrap_or(0.0) as i64;

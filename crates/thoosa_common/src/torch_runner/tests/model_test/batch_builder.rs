@@ -30,8 +30,8 @@ impl BatchBuilder {
     }
 }
 
-pub(crate) fn new_file_list_input_cache(input: FileListInput) -> Arc<DevicesWrap<FileListInput>> {
-    Arc::new(DevicesWrap::wrap_plain(input))
+pub(crate) fn new_file_list_input_cache(input: FileListInput) -> Arc<FileListInput> {
+    Arc::new(input)
 }
 
 impl OutId for BatchBuilder {
@@ -50,20 +50,17 @@ impl Stage for BatchBuilder {
 }
 
 impl AsyncStage for BatchBuilder {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Arc<Self::In<'static>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
-        let (id_key, files) = {
-            let input_ref = input.load_from_any_device_(0).await?;
-            (input_ref.id.0.to_string(), input_ref.files.clone())
-        };
+        let (id_key, files) = (input.id.0.to_string(), input.files.clone());
 
         if files.is_empty() {
             return Err(Cause::SomethingElse("empty file list".into()).into());
