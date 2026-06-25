@@ -45,7 +45,7 @@ use thoosa_shared::traits::Adjustable;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourceId};
 use crate::tasks::find_motifs::{config_to_stage, FilteredLoaderStage, LoaderStageChoice};
-use crate::tasks::stages_seq::{ABStage, StageChainOption};
+use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::runner::cache_areas::CacheArea;
