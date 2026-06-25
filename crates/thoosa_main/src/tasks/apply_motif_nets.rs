@@ -320,7 +320,7 @@ where
                 let load_motif_net = Arc::clone(&load_motif_net);
                 let load_ctx = stage_ctx.branch(false);
                 async move {
-                    match track_await(load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx)).await {
+                    match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
                             debug!("ApplyMotifNets::new: loaded net={net:?}");
                             Ok::<_, ThoError>(Some((id, net)))

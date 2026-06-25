@@ -119,17 +119,17 @@ impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Self::In<'static>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: LoadMotifNetInput, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
-        let input = track_await(input.load_from_any_device_(0)).await?;//TODO clone_from_cpu
+        // let input = track_await(input.load_from_any_device_(0)).await?;//TODO clone_from_cpu
 
 
         let (params, module) = perf_log!(sync_read_lock!(self.ws)).load_motif_net(&input.net_id, &ThoDevice::from(device_idx).into(), input.quantize)?;

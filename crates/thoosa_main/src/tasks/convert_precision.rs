@@ -273,7 +273,7 @@ where
         let entries_len = entries.len();
         if entries_len == 0 {
             warn!("ConvertPrecisionStage::run: no nets matched {:?}", self.args.nets_by());
-            return Ok(Arc::new(DevicesWrap::wrap(ConvertPrecisionOutput::new(vec![]))));
+            return Ok(Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionOutput::new(vec![]))));
         }
 
         let target_precision = self.args.target_precision();
@@ -304,7 +304,7 @@ where
         }
 
         info!("ConvertPrecisionStage::run: converted {} nets to {:?}", converted.len(), target_precision);
-        Ok(Arc::new(DevicesWrap::wrap(ConvertPrecisionOutput::new(converted))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionOutput::new(converted))))
     }
 }
 
@@ -547,7 +547,7 @@ mod tests {
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
+                Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
                 RunCtxImpl::new(0, "convert_precision_test"),
             )
             .await?;
@@ -578,7 +578,7 @@ mod tests {
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
+                Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
                 RunCtxImpl::new(0, "convert_precision_test"),
             )
             .await?;
@@ -618,7 +618,7 @@ mod tests {
         let stage = Arc::new(ConvertPrecisionStage::<RunCtxImpl>::new(&ws, args));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap(ConvertPrecisionInput::new())),
+                Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionInput::new())),
                 RunCtxImpl::new(0, "convert_precision_names_test"),
             )
             .await?;

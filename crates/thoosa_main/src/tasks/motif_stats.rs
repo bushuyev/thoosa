@@ -165,23 +165,6 @@ impl Data for MotifStatsInput {
 
 impl Adjustable for MotifStatsInput {}
 
-#[async_trait]
-impl CopyToDevice for MotifStatsInput {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
-        let source = match &self.source {
-            MotifStatsSource::Motif(motif_loader_input) => MotifStatsSource::Motif(motif_loader_input.clone()),
-            MotifStatsSource::MergedMotifs(motif_loader_inputs) => MotifStatsSource::MergedMotifs(motif_loader_inputs.clone()),
-            MotifStatsSource::Random { max_slices, find_motifs_run_config_id, resources } => MotifStatsSource::Random { max_slices: *max_slices, find_motifs_run_config_id: *find_motifs_run_config_id, resources: resources.clone() },
-        };
-
-        Ok(Self {
-            id: self.id.clone(),
-            source,
-            metrics: self.metrics.clone(),
-        })
-    }
-}
-
 type LoadedMotif = thoosa_shared::data_with_extra::DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
 
 #[derive(Debug)]
@@ -696,13 +679,6 @@ impl WithId for MotifStatsOutput {
 
 impl Output for MotifStatsOutput {}
 
-#[async_trait]
-impl CopyToDevice for MotifStatsOutput {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(self.clone())
-    }
-}
-
 #[derive(Debug, Named)]
 struct MotifStatsSyncStage<C>
 where
@@ -941,7 +917,7 @@ where
                 debug!("MotifStats::run: motif_loader_input={motif_loader_input:?}");
                 let motif = track_await(Arc::clone(&self.motif_loader)
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(motif_loader_input)),
+                        Arc::new(DevicesWrap::wrap_plain(motif_loader_input)),
                         ctx.branch(false),
                     )).await?;
 
@@ -981,7 +957,7 @@ where
                 for (idx, motif_loader_input) in motif_loader_inputs.into_iter().enumerate() {
                     let motif = track_await(Arc::clone(&self.motif_loader)
                         .run_cached(
-                            Arc::new(DevicesWrap::wrap(motif_loader_input)),
+                            Arc::new(DevicesWrap::wrap_plain(motif_loader_input)),
                             ctx.branch(false),
                         )).await?;
 
@@ -1089,7 +1065,7 @@ where
 
         debug!("MotifStats::run: done input_id={input_id:?} stats={:?}", stats);
 
-        Ok(Arc::new(DevicesWrap::wrap(stats)))
+        Ok(Arc::new(DevicesWrap::wrap_plain(stats)))
     }
 }
 
@@ -1273,7 +1249,7 @@ mod tests {
 
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(1)));
         let metric = Metrics::default();
-        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(4, run_config_id, vec![metric.clone()])));
+        let input = Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_random(4, run_config_id, vec![metric.clone()])));
 
         let output = Arc::clone(&stage)
             .run(
@@ -1333,7 +1309,7 @@ mod tests {
         let stage = Arc::new(MotifStats::new(Arc::clone(&store), loader, Arc::clone(&ws), motif_loader));
         let ctx = Arc::new(RwLock::new(mock_run_ctx::default(0)));
         let metric = Metrics::default();
-        let input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_merged_motif_inputs(
+        let input = Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_merged_motif_inputs(
             vec![motif_input_0, motif_input_1],
             vec![metric.clone()],
         )?));

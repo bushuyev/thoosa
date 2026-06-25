@@ -294,7 +294,7 @@ async fn do_test_loaded(
 
 
     let loaded_tensor_0_0 = Arc::clone(&loader).run_cached(
-        Arc::new(DevicesWrap::wrap("resource_1".into())),
+        Arc::new(DevicesWrap::wrap_plain("resource_1".into())),
         ctx_device_0.branch(false),
     ).await?;
 
@@ -321,7 +321,7 @@ async fn do_test_loaded(
 
     let _loaded_tensor_0_1 = Arc::clone(&loader)
         .run_cached(
-            Arc::clone(&Arc::new(DevicesWrap::wrap("resource_1".into()))),
+            Arc::clone(&Arc::new(DevicesWrap::wrap_plain("resource_1".into()))),
             ctx_device_0.branch(false),
         )
         .await?;
@@ -740,7 +740,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
 
         Arc::clone(&load_and_mut)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(res.into())),
+                Arc::new(DevicesWrap::wrap_plain(res.into())),
                 ctx_device.write().branch(false),
             )
             .await?;
@@ -886,7 +886,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     let multed = Arc::clone(&load_and_mut)
         .run_cached(
-            Arc::new(DevicesWrap::wrap("resource_1".into())),
+            Arc::new(DevicesWrap::wrap_plain("resource_1".into())),
             ctx_device.write().branch(false),
         )
         .await?;
@@ -1057,6 +1057,5 @@ async fn test_with_data() -> Result<(), ThoError> {
     Ok(())
 
 }
-
 
 

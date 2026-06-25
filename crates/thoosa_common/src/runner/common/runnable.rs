@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
+use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -26,7 +26,6 @@ pub trait WrappedRunInputStage: AsyncStage<RunInput = WrappedStageRunInput<Self>
 where
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,
-    <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
 {
 }
 
@@ -35,7 +34,6 @@ where
     T: AsyncStage<RunInput = WrappedStageRunInput<T>>,
     for<'a> T::In<'a>: Data + WithId + Send + Sync,
     T::Out: Data + WithId + Send + Sync,
-    <T::Out as Data>::M: DevicesWrapCopyMode<T::Out>,
 {
 }
 
@@ -48,12 +46,11 @@ pub trait Stage: Debug {
 
 }
 
-// #[async_trait] - it's anyway not obj safe, and it forces Output to be Send
+
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
         for <'a> Self::In<'a>: WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync,
-        <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>
 {
     type RunInput: AsyncStageRunInput<Self::In<'static>>;
 
@@ -61,7 +58,7 @@ where
         unimplemented!()
     }
 
-    //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stages wins 100 GPU)
+    //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
     //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
     // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
     fn run(self: Arc<Self>, _input: Self::RunInput, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send

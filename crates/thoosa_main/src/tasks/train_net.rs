@@ -459,7 +459,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store, node_params, run_config, loss))))
+            Ok(Arc::new(DevicesWrap::wrap_plain(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store, node_params, run_config, loss))))
         }
     }
 }
@@ -914,7 +914,7 @@ mod tests {
 
         let output = train_net
             .run(
-                Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("test", "test")])))),
+                Arc::new(DevicesWrap::wrap_plain(TrainNetInput::new(SynKey::new([mono_key!("test", "test")])))),
                 ctx,
             )
             .await?;

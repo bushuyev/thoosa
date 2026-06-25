@@ -11,7 +11,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::{CachableIdTr, Data, WithId};
 use thoosa_shared::CopyToDevice;
-use crate::runner::common::cachable::{DevicesWrap, DevicesWrapCopyMode};
+use crate::runner::common::cachable::DevicesWrap;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::RegisteredCacheHandle;
@@ -23,8 +23,6 @@ use thoosa_shared::tracked_await::track_await;
 ///To keep tensors in async functions in between async calls so that data can be dumped to CPU when competing task wins 100 Permits and requests others to be dumped.
 #[derive(Debug)]
 pub struct TmpCached<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static>
-where
-    <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     pub name: String,
     registered_cache: Option<RegisteredCacheHandle>,
@@ -39,8 +37,6 @@ pub struct TmpCacheTakeAllError<D> {
 }
 
 impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> TmpCached<D>
-where
-    <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     pub fn registered_name(&self) -> &'static str {
         self.registered_cache.as_ref().expect("TmpCached::registered_name: cache already unregistered").name()
@@ -171,7 +167,6 @@ where
 impl <D> FuturesRunnerMapPurger for DashMap<<D as WithId>::ID, Arc<DevicesWrap<D>>>
 where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
-    <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         self.iter().any(|entry| entry.value().is_on_device(device_idx))
@@ -234,7 +229,6 @@ where
 impl<D> Drop for TmpCached<D>
 where
     D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static,
-    <D as Data>::M: DevicesWrapCopyMode<D>,
 {
     fn drop(&mut self) {
 

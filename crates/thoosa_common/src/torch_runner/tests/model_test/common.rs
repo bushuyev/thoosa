@@ -78,13 +78,6 @@ impl From<&'static str> for FileInput {
 }
 
 #[async_trait]
-impl CopyToDevice for FileInput {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(self.clone())
-    }
-}
-
-#[async_trait]
 impl Data for FileInput {
     type Metrics = ();
     type M = CpuOnly<Self>;
@@ -119,16 +112,6 @@ impl WithId for FileListInput {
 
     fn id(&self) -> &Self::ID {
         &self.id
-    }
-}
-
-#[async_trait]
-impl CopyToDevice for FileListInput {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(Self {
-            files: self.files.clone(),
-            id: self.id.clone(),
-        })
     }
 }
 

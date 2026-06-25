@@ -225,7 +225,7 @@ where
             for resource in &resources {
                 let loaded = track_await(Arc::clone(&configured_stage.configured_loader)
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(resource.clone())),
+                        Arc::new(DevicesWrap::wrap_plain(resource.clone())),
                         ctx.branch(false),
                     )).await?;
                 let resource_len = loaded.size().dim_1();
@@ -285,7 +285,7 @@ where
             );
         }
 
-        Ok(Arc::new(DevicesWrap::wrap(SeqScanOutput::new())))
+        Ok(Arc::new(DevicesWrap::wrap_plain(SeqScanOutput::new())))
     }
 }
 
@@ -779,7 +779,7 @@ mod tests {
 
         let out = stage
             .run(
-                Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?)),
+                Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(resources_group)).check(&store).await?)),
                 mock_run_ctx::default(0),
             )
             .await?;

@@ -226,7 +226,7 @@ where
     async fn run_metric(&self, motif_stats_input: MotifStatsInput, metric: Metrics, mut ctx: C) -> Result<f32, ThoError> {
         let stats = track_await(Arc::clone(&self.motif_stats)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(motif_stats_input)),
+                Arc::new(DevicesWrap::wrap_plain(motif_stats_input)),
                 ctx.branch(false),
             )).await?;
 
@@ -386,7 +386,7 @@ where
             motif_ids.sort_by_key(|(motif_id, _)| *motif_id);
             let select_motifs_run_config_id = track_await(self.store.save_selected_motifs(merge_run_config_id, motif_ids)).await?;
 
-            Ok(Arc::new(DevicesWrap::wrap(MergeSelectedMotifsOutput::new(select_motifs_run_config_id, merged_groups_by_channel))))
+            Ok(Arc::new(DevicesWrap::wrap_plain(MergeSelectedMotifsOutput::new(select_motifs_run_config_id, merged_groups_by_channel))))
         }
     }
 }
@@ -491,7 +491,7 @@ mod tests {
 
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1]))),
+                Arc::new(DevicesWrap::wrap_plain(MergeSelectedMotifsInput::new(vec![select_run_config_id_0, select_run_config_id_1]))),
                 thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
                 .branch(false),
             )

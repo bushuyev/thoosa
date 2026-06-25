@@ -231,7 +231,7 @@ where
                 let ctx_for_run = ctx_for_loader.branch(false);
 
                 async move {
-                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?));
+                    let stacked_motifs_input = Arc::new(DevicesWrap::wrap_plain(StackedMotifsInput::new(Arc::clone(&find_motifs_run_config))?));
 
                     match track_await(stacked_motifs_loader.run_cached(stacked_motifs_input, ctx_for_run)).await {
                         Ok(motif_data) => Ok::<_, ThoError>(Some((find_motifs_run_config, motif_data))),
@@ -291,7 +291,7 @@ where
                 async move {
                     let result = track_await(async {
                         let motif_loader_input = MotifLoaderInput::find_motif_slices_only(motif_id.clone());
-                        let clc_input = Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()])));
+                        let clc_input = Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(motif_loader_input, vec![slices_selector_metric.clone()])));
                         let motif_stat: f32 = track_await(track_await(load_and_clc_dist
                             .run(clc_input, ctx_for_motif.branch(false))).await?
                             .with_data_ref(
@@ -478,7 +478,7 @@ where
             let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws)?;
 
             let t_0 = track_await(Arc::clone(&configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.clone())), ctx.branch(false))).await?;
+                .run_cached(Arc::new(DevicesWrap::wrap_plain(resource_0.clone())), ctx.branch(false))).await?;
 
             t_1_batch_dim_0_size += t_0.size().dim_1();
             t_1_batch.push(t_0);
@@ -719,7 +719,7 @@ where
             }
         });
         let _ = track_await(collect_futures_with_progress(futures, run_configs_len, FuturesOrdering::Unordered, "ExtendMotifsStage::run")).await;
-        Ok(Arc::new(DevicesWrap::wrap(ExtendMotifsSavableResult::new())))
+        Ok(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsSavableResult::new())))
     }
 }
 

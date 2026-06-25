@@ -249,7 +249,7 @@ where
             async move {
                 let stats = track_await(Arc::clone(&motif_stats)
                     .run(
-                        Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
+                        Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
                             vec![energy_metric.clone()],
                         ))),
@@ -325,7 +325,7 @@ where
         let energy_metric = energy_metric();
         let stats = track_await(Arc::clone(motif_stats)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random_resources(
+                Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_random_resources(
                     max_slices,
                     find_motifs_run_config_id,
                     Some(resources.to_vec()),
@@ -610,7 +610,7 @@ where
         }
 
         info!("SelectBucketsStage::run: selected motifs for {} run configs", run_results.len());
-        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_results))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(SelectMotifsSavableResult::new(run_results))))
     }
 }
 
@@ -701,7 +701,7 @@ mod tests {
                 .finish(),
         );
 
-        let input = Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))));
+        let input = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))));
 
         let stage = Arc::new(
             SelectBucketsStage::new(
