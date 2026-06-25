@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{CachedStageOutput, DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -160,6 +160,7 @@ where
     C: RunCtx + 'static,
 {
     type RunInput = Self::In<'static>;
+    type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
@@ -184,7 +185,7 @@ where
         let converted = if let Some(target_precision) = self.args.target_precision {
             let output = track_await(Arc::new(ConvertPrecisionStage::<C>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::All), target_precision)))
                 .run(ConvertPrecisionInput::new(), ctx.branch(true))).await?;
-            track_await(Arc::into_inner(output).expect("export convert precision output should not be shared").take_data(0)).await?.converted().to_vec()
+            track_await(CachedStageOutput::take_data(output, 0)).await?.converted().to_vec()
         } else {
             Vec::new()
         };

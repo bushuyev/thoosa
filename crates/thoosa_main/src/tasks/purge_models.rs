@@ -211,6 +211,8 @@ impl WithId for PurgeModelsOutput {
 
 impl Output for PurgeModelsOutput {}
 
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for PurgeModelsOutput {}
+
 #[derive(Debug)]
 pub struct PurgeModelsStage<C>
 where
@@ -250,12 +252,13 @@ where
     C: RunCtx + 'static,
 {
     type RunInput = Self::In<'static>;
+    type RunOutput = Arc<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "PurgeModelsStage::run"))]
-    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError> {
         let roots = {
             let ws_guard = self.ws.read();
             ModelRoots::from_ws(ws_guard.as_ref())
@@ -266,7 +269,7 @@ where
         let entries_len = entries.len();
         if entries_len == 0 {
             warn!("PurgeModelsStage::run: no models matched {:?}", self.args.purge_mode());
-            return Ok(Arc::new(DevicesWrap::wrap_plain(PurgeModelsOutput::new(vec![]))));
+            return Ok(Arc::new(PurgeModelsOutput::new(vec![])));
         }
 
         let ids_to_delete = entries
@@ -305,7 +308,7 @@ where
         }
 
         info!("PurgeModelsStage::run: purged {} models for {:?}", purged.len(), self.args.purge_mode());
-        Ok(Arc::new(DevicesWrap::wrap_plain(PurgeModelsOutput::new(purged))))
+        Ok(Arc::new(PurgeModelsOutput::new(purged)))
     }
 }
 
@@ -634,7 +637,7 @@ mod tests {
                 RunCtxImpl::new(0, "purge_models_test"),
             )
             .await?;
-        Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await
+        Ok(Arc::into_inner(output).expect("stage output should not be shared"))
     }
 
     fn create_dummy_model(root: &Path, net_path: &Path) -> Result<(), ThoError> {

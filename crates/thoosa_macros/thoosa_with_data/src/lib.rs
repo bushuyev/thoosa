@@ -78,7 +78,7 @@ fn expand_with_data(input: WithDataInput, with_stream: bool) -> proc_macro2::Tok
                 });
 
                 load_steps.push(quote! {
-                    let #guard_ident = #var_ident.load_from_any_device_(__device_idx).await?;
+                    let #guard_ident = thoosa_common::runner::common::cachable::LoadDataFromAnyDevice::load_from_any_device_(&#var_ident, __device_idx).await?;
                     let #ref_ident = &*#guard_ident;
                 });
 
@@ -95,7 +95,7 @@ fn expand_with_data(input: WithDataInput, with_stream: bool) -> proc_macro2::Tok
 
                 load_steps.push(quote! {
                     let #guards_ident = ::futures_util::future::try_join_all(
-                        #vec_ident.iter().map(|wrap| wrap.load_from_any_device_(__device_idx))
+                        #vec_ident.iter().map(|wrap| thoosa_common::runner::common::cachable::LoadDataFromAnyDevice::load_from_any_device_(wrap, __device_idx))
                     ).await?;
                     let #refs_ident: ::std::vec::Vec<_> = #guards_ident.iter().map(|item| &**item).collect();
                 });

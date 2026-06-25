@@ -1,4 +1,4 @@
-use crate::runner::common::cachable::DevicesWrap;
+use crate::runner::common::cachable::{CachedStageOutput, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -8,6 +8,8 @@ use thoosa_shared::ThoError;
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 
 pub type WrappedStageRunInput<S> = Arc<DevicesWrap<<S as Stage>::In<'static>>>;
+pub type WrappedStageRunOutput<S> = Arc<DevicesWrap<<S as Stage>::Out>>;
+pub type PlainStageRunOutput<S> = Arc<<S as Stage>::Out>;
 
 pub trait AsyncStageRunInput<I>: Send + 'static
 where
@@ -37,6 +39,21 @@ where
 {
 }
 
+pub trait WrappedRunOutputStage: AsyncStage<RunOutput = WrappedStageRunOutput<Self>>
+where
+    for<'a> Self::In<'a>: Data + WithId + Send + Sync,
+    Self::Out: Data + WithId + Send + Sync,
+{
+}
+
+impl<T> WrappedRunOutputStage for T
+where
+    T: AsyncStage<RunOutput = WrappedStageRunOutput<T>>,
+    for<'a> T::In<'a>: Data + WithId + Send + Sync,
+    T::Out: Data + WithId + Send + Sync,
+{
+}
+
 pub trait Stage: Debug {
     type Ctx: RunCtx;
 
@@ -53,6 +70,7 @@ where
         Self::Out: Data + WithId + Send + Sync,
 {
     type RunInput: AsyncStageRunInput<Self::In<'static>>;
+    type RunOutput: CachedStageOutput<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<Self::In<'static> as WithId>::ID {
         unimplemented!()
@@ -61,7 +79,7 @@ where
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
     //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
     // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
-    fn run(self: Arc<Self>, _input: Self::RunInput, _ctx: Self::Ctx) -> impl Future<Output = Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send
+    fn run(self: Arc<Self>, _input: Self::RunInput, _ctx: Self::Ctx) -> impl Future<Output = Result<Self::RunOutput, ThoError>> + Send
 
     {
         async {

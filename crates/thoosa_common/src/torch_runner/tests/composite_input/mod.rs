@@ -47,7 +47,7 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
 pub(crate) async fn run_ab_clc_with_stage<S, F>(ab_stage: Arc<ABClcStage<S>>, num_calls: F) -> Result<(), ThoError>
 where
     for<'a> ABClcStage<S>: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = ABClcStageOutput>,
-    ABClcStage<S>: crate::runner::common::runnable::AsyncStage<RunInput = ABClcStageInput>,
+    ABClcStage<S>: crate::runner::common::runnable::AsyncStage<RunInput = ABClcStageInput, RunOutput = Arc<DevicesWrap<ABClcStageOutput>>>,
     ABClcStage<S>: Cached + crate::runner::common::OutId,
     S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
     S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,

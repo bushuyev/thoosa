@@ -61,8 +61,8 @@ use thoosa_shared::tracked_await::track_await;
 #[derive(Debug)]
 pub struct TrainLabelNets<L, LM, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     train_motif_nets_run_config_ids: Vec<RunConfigId>,
@@ -83,7 +83,7 @@ where
 
 }
 
-pub trait AppliedMotifNetsStage<C>: for<'i> AsyncStage<In<'i> = ThoTensor<ChannelsData, SynKey>, Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage
+pub trait AppliedMotifNetsStage<C>: for<'i> AsyncStage<In<'i> = ThoTensor<ChannelsData, SynKey>, Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx = C, RunOutput = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -128,7 +128,7 @@ pub async fn new_train_label_nets<L, AMN, C>(
     labels: Option<Vec<String>>,
     ) -> Result<TrainLabelNets<L, ABStage<L, AMN, C>, C>, ThoError>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
     AMN: AppliedMotifNetsStage<C>,
     C: RunCtx + Adjustable + 'static,
 {
@@ -163,8 +163,8 @@ where
 
 impl <L, LM, C> TrainLabelNets<L, LM, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
 
@@ -275,6 +275,8 @@ impl Output for TrainLabelNetsOutput {
 
 }
 
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for TrainLabelNetsOutput {}
+
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
     type R = Vec<u32>;
@@ -310,8 +312,8 @@ impl TrainLabelNetsOutput {
 
 impl <L, LM, C> Stage for TrainLabelNets<L, LM, C>
 where
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     type Ctx = C;
@@ -321,17 +323,18 @@ where
 
 impl<L, LM, C> AsyncStage for TrainLabelNets<L, LM, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
-    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    LM: for <'i> AsyncStage<In<'i>=Resource, Out=DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     type RunInput = Arc<Self::In<'static>>;
+    type RunOutput = Arc<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
-    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<Self::Out>, ThoError>> + Send {
         let train_label_nets_run_configs = Arc::clone(&self.run_configs);
 
 
@@ -540,7 +543,7 @@ where
                 "train labels",
             )).await;
 
-            Ok(Arc::new(DevicesWrap::wrap_plain(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results))))
+            Ok(Arc::new(TrainLabelNetsOutput::new(self.train_motif_nets_run_config_ids.clone(), self.motif_nets_ids.clone(), results)))
         }
     }
 }
@@ -555,7 +558,7 @@ type BuildBatchFn<LD: Data + CopyToDevice + WithId + Send + Sync + 'static, X:Di
 // #[derive(Debug)]
 struct ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<LD>>> + OutId + 'static,
     C:RunCtx+'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
@@ -573,7 +576,7 @@ where
 
 impl <L, C, LD, X, Y> Debug for  ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<LD>>> + OutId + 'static,
     C:RunCtx+'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
@@ -586,7 +589,7 @@ where
 
 impl <L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<LD>>> + OutId + 'static,
     C:RunCtx+'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
@@ -632,7 +635,7 @@ where
 
 impl <L,C, LD, X, Y> AsyncDataBatch<X, Y, C> for ResourcesBatch<L, C, LD, X, Y>
 where
-    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>> + OutId + 'static,
+    L: for<'i> Cached<In<'i> = Resource, Out = LD, Ctx=C> + AsyncStage<RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<LD>>> + OutId + 'static,
     C:RunCtx+'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
@@ -678,7 +681,7 @@ where
 impl<L, C, LD, X, Y> ResourcesBatch<L, C, LD, X, Y>
 where
     C: 'static + RunCtx,
-    L: 'static + AsyncStage<RunInput = Arc<Resource>> + OutId + for<'i> Cached<In<'i>=Resource, Out=LD, Ctx=C>+ 'static,
+    L: 'static + AsyncStage<RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<LD>>> + OutId + for<'i> Cached<In<'i>=Resource, Out=LD, Ctx=C>+ 'static,
     LD: Data + CopyToDevice + WithId + Send + Sync + 'static,
     X:Dims+ 'static,
     Y:Dims+ 'static,

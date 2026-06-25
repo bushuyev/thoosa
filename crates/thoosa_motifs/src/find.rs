@@ -149,6 +149,7 @@ impl SavableResult for FindMotifsSavableResult {
 }
 
 impl Output for FindMotifsSavableResult {}
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for FindMotifsSavableResult {}
 impl WithId for FindMotifsSavableResult {
     type ID = ();
 

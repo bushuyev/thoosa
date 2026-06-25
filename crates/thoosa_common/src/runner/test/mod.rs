@@ -242,7 +242,7 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 ) -> Result<(), ThoError>
 where
     R: Cached + OutId + Send + Sync + 'static,
-    R: crate::runner::common::runnable::AsyncStage<RunInput = Arc<StageInStatic<R>>>,
+    R: crate::runner::common::runnable::AsyncStage<RunInput = Arc<StageInStatic<R>>, RunOutput = Arc<DevicesWrap<<R as Stage>::Out>>>,
     for<'a> <R as Stage>::In<'a>: Data + WithId + Send + Sync,
     R::Out: Data + CopyToDevice + Send + Sync,
     StageInStatic<R>: From<&'static str>,
@@ -502,6 +502,7 @@ pub mod fixtures {
     // #[async_trait]
     impl AsyncStage for DummyLoader {
         type RunInput = Arc<Self::In<'static>>;
+        type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
         fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
             thoosa_shared::traits::WithId::id(input)
@@ -650,6 +651,7 @@ mod tests {
 
     impl AsyncStage for DummyLoader {
         type RunInput = Arc<Self::In<'static>>;
+        type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
         fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
             thoosa_shared::traits::WithId::id(input)
@@ -895,6 +897,7 @@ mod tests {
     // #[async_trait]
     impl AsyncStage for DLoadAndClcStage {
         type RunInput = Arc<Self::In<'static>>;
+        type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
         fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
             thoosa_shared::traits::WithId::id(input)

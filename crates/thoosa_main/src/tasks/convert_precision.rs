@@ -223,6 +223,8 @@ impl WithId for ConvertPrecisionOutput {
 
 impl Output for ConvertPrecisionOutput {}
 
+impl thoosa_common::runner::common::cachable::PlainCachedOutput for ConvertPrecisionOutput {}
+
 #[derive(Debug)]
 pub struct ConvertPrecisionStage<C>
 where
@@ -260,12 +262,13 @@ where
     C: RunCtx + 'static,
 {
     type RunInput = Self::In<'static>;
+    type RunOutput = Arc<Self::Out>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ConvertPrecisionStage::run"))]
-    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError> {
         let entries = {
             let ws_guard = self.ws.read();
             selected_entries(ws_guard.as_ref(), self.args.nets_by())?
@@ -273,7 +276,7 @@ where
         let entries_len = entries.len();
         if entries_len == 0 {
             warn!("ConvertPrecisionStage::run: no nets matched {:?}", self.args.nets_by());
-            return Ok(Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionOutput::new(vec![]))));
+            return Ok(Arc::new(ConvertPrecisionOutput::new(vec![])));
         }
 
         let target_precision = self.args.target_precision();
@@ -304,7 +307,7 @@ where
         }
 
         info!("ConvertPrecisionStage::run: converted {} nets to {:?}", converted.len(), target_precision);
-        Ok(Arc::new(DevicesWrap::wrap_plain(ConvertPrecisionOutput::new(converted))))
+        Ok(Arc::new(ConvertPrecisionOutput::new(converted)))
     }
 }
 
@@ -556,7 +559,7 @@ mod tests {
                 RunCtxImpl::new(0, "convert_precision_test"),
             )
             .await?;
-        let output = Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await?;
+        let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
         let (_, loaded_module) = ws.read().load_final_net(&net_id, &Device::Cpu, false)?;
@@ -587,7 +590,7 @@ mod tests {
                 RunCtxImpl::new(0, "convert_precision_test"),
             )
             .await?;
-        let output = Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await?;
+        let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
         let (_, params, loaded_module) = ws.read().load_label_net(&net_id, &Device::Cpu, false)?;
@@ -630,7 +633,7 @@ mod tests {
                 RunCtxImpl::new(0, "convert_precision_names_test"),
             )
             .await?;
-        let output = Arc::into_inner(output).expect("stage output should not be shared").take_data(0).await?;
+        let output = Arc::into_inner(output).expect("stage output should not be shared");
         assert_eq!(output.converted().len(), 1);
 
         let converted = Tensor::read_safetensors(&weights_path)?;
