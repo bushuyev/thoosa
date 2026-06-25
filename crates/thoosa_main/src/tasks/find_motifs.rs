@@ -151,8 +151,8 @@ where
                 let input = with_data!(ctx.branch(false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
                     Ok::<_, ThoError>(BucketingInput::new(input.resources_config().clone()))
                 })?;
-                track_await(Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap(input)), ctx)).await?;
-                Ok(Arc::new(DevicesWrap::wrap(())))
+                track_await(Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap_plain(input)), ctx)).await?;
+                Ok(Arc::new(DevicesWrap::wrap_plain(())))
             }
         }
     }
@@ -305,7 +305,7 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats = track_await(motif_stats.run_cached(Arc::new(DevicesWrap::wrap(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true))).await?;
+                                    let motif_stats = track_await(motif_stats.run_cached(Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()]))), ctx.branch(true))).await?;
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
@@ -541,7 +541,7 @@ where
 
 
         //gpt FindMotifsStage output is a placeholder; the real artifacts are persisted by DistsTracker side effects.
-        Ok(Arc::new(DevicesWrap::wrap(FindMotifsSavableResult::new())))
+        Ok(Arc::new(DevicesWrap::wrap_plain(FindMotifsSavableResult::new())))
     }
 }
 
@@ -728,7 +728,7 @@ mod tests {
 
 
         let result = stage.run(
-            Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))))), ctx.branch(false),
+            Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))))), ctx.branch(false),
         ).await?;
 
         with_data!(ctx.branch(false), result; |ctx, result:&FindMotifsSavableResult|{

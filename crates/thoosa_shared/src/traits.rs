@@ -11,12 +11,12 @@ use std::sync::Arc;
 use log::debug;
 use thoosa_named_derive::Named;
 use crate::applicables_runner::Input;
-use crate::{CopyToDevice, ThoError};
+use crate::ThoError;
 use uuid::Uuid;
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use thoosa_dummy_data_derive::DummyData;
-use crate::copy_mode::{CopyMode, CpuOnly};
+use crate::copy_mode::CpuOnly;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -542,7 +542,7 @@ impl From<usize> for MonoMetrics<0, 1> {
 pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
-    type M:CopyMode;
+    type M;
 
     fn size(&self) -> Self::Metrics;
 
@@ -622,16 +622,9 @@ impl Data for (){
 }
 
 
-#[async_trait]
-impl CopyToDevice for MockData {
-    async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-        Ok(MockData::new())
-    }
-}
-
 #[delegatable_trait]
 pub trait Select<S> {
-    type Output; //: CopyToDevice;
+    type Output;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoError>;
 }

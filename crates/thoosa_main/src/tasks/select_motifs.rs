@@ -346,7 +346,7 @@ where
             async move {
                 let motif_stats_output = track_await(Arc::clone(&motif_stats)
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(MotifStatsInput::from_motif_input(
+                        Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::new((motif_id, "motif_id").into(), Some(vec![select_motifs_run_config_id])),
                             criteria_metrics.clone(),
                         ))),
@@ -485,7 +485,7 @@ where
 
         debug!("SelectMotifsStage::run: run_results={run_results:?}");
 
-        Ok(Arc::new(DevicesWrap::wrap(SelectMotifsSavableResult::new(run_results))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(SelectMotifsSavableResult::new(run_results))))
     }
 }
 
@@ -559,11 +559,11 @@ pub mod tests {
     }
 
     fn standalone_select_input(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
-        Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
+        Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
     }
 
     fn select_input_with_constraint_metrics(resources_group: &str) -> Arc<DevicesWrap<SelectMotifsInput>> {
-        Arc::new(DevicesWrap::wrap(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
+        Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::with_constraint_metrics(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))))
     }
 
     fn find_motifs_run_config_descr(run_config_id: RunConfigId) -> (RunConfigId, Result<RunConfigRow, ThoError>) {
@@ -655,7 +655,7 @@ pub mod tests {
             None,
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(1)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }
@@ -733,7 +733,7 @@ pub mod tests {
             None
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(0)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }
@@ -814,7 +814,7 @@ pub mod tests {
             None
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(0)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(0)).await?;
 
         Ok(())
     }
@@ -962,7 +962,7 @@ pub mod tests {
             Some(801) //TODO check if ran through OOMHandler
         ).await?);
 
-        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(1)).await?;
+        let _result = extend_motifs_stage.run(Arc::new(DevicesWrap::wrap_plain(ExtendMotifsInput::new(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))))), mock_run_ctx::default(1)).await?;
 
         Ok(())
     }

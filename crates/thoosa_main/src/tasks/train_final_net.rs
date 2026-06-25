@@ -250,7 +250,7 @@ where
             ));
 
             let result = track_await(Arc::into_inner(track_await(train_net.run(
-                Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
+                Arc::new(DevicesWrap::wrap_plain(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
                 ctx.branch(false))).await?
             ).unwrap()
                 .take_data(0)).await?;
@@ -258,7 +258,7 @@ where
             let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_config_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
             debug!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
-            Ok(Arc::new(DevicesWrap::wrap(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result))))
+            Ok(Arc::new(DevicesWrap::wrap_plain(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result))))
         }
     }
 }
@@ -324,7 +324,7 @@ where
                     let ctx_for_loader = ctx_for_batch.branch(false);
 
                     async move {
-                        let out = track_await(Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap(resource)), ctx_for_loader)).await?;
+                        let out = track_await(Arc::clone(&loader).run_cached(Arc::new(DevicesWrap::wrap_plain(resource)), ctx_for_loader)).await?;
                         Ok::<_, ThoError>((out, labels))
                     }
                 });
@@ -567,7 +567,7 @@ mod tests {
         let mut run_ctx = mock_run_ctx::default(1);
         let train_final_net = Arc::new(new_train_final_net(vec![train_label_nets_run_config_id], loader, run_configs, &ws, &store, run_ctx.branch(false), Arc::new(OptConfig::new(10, 3)), step, Some(2)).await?);
 
-        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string())))));
+        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(NetResources::new(Logits::new(train_group.to_string()), Logits::new(valid_group.to_string())))));
 
         let r = train_final_net.run(input, run_ctx.branch(false)).await?;
         with_data!(run_ctx.branch(false), r; |_ctx, r:&TrainFinalNetOutput|{

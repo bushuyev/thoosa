@@ -266,7 +266,7 @@ where
         let entries_len = entries.len();
         if entries_len == 0 {
             warn!("PurgeModelsStage::run: no models matched {:?}", self.args.purge_mode());
-            return Ok(Arc::new(DevicesWrap::wrap(PurgeModelsOutput::new(vec![]))));
+            return Ok(Arc::new(DevicesWrap::wrap_plain(PurgeModelsOutput::new(vec![]))));
         }
 
         let ids_to_delete = entries
@@ -305,7 +305,7 @@ where
         }
 
         info!("PurgeModelsStage::run: purged {} models for {:?}", purged.len(), self.args.purge_mode());
-        Ok(Arc::new(DevicesWrap::wrap(PurgeModelsOutput::new(purged))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(PurgeModelsOutput::new(purged))))
     }
 }
 
@@ -616,7 +616,7 @@ mod tests {
         let stage = Arc::new(PurgeModelsStage::<RunCtxImpl>::new(ws, store, PurgeModelsArgs::new(purge_mode)));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap(PurgeModelsInput::new())),
+                Arc::new(DevicesWrap::wrap_plain(PurgeModelsInput::new())),
                 RunCtxImpl::new(0, "purge_models_test"),
             )
             .await?;

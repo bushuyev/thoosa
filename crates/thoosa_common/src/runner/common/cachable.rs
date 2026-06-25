@@ -22,7 +22,6 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
-use thoosa_shared::copy_mode::{CopyMode, CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
@@ -30,6 +29,22 @@ use crate::runner::common::runnable::{AsyncStage, AsyncStageRunInput, ConsumeRes
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
+
+trait DeviceCopier<O>: Debug + Send + Sync {
+    fn copy<'a>(&self, src: &'a O, dst_device: usize) -> BoxFuture<'a, Result<O, ThoError>>;
+}
+
+#[derive(Debug)]
+struct CopyToDeviceCopier;
+
+impl<O> DeviceCopier<O> for CopyToDeviceCopier
+where
+    O: CopyToDevice + Send + Sync,
+{
+    fn copy<'a>(&self, src: &'a O, dst_device: usize) -> BoxFuture<'a, Result<O, ThoError>> {
+        async move { src.copy_to_device(dst_device).await }.boxed()
+    }
+}
 
 
 
@@ -39,7 +54,6 @@ where
     for <'i> Self::In<'i>: WithId + Send + Sync,
     Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
     <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
-    <<Self as Stage>::Out as Data>::M: DevicesWrapCopyMode<<Self as Stage>::Out>
 {
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
@@ -148,539 +162,6 @@ where
 }
 
 
-pub trait DevicesWrapCopyMode<O>: CopyMode + Debug + Send + Sync
-where
-    O: Data + WithId + Send + Sync,
-{
-    fn wrap<'f>(o:O) -> DevicesWrap<O> where Self:Sized;
-
-    async fn load_from_any_device_(
-        wrap:&DevicesWrap<O>,
-        to_tho_device_idx: usize,
-    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError>
-    where
-        Self:Sized;
-
-    fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        Self:Sized,
-        F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        P:RunCtx + 'a;
-
-    fn with_selected_data_ref<'a, 'o, R: Send, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        Self:Sized,
-        O: Select<S, Output=O>,
-        for <'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        S:Debug + Clone + Send + 'static,
-        P:RunCtx + 'a;
-
-    async fn with_selected_data<S, R, P>(
-        wrap:&DevicesWrap<O>,
-        to_device_idx: usize,
-        permits_ctx: P,
-        selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
-    ) -> Result<R, ThoError>
-    where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
-        S:Clone,
-        P:RunCtx,
-        Self:Sized;
-
-    fn dump_to_cpu(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
-        where Self:Sized;
-
-    fn drop_device(wrap:&DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
-    where Self:Sized;
-
-    fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
-        where Self:Sized;
-    fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool
-        where Self:Sized;
-    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
-        where Self:Sized;
-
-    fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> impl Future<Output=bool> + Send
-        where Self:Sized;
-}
-
-
-impl<O> DevicesWrapCopyMode<O> for CpuOnly<O>
-where
-    O:Data<M=Self> + WithId + Send + Sync
-{
- 
-    fn wrap(o:O) -> DevicesWrap<O> where Self:Sized {
-        let size = o.size();
-        let mem_size = o.mem_size();
-        assert_eq!(o.device(), 0);
-
-        DevicesWrap {
-            id: o.id().clone(),
-            cached_data: Box::new([tokio::sync::RwLock::new(Some(o))]),
-            inflights: Box::new([]),
-            size,
-            resident_devices: Box::new([AtomicBool::new(true)]),
-            gpu_resident_count: AtomicUsize::new(0),
-            on_cpu_since: Default::default(),
-            mem_size,
-            pd: PhantomData,
-        }
-    }
-
-    async fn load_from_any_device_(wrap: &DevicesWrap<O>, _to_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoError>
-    where
-        Self: Sized
-    {
-        let lock = &wrap.cached_data[0];
-        let read_guard = track_await(lock.read()).await;
-
-        if read_guard.is_some() {
-            Ok(tokio::sync::RwLockReadGuard::map(
-                read_guard,
-                |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-            ))
-        } else {
-
-            Err(Cause::NotFound.into())
-        }
-    }
-
-    fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-            for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-            P: RunCtx + 'a
-    {
-        Box::pin(async move {
-            match track_await(wrap.load_from_any_device_(to_device_idx)).await {
-                Ok(v) => {
-                    let data = v.deref();
-                    do_run(data, &permits_ctx)
-                }
-                Err(e) => Err(e),
-            }
-        })
-    }
-
-    fn with_selected_data_ref<'a, 'o, R: Send, F, P, S>(wrap:&'a DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, _trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        S:Debug + Clone + Send + 'static,
-        P: RunCtx + 'a
-    {
-        Box::pin(async move {
-            match track_await(wrap.load_from_any_device_(to_device_idx)).await {
-                Ok(v) => {
-                    let data = v.deref();
-                    let sub = data.subview(selector)?;
-                    do_run(&sub, &permits_ctx)
-                }
-                Err(e) => Err(e),
-            }
-        })
-    }
-
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
-    where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
-        S:Clone,
-        P:RunCtx,
-        Self: Sized
-    {
-        match track_await(wrap.load_from_any_device_(to_device_idx)).await {
-            Ok(v) => {
-                let data = v.deref();
-                do_run(data.subview(selector)?, &permits_ctx)
-            }
-            Err(e) => Err(e),
-        }
-    }
-
-
-    fn dump_to_cpu(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
-    where
-        Self: Sized
-    {
-        async {
-            Ok(())
-        }
-    }
-
-    fn drop_device(_wrap: &DevicesWrap<O>, _device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
-    where
-        Self: Sized
-    {
-        async {
-            Ok(())
-        }
-    }
-
-
-    fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
-    where
-        Self: Sized
-    {
-        &wrap.size //TODO move to DevicesWrap?
-    }
-
-    fn is_on_cpu_before(_wrap: &DevicesWrap<O>, _threshold_age: u64) -> bool
-    where
-        Self: Sized
-    {
-        true
-    }
-
-    async fn take_data(wrap: DevicesWrap<O>, _to_device_idx: usize) -> Result<O, ThoError>
-    where
-        Self: Sized
-    {
-        let lock = &wrap.cached_data[0];
-        Ok(track_await(lock.write()).await.take().expect(&format!("no cpu data {:?}", wrap.id)))
-    }
-
-    async fn is_all_on_cpu(_wrap: &DevicesWrap<O>) -> bool {
-        true
-    }
-}
-
-
-impl<O> DevicesWrapCopyMode<O> for CpuOrGpu<O>
-where
-    O:Data<M=Self> + CopyToDevice + WithId + Send + Sync
-{
-
-    fn wrap(o:O) -> DevicesWrap<O> where Self:Sized {
-
-        let id = o.id().clone();
-        let size = o.size();
-        let device_ordinal = o.device();
-        let mem_size = o.mem_size();
-        let num_devices: usize = GlobalCtx::global().device_count();
-        let (resident_devices, gpu_resident_count) = initial_residency(num_devices, device_ordinal);
-
-        debug!("DevicesWrapCopyMode<O> for CpuOrGpu<O>::wrap: id={id:?} device_ordinal={device_ordinal}");
-
-        // #[cfg(any(test, feature = "mock_global_ctx"))]
-        // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-        let mut o_op = Some(o);
-
-        let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
-            .map(|device| {
-                if device == device_ordinal {
-                    tokio::sync::RwLock::new(o_op.take())
-                } else {
-                    tokio::sync::RwLock::new(None)
-                }
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-
-        let inflights = (0..num_devices)
-            .map(|_device| Mutex::new(None))
-            .collect::<Vec<_>>()
-            .into_boxed_slice();
-
-
-        DevicesWrap {
-            id,
-            cached_data: device_futures,
-            inflights,
-            size,
-            resident_devices,
-            gpu_resident_count,
-            on_cpu_since: Default::default(),
-            mem_size,
-            pd: PhantomData,
-        }
-    }
-
-    async fn load_from_any_device_(wrap: &DevicesWrap<O>, to_tho_device_idx: usize) -> Result<impl Deref<Target=O> + Debug + Send, ThoError>
-    where
-        Self: Sized
-    {
-        //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
-        debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx}",wrap.id);
-        trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}",wrap.id, wrap.cached_data);
-        assert!(wrap.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", wrap.cached_data.len(), wrap.id);
-
-        //dump_to_cpu can only be executed either from DumpToCpu::adjust, but it's running with set_max_other_parallel(0) so nobody should be loading anything at the momemnt, or from run_cached clean-up at thoosa_common/src/runner/common/cachable.rs:95 when the context being dropped is the last one holding
-        //reference to the cached object. And in the latter case it can indeed happen so that read_guard at thoosa_common/src/runner/common/cachable.rs:416  is obtained when device data is dropped at thoosa_common/src/runner/common/cachable.rs:590 but then it will be copied back from CPU (0 device) in cycle at thoosa_common/src/runner/common/cachable.rs:429
-        if wrap.is_resident_on_device(to_tho_device_idx) {
-            let lock = &wrap.cached_data[to_tho_device_idx];
-            let read_guard = track_await(lock.read()).await;
-            if read_guard.is_some() {
-                return Ok(tokio::sync::RwLockReadGuard::map(
-                    read_guard,
-                    |val: &Option<O>| val.as_ref().expect("no value behind guard"),
-                ));
-            }
-            drop(read_guard);
-            wrap.mark_not_resident_on_device(to_tho_device_idx);
-        }
-
-        debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}",wrap.id);
-
-        for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-            if source_device_idx == to_tho_device_idx || !wrap.is_resident_on_device(source_device_idx) {
-                continue;
-            }
-
-            let source_read_guard = track_await(op.read()).await;
-
-            if let Some(src) = source_read_guard.as_ref() {
-                return track_await(wrap.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
-            }
-            drop(source_read_guard);
-            wrap.mark_not_resident_on_device(source_device_idx);
-        }
-
-
-        Err(Cause::NotFound.into())
-    }
-
-    fn with_data_ref<'a, R: Send, F, P>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        P: RunCtx + 'a
-    {
-        Box::pin(async move {
-
-            match track_await(wrap.load_from_any_device_(to_tho_device_idx)).await {
-                Ok(v) => {
-                    let data = v.deref();
-                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
-
-                }
-                Err(e) => Err(e),
-            }
-        })
-    }
-
-    fn with_selected_data_ref<'a, 'o, R: Send, F, P, S>(wrap:&'a DevicesWrap<O>, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        O: Select<S, Output=O>,
-        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
-        S:Debug + Clone + Send + 'static,
-        P: RunCtx + 'a
-    {
-        Box::pin(async move {
-            let permits_ctx = permits_ctx;
-
-            //TODO it's assumed dump_all_to_cpu was executed
-            if GlobalCtx::global().is_ipc() && to_tho_device_idx != 0 && wrap.is_resident_on_device(0) {
-                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(wrap.cached_data[0].read()).await;
-                if let Some(src) = source_read_guard.as_ref() {
-                    let sub_t: O = src.subview(selector.clone())?;
-
-                    debug!("CpuOrGpu::with_selected_data_ref: cpu sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
-
-                    let data = track_await(sub_t.copy_to_device(to_tho_device_idx)).await?;
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                }
-                drop(source_read_guard);
-                wrap.mark_not_resident_on_device(0);
-            }
-
-            if wrap.is_resident_on_device(to_tho_device_idx) {
-                let lock = &wrap.cached_data[to_tho_device_idx];
-                let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
-                if read_guard.is_some() {
-                    let base: &O = read_guard
-                        .as_ref()
-                        .expect("no value behind guard");
-                    let data: O = base.subview(selector.clone())?;
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                }
-
-                drop(read_guard);
-                wrap.mark_not_resident_on_device(to_tho_device_idx);
-            }
-
-            for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-                if source_device_idx == to_tho_device_idx || !wrap.is_resident_on_device(source_device_idx) {
-                    continue;
-                }
-
-                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
-
-                if let Some(src) = source_read_guard.as_ref() {
-                    let sub_t: O = src.subview(selector.clone())?;
-
-                    debug!("CpuOrGpu::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}",sub_t.size());
-
-                    let data = track_await(sub_t.copy_to_device(to_tho_device_idx)).await?;
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-                }
-                drop(source_read_guard);
-                wrap.mark_not_resident_on_device(source_device_idx);
-            }
-
-            Err(Cause::NotFound.into())
-        })
-    }
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CpuOrGpu::with_selected_data"))]
-    async fn with_selected_data<S, R, P>(wrap: &DevicesWrap<O>, to_device_idx: usize, permits_ctx: P, selector: S, do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>) -> Result<R, ThoError>
-    where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
-        S:Clone,
-        P:RunCtx,
-        Self: Sized
-    {
-        let permits_ctx = permits_ctx;
-
-        if wrap.is_resident_on_device(to_device_idx) {
-            let lock = &wrap.cached_data[to_device_idx];
-            let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
-            if read_guard.is_some() {
-                let data = read_guard
-                    .as_ref()
-                    .expect("no value behind guard")
-                    .subview(selector.clone())?;
-                return do_run(data, &permits_ctx);
-            }
-
-            drop(read_guard);
-            wrap.mark_not_resident_on_device(to_device_idx);
-        }
-
-        for (source_device_idx, op) in wrap.cached_data.iter().enumerate() {
-            if source_device_idx == to_device_idx || !wrap.is_resident_on_device(source_device_idx) {
-                continue;
-            }
-
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
-
-            if let Some(src) = source_read_guard.as_ref() {
-                let sub_t = src.subview(selector.clone())?;
-                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}",sub_t.size());
-
-                let data = track_await(sub_t.copy_to_device(to_device_idx)).await?;
-                return do_run(data, &permits_ctx);
-            }
-            drop(source_read_guard);
-            wrap.mark_not_resident_on_device(source_device_idx);
-        }
-
-        Err(Cause::NotFound.into())
-    }
-
-
-
-    fn dump_to_cpu(wrap: &DevicesWrap<O>, device_idx: usize) -> impl std::future::Future<Output = Result<(), ThoError>> + std::marker::Send
-    where
-        Self: Sized
-    {
-
-        async move {
-            if wrap.is_all_on_cpu_resident() {
-                // #[cfg(any(test, feature = "mock_global_ctx"))]
-                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-                wrap.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
-                return Ok(());
-            }
-
-            assert_ne!(device_idx, 0);
-
-
-            debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}",wrap.id);
-
-            if let Some(Ok(mut lock)) = wrap.cached_data.get(device_idx).map(|v| v.try_write()) {
-
-                if track_await(wrap.cached_data[0].read()).await.is_none() {
-                    if let Some(data) = lock.as_ref() {
-                        track_await(wrap.ensure_copied(0, data, false)).await?;
-                    }
-                    drop(lock.take());
-                    wrap.mark_not_resident_on_device(device_idx);
-
-                    debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", wrap.id);
-                } else {
-                    drop(lock.take());
-                    wrap.mark_not_resident_on_device(device_idx);
-                }
-            } else {
-                // If it's locked, assume it's the current task's input. DumpToCpu only runs with
-                // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
-                warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}",wrap.id, wrap.cached_data) //if it was dumped to cpu from DumpAllToCpu and then purged
-            }
-
-            let is_all_on_cpu = wrap.is_all_on_cpu_resident();
-            let age = GlobalCtx::global().cache_age();
-            if is_all_on_cpu {
-                //may rewrite previous Some, but shouldn't be a problem
-
-                // #[cfg(any(test, feature = "mock_global_ctx"))]
-                // let _mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock();
-
-
-                wrap.mark_on_cpu_since_if_all_on_cpu(age);
-            }
-
-            debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}",wrap.id);
-
-            Ok(())
-        }
-    }
-
-    fn drop_device(wrap: &DevicesWrap<O>, device_idx: usize) -> impl Future<Output=Result<(), ThoError>> + Send
-    where
-        Self: Sized
-    {
-        async move {
-            assert!(device_idx > 0, "can't drop cpu");
-            drop(track_await(wrap.cached_data[device_idx].write()).await.take());
-            wrap.mark_not_resident_on_device(device_idx);
-
-            Ok(())
-        }
-    }
-
-    fn size(wrap: &DevicesWrap<O>) -> &<O as Data>::Metrics
-    where
-        Self: Sized
-    {
-        &wrap.size
-    }
-
-    fn is_on_cpu_before(wrap: &DevicesWrap<O>, threshold_age: u64) -> bool {
-        let on_cpu_since = perf_log!(sync_read_lock!(&wrap.on_cpu_since), "CpuOrGpu::is_on_cpu_before on_cpu_since.read");
-        let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age ).unwrap_or(false);
-
-        debug!("DataCacheWrapper::is_on_cpu_before: self.id={:?} self.on_cpu_since={:?} r={r} threshold_age={threshold_age}",wrap.id, wrap.on_cpu_since);
-
-        r
-    }
-
-    async fn take_data(wrap: DevicesWrap<O>, to_device_idx: usize) -> Result<O, ThoError>
-    where
-        Self: Sized
-    {
-        let _ = track_await(wrap.load_from_any_device_(to_device_idx)).await?;
-
-        let mut v = wrap.cached_data.into_vec();
-        let lock = v.remove(to_device_idx);
-        let opt: Option<O> = lock.into_inner();
-        Ok(opt.expect(&format!("no data in {to_device_idx} for {:?}", wrap.id)))
-    }
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DevicesWrapCopyMode<O> for CpuOrGpu<O>::is_all_on_cpu"))]
-    async fn is_all_on_cpu(wrap: &DevicesWrap<O>) -> bool {
-        trace!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", wrap.id);
-
-        let is_all_on_cpu = wrap.is_all_on_cpu_resident();
-        debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?} is_all_on_cpu={is_all_on_cpu}", wrap.id);
-        is_all_on_cpu
-    }
-}
-
 //https://github.com/rust-lang/rust/issues/100013
 #[derive(Debug)]
 pub struct DevicesWrap<O>
@@ -693,6 +174,7 @@ where
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     size: O::Metrics,
     mem_size: u64,
+    copy_to_device: Option<Arc<dyn DeviceCopier<O>>>,
     resident_devices: Box<[AtomicBool]>,
     gpu_resident_count: AtomicUsize,
     //contains cache age ( GlobalCtx::cache_age - increated when something is being cached from Cachable::run_cached). The smaller the value the longer it was on the cpu
@@ -783,7 +265,7 @@ where
 
 struct TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync,
     D: Deref<Target = O>,
 {
     o: D,
@@ -792,7 +274,7 @@ where
 
 impl<O, D> Debug for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync,
     D: Deref<Target = O>,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -801,7 +283,7 @@ where
 }
 impl<O, D> TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync,
     D: Deref<Target = O>,
 {
     pub fn new(o: D, init_ctx: Option<&'static str>) -> Self {
@@ -815,7 +297,7 @@ where
 
 impl<O, D> Drop for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync,
     D: Deref<Target = O>,
 {
     fn drop(&mut self) {
@@ -827,7 +309,7 @@ where
 
 impl<O, D> Deref for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync,
     D: Deref<Target = O>,
 {
     type Target = O;
@@ -839,7 +321,7 @@ where
 
 unsafe impl<O, D> Send for TracingWrapper<O, D>
 where
-    O: Data + WithId + Send + Sync + CopyToDevice,
+    O: Data + WithId + Send + Sync,
     D: Deref<Target = O>,
 {
 }
@@ -847,23 +329,198 @@ where
 impl<O> DevicesWrap<O>
 where
     O: Data + WithId + Send + Sync,
-    O::M: DevicesWrapCopyMode<O>,
 {
-    pub fn wrap(o: O) -> Self {
-        O::M::wrap(o)
+    pub fn wrap(o: O) -> Self
+    where
+        O: CopyToDevice,
+    {
+        Self::wrap_inner(o, Some(Arc::new(CopyToDeviceCopier)))
+    }
+
+    pub fn wrap_plain(o: O) -> Self {
+        assert_eq!(o.device(), 0);
+        Self::wrap_inner(o, None)
+    }
+
+    fn wrap_inner(o: O, copy_to_device: Option<Arc<dyn DeviceCopier<O>>>) -> Self {
+        let id = o.id().clone();
+        let size = o.size();
+        let device_ordinal = o.device();
+        let mem_size = o.mem_size();
+        let num_devices: usize = GlobalCtx::global().device_count();
+        let (resident_devices, gpu_resident_count) = initial_residency(num_devices, device_ordinal);
+
+        debug!("DevicesWrap::wrap: id={id:?} device_ordinal={device_ordinal}");
+
+        let mut o_op = Some(o);
+
+        let device_futures: Box<[tokio::sync::RwLock<Option<O>>]> = (0..num_devices)
+            .map(|device| {
+                if device == device_ordinal {
+                    tokio::sync::RwLock::new(o_op.take())
+                } else {
+                    tokio::sync::RwLock::new(None)
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let inflights = (0..num_devices)
+            .map(|_device| Mutex::new(None))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        Self {
+            id,
+            cached_data: device_futures,
+            inflights,
+            size,
+            resident_devices,
+            gpu_resident_count,
+            on_cpu_since: Default::default(),
+            mem_size,
+            copy_to_device,
+            pd: PhantomData,
+        }
     }
 
 
     pub fn size(&self) -> &O::Metrics {
-        O::M::size(self)
+        &self.size
     }
 
-    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError> {
-        O::M::dump_to_cpu(self, device_idx).await
+    pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError>
+    {
+        if self.is_all_on_cpu_resident() {
+            self.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
+            return Ok(());
+        }
+
+        assert_ne!(device_idx, 0);
+
+        debug!("DataCacheWrapper::dump_to_cpu: 0.  id={:?} device_idx={device_idx}", self.id);
+
+        if let Some(Ok(mut lock)) = self.cached_data.get(device_idx).map(|v| v.try_write()) {
+            if track_await(self.cached_data[0].read()).await.is_none() {
+                if let Some(data) = lock.as_ref() {
+                    track_await(self.ensure_copied(0, data, false)).await?;
+                }
+                drop(lock.take());
+                self.mark_not_resident_on_device(device_idx);
+
+                debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", self.id);
+            } else {
+                drop(lock.take());
+                self.mark_not_resident_on_device(device_idx);
+            }
+        } else {
+            // If it's locked, assume it's the current task's input. DumpToCpu only runs with
+            // MAX_PERMITS or when cache_area.assigned_count() == 0 (from purge_gpu_closure added in run_cached), so no other tasks should be running; skipping avoids deadlock.
+            warn!("DataCacheWrapper::dump_to_cpu: can't drop self.id={:?}, locked, data={:?}", self.id, self.cached_data)
+        }
+
+        let is_all_on_cpu = self.is_all_on_cpu_resident();
+        let age = GlobalCtx::global().cache_age();
+        if is_all_on_cpu {
+            self.mark_on_cpu_since_if_all_on_cpu(age);
+        }
+
+        debug!("DataCacheWrapper::dump_to_cpu: 2. id={:?} device_idx={device_idx} is_all_on_cpu={is_all_on_cpu} age={age}", self.id);
+
+        Ok(())
     }
 
     pub async fn drop_device(&self, device_idx: usize) -> Result<(), ThoError> {
-        O::M::drop_device(self, device_idx).await
+        assert!(device_idx > 0, "can't drop cpu");
+        drop(track_await(self.cached_data[device_idx].write()).await.take());
+        self.mark_not_resident_on_device(device_idx);
+
+        Ok(())
+    }
+
+    pub fn with_data_ref<'a, R: Send, F, P>(&'a self, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    where
+        F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
+        P: RunCtx + 'a,
+    {
+        Box::pin(async move {
+            match track_await(self.load_from_any_device_(to_tho_device_idx)).await {
+                Ok(v) => {
+                    let data = v.deref();
+                    DevicesWrap::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), data)
+                }
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    pub fn with_selected_data_ref<'a, R: Send, F, P, S>(&'a self, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    where
+        O: Select<S, Output = O>,
+        for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
+        S: Debug + Clone + Send + 'static,
+        P: RunCtx + 'a,
+    {
+        Box::pin(async move {
+            let permits_ctx = permits_ctx;
+
+            //TODO it's assumed dump_all_to_cpu was executed
+            if GlobalCtx::global().is_ipc() && to_tho_device_idx != 0 && self.is_resident_on_device(0) {
+                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(self.cached_data[0].read()).await;
+                if let Some(src) = source_read_guard.as_ref() {
+                    let sub_t: O = src.subview(selector.clone())?;
+
+                    debug!("DevicesWrap::with_selected_data_ref: cpu sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
+
+                    let data = match &self.copy_to_device {
+                        Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
+                        None => sub_t,
+                    };
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                }
+                drop(source_read_guard);
+                self.mark_not_resident_on_device(0);
+            }
+
+            if self.is_resident_on_device(to_tho_device_idx) {
+                let lock = &self.cached_data[to_tho_device_idx];
+                let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
+                if read_guard.is_some() {
+                    let base: &O = read_guard
+                        .as_ref()
+                        .expect("no value behind guard");
+                    let data: O = base.subview(selector.clone())?;
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                }
+
+                drop(read_guard);
+                self.mark_not_resident_on_device(to_tho_device_idx);
+            }
+
+            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+                if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
+                    continue;
+                }
+
+                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
+
+                if let Some(src) = source_read_guard.as_ref() {
+                    let sub_t: O = src.subview(selector.clone())?;
+
+                    debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
+
+                    let data = match &self.copy_to_device {
+                        Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
+                        None => sub_t,
+                    };
+                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                }
+                drop(source_read_guard);
+                self.mark_not_resident_on_device(source_device_idx);
+            }
+
+            Err(Cause::NotFound.into())
+        })
     }
 
     pub async fn with_selected_data<S, R, P>(
@@ -874,30 +531,117 @@ where
         do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
     ) -> Result<R, ThoError>
     where
-        O: Select<S>,
-        <O as Select<S>>::Output: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        O: Select<S, Output = O>,
+        <O as Select<S>>::Output: Data + WithId + Send + Sync,
         P:RunCtx,
         S: Clone,
     {
-        track_await(O::M::with_selected_data(self, to_device_idx, permits_ctx, selector, do_run)).await
+        let permits_ctx = permits_ctx;
+
+        if self.is_resident_on_device(to_device_idx) {
+            let lock = &self.cached_data[to_device_idx];
+            let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
+            if read_guard.is_some() {
+                let data = read_guard
+                    .as_ref()
+                    .expect("no value behind guard")
+                    .subview(selector.clone())?;
+                return do_run(data, &permits_ctx);
+            }
+
+            drop(read_guard);
+            self.mark_not_resident_on_device(to_device_idx);
+        }
+
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            if source_device_idx == to_device_idx || !self.is_resident_on_device(source_device_idx) {
+                continue;
+            }
+
+            let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
+
+            if let Some(src) = source_read_guard.as_ref() {
+                let sub_t = src.subview(selector.clone())?;
+                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}", sub_t.size());
+
+                let data = match &self.copy_to_device {
+                    Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_device_idx)).await?,
+                    None => sub_t,
+                };
+                return do_run(data, &permits_ctx);
+            }
+            drop(source_read_guard);
+            self.mark_not_resident_on_device(source_device_idx);
+        }
+
+        Err(Cause::NotFound.into())
     }
 
     pub fn is_on_cpu_before(&self, threshold_age: u64) -> bool {
-        O::M::is_on_cpu_before(self, threshold_age)
+        let on_cpu_since = perf_log!(sync_read_lock!(&self.on_cpu_since), "DevicesWrap::is_on_cpu_before on_cpu_since.read");
+        let r = on_cpu_since.as_ref().map(|on_cpu_since| *on_cpu_since <= threshold_age).unwrap_or(false);
+
+        debug!("DataCacheWrapper::is_on_cpu_before: self.id={:?} self.on_cpu_since={:?} r={r} threshold_age={threshold_age}", self.id, self.on_cpu_since);
+
+        r
     }
 
     pub async fn take_data(
         self,
         to_device_idx: usize,
     ) -> Result<O, ThoError> {
-        track_await(O::M::take_data(self, to_device_idx)).await
+        self.take_data_prefer_device_or_any(to_device_idx)
     }
 
     pub async fn load_from_any_device_(
         &self,
         to_tho_device_idx: usize,
-    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError> {
-        track_await(O::M::load_from_any_device_(self, to_tho_device_idx)).await
+    ) -> Result<impl Deref<Target = O> + Debug + Send, ThoError>
+    {
+        //purge shouldn't happen here since it requires MAX max_parallel and it this is being executed other runs can't have MAX max_parallel,
+        debug!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx}", self.id);
+        trace!("DataCacheWrapper::from_any_device id={:?} to_device_idx={to_tho_device_idx} self.cached_data={:?}", self.id, self.cached_data);
+        assert!(self.cached_data.len() > to_tho_device_idx, "Device index {to_tho_device_idx}(cache len is {}) too big {:?}", self.cached_data.len(), self.id);
+
+        //dump_to_cpu can only be executed either from DumpToCpu::adjust, but it's running with set_max_other_parallel(0) so nobody should be loading anything at the momemnt, or from run_cached clean-up at thoosa_common/src/runner/common/cachable.rs:95 when the context being dropped is the last one holding
+        //reference to the cached object. And in the latter case it can indeed happen so that read_guard is obtained when device data is dropped by dump_to_cpu but then it will be copied back from CPU (0 device) in cycle below.
+        if self.is_resident_on_device(to_tho_device_idx) {
+            let lock = &self.cached_data[to_tho_device_idx];
+            let read_guard = track_await(lock.read()).await;
+            if read_guard.is_some() {
+                return Ok(tokio::sync::RwLockReadGuard::map(
+                    read_guard,
+                    |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+                ));
+            }
+            drop(read_guard);
+            self.mark_not_resident_on_device(to_tho_device_idx);
+        }
+
+        debug!("DataCacheWrapper::from_any_device id={:?} copying to_device_idx={to_tho_device_idx}", self.id);
+
+        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+            if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
+                continue;
+            }
+
+            let source_read_guard = track_await(op.read()).await;
+
+            if source_read_guard.is_some() && self.copy_to_device.is_none() {
+                return Ok(tokio::sync::RwLockReadGuard::map(
+                    source_read_guard,
+                    |val: &Option<O>| val.as_ref().expect("no value behind guard"),
+                ));
+            }
+
+            if let Some(src) = source_read_guard.as_ref() {
+                return track_await(self.ensure_copied(to_tho_device_idx, src, true)).await.map(|v| v.expect("no value returned"));
+            }
+            drop(source_read_guard);
+            self.mark_not_resident_on_device(source_device_idx);
+        }
+
+        Err(Cause::NotFound.into())
     }
 
     pub fn take_data_prefer_device_or_any(self, preferred_device_idx: usize) -> Result<O, ThoError> {
@@ -920,7 +664,13 @@ where
     }
 
     pub fn is_all_on_cpu(&self) -> impl Future<Output=bool> + Send {
-        O::M::is_all_on_cpu(self)
+        async move {
+            trace!("DataCacheWrapper::is_all_on_cpu: self.id={:?}", self.id);
+
+            let is_all_on_cpu = self.is_all_on_cpu_resident();
+            debug!("DataCacheWrapper::is_all_on_cpu: self.id={:?} is_all_on_cpu={is_all_on_cpu}", self.id);
+            is_all_on_cpu
+        }
     }
 
     pub fn is_on_device(&self, tho_device_idx: usize) -> bool {
@@ -935,13 +685,7 @@ where
 
 impl<O> DevicesWrap<O>
 where
-    O: Data<M=CpuOnly<O>> + WithId + Send + Sync
-{
-}
-
-impl<O> DevicesWrap<O>
-where
-    O: Data<M=CpuOrGpu<O>> + CopyToDevice + WithId + Send + Sync
+    O: Data + WithId + Send + Sync
 {
 
     pub fn id(&self) -> &<O as WithId>::ID {
@@ -975,7 +719,7 @@ where
         data: T,
     ) -> Result<R, ThoError>
     where
-        T: Data + CopyToDevice + WithId + Send + Sync + CopyToDevice,
+        T: Data + WithId + Send + Sync,
     {
         if trace_ctx.is_none() {
             do_run(&data)
@@ -990,7 +734,8 @@ where
         dst_idx: usize,
         src: &O,
         do_return: bool,
-    ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError> {
+    ) -> Result<Option<RwLockReadGuard<'_, O>>, ThoError>
+    {
         // Ensures inflight slot is cleared and waiters are notified even if the leader is canceled or panics.
         struct InflightGuard<'a> {
             inflight: &'a Mutex<Option<Arc<Notify>>>,
@@ -1083,8 +828,13 @@ where
                 self.mark_not_resident_on_device(dst_idx);
             }
 
+            let Some(copy_to_device) = &self.copy_to_device else {
+                inflight_guard.clear();
+                return Err(ThoError::new_with_cause(format!("DevicesWrap::ensure_copied: no copy_to_device for {:?}", self.id), Cause::SomethingElse("no copy_to_device".into())));
+            };
+
             debug!("DevicesWrap::ensure_copied: self.id={:?} copy_to_device from src", self.id);
-            let produced = track_await(src.copy_to_device(dst_idx)).await;
+            let produced = track_await(copy_to_device.copy(src, dst_idx)).await;
 
             let produced = match produced {
                 Ok(v) => v,
@@ -1178,7 +928,6 @@ pub trait ConsumeData {
 impl <O> WithDataRef for DevicesWrap<O>
 where
     O: Data + WithId + Send + Sync,
-    O::M: DevicesWrapCopyMode<O>,
 {
     type O<'o> = O;
 
@@ -1187,7 +936,7 @@ where
             for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
             P:RunCtx + 'a
     {
-        O::M::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run)
+        DevicesWrap::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run)
     }
 
 
@@ -1197,8 +946,7 @@ where
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
 where
     S:Debug + Clone + Send + 'static,
-    O: Select<S, Output=O> + Data + WithId + Send + Sync + CopyToDevice,
-    O::M: DevicesWrapCopyMode<O>,
+    O: Select<S, Output=O> + Data + WithId + Send + Sync,
 {
     fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
@@ -1206,7 +954,7 @@ where
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
         P:RunCtx + 'a
     {
-        O::M::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run)
+        DevicesWrap::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run)
     }
 
 }

@@ -218,7 +218,7 @@ impl FindAndSelectMotifsStage {
         device_idx: usize,
         mut ctx: C
     ) -> Result<FindAndSelectEvalMetrics, ThoError> {
-        let find_input = Arc::new(DevicesWrap::wrap(track_await(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).await?));
+        let find_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new(Simple::new(find_resources.clone())).check(store)).await?));
         //code in FindMotifsStage and SelectMotifsStage expects pre saved run configurations
         let find_run_config_id = track_await(Self::save_run_config_with_input(
             store,
@@ -272,7 +272,7 @@ impl FindAndSelectMotifsStage {
 
         let select_stage_output:Arc<DevicesWrap<SelectMotifsSavableResult>> = track_await(Arc::clone(&select_stage)
             .run(
-                Arc::new(DevicesWrap::wrap(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?))),
+                Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(Simple::new(select_resources.clone())).check(store)).await?))),
                 ctx.branch(true)
             )).await?;
 
@@ -454,6 +454,6 @@ impl AsyncStage for FindAndSelectMotifsStage {
             .filter_map(|(_, config)| config)
             .collect::<Vec<_>>();
 
-        Ok(Arc::new(DevicesWrap::wrap(FindAndSelectMotifsResult::new(best_configs))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(FindAndSelectMotifsResult::new(best_configs))))
     }
 }

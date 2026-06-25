@@ -31,7 +31,7 @@ impl BatchBuilder {
 }
 
 pub(crate) fn new_file_list_input_cache(input: FileListInput) -> Arc<DevicesWrap<FileListInput>> {
-    Arc::new(DevicesWrap::wrap(input))
+    Arc::new(DevicesWrap::wrap_plain(input))
 }
 
 impl OutId for BatchBuilder {

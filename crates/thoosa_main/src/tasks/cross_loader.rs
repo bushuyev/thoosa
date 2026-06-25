@@ -6,7 +6,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -330,7 +330,7 @@ where
 
         for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
             let t_1 = track_await(Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_1.as_ref().clone())), ctx.branch(false))).await?;
+                .run_cached(Arc::new(DevicesWrap::wrap_plain(resource_1.as_ref().clone())), ctx.branch(false))).await?;
             let t_1_len = t_1.size().dim_1();
 
             if t_1_len > max_batch {
@@ -445,9 +445,7 @@ where
     C: RunCtx + Adjustable + 'static,
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     ResourcesConfigInput<ResC>: Data<M=CpuOnly<ResourcesConfigInput<ResC>>> + WithId + Send + Sync,
-    CpuOnly<ResourcesConfigInput<ResC>>: DevicesWrapCopyMode<ResourcesConfigInput<ResC>>,
     Self::Out: Data + WithId + Send + Sync,
-    <Self::Out as Data>::M: DevicesWrapCopyMode<Self::Out>,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx=C> + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
@@ -495,7 +493,7 @@ where
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
             let t_0 = track_await(Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(DevicesWrap::wrap(resource_0.as_ref().clone())), ctx.branch(false))).await?;
+                .run_cached(Arc::new(DevicesWrap::wrap_plain(resource_0.as_ref().clone())), ctx.branch(false))).await?;
             let t_0_len = t_0.size().dim_1();
 
             if t_0_len > max_batch {
@@ -561,7 +559,7 @@ where
 
         track_await((self.on_all_done)(&receiver)).await?;
 
-        Ok(Arc::new(DevicesWrap::wrap(())))
+        Ok(Arc::new(DevicesWrap::wrap_plain(())))
     }
 }
 
@@ -1803,7 +1801,7 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys)))));
+        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(resource_keys)))));
 
         let output:Arc<DevicesWrap<()>> = cross_loader
             .run(input, ctx.branch(false))
@@ -1974,7 +1972,7 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
             "resource_a".to_string(),
             "resource_b".to_string(),
         ])))));
@@ -2115,7 +2113,7 @@ mod tests {
             0,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
             "resource_small".to_string(),
             "resource_large".to_string(),
         ])))));
@@ -2254,7 +2252,7 @@ mod tests {
             1,
         ));
 
-        let input = Arc::new(DevicesWrap::wrap(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
+        let input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(ResourceType::List(vec![
             "resource_a".to_string(),
         ])))));
 

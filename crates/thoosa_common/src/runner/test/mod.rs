@@ -15,7 +15,7 @@ use tokio::task::JoinSet;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{Cached, DevicesWrap, DevicesWrapCopyMode, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{Stage, SyncStage, WrappedStageRunInput};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -243,10 +243,8 @@ pub async fn run_mul_task_invocations<R, F, CF>(
 where
     R: Cached + OutId + Send + Sync + 'static,
     R: crate::runner::common::runnable::AsyncStage<RunInput = WrappedStageRunInput<R>>,
-    for<'a> <R as Stage>::In<'a>: Data   + WithId+ Send + Sync,
-    for<'a> <<R as Stage>::In<'a> as Data>::M: DevicesWrapCopyMode<<R as Stage>::In<'a>>,
+    for<'a> <R as Stage>::In<'a>: Data + WithId + Send + Sync,
     R::Out: Data + CopyToDevice + Send + Sync,
-    <R::Out as Data>::M: DevicesWrapCopyMode<R::Out>,
     StageInStatic<R>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<R as Stage>::Out) + Send + Sync + Clone + 'static,
@@ -278,7 +276,7 @@ where
 
                 let multed = load_and_clc
                     .run_cached(
-                        Arc::new(DevicesWrap::wrap(<&str as Into<StageInStatic<R>>>::into(res))),
+                        Arc::new(DevicesWrap::wrap_plain(<&str as Into<StageInStatic<R>>>::into(res))),
                         ctx_device.branch(false),
                     )
                     .await?;
@@ -465,13 +463,6 @@ pub mod fixtures {
 
         fn id(&self) -> &Self::ID {
             &self.id
-        }
-    }
-
-    #[async_trait]
-    impl CopyToDevice for DLoaderInput {
-        async fn copy_to_device(&self, _dst_device: usize) -> Result<Self, ThoError> {
-           Ok(self.clone())
         }
     }
 
@@ -955,7 +946,7 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
                                 })),
                 ctx_device_0_0,
@@ -966,7 +957,7 @@ mod tests {
 
         let loaded_tensor_0_1 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
                                 })),
                 ctx_device_0_1,
@@ -989,7 +980,7 @@ mod tests {
 
         let loaded_tensor_1_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
                                                     id: DLoaderInputId("resource_1"),
                                                 })),
                 ctx_device_1_0,
@@ -1031,7 +1022,7 @@ mod tests {
 
         let loaded_tensor_0_0 = Arc::clone(&loader)
             .run_cached(
-                Arc::new(DevicesWrap::wrap(DLoaderInput {
+                Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
                                     id: DLoaderInputId("resource_1"),
                                 })),
                 ctx_device_0_0,
@@ -1094,7 +1085,7 @@ mod tests {
         let ctx_device_0_data = ctx_device_0.branch(false);
 
         let multed = load_and_mut.run_cached(
-            Arc::new(DevicesWrap::wrap(DLoaderInput {
+            Arc::new(DevicesWrap::wrap_plain(DLoaderInput {
                                                 id: DLoaderInputId("resource_1"),
                                             })),
             ctx_device_0_run,

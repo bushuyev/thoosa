@@ -412,7 +412,7 @@ where
             async move {
 
                 let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = track_await(motif_loader.run_cached(
-                    Arc::new(DevicesWrap::wrap(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id])))),
+                    Arc::new(DevicesWrap::wrap_plain(MotifLoaderInput::new((motif_id_rate.0, "motif_id").into(), Some(vec![select_motifs_run_config_id])))),
                     ctx.branch(false),
                 )).await?;
 
@@ -579,7 +579,7 @@ where
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
                 let train_net_output = track_await(Arc::into_inner(track_await(train_net.run(
-                    Arc::new(DevicesWrap::wrap(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
+                    Arc::new(DevicesWrap::wrap_plain(TrainNetInput::new(SynKey::new([mono_key!("", "empty")])))),
 
                     ctx_run
                 )).await?).unwrap().take_data(0)).await?;
@@ -611,7 +611,7 @@ where
             "train motif",
         )).await;
 
-        Ok(Arc::new(DevicesWrap::wrap(TrainMotifsNetsResult::new(select_motifs_run_config_ids, results))))
+        Ok(Arc::new(DevicesWrap::wrap_plain(TrainMotifsNetsResult::new(select_motifs_run_config_ids, results))))
     }
 
 }
@@ -754,7 +754,7 @@ where
         // TODO(perf): asynchronously prefetch the next random-slice epoch before this cache misses so RandomSlicesLoader latency is hidden behind TrainStep work.
         let random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = track_await(Arc::clone(&self.random_slices_loader)
             .run(
-                Arc::new(DevicesWrap::wrap(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit))),
+                Arc::new(DevicesWrap::wrap_plain(SlicesLoaderInput::new(self.motif_id.vals[0].to_data_id(), self.random_slices_limit))),
                 ctx.branch(false),
             )).await?;
 
@@ -968,7 +968,7 @@ mod tests {
             None
         )?);
 
-        let input = Arc::new(DevicesWrap::wrap(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)))));
+        let input = Arc::new(DevicesWrap::wrap_plain(TrainMotifNetInput::new(MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(3, 2)))));
 
         let mut run_ctx = mock_run_ctx::default(1);
         let run_ctx_branch = run_ctx.branch(false);

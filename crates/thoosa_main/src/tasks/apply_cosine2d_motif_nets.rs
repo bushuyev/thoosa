@@ -172,7 +172,7 @@ where
                         return Ok(None);
                     };
 
-                    match track_await(load_motif_net.run_cached(Arc::new(DevicesWrap::wrap(LoadMotifNetInput::new(path, false))), load_ctx)).await {
+                    match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
 
 

@@ -34,7 +34,7 @@ impl ABLoader {
 }
 
 pub(crate) fn new_file_input_cache(value: impl Into<FileInput>) -> Arc<DevicesWrap<FileInput>> {
-    Arc::new(DevicesWrap::wrap(value.into()))
+    Arc::new(DevicesWrap::wrap_plain(value.into()))
 }
 
 impl OutId for ABLoader {
