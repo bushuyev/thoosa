@@ -619,7 +619,7 @@ where
 
             debug!("FindMotifs: find_motifs_run_config_range_or_value={find_motifs_run_config_range_or_value:?} find_motifs_args.fixed_config={:?}", find_motifs_args.fixed_config);
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(find_motifs_args.resource_config())));
+            let input_wrapper = Arc::new(ResourcesConfigInput::new(find_motifs_args.resource_config()));
 
             let mut init_ctx = root_ctx.branch(true);
             let init_loader = Arc::clone(&loader);
@@ -748,7 +748,7 @@ where
             let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = serde_json5::from_str(&train_motif_nets_args.run_config_cnt).expect("TrainMotifsNets2");
             let motifs_by = train_motif_nets_args.motifs_by()?;
 
-            let input_wrapper = Arc::new(DevicesWrap::wrap_plain(TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()))));
+            let input_wrapper = TrainMotifNetInput::new(motifs_by, Arc::new(train_motif_nets_args.opt_config.clone()));
 
             let run_config_ids = track_await(run_opt::<_, _, TrainMotifNetRunConfig, _, _>(
                 train_motif_nets_run_config_range_or_value,
@@ -882,7 +882,7 @@ where
             debug!("PurgeModels: purge_models_args={purge_models_args:?}");
             let output = track_await(Arc::new(PurgeModelsStage::<RunCtxImpl>::new(&ws, &store, purge_models_args.clone()))
                 .run(
-                    Arc::new(DevicesWrap::wrap_plain(PurgeModelsInput::new())),
+                    PurgeModelsInput::new(),
                     root_ctx.branch(true),
                 )).await?;
             let output = track_await(Arc::into_inner(output).expect("top level stage should not have more than one reference").take_data(0)).await?;
@@ -1918,7 +1918,7 @@ where
 pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     input_run_config_ids: Option<Vec<RunConfigId>>,
     rcrv: RCRV,
-    input: Arc<DevicesWrap<ST::In<'static>>>,
+    input: ST::RunInput,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     f: F,
@@ -1927,7 +1927,7 @@ pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
 ) -> Result<Vec<RunConfigId>, ThoError>
 where
     F: AsyncFnOnce(Vec<RC>) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync + thoosa_common::runner::common::runnable::WrappedRunInputStage, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
+    ST: Stage + AsyncStage + Send + Sync, // + From<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>, Arc<RwLock<LoadRunner<Tensor>>>, Vec<RC>, FC)>,
     RC: RunConfig
         + From<std::vec::IntoIter<NamedVal<<RCRV as GridRunConfigSource>::P>>>
         + thoosa_properties_map::ToHashmap,
@@ -1968,7 +1968,7 @@ where
 
 pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
-    input: Arc<DevicesWrap<ST::In<'static>>>,
+    input: ST::RunInput,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     init_stage: F,
@@ -1981,7 +1981,7 @@ where
         Vec<Hyperparameter<<RCRV as OptRunConfigSource>::P>>,
         <RCRV as OptRunConfigSource>::P,
     >) -> Result<Arc<ST>, ThoError>,
-    ST: Stage + AsyncStage + Send + Sync + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    ST: Stage + AsyncStage + Send + Sync, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     RC: RunConfig
     + From<std::vec::IntoIter<NamedVal<<RCRV as OptRunConfigSource>::P>>>
     + ToHashmap,
