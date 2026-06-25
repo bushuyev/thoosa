@@ -249,13 +249,13 @@ impl<C> AsyncStage for PurgeModelsStage<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Self::In<'static>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "PurgeModelsStage::run"))]
-    async fn run(self: Arc<Self>, _input: Arc<DevicesWrap<Self::In<'static>>>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let roots = {
             let ws_guard = self.ws.read();
             ModelRoots::from_ws(ws_guard.as_ref())
@@ -463,6 +463,8 @@ mod tests {
     use std::sync::Arc;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::{TrainLabelNetRunConfig, TrainMotifNetRunConfig};
     use thoosa_common::ws::{FsWorkspace, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
@@ -482,6 +484,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_purge_models_stage_purges_lost_disk_models() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         let (ws, store) = test_ws_store("purge_models_lost").await?;
         let kept_path = PathBuf::from("kept_label").join("1");
         let lost_motif_path = PathBuf::from("0").join("42_2");
@@ -513,6 +518,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_purge_models_stage_purges_label_models_by_date() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         let (ws, store) = test_ws_store("purge_models_label_date").await?;
         let old_path = PathBuf::from("label").join("1");
         let new_path = PathBuf::from("label").join("2");
@@ -542,6 +550,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_purge_models_stage_purges_label_models_by_loss() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         let (ws, store) = test_ws_store("purge_models_label_loss").await?;
         let high_loss_path = PathBuf::from("label").join("1");
         let low_loss_path = PathBuf::from("label").join("2");
@@ -569,6 +580,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_purge_models_stage_purges_unused_motif_models() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         let (ws, store) = test_ws_store("purge_models_unused_motifs").await?;
         let used_motif_path = PathBuf::from("0").join("10_1");
         let unused_motif_path = PathBuf::from("0").join("11_2");
@@ -616,7 +630,7 @@ mod tests {
         let stage = Arc::new(PurgeModelsStage::<RunCtxImpl>::new(ws, store, PurgeModelsArgs::new(purge_mode)));
         let output = stage
             .run(
-                Arc::new(DevicesWrap::wrap_plain(PurgeModelsInput::new())),
+                PurgeModelsInput::new(),
                 RunCtxImpl::new(0, "purge_models_test"),
             )
             .await?;

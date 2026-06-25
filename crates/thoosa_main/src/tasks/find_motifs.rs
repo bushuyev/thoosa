@@ -144,14 +144,12 @@ where
         }
     }
 
-    pub async fn run(&self, input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>, mut ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
+    pub async fn run(&self, input: Arc<ResourcesConfigInput<RC>>, mut ctx:C) -> Result<Arc<DevicesWrap<()>>, ThoError> {
         match self {
             Self::CrossLoader { cross_loader, .. } => track_await(Arc::clone(cross_loader).run(input, ctx)).await,
             Self::Bucketing { bucketing_stage, .. } => {
-                let input = with_data!(ctx.branch(false), Arc::clone(&input); |_ctx: C, input: &ResourcesConfigInput<RC>| {
-                    Ok::<_, ThoError>(BucketingInput::new(input.resources_config().clone()))
-                })?;
-                track_await(Arc::clone(bucketing_stage).run(Arc::new(DevicesWrap::wrap_plain(input)), ctx)).await?;
+                let input = input.resources_config().clone();
+                track_await(Arc::clone(bucketing_stage).run(Arc::new(BucketingInput::new(input)), ctx)).await?;
                 Ok(Arc::new(DevicesWrap::wrap_plain(())))
             }
         }
@@ -499,7 +497,7 @@ where
     LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C> +  'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
@@ -508,7 +506,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindMotifsStage::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<ResourcesConfigInput<RC>>>,
+        input: Arc<ResourcesConfigInput<RC>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
@@ -728,7 +726,7 @@ mod tests {
 
 
         let result = stage.run(
-            Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(Simple::new(Group(resources_group.into()))))), ctx.branch(false),
+            Arc::new(ResourcesConfigInput::new(Simple::new(Group(resources_group.into())))), ctx.branch(false),
         ).await?;
 
         with_data!(ctx.branch(false), result; |ctx, result:&FindMotifsSavableResult|{

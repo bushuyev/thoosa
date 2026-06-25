@@ -518,6 +518,8 @@ mod tests {
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::{final_net, lin_label_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams};
     use thoosa_common::ws::{FsWorkspace, Workspace};
@@ -525,6 +527,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_converts_saved_final_net() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         run_convert_precision_stage_final_net(ConvertPrecisionTarget::Fp64, Kind::Double).await?;
         run_convert_precision_stage_final_net(ConvertPrecisionTarget::Bf16, Kind::BFloat16).await?;
         run_convert_precision_stage_label_net(ConvertPrecisionTarget::Bf16, Kind::BFloat16).await?;
@@ -597,6 +602,9 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_preserves_existing_tensor_names() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+        
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
         let ws_box = FsWorkspace::new(test_dir, 2, 100, 100)?;
         let net_dir = ws_box.motifs_nets_path().join("0").join("34603_36472");
