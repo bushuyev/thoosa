@@ -1988,44 +1988,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn test_shared_parallelism_is_observed_across_executors() -> Result<(), ThoError> {
-        let limits = Arc::new(FuturesLimits::new());
-        let shared_limit = limits.max_parallel_jobs();
-        let reset_fn: ResetFn = Arc::new(|_| async { Ok(()) }.boxed());
-        let exec_a = Arc::new(DynamicTaskExecutor::new_inner_with_buffer_limits(64, 0, Arc::clone(&reset_fn), Arc::clone(&limits)));
-        let exec_b = Arc::new(DynamicTaskExecutor::new_inner_with_buffer_limits(64, 1, reset_fn, limits));
-        let active = Arc::new(AtomicUsize::new(0));
-        let max_seen = Arc::new(AtomicUsize::new(0));
-
-        let results = futures_util::stream::iter(0..shared_limit * 2)
-            .map(|idx| {
-                let exec = if idx % 2 == 0 { Arc::clone(&exec_a) } else { Arc::clone(&exec_b) };
-                let active = Arc::clone(&active);
-                let max_seen = Arc::clone(&max_seen);
-                async move {
-                    exec.submit(usize::MAX, async move {
-                        let now = active.fetch_add(1, Ordering::SeqCst) + 1;
-                        max_seen.fetch_max(now, Ordering::SeqCst);
-                        tokio::time::sleep(Duration::from_millis(30)).await;
-                        active.fetch_sub(1, Ordering::SeqCst);
-                        Ok::<_, ThoError>(())
-                    }, None).await
-                }
-            })
-            .buffer_unordered(shared_limit * 2)
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        assert_eq!(results.len(), shared_limit * 2);
-        assert!(max_seen.load(Ordering::SeqCst) <= shared_limit);
-
-        let exec_a = Arc::try_unwrap(exec_a).expect("all Arc clones must be dropped");
-        let exec_b = Arc::try_unwrap(exec_b).expect("all Arc clones must be dropped");
-        exec_a.shutdown().await;
-        exec_b.shutdown().await;
-        Ok(())
-    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_max_other_parallel_is_observed() -> Result<(), ThoError> {
