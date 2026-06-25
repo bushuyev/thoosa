@@ -5,7 +5,6 @@ use parking_lot::RwLock;
 use tch::Device::Cpu;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
 use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
@@ -78,16 +77,16 @@ pub(crate) async fn run_all(
     let find_motifs_input = Arc::new(track_await(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?);
 
     //gpt Build the input for SelectMotifs: separate resource config so selection can use its own dataset.
-    let select_motifs_input = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).await?)));
+    let select_motifs_input = Arc::new(SelectMotifsInput::standalone(track_await(ResourcesConfigInput::new(run_all_args.select_resource_config()?).check(&store)).await?));
 
     //gpt Build the input for label training: this is typically a labeled resource set.
-    let train_labels_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
+    let train_labels_input = Arc::new(track_await(ResourcesConfigInput::new( //TODO the group is needed to load resources not belonging to label being trained
        run_all_args.train_resource_config()
-    ).check(&store)).await?));
+    ).check(&store)).await?);
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
-    let _train_final_input = Arc::new(DevicesWrap::wrap_plain(track_await(ResourcesConfigInput::new(
-        run_all_args.train_final_resource_config()).check(&store)).await?));
+    let _train_final_input = Arc::new(track_await(ResourcesConfigInput::new(
+        run_all_args.train_final_resource_config()).check(&store)).await?);
 
 
     //gpt Pre-create context and shared handles for FindMotifs stage construction (kept outside the run_grid closure).
@@ -96,10 +95,10 @@ pub(crate) async fn run_all(
     let ws_in_find_motifs = Arc::clone(&ws);
     let loader_in_find_motifs = Arc::clone(&loader);
 
-    let find_and_select_input = Arc::new(DevicesWrap::wrap_plain(FindAndSelectMotifsInput::new(
+    let find_and_select_input = FindAndSelectMotifsInput::new(
         run_all_args.find_resources.clone(),
         run_all_args.select_resources.clone(),
-    )));
+    );
 
 
     let select_motifs_run_config_ids = match all_config.find_and_select {

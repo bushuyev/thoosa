@@ -36,12 +36,12 @@ use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
 #[derive(Debug, Named, Clone)]
 pub(crate) struct ABClcStageInput {
     id:SynKey,
-    from_a:Arc<DevicesWrap<AStageInput>>,
-    from_b:Arc<DevicesWrap<BStageInput>>,
+    from_a:Arc<AStageInput>,
+    from_b:Arc<BStageInput>,
 }
 
 impl ABClcStageInput {
-    pub(super) fn new(from_a: Arc<DevicesWrap<AStageInput>>, from_b: Arc<DevicesWrap<BStageInput>>) -> Self {
+    pub(super) fn new(from_a: Arc<AStageInput>, from_b: Arc<BStageInput>) -> Self {
         Self {
             id: from_a.id().clone() + from_b.id(),
             from_a,

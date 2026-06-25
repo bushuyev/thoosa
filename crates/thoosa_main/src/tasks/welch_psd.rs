@@ -223,7 +223,7 @@ where
 pub struct WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -236,7 +236,7 @@ where
 impl<RC, L, C> WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
@@ -266,7 +266,7 @@ where
 impl<RC, L, C> OutId for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -277,7 +277,7 @@ where
 impl<RC, L, C> Stage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -288,10 +288,10 @@ where
 impl<RC, L, C> AsyncStage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + Send + Sync + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
@@ -299,7 +299,7 @@ where
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPSD::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<FrequenciesStatsInput<RC>>>,
+        input: Arc<FrequenciesStatsInput<RC>>,
         mut ctx: Self::Ctx,
     ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
     where
@@ -307,17 +307,7 @@ where
     {
         let input_id = input.id().clone();
 
-        let (resources_config, nperseg, noverlap) = with_data!(
-            ctx.branch(false),
-            input;
-            |_ctx, input: &FrequenciesStatsInput<RC>| {
-                Ok::<_, ThoError>((
-                    input.resources().map(|v| v.resources_config().clone()),
-                    input.nperseg() as i64,
-                    input.noverlap() as i64,
-                ))
-            }
-        )?;
+        let (resources_config, nperseg, noverlap) = (input.resources().map(|v| v.resources_config().clone()), input.nperseg() as i64, input.noverlap() as i64);
 
         validate_welch_params(nperseg, noverlap)?;
 
@@ -343,7 +333,7 @@ where
 
             let loaded = track_await(Arc::clone(&self.loader)
                 .run_cached(
-                    Arc::new(DevicesWrap::wrap_plain(resource.clone())),
+                    Arc::new(resource.clone()),
                     ctx.branch(false),
                 )).await?;
 

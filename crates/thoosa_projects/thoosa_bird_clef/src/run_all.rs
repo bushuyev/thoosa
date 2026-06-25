@@ -187,7 +187,7 @@ pub(crate) async fn run_all(
 
                         info!("run_all: label={label} find_motifs_run_config_ids={find_motifs_run_config_ids:?}");
 
-                        let select_motifs_input = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train")))))));
+                        let select_motifs_input = Arc::new(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(ResourceType::Set(format!("{find_resources}_{label}_train"))))));
                         let init_ctx_select_buckets = label_ctx.branch(true);
                         let ws_for_select_buckets = Arc::clone(&ws);
                         let store_for_select_buckets = Arc::clone(&store);
@@ -263,9 +263,9 @@ pub(crate) async fn run_all(
                         let loader_in_train_labels = Arc::clone(&loader);
 
 
-                        let train_labels_input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(
+                        let train_labels_input = Arc::new(ResourcesConfigInput::new(
                             run_all_args.train_resource_config()
-                        )/*.check(&store).await?*/));
+                        )/*.check(&store).await?*/);
 
                          let combo_sets = unordered_sets_of_size(train_motif_net_run_config_ids.as_slice(), run_all_args.selected_motif_nets_limit.unwrap_or(5));
                         let limit = combo_sets.len().min(10);//TODO ..100
@@ -397,9 +397,9 @@ pub(crate) async fn run_all(
                 let ws_in_train_labels = Arc::clone(&ws);
                 let store_in_train_labels = Arc::clone(&store);
                 let train_label_nets_run_config_range_or_value = Arc::clone(&train_label_nets_run_config_range_or_value);
-                let train_labels_input = Arc::new(DevicesWrap::wrap_plain(ResourcesConfigInput::new(
+                let train_labels_input = Arc::new(ResourcesConfigInput::new(
                     run_all_args.train_resource_config()
-                )));
+                ));
 
                 async move {
                     let train_motif_net_run_config_ids = track_await(store.list_run_config_ids_by_descr(label.clone(), TrainMotifNetRunConfig::type_name())).await?;

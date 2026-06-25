@@ -127,8 +127,8 @@ fn energy_metric() -> Metrics {
 
 pub struct SelectBucketsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C, RunInput = Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -139,8 +139,8 @@ where
 
 impl<L, ML, C> Debug for SelectBucketsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C, RunInput = Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -154,8 +154,8 @@ where
 
 impl<L, ML, C> WithId for SelectBucketsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C, RunInput = Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type ID = SynKey;
@@ -167,8 +167,8 @@ where
 
 impl<L, ML, C> SelectBucketsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C, RunInput = Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
@@ -178,7 +178,7 @@ where
         motif_loader: Arc<ML>,
         run_configs: Vec<SelectBucketsRunConfig>,
         find_motifs_run_config_ids: Vec<RunConfigId>,
-        select_motifs_input: Arc<DevicesWrap<SelectMotifsInput>>,
+        select_motifs_input: Arc<SelectMotifsInput>,
         mut init_ctx: C,
     ) -> Result<Self, ThoError> {
         let motif_stats = Arc::new(MotifStats::new(
@@ -249,10 +249,10 @@ where
             async move {
                 let stats = track_await(Arc::clone(&motif_stats)
                     .run(
-                        Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_motif_input(
+                        Arc::new(MotifStatsInput::from_motif_input(
                             MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()),
                             vec![energy_metric.clone()],
-                        ))),
+                        )),
                         ctx.branch(false),
                     )).await?;
 
@@ -283,14 +283,11 @@ where
     }
 
     async fn load_resources_for_selection(
-        input: &Arc<DevicesWrap<SelectMotifsInput>>,
+        input: &Arc<SelectMotifsInput>,
         store: &Arc<Box<dyn Store>>,
         mut ctx: C,
     ) -> Result<(Arc<Vec<Resource>>, SelectMotifsOutputMode), ThoError> {
-        let (resources_config, output_mode) = track_await(input
-            .with_data_ref(0, ctx.branch(false), None, |input: &SelectMotifsInput, _ctx| {
-                Ok::<_, ThoError>((input.resources_input().resources_config().clone(), input.output_mode()))
-            })).await?;
+        let (resources_config, output_mode) = (input.resources_input().resources_config().clone(), input.output_mode());
 
         Ok((Arc::new(track_await(resources_config.to_resources(store)).await?.into_iter().collect::<Vec<_>>()), output_mode))
     }
@@ -325,12 +322,12 @@ where
         let energy_metric = energy_metric();
         let stats = track_await(Arc::clone(motif_stats)
             .run_cached(
-                Arc::new(DevicesWrap::wrap_plain(MotifStatsInput::from_random_resources(
+                Arc::new(MotifStatsInput::from_random_resources(
                     max_slices,
                     find_motifs_run_config_id,
                     Some(resources.to_vec()),
                     vec![energy_metric.clone()],
-                ))),
+                )),
                 ctx.branch(false),
             )).await?;
 
@@ -543,8 +540,8 @@ where
 
 impl<L, ML, C> Stage for SelectBucketsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C, RunInput = Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
@@ -554,17 +551,17 @@ where
 
 impl<L, ML, C> AsyncStage for SelectBucketsStage<L, ML, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx = C, RunInput = Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SelectBucketsStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         debug!("SelectBucketsStage::run: input={input:?}");
 
         let run_configs_len = self.run_configs.len();
@@ -701,7 +698,7 @@ mod tests {
                 .finish(),
         );
 
-        let input = Arc::new(DevicesWrap::wrap_plain(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into()))))));
+        let input = Arc::new(SelectMotifsInput::standalone(ResourcesConfigInput::new(Simple::new(NotInGroup(resources_group.into())))));
 
         let stage = Arc::new(
             SelectBucketsStage::new(

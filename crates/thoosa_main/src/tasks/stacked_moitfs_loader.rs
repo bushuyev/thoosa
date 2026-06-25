@@ -130,7 +130,7 @@ impl Output for StackedMotifsOutput {}
 #[derive(Debug, Cached, Named)]
 pub struct StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     id:MonoKey,
@@ -143,7 +143,7 @@ where
 
 impl <ML, C> OutId for StackedMotifsLoader<ML, C>
 where
-ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
 C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -154,7 +154,7 @@ C: RunCtx + Adjustable + 'static
 
 impl <ML, C> StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     pub fn new(
@@ -175,7 +175,7 @@ where
 
 impl <ML, C> Stage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
@@ -187,24 +187,22 @@ where
 // #[async_trait]
 impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C> + Cached + OutId + 'static + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
         thoosa_shared::traits::WithId::id(input)
     }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
         let num_channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))
         .channels();
-        let find_motifs_run_config = with_data!(ctx.branch(false), input; |_ctx, input: &StackedMotifsInput|{
-            Ok::<Arc<FindMotifsRunConfig>, ThoError>(Arc::clone(&input.find_motifs_run_config))
-        })?;
+        let find_motifs_run_config = Arc::clone(&input.find_motifs_run_config);
 
         let find_motifs_run_config_id = find_motifs_run_config.id;
         let find_motifs_run_config_id = find_motifs_run_config_id.ok_or_else(|| ThoError::new("StackedMotifsLoader::run: no id in find_motifs_run_config"))?;
@@ -227,7 +225,7 @@ where
                 let mut ctx = ctx.branch(false);
 
                 async move {
-                    let motif_id_wrap = Arc::new(DevicesWrap::wrap_plain(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone()));//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
+                    let motif_id_wrap = Arc::new(MotifLoaderInput::find_motif_slices_only((motif_id, "motif_id").into()).clone());//TODO used only from select motifs, when needed from somewhere where selected motifs needed too add select_motif_run_config_ids StackedMotifsInput
 
                     match track_await(motif_loader_clone.run_cached(
                         motif_id_wrap, ctx.branch(false)

@@ -123,29 +123,27 @@ impl BStage {
 }
 
 impl AsyncStage for BStage  {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    type RunInput = Arc<Self::In<'static>>;
 
     fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as WithId>::ID {
         WithId::id(input)
     }
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
 
 
-        with_data!(ctx.branch(false), input; |ctx:RunCtxImpl, input: &BStageInput| {
-            let tensor = match input.token.as_str() {
-                "b100" => Tensor::from_slice(&[100.2]),
-                _ => Tensor::rand(&[1], FLOAT_CPU)
-            };
+        let tensor = match input.token.as_str() {
+            "b100" => Tensor::from_slice(&[100.2]),
+            _ => Tensor::rand(&[1], FLOAT_CPU)
+        };
 
-            let id = self.out_id(input.id());
+        let id = self.out_id(input.id());
 
-            Ok::<Arc<DevicesWrap<Self::Out>>, ThoError>(Arc::new(DevicesWrap::wrap(
-                BStageOutput{
-                    id,
-                    value: ThoTensor::new((), tensor)?,
-                }
-            )))
-        })
+        Ok(Arc::new(DevicesWrap::wrap(
+            BStageOutput{
+                id,
+                value: ThoTensor::new((), tensor)?,
+            }
+        )))
 
     }
 }
