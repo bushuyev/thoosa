@@ -31,7 +31,6 @@ use crate::tho_device::ThoDevice;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_STAGE_ID};
 use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput, BStageOutput};
-use crate::torch_runner::tests::model_test::common::{ClsOut, ModelTestId};
 
 #[derive(Debug, Named, Clone)]
 pub(crate) struct ABClcStageInput {
@@ -77,6 +76,7 @@ impl WithId for ABClcStageOutput {
     }
 }
 
+
 impl Output for ABClcStageOutput {}
 
 #[async_trait]
@@ -103,16 +103,6 @@ where
     ab_clc_sync:Arc<S>
 }
 
-impl<S> Stage for ABClcStage<S>
-where
-    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
-    S::Ctx: Adjustable + Send + Sync + 'static,
-    for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
-{
-    type Ctx = RunCtxImpl;
-    type In<'a> = ABClcStageInput;
-    type Out = ABClcStageOutput;
-}
 
 impl ABClcStage {
     pub fn new() -> Self {
@@ -211,6 +201,18 @@ struct ABClcSyncStageInputWrapperSelector {}
 impl Adjustable for ABClcSyncStageInputWrapperSelector {}
 
 
+impl<S> Stage for ABClcStage<S>
+where
+    S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
+    S::Ctx: Adjustable + Send + Sync + 'static,
+    for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+{
+    type Ctx = RunCtxImpl;
+    type In<'a> = ABClcStageInput;
+    type Out = Arc<DevicesWrap<ABClcStageOutput>>;
+}
+
+
 impl<S> AsyncStage for ABClcStage<S>
 where
     S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
@@ -220,11 +222,11 @@ where
     // type RunInput = ABClcStageInput;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        WithId::id(input)
-    }
+    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+    //     WithId::id(input)
+    // }
 
-    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let a_out = Arc::clone(&self.a_stage).run_cached(Arc::clone(&input.from_a), ctx.branch(false)).await?;
         let b_out = Arc::clone(&self.b_stage).run_cached(Arc::clone(&input.from_b), ctx.branch(false)).await?;
 

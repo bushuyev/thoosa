@@ -112,8 +112,8 @@ pub(super) struct BStage {
 
 impl Stage for BStage  {
     type Ctx = RunCtxImpl;
-    type In<'a> = BStageInput;
-    type Out = BStageOutput;
+    type In<'a> = Arc<BStageInput>;
+    type Out = Arc<DevicesWrap<BStageOutput>>;
 }
 
 impl BStage {
@@ -126,10 +126,10 @@ impl AsyncStage for BStage  {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-        WithId::id(input)
-    }
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as WithId>::ID {
+    //     WithId::id(input)
+    // }
+    async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
 
 
         let tensor = match input.token.as_str() {
