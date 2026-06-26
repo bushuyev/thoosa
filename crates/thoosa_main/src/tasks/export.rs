@@ -185,7 +185,7 @@ where
         let converted = if let Some(target_precision) = self.args.target_precision {
             let output = track_await(Arc::new(ConvertPrecisionStage::<C>::new(&target_ws, ConvertPrecisionArgs::new(ConvertPrecisionBy::Type(ConvertPrecisionNetType::All), target_precision)))
                 .run(ConvertPrecisionInput::new(), ctx.branch(true))).await?;
-            track_await(CachedStageOutput::take_data(output, 0)).await?.converted().to_vec()
+            output.converted().to_vec()
         } else {
             Vec::new()
         };
