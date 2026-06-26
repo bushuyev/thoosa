@@ -67,8 +67,8 @@ pub trait Stage: Debug {
 
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
-        for <'a> Self::In<'a>: WithId + Send + Sync,
-        Self::Out: Data + WithId + Send + Sync,
+        for <'a> Self::In<'a>:  Send + Sync,
+        Self::Out: Send + Sync,
 {
     // // type RunInput: AsyncStageRunInput<Self::In<'static>>;
     // // type RunOutput: CachedStageOutput<Self::Out>;

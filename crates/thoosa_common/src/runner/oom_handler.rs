@@ -229,16 +229,18 @@ impl RunCtxContext for NoopRunCtxContext {}
 #[derive(Debug)]
 pub struct OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
-    R: SyncStage + Adjustable + OutId,
+    R: SyncStage + Adjustable,
     // for<'i> <R as Stage>::In<'i>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + 'static,
+
+    // <R as Stage>::Out: Data + WithId,
     // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
-    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId
+    for<'i> <R as Stage>::In<'i>: WithId
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
@@ -289,12 +291,13 @@ fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::Dyna
 
 impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
-    R: SyncStage + Adjustable + OutId + Send + Sync + 'static + 'a,
+    R: SyncStage + Adjustable + Send + Sync + 'static + 'a,
     R::Ctx: Adjustable + Send + Sync + 'static,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + Send + 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
+    // <R as Stage>::Out: Data + WithId,
     // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + Send + Sync,

@@ -7,9 +7,15 @@ pub trait Input: Debug {
 
 }
 
-pub trait Output: Data + WithId + Debug {
+impl <I> Input for Arc<I> where I: Input {
 
 }
+
+pub trait Output:  Debug {
+
+}
+
+impl <O> Output for Arc<O> where O: Output {}
 
 impl <O> WithId for Arc<O>  where O:WithId + Debug {
     type ID = <O as WithId>::ID;
@@ -18,8 +24,7 @@ impl <O> WithId for Arc<O>  where O:WithId + Debug {
         self.as_ref().id()
     }
 }
-impl <O> Output for Arc<O> where O:Output + Debug {
-}
+
 
 impl Named for (){
 

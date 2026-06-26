@@ -155,11 +155,13 @@ where
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
     B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
+
+    Self::Out: WithId
 {
     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>
     where
         Self: Sized,
-        Self::Out: Data + Sync + Send,
+        Self::Out: WithId + Sync + Send,
     {
         unimplemented!()
     }
@@ -255,6 +257,8 @@ where
     <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
+
+    Self::Out: WithId
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         match &*self {
@@ -272,11 +276,13 @@ where
     <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
+    
+    Self::Out: WithId
 {
     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>
     where
         Self: Sized,
-        Self::Out: Data + Sync + Send
+        Self::Out: Sync + Send
     {
         unimplemented!()
     }
