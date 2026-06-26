@@ -53,7 +53,8 @@ where
     T::Out: Data + WithId + Send + Sync,
 {
 }
-
+/// a Stage is just a function with explicitly defined state, execution context and input so that all three can be adjusted to handle OOM
+/// see ['thoosa_common::runner::oom_handler::Adjusters'] enum
 pub trait Stage: Debug {
     type Ctx: RunCtx;
 
