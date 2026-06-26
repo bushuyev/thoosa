@@ -732,12 +732,11 @@ where
                 ))
             ));
 
-            let output_wrap = track_await(Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
+            let output = track_await(Arc::new(MergeSelectedMotifs::new(&store, &ws, motif_stats)).run(
                 Arc::new(MergeSelectedMotifsInput::new(merge_selected_motifs_args.select_motifs_run_config_ids.clone())),
                 root_ctx.branch(true)
             )).await?;
 
-            let output = track_await(CachedStageOutput::take_data(output_wrap, 0)).await?;
 
             info!("MergeSelectedMotifs done, output={output:?}");
         }

@@ -337,9 +337,6 @@ where
 
         let tho_device_idx = run_context.tho_device_idx();
 
-        if tho_device_idx == 1 {
-
-        }
 
         track_await(run_with_runner(
             &self.adjusters,
