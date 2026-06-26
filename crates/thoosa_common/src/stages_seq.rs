@@ -1,4 +1,4 @@
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, WrappedRunInputStage, WrappedRunOutputStage};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, /*WrappedRunInputStage, WrappedRunOutputStage*/};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::marker::PhantomData;
@@ -15,18 +15,19 @@ use thoosa_shared::{ThoError, ThoosaError};
 use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
+use crate::runner::common::cachable::CachedPurgeOutput;
 
 #[derive(Debug, Named)]
 pub struct ABStage<A, B, C>//TODO rename to Pair/Chained
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
     id: SynKey,
     stage_a: Arc<A>,
@@ -40,12 +41,12 @@ impl <A, B, C> Stage for ABStage<A, B, C>
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 
 {
     type Ctx = C;
@@ -58,12 +59,12 @@ impl<A, B, C> OutId for ABStage<A, B, C>
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID
     {
@@ -76,12 +77,12 @@ impl<A, B, C> ABStage<A, B, C>
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
     pub fn new<I:Into<SynKey>>(id:I, stage_a: Arc<A>, stage_b: Arc<B>) -> ABStage<A, B, C> {
         ABStage {
@@ -97,12 +98,12 @@ impl<A, B, C> WithId for ABStage<A, B, C>
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
     type ID = SynKey;
 
@@ -117,17 +118,16 @@ impl<A, B, C> AsyncStage for ABStage<A, B, C>
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B: WrappedRunInputStage,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-    type RunInput = A::RunInput;
-    type RunOutput = B::RunOutput;
-    async fn run(self: Arc<Self>, input: Self::RunInput, mut ctx: Self::Ctx) -> Result<Self::RunOutput, ThoError> {
+//    // type RunInput = A::RunInput;
+    //  // type RunOutput = B::RunOutput;
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let input_id = A::run_input_id(&input).clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
@@ -149,17 +149,14 @@ impl<A, B, C> Cached for ABStage<A, B, C>
 where
     C:RunCtx + 'static,
 
-    A:Cached<Ctx=C> + WrappedRunOutputStage + OutId + Sync + Send + 'static,
-    for <'i> A::In<'i>: Data + WithId + Send + Sync,
-    A::Out: Data + WithId + Send + Sync + 'static,
+    A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
+    for <'i> A::In<'i>:  WithId + Send + Sync,
+    A::Out: Clone + CachedPurgeOutput + WithId + Send + Sync + 'static,
 
     for <'i> B:Cached<In<'i>=A::Out, Ctx=C> + OutId + Send + Sync + 'static,
-    B: WrappedRunInputStage,
-    B::Out: Data + WithId<ID = SynKey> + Send + Sync + 'static,
-    ABStage<A, B, C>: Stage<Out=B::Out, Ctx=C>,
-    for<'i> <ABStage<A, B, C> as Stage>::In<'i>: WithId + Send + Sync,
+    B::Out: Clone + CachedPurgeOutput + WithId<ID = SynKey> + Send + Sync + 'static,
 {
-    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::RunOutput, ThoosaError>>>>
+    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>
     where
         Self: Sized,
         Self::Out: Data + Sync + Send,
@@ -169,11 +166,11 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Self::RunInput,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Self::RunOutput, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         let mut ctx_c: C = ctx;
-        let output_a: Arc<DevicesWrap<A::Out>> = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx_c.branch(false))).await?;
+        let output_a: A::Out = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx_c.branch(false))).await?;
         track_await(Arc::clone(&self.stage_b).run_cached(output_a, ctx_c.branch(false))).await
     }
 }
@@ -182,8 +179,8 @@ where
 pub enum StageChainOption<A, B>//TODO it's not Chained, rename to Or/AB?
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
+    <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -194,8 +191,8 @@ where
 impl<A, B> Debug for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
+    <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -216,8 +213,8 @@ where
 impl<A, B> Stage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
+    <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -232,19 +229,18 @@ where
 impl<A, B> AsyncStage for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
+    <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
-    B: AsyncStage<RunInput=A::RunInput, RunOutput=A::RunOutput>,
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
-    type RunInput = A::RunInput;
-    type RunOutput = A::RunOutput;
+//    // type RunInput = A::RunInput;
+//     // type RunOutput = A::Out;
     async fn run(
         self: Arc<Self>,
-        input: Self::RunInput,
+        input: Self::In<'static>,
         ctx: <A as Stage>::Ctx,
-    ) -> Result<Self::RunOutput, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         match &*self {
             StageChainOption::Single(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
             StageChainOption::Chained(stage) => track_await(Arc::clone(stage).run_cached(input, ctx)).await,
@@ -255,8 +251,8 @@ where
 impl<A, B> OutId for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
+    <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
@@ -272,14 +268,12 @@ where
 impl<A, B> Cached for StageChainOption<A, B>
 where
     A: Cached + OutId + Send + Sync + Debug + 'static,
-    for<'i> <A as Stage>::In<'i>: Data + WithId + Send + Sync,
-    <A as Stage>::Out: Data + WithId + Send + Sync,
-    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId + Send + Sync + Debug + 'static,
-    B: AsyncStage<RunInput=A::RunInput, RunOutput=A::RunOutput>,
-    StageChainOption<A, B>: Stage<Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx>,
-    for<'i> <StageChainOption<A, B> as Stage>::In<'i>: WithId + Send + Sync,
+    for<'i> <A as Stage>::In<'i>:  WithId + Send + Sync,
+    <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
+
+    B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
 {
-    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::RunOutput, ThoosaError>>>>
+    async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>
     where
         Self: Sized,
         Self::Out: Data + Sync + Send
@@ -289,16 +283,16 @@ where
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Self::RunInput,
+        input: Self::In<'static>,
         ctx: Self::Ctx,
-    ) -> Result<Self::RunOutput, ThoError>
-    where
-        Self: Sized + OutId,
-        for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
-        <Self as Stage>::Out: Send + Sync,
-        <<Self as Stage>::Out as WithId>::ID: 'static,
-        <Self as Stage>::Out: 'static,
-        Self::Out: Data,
+    ) -> Result<Self::Out, ThoError>
+    // where
+    //     Self: Sized + OutId,
+    //     for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
+    //     <Self as Stage>::Out: Send + Sync,
+    //     <<Self as Stage>::Out as WithId>::ID: 'static,
+    //     <Self as Stage>::Out: 'static,
+    //     Self::Out: Data,
     {
         let ctx_a: <A as Stage>::Ctx = ctx;
 

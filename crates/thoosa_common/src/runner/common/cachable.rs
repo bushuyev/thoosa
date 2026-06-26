@@ -234,7 +234,7 @@ where
 pub trait Cached: AsyncStage + Named
 where
     for <'i> Self::In<'i>: WithId + Send + Sync,
-    // Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
+    // Self::In<'static>: AsyncStageRunInput<Self::In<'static>>,
     <Self as Stage>::Out:  WithId + Send + Sync + 'static,//
     // Self::RunOutput: CachedStageOutput<Self::Out>,
 {
@@ -258,8 +258,8 @@ where
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
-        <Self as Stage>::Out:CachedPurgeOutput + Clone + Send + Sync + 'static,
-        <<Self as Stage>::Out as WithId>::ID: 'static
+        <Self as Stage>::Out: CachedPurgeOutput + Clone + Send + Sync + 'static,//CachedPurgeOutput +
+        <<Self as Stage>::Out as WithId>::ID: 'static,
     {
         let key = self.out_id(Self::run_input_id(&input));
         let device_idx = ctx.tho_device_idx();
@@ -441,20 +441,6 @@ where
         &self.id
     }
 }
-
-
-impl <O> WithId for Arc<DevicesWrap<O>>
-where
-    O: WithId + Data + Send + Sync,
-
-{
-    type ID = O::ID;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
-}
-
 
 
 struct TracingWrapper<O, D>

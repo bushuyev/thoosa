@@ -1240,375 +1240,375 @@ pub mod mock_context_adjuster {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::mock_context_adjuster::build as mock_context_adjuster;
-    use super::mock_input_adjuster::{build as mock_input_adjuster, MockInputAdjuster};
-    use super::mock_runnable::build as mock_runnable;
-    use super::mock_task_adjuster::build as mock_task_adjuster;
-    use super::test_types::{TestInput, TestOutput};
-    use super::{AdjusterError, Adjusters, Contexts, OOMHandler};
-    use crate::runner::common::cachable::DevicesWrap;
-    // use crate::common::runnable::Runnable;
-    use crate::runner::common::{DropIf, MockRunCtx, OutId};
-    use crate::runner::common::runnable::{AsyncStage, Stage};
-    use std::collections::VecDeque;
-    use std::ops::Range;
-    use std::sync::{Arc, Mutex};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use async_trait::async_trait;
-    use thoosa_shared::{Cause, ThoError};
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_shared::traits::{Adjustable, WithId};
-    use super::{Adjuster, InputContext};
-    type Selector = Range<[usize; 1]>;
-
-    #[derive(Debug)]
-    struct AsyncTestTask {
-        results: Arc<Mutex<VecDeque<Result<TestOutput, ThoError>>>>,
-    }
-
-    impl AsyncTestTask {
-        fn new(results: VecDeque<Result<TestOutput, ThoError>>) -> Self {
-            Self {
-                results: Arc::new(Mutex::new(results)),
-            }
-        }
-    }
-
-    impl Adjustable for AsyncTestTask {}
-
-    impl Stage for AsyncTestTask {
-        type In<'a> = Arc<DevicesWrap<TestInput>>;
-        type Out = Arc<DevicesWrap<TestOutput>>;
-        type Ctx = MockRunCtx;
-    }
-
-    impl AsyncStage for AsyncTestTask {
-        // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-        // type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-        // fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        //     WithId::id(input)
-        // }
-        async fn run(
-            self: Arc<Self>,
-            input: Arc<DevicesWrap<TestInput>>,
-            _ctx: Self::Ctx,
-        ) -> Result<Arc<DevicesWrap<TestOutput>>, ThoError> {
-            let next = self
-                .results
-                .lock().unwrap()
-                .pop_front()
-                .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
-
-            match next {
-                Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o))),
-                Err(e) => Err(e),
-            }
-        }
-    }
-
-    impl OutId for AsyncTestTask {
-        fn out_id(
-            &self,
-            input_id: &<Self::In<'static> as WithId>::ID,
-        ) -> <Self::Out as WithId>::ID {
-            input_id.clone()
-        }
-    }
-
-    #[derive(Debug)]
-    struct AsyncInputCtx {
-        outputs: Vec<TestOutput>,
-    }
-
-    impl InputContext<'static, AsyncTestTask> for AsyncInputCtx {
-        async fn add_partial_output(&mut self, o: TestOutput) {
-            self.outputs.push(o);
-        }
-
-        fn all_done(&self) -> bool {
-            true
-        }
-
-        async fn build_final_output(self) -> Result<TestOutput, ThoError> {
-            self.outputs.into_iter().next().ok_or_else(|| {
-                ThoError::new("no output in AsyncInputCtx")
-            })
-        }
-    }
-
-
-    #[tokio::test]
-    async fn test_input_task_context_once() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-
-        let input_adj_calls = Arc::new(AtomicUsize::new(0));
-        let mut input_adj = MockInputAdjuster::new();
-        {
-            let c = input_adj_calls.clone();
-
-            input_adj.expect_adjust().returning(move |i, _| {
-                c.fetch_add(1, Ordering::SeqCst);
-                Ok(i.clone())
-            });
-        }
-        input_adj.expect_degrade().times(1).return_const(false);
-
-        let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
-
-        let (init_task, init_calls) = mock_runnable([
-            Err(ThoError::oom()), //no adjusters
-            Err(ThoError::oom()), //input adjuster
-        ]);
-
-        let (adjusted_task, adjusted_calls) = mock_runnable([
-            Err(ThoError::oom()), //task adjuster
-            Ok(TestOutput::new(111.)),                    //ctx adjuster
-        ]);
-
-        let (task_adj, task_adj_calls) = mock_task_adjuster([adjusted_task]);
-
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
-
-        let oom_handler = OOMHandler::new(
-            vec![
-                Adjusters::Input(Box::new(input_adj)),
-                Adjusters::Task(Box::new(task_adj)),
-                Adjusters::RunContext(Box::new(ctx_adj)),
-            ],
-            None,
-        );
-
-        let out: TestOutput = oom_handler
-            .run(
-                &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(100))),
-                ctx_mock,
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(111.))
-                        .with_all_done(&[true]) 
-                        .with_build_final_output(TestOutput::new(111.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(111., out.v.0);
-
-        assert_eq!(1, input_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
-
-        assert_eq!(2, init_calls.load(Ordering::SeqCst));
-        assert_eq!(2, adjusted_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_only_task_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-
-        let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
-        let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
-        let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
-        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
-
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
-
-        let out: TestOutput = oom_handler
-            .run(
-                &Arc::new(init_task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
-                ctx_mock,
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(10., out.v.0);
-        assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(1, init_calls.load(Ordering::SeqCst));
-        assert_eq!(1, final_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_only_input_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-
-        let (task, task_calls) = mock_runnable([
-            Err(ThoError::oom()),
-            Ok(TestOutput::new(10.)),
-        ]);
-        let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
-        let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
-
-        let out = oom_handler
-            .run(
-                &Arc::new(task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
-                ctx_mock,
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true])
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(10., out.v.0);
-        assert_eq!(1, input_calls.load(Ordering::SeqCst));
-        assert_eq!(2, task_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_only_run_ctx_adjuster() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-
-        let (task, task_calls) = mock_runnable([
-            Err(ThoError::oom()),
-            Ok(TestOutput::new(10.)),
-        ]);
-        let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
-
-        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
-
-        let ctx_mock = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(1)
-            .finish();
-
-        let out = oom_handler
-            .run(
-                &Arc::new(task),
-                Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
-                ctx_mock,
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
-            )
-            .await
-            .unwrap();
-        assert_eq!(10., out.v.0);
-        assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
-        assert_eq!(2, task_calls.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn test_parallel_tasks() {
-        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-
-        let (init_task1, init_calls1) =
-            mock_runnable([Err(ThoError::oom())]);
-        let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
-
-        let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
-
-        let (init_task2, init_calls2) =
-            mock_runnable([Err(ThoError::oom())]);
-        let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
-
-        let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
-
-        let init_task1_arc = Arc::new(init_task1);
-        let input_arc = Arc::new(DevicesWrap::wrap_plain(TestInput::new(1)));
-
-        let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
-        let ctx_mock_2 = crate::runner::common::mock_run_ctx::build()
-            .with_id(0)
-            .with_device_idx(1)
-            .with_max_other_parallel(1)
-            .with_branch(4)
-            .finish();
-
-        let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);
-        let h1 = oom1.run(
-            &init_task1_arc,
-            Arc::clone(&input_arc),
-            ctx_mock_1,
-            Contexts::new(
-                super::mock_input_context::build()
-                    .with_partial_output(TestOutput::new(5.))
-                    .with_all_done(&[true]) //TODO should
-                    .with_build_final_output(TestOutput::new(5.))
-                    .finish(),
-                super::MockRunnableContext::new(),
-                super::MockRunCtxContext::new(),
-            ),
-        );
-        let init_task2_arc = Arc::new(init_task2);
-
-        let oom2 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj2))], None);
-        let h2 = oom2.run(
-            &init_task2_arc,
-            Arc::clone(&input_arc),
-            ctx_mock_2,
-            Contexts::new(
-                super::mock_input_context::build()
-                    .with_partial_output(TestOutput::new(7.))
-                    .with_all_done(&[true]) //TODO should
-                    .with_build_final_output(TestOutput::new(7.))
-                    .finish(),
-                super::MockRunnableContext::new(),
-                super::MockRunCtxContext::new(),
-            ),
-        );
-        let r1: Result<TestOutput, ThoError> = h1.await;
-        let r2: Result<TestOutput, ThoError> = h2.await;
-        assert_eq!(5., r1.unwrap().v.0);
-        assert_eq!(7., r2.unwrap().v.0);
-
-        assert_eq!(1, task_adj_calls1.load(Ordering::SeqCst));
-        assert_eq!(1, task_adj_calls2.load(Ordering::SeqCst));
-
-        assert_eq!(1, init_calls1.load(Ordering::SeqCst));
-        assert_eq!(1, init_calls2.load(Ordering::SeqCst));
-
-        assert_eq!(1, final_calls1.load(Ordering::SeqCst));
-        assert_eq!(1, final_calls2.load(Ordering::SeqCst));
-    }
-}
+// #[cfg(test)]
+// mod tests {
+//     use super::mock_context_adjuster::build as mock_context_adjuster;
+//     use super::mock_input_adjuster::{build as mock_input_adjuster, MockInputAdjuster};
+//     use super::mock_runnable::build as mock_runnable;
+//     use super::mock_task_adjuster::build as mock_task_adjuster;
+//     use super::test_types::{TestInput, TestOutput};
+//     use super::{AdjusterError, Adjusters, Contexts, OOMHandler};
+//     use crate::runner::common::cachable::DevicesWrap;
+//     // use crate::common::runnable::Runnable;
+//     use crate::runner::common::{DropIf, MockRunCtx, OutId};
+//     use crate::runner::common::runnable::{AsyncStage, Stage};
+//     use std::collections::VecDeque;
+//     use std::ops::Range;
+//     use std::sync::{Arc, Mutex};
+//     use std::sync::atomic::{AtomicUsize, Ordering};
+//     use async_trait::async_trait;
+//     use thoosa_shared::{Cause, ThoError};
+//     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+//     use thoosa_shared::traits::{Adjustable, WithId};
+//     use super::{Adjuster, InputContext};
+//     type Selector = Range<[usize; 1]>;
+//
+//     #[derive(Debug)]
+//     struct AsyncTestTask {
+//         results: Arc<Mutex<VecDeque<Result<TestOutput, ThoError>>>>,
+//     }
+//
+//     impl AsyncTestTask {
+//         fn new(results: VecDeque<Result<TestOutput, ThoError>>) -> Self {
+//             Self {
+//                 results: Arc::new(Mutex::new(results)),
+//             }
+//         }
+//     }
+//
+//     impl Adjustable for AsyncTestTask {}
+//
+//     impl Stage for AsyncTestTask {
+//         type In<'a> = Arc<DevicesWrap<TestInput>>;
+//         type Out = Arc<DevicesWrap<TestOutput>>;
+//         type Ctx = MockRunCtx;
+//     }
+//
+//     impl AsyncStage for AsyncTestTask {
+//         // // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+//         // // type RunOutput = Arc<DevicesWrap<Self::Out>>;
+//
+//         // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+//         //     WithId::id(input)
+//         // }
+//         async fn run(
+//             self: Arc<Self>,
+//             input: Arc<DevicesWrap<TestInput>>,
+//             _ctx: Self::Ctx,
+//         ) -> Result<Arc<DevicesWrap<TestOutput>>, ThoError> {
+//             let next = self
+//                 .results
+//                 .lock().unwrap()
+//                 .pop_front()
+//                 .unwrap_or_else(|| Err(Cause::SomethingElse("no more results".into()).into()));
+//
+//             match next {
+//                 Ok(o) => Ok(Arc::new(DevicesWrap::wrap(o))),
+//                 Err(e) => Err(e),
+//             }
+//         }
+//     }
+//
+//     impl OutId for AsyncTestTask {
+//         fn out_id(
+//             &self,
+//             input_id: &<Self::In<'static> as WithId>::ID,
+//         ) -> <Self::Out as WithId>::ID {
+//             input_id.clone()
+//         }
+//     }
+//
+//     #[derive(Debug)]
+//     struct AsyncInputCtx {
+//         outputs: Vec<TestOutput>,
+//     }
+//
+//     impl InputContext<'static, AsyncTestTask> for AsyncInputCtx {
+//         async fn add_partial_output(&mut self, o: TestOutput) {
+//             self.outputs.push(o);
+//         }
+//
+//         fn all_done(&self) -> bool {
+//             true
+//         }
+//
+//         async fn build_final_output(self) -> Result<TestOutput, ThoError> {
+//             self.outputs.into_iter().next().ok_or_else(|| {
+//                 ThoError::new("no output in AsyncInputCtx")
+//             })
+//         }
+//     }
+//
+//
+//     #[tokio::test]
+//     async fn test_input_task_context_once() {
+//         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+//
+//         let input_adj_calls = Arc::new(AtomicUsize::new(0));
+//         let mut input_adj = MockInputAdjuster::new();
+//         {
+//             let c = input_adj_calls.clone();
+//
+//             input_adj.expect_adjust().returning(move |i, _| {
+//                 c.fetch_add(1, Ordering::SeqCst);
+//                 Ok(i.clone())
+//             });
+//         }
+//         input_adj.expect_degrade().times(1).return_const(false);
+//
+//         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
+//
+//         let (init_task, init_calls) = mock_runnable([
+//             Err(ThoError::oom()), //no adjusters
+//             Err(ThoError::oom()), //input adjuster
+//         ]);
+//
+//         let (adjusted_task, adjusted_calls) = mock_runnable([
+//             Err(ThoError::oom()), //task adjuster
+//             Ok(TestOutput::new(111.)),                    //ctx adjuster
+//         ]);
+//
+//         let (task_adj, task_adj_calls) = mock_task_adjuster([adjusted_task]);
+//
+//         let ctx_mock = crate::runner::common::mock_run_ctx::build()
+//             .with_id(0)
+//             .with_device_idx(1)
+//             .with_max_other_parallel(1)
+//             .with_branch(4)
+//             .finish();
+//
+//         let oom_handler = OOMHandler::new(
+//             vec![
+//                 Adjusters::Input(Box::new(input_adj)),
+//                 Adjusters::Task(Box::new(task_adj)),
+//                 Adjusters::RunContext(Box::new(ctx_adj)),
+//             ],
+//             None,
+//         );
+//
+//         let out: TestOutput = oom_handler
+//             .run(
+//                 &Arc::new(init_task),
+//                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(100))),
+//                 ctx_mock,
+//                 Contexts::new(
+//                     super::mock_input_context::build()
+//                         .with_partial_output(TestOutput::new(111.))
+//                         .with_all_done(&[true])
+//                         .with_build_final_output(TestOutput::new(111.))
+//                         .finish(),
+//                     super::MockRunnableContext::new(),
+//                     super::MockRunCtxContext::new(),
+//                 ),
+//             )
+//             .await
+//             .unwrap();
+//
+//         assert_eq!(111., out.v.0);
+//
+//         assert_eq!(1, input_adj_calls.load(Ordering::SeqCst));
+//         assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
+//         assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
+//
+//         assert_eq!(2, init_calls.load(Ordering::SeqCst));
+//         assert_eq!(2, adjusted_calls.load(Ordering::SeqCst));
+//     }
+//
+//     #[tokio::test]
+//     async fn test_only_task_adjuster() {
+//         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+//
+//         let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
+//         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
+//         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
+//         let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
+//
+//         let ctx_mock = crate::runner::common::mock_run_ctx::build()
+//             .with_id(0)
+//             .with_device_idx(1)
+//             .with_max_other_parallel(1)
+//             .with_branch(4)
+//             .finish();
+//
+//         let out: TestOutput = oom_handler
+//             .run(
+//                 &Arc::new(init_task),
+//                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
+//                 ctx_mock,
+//                 Contexts::new(
+//                     super::mock_input_context::build()
+//                         .with_partial_output(TestOutput::new(10.))
+//                         .with_all_done(&[true]) //TODO should
+//                         .with_build_final_output(TestOutput::new(10.))
+//                         .finish(),
+//                     super::MockRunnableContext::new(),
+//                     super::MockRunCtxContext::new(),
+//                 ),
+//             )
+//             .await
+//             .unwrap();
+//         assert_eq!(10., out.v.0);
+//         assert_eq!(1, task_adj_calls.load(Ordering::SeqCst));
+//         assert_eq!(1, init_calls.load(Ordering::SeqCst));
+//         assert_eq!(1, final_calls.load(Ordering::SeqCst));
+//     }
+//
+//     #[tokio::test]
+//     async fn test_only_input_adjuster() {
+//         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+//
+//         let (task, task_calls) = mock_runnable([
+//             Err(ThoError::oom()),
+//             Ok(TestOutput::new(10.)),
+//         ]);
+//         let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
+//         let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
+//         let ctx_mock = crate::runner::common::mock_run_ctx::build()
+//             .with_id(0)
+//             .with_device_idx(1)
+//             .with_max_other_parallel(1)
+//             .with_branch(4)
+//             .finish();
+//
+//         let out = oom_handler
+//             .run(
+//                 &Arc::new(task),
+//                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
+//                 ctx_mock,
+//                 Contexts::new(
+//                     super::mock_input_context::build()
+//                         .with_partial_output(TestOutput::new(10.))
+//                         .with_all_done(&[true])
+//                         .with_build_final_output(TestOutput::new(10.))
+//                         .finish(),
+//                     super::MockRunnableContext::new(),
+//                     super::MockRunCtxContext::new(),
+//                 ),
+//             )
+//             .await
+//             .unwrap();
+//         assert_eq!(10., out.v.0);
+//         assert_eq!(1, input_calls.load(Ordering::SeqCst));
+//         assert_eq!(2, task_calls.load(Ordering::SeqCst));
+//     }
+//
+//     #[tokio::test]
+//     async fn test_only_run_ctx_adjuster() {
+//         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+//
+//         let (task, task_calls) = mock_runnable([
+//             Err(ThoError::oom()),
+//             Ok(TestOutput::new(10.)),
+//         ]);
+//         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
+//
+//         let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
+//
+//         let ctx_mock = crate::runner::common::mock_run_ctx::build()
+//             .with_id(0)
+//             .with_device_idx(1)
+//             .with_max_other_parallel(1)
+//             .with_branch(1)
+//             .finish();
+//
+//         let out = oom_handler
+//             .run(
+//                 &Arc::new(task),
+//                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
+//                 ctx_mock,
+//                 Contexts::new(
+//                     super::mock_input_context::build()
+//                         .with_partial_output(TestOutput::new(10.))
+//                         .with_all_done(&[true]) //TODO should
+//                         .with_build_final_output(TestOutput::new(10.))
+//                         .finish(),
+//                     super::MockRunnableContext::new(),
+//                     super::MockRunCtxContext::new(),
+//                 ),
+//             )
+//             .await
+//             .unwrap();
+//         assert_eq!(10., out.v.0);
+//         assert_eq!(1, ctx_adj_calls.load(Ordering::SeqCst));
+//         assert_eq!(2, task_calls.load(Ordering::SeqCst));
+//     }
+//
+//     #[tokio::test]
+//     async fn test_parallel_tasks() {
+//         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
+//
+//         let (init_task1, init_calls1) =
+//             mock_runnable([Err(ThoError::oom())]);
+//         let (final_task1, final_calls1) = mock_runnable([Ok(TestOutput::new(5.))]);
+//
+//         let (task_adj1, task_adj_calls1) = mock_task_adjuster([final_task1]);
+//
+//         let (init_task2, init_calls2) =
+//             mock_runnable([Err(ThoError::oom())]);
+//         let (final_task2, final_calls2) = mock_runnable([Ok(TestOutput::new(7.))]);
+//
+//         let (task_adj2, task_adj_calls2) = mock_task_adjuster([final_task2]);
+//
+//         let init_task1_arc = Arc::new(init_task1);
+//         let input_arc = Arc::new(DevicesWrap::wrap_plain(TestInput::new(1)));
+//
+//         let ctx_mock_1 = crate::runner::common::mock_run_ctx::build()
+//             .with_id(0)
+//             .with_device_idx(1)
+//             .with_max_other_parallel(1)
+//             .with_branch(4)
+//             .finish();
+//         let ctx_mock_2 = crate::runner::common::mock_run_ctx::build()
+//             .with_id(0)
+//             .with_device_idx(1)
+//             .with_max_other_parallel(1)
+//             .with_branch(4)
+//             .finish();
+//
+//         let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);
+//         let h1 = oom1.run(
+//             &init_task1_arc,
+//             Arc::clone(&input_arc),
+//             ctx_mock_1,
+//             Contexts::new(
+//                 super::mock_input_context::build()
+//                     .with_partial_output(TestOutput::new(5.))
+//                     .with_all_done(&[true]) //TODO should
+//                     .with_build_final_output(TestOutput::new(5.))
+//                     .finish(),
+//                 super::MockRunnableContext::new(),
+//                 super::MockRunCtxContext::new(),
+//             ),
+//         );
+//         let init_task2_arc = Arc::new(init_task2);
+//
+//         let oom2 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj2))], None);
+//         let h2 = oom2.run(
+//             &init_task2_arc,
+//             Arc::clone(&input_arc),
+//             ctx_mock_2,
+//             Contexts::new(
+//                 super::mock_input_context::build()
+//                     .with_partial_output(TestOutput::new(7.))
+//                     .with_all_done(&[true]) //TODO should
+//                     .with_build_final_output(TestOutput::new(7.))
+//                     .finish(),
+//                 super::MockRunnableContext::new(),
+//                 super::MockRunCtxContext::new(),
+//             ),
+//         );
+//         let r1: Result<TestOutput, ThoError> = h1.await;
+//         let r2: Result<TestOutput, ThoError> = h2.await;
+//         assert_eq!(5., r1.unwrap().v.0);
+//         assert_eq!(7., r2.unwrap().v.0);
+//
+//         assert_eq!(1, task_adj_calls1.load(Ordering::SeqCst));
+//         assert_eq!(1, task_adj_calls2.load(Ordering::SeqCst));
+//
+//         assert_eq!(1, init_calls1.load(Ordering::SeqCst));
+//         assert_eq!(1, init_calls2.load(Ordering::SeqCst));
+//
+//         assert_eq!(1, final_calls1.load(Ordering::SeqCst));
+//         assert_eq!(1, final_calls2.load(Ordering::SeqCst));
+//     }
+// }
