@@ -234,33 +234,32 @@ where
 pub trait Cached: AsyncStage + Named
 where
     for <'i> Self::In<'i>: WithId + Send + Sync,
-    Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
-    <Self as Stage>::Out: Data + WithId + Send + Sync + 'static,
-    Self::RunOutput: CachedStageOutput<Self::Out>,
+    // Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
+    <Self as Stage>::Out:  WithId + Send + Sync + 'static,//
+    // Self::RunOutput: CachedStageOutput<Self::Out>,
 {
+    fn run_input_id(input: &Self::In<'static>) -> &'static <Self::In<'static> as WithId>::ID {
+        unimplemented!()
+    }
+
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Self::RunOutput, ThoError>>>,
+        Shared<BoxFuture<'static, Result<Self::Out, ThoError>>>,
     >
     where
         Self: Sized,
-        Self::Out: Data + Sync + Send,
-        Self::RunOutput: CachedStageOutput<Self::Out>;
+        Self::Out:  Sync + Send;
 
     async fn run_cached(
         self: Arc<Self>,
-        input: Self::RunInput,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Self::RunOutput, ThoError>
+    ) -> Result<Self::Out, ThoError>
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
-        Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
-        <Self as Stage>::Out: Send + Sync,
-        <<Self as Stage>::Out as WithId>::ID: 'static,
-        <Self as Stage>::Out: 'static,
-        Self::Out: Data, // <Self as Runnable>::Out:Data<Sub= <Self as Runnable>::Out>+CopyToDevice,
-        Self::RunOutput: CachedStageOutput<Self::Out>,
+        <Self as Stage>::Out:CachedPurgeOutput + Clone + Send + Sync + 'static,
+        <<Self as Stage>::Out as WithId>::ID: 'static
     {
         let key = self.out_id(Self::run_input_id(&input));
         let device_idx = ctx.tho_device_idx();
@@ -340,10 +339,6 @@ where
             }
         }
     }
-
-    // fn run_input_id(input: &Self::RunInput) -> &<Self::In<'static> as WithId>::ID {
-    //     unimplemented!()
-    // }
 }
 
 
@@ -446,6 +441,20 @@ where
         &self.id
     }
 }
+
+
+impl <O> WithId for Arc<DevicesWrap<O>>
+where
+    O: WithId + Data + Send + Sync,
+
+{
+    type ID = O::ID;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
 
 
 struct TracingWrapper<O, D>
