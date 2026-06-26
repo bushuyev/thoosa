@@ -118,18 +118,18 @@ impl AStage {
 
 impl Stage for AStage  {
     type Ctx = RunCtxImpl;
-    type In<'a> = AStageInput;
-    type Out = AStageOutput;
+    type In<'a> = Arc<AStageInput>;
+    type Out = Arc<DevicesWrap<AStageOutput>>;
 }
 
 impl AsyncStage for AStage  {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
+    // type RunInput = Arc<Self::In<'static>>;
+    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        WithId::id(input)
-    }
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, _ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+    //     WithId::id(input)
+    // }
+    async fn run(self: Arc<Self>, input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
 
 
         let tensor = match input.token.as_str() {

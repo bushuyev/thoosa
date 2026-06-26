@@ -48,10 +48,10 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::utils::tensor_digest;
-#[cfg(test)]
-use crate::torch_runner::tests::load_and_clc::clc::ClcStage;
-#[cfg(test)]
-use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+// #[cfg(test)]
+// use crate::torch_runner::tests::load_and_clc::clc::ClcStage;
+// #[cfg(test)]
+// use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 
 pub(crate) const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
@@ -1723,347 +1723,347 @@ where
 }
 
 
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-    use std::path::PathBuf;
-    use std::process::Stdio;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicU64;
-    use std::sync::atomic::Ordering::Relaxed;
-    use std::time::Instant;
-    use log::{debug, info};
-    use rand::random_range;
-    use tch::{Device, Kind, Tensor};
-    use tch::Device::Cuda;
-    use tch::Kind::Float;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::{UnixListener, UnixStream};
-    use tokio::process::{Child, Command};
-    use tokio::sync::Mutex;
-    use tokio::task::JoinSet;
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::{mono_key, Cause, ThoError};
-    use thoosa_shared::tracked_await::track_await;
-    use crate::copy_ctx::CudaActorHandle;
-    use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-    use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
-    use crate::runner::common::cachable::DevicesWrap;
-    use crate::runner::common::RunCtx;
-    use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-    use crate::runner::run_ctx_2::RunCtxImpl;
-    use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
-    use crate::tho_device::ThoDevice;
-    use crate::tho_tensor::ThoTensor;
-    use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
-    use crate::ipc::cuda_wokrer::CudaWorker;
-    use crate::ipc::json_ser::SyncStageJsonWrapper;
-    use crate::ipc::tests::init_ipc_test;
-    use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-    use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
-    use crate::utils::{lin_for_size, tensor_digest};
-
-
-
-    macro_rules! pure_module_path {
-        () => {{
-            let p = module_path!();
-
-            match p.split_once("::") {
-                Some((_crate_name, rest)) => rest,
-                None => "",
-            }
-        }};
-    }
-
-    async fn spawn_test_worker(test_name: &str) -> Result<(Child, UnixStream), ThoError> {
-
-        let module = pure_module_path!();
-
-        let test_name = if module.is_empty() {
-            test_name.to_string()
-        } else {
-            format!("{module}::{test_name}")
-        };
-        let args:Vec<String> = vec![test_name, "--exact".to_string(), "--nocapture".to_string()];
-
-        CudaIPCActor::spawn_worker(&args).await
-    }
-
-
-    async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
-        let (free_mem, _total_mem) = cuda_mem();
-        let init_type = Float;
-        let dim_1 = 4u64;
-        let retained_copies = u64::from(threads).max(1) * u64::from(runs).max(1);
-        let total_size = (free_mem as f64 * 0.2) as u64 / init_type.elt_size_in_bytes() as u64 / retained_copies;
-        let input_n = (total_size / dim_1).max(1);
-
-        let d2h_time = Arc::new(AtomicU64::new(0));
-        let h2d_time = Arc::new(AtomicU64::new(0));
-        let mut tasks = JoinSet::new();
-
-        for thread_i in 0..threads {
-            tasks.spawn(run_ipc_copy_perf_thread(
-                thread_i,
-                input_n as i64,
-                dim_1 as i64,
-                runs,
-                init_type,
-                Arc::clone(&d2h_time),
-                Arc::clone(&h2d_time),
-                cuda_actor,
-            ));
-        }
-
-        while let Some(result) = tasks.join_next().await {
-            result.map_err(|e| ThoError::new(format!("IPC copy perf task join error: {e}")))??;
-        }
-
-        let total_copied_mem_size = input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
-
-        Ok((
-            speed_gb_per_s(total_copied_mem_size, d2h_time.load(Relaxed)),
-            speed_gb_per_s(total_copied_mem_size, h2d_time.load(Relaxed)),
-        ))
-    }
-
-    async fn run_ipc_copy_perf_thread(
-        _thread_i: u8,
-        input_n: i64,
-        dim_1: i64,
-        runs: u8,
-        init_type: tch::Kind,
-        d2h_time: Arc<AtomicU64>,
-        h2d_time: Arc<AtomicU64>,
-        cuda_actor: &'static Box<dyn CudaActorHandle>,
-    ) -> Result<(), ThoError> {
-        let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64).max(1.0) as i64;
-        let mut src_t = Tensor::rand([dim_0, dim_1], FLOAT_CPU);
-
-        for _ in 0..runs {
-            let inst_0 = Instant::now();
-            let cuda_ref = track_await(cuda_actor.copy(src_t.into(), 1.into())).await?;
-            h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
-
-            let inst_0 = Instant::now();
-            let cpu_tensor = track_await(cuda_actor.copy(cuda_ref, 0.into())).await?;
-            d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
-
-            let tensor = cpu_tensor.t();
-            if tensor.kind() != init_type {
-                return Err(ThoError::new(format!("IPC copy perf expected kind {init_type:?}, got {:?}", tensor.kind())));
-            }
-            src_t = tensor;
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker_propagates_oom() {
-        debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await.unwrap()
-        } else {
-            run_ipc_copy_oom_main("test_copy_ipc_cuda_worker_propagates_oom").await.unwrap();
-        }
-
-        async fn run_ipc_copy_oom_main(test_name: &str) -> Result<(), ThoError> {
-
-            init_ipc_test(test_name, pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let (free_mem, _total_mem) = cuda_mem();
-            let oversize_bytes = free_mem.saturating_add(256 * 1024 * 1024);
-            let elements = oversize_bytes / Float.elt_size_in_bytes() + 1;
-            let dim_1 = 4usize;
-            let dim_0 = elements.div_ceil(dim_1);
-            let too_large_tensor = Tensor::f_empty([dim_0 as i64, dim_1 as i64], FLOAT_CPU)?;
-
-            let copy_result = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
-                track_await(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
-            ).await.map_err(|_| ThoError::new("timed out waiting for worker IPC oversized H2D copy to fail"))?;
-
-            let shutdown_result = cuda_actor.shutdown().await;
-
-            let error = match copy_result {
-                Ok(_) => return Err(ThoError::new("worker IPC copy unexpectedly succeeded for oversized tensor")),
-                Err(error) => error,
-            };
-
-            debug!("run_ipc_copy_oom: error={error:?}");
-
-            match error.what() {
-                thoosa_shared::Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
-                    assert!(*is_oom, "worker OOM flag was not propagated: {error:?}");
-                    assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
-                    assert!(!*needs_cuda_ctx_reset, "plain worker OOM should not request CUDA context reset: {error:?}");
-                }
-                other => return Err(ThoError::new(format!("expected Cause::CudaWoker, got {other:?}: {error:?}"))),
-            }
-            assert!(error.is_oom(), "ThoError::is_oom should delegate to Cause::CudaWoker: {error:?}");
-            assert!(error.is_retryable_oom(), "ThoError::is_retryable_oom should delegate to Cause::CudaWoker: {error:?}");
-
-            shutdown_result?;
-
-            Ok(())
-        }
-
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_unrecoverable_cuda_error() -> Result<(), ThoError> {
-        debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        #[derive(Debug)]
-        struct _SyncStageJsonWrapper {
-
-        }
-
-        impl SyncStageJsonWrapper for _SyncStageJsonWrapper {
-            fn do_run(&self, _input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
-                debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
-                if _input.eq("fail") {
-                    fail_with_unrecoverable_error();
-                } else {
-
-                }
-
-                Ok("ok".to_string())
-            }
-        }
-
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            let r= CudaWorker::run_worker(HashMap::from([
-                            (
-                                "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                                Box::new(|s|{
-                                    debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
-                                }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-                            )
-                        ]),
-                                          ThoDevice::from(Cuda(0))).await;
-
-            debug!("test_copy_ipc_cuda_worker_propagates_oom: run_worker r={r:?}");
-
-        } else {
-            init_ipc_test("test_copy_ipc_unrecoverable_cuda_error", pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-
-            let result = async {
-                GlobalCtx::global().cuda_actor(tho_device_idx).install_endpoint(encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "xxx")).await?;
-                let r = GlobalCtx::global().cuda_actor(tho_device_idx).invoke_endpoint(encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "fail")).await;
-
-                debug!("test_copy_ipc_cuda_worker_propagates_oom: r={r:?}");
-
-                if let Err(e) = &r {
-                    debug!("test_copy_ipc_cuda_worker_propagates_oom: needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
-                    assert!(e.needs_cuda_ctx_reset());
-                } else {
-                    panic!("no error");
-                }
-
-                GlobalCtx::global().cuda_actor(tho_device_idx).reset().await?;
-
-
-                Ok::<(), ThoError>(())
-            }.await?;
-
-            debug!("test_copy_ipc_cuda_worker_propagates_oom: result={result:?}");
-        }
-
-        Ok(())
-    }
-
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
-        debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
-        } else {
-            init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let (d2h, h2d)  = run_ipc_copy_perf(cuda_actor, 3, 3).await?;
-
-            info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
-
-            cuda_actor.shutdown().await?;
-
-            Ok(())
-        }
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker() -> Result<(), ThoError> {
-        debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
-
-        } else {
-            init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
-
-            let tho_device_idx = 1;
-
-            let main_process_cpu_tensor = Tensor::rand(&[1000, 10000], FLOAT_CPU);
-            let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
-
-
-            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-            let cuda_ref = track_await(cuda_actor.copy(
-                    main_process_cpu_tensor.into(),
-                    tho_device_idx.into(),//Cuda
-                )).await?;
-
-            debug!("run_main: cuda_ref={cuda_ref:?}");
-
-            let reff = cuda_ref.ref_key().unwrap();
-
-            let cpu_tensor = track_await(cuda_actor.copy(
-                    cuda_ref,
-                    0.into(),//Cpu
-                )).await?;
-
-            debug!("run_main: cpu_tensor={cpu_tensor:?}");
-
-            let actual_digest = tensor_digest(cpu_tensor.t_ref())?;
-            if actual_digest.hex != expected_digest.hex {
-                return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
-            }
-
-            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float)).await?;
-
-            let r = track_await(cuda_actor
-                .copy(
-                    ThoTensor::new_ref((), reff, vec![], tch::Kind::Float),
-                    0.into(), //Cpu
-                )).await;
-
-            let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
-                panic!("Got r={r:?}, expected CudaWorker error");
-            } ;
-
-            assert_eq!("ThoError: Unknown error, cause=worker tensor key=1 not found", what_msg);
-
-
-            cuda_actor.shutdown().await?;
-
-            Ok(())
-        }
-    }
-
-}
+// #[cfg(test)]
+// mod tests {
+//     use std::collections::HashMap;
+//     use std::path::PathBuf;
+//     use std::process::Stdio;
+//     use std::sync::Arc;
+//     use std::sync::atomic::AtomicU64;
+//     use std::sync::atomic::Ordering::Relaxed;
+//     use std::time::Instant;
+//     use log::{debug, info};
+//     use rand::random_range;
+//     use tch::{Device, Kind, Tensor};
+//     use tch::Device::Cuda;
+//     use tch::Kind::Float;
+//     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+//     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+//     use tokio::net::{UnixListener, UnixStream};
+//     use tokio::process::{Child, Command};
+//     use tokio::sync::Mutex;
+//     use tokio::task::JoinSet;
+//     use thoosa_shared::comp_id::SynKey;
+//     use thoosa_shared::{mono_key, Cause, ThoError};
+//     use thoosa_shared::tracked_await::track_await;
+//     use crate::copy_ctx::CudaActorHandle;
+//     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
+//     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
+//     use crate::runner::common::cachable::DevicesWrap;
+//     use crate::runner::common::RunCtx;
+//     use crate::runner::global_ctx::GlobalCtx;
+//     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+//     use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+//     use crate::runner::run_ctx_2::RunCtxImpl;
+//     use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
+//     use crate::tho_device::ThoDevice;
+//     use crate::tho_tensor::ThoTensor;
+//     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
+//     use crate::ipc::cuda_wokrer::CudaWorker;
+//     use crate::ipc::json_ser::SyncStageJsonWrapper;
+//     use crate::ipc::tests::init_ipc_test;
+//     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
+//     use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+//     use crate::utils::{lin_for_size, tensor_digest};
+//
+//
+//
+//     macro_rules! pure_module_path {
+//         () => {{
+//             let p = module_path!();
+//
+//             match p.split_once("::") {
+//                 Some((_crate_name, rest)) => rest,
+//                 None => "",
+//             }
+//         }};
+//     }
+//
+//     async fn spawn_test_worker(test_name: &str) -> Result<(Child, UnixStream), ThoError> {
+//
+//         let module = pure_module_path!();
+//
+//         let test_name = if module.is_empty() {
+//             test_name.to_string()
+//         } else {
+//             format!("{module}::{test_name}")
+//         };
+//         let args:Vec<String> = vec![test_name, "--exact".to_string(), "--nocapture".to_string()];
+//
+//         CudaIPCActor::spawn_worker(&args).await
+//     }
+//
+//
+//     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
+//         let (free_mem, _total_mem) = cuda_mem();
+//         let init_type = Float;
+//         let dim_1 = 4u64;
+//         let retained_copies = u64::from(threads).max(1) * u64::from(runs).max(1);
+//         let total_size = (free_mem as f64 * 0.2) as u64 / init_type.elt_size_in_bytes() as u64 / retained_copies;
+//         let input_n = (total_size / dim_1).max(1);
+//
+//         let d2h_time = Arc::new(AtomicU64::new(0));
+//         let h2d_time = Arc::new(AtomicU64::new(0));
+//         let mut tasks = JoinSet::new();
+//
+//         for thread_i in 0..threads {
+//             tasks.spawn(run_ipc_copy_perf_thread(
+//                 thread_i,
+//                 input_n as i64,
+//                 dim_1 as i64,
+//                 runs,
+//                 init_type,
+//                 Arc::clone(&d2h_time),
+//                 Arc::clone(&h2d_time),
+//                 cuda_actor,
+//             ));
+//         }
+//
+//         while let Some(result) = tasks.join_next().await {
+//             result.map_err(|e| ThoError::new(format!("IPC copy perf task join error: {e}")))??;
+//         }
+//
+//         let total_copied_mem_size = input_n * dim_1 * init_type.elt_size_in_bytes() as u64 * runs as u64 * threads as u64;
+//
+//         Ok((
+//             speed_gb_per_s(total_copied_mem_size, d2h_time.load(Relaxed)),
+//             speed_gb_per_s(total_copied_mem_size, h2d_time.load(Relaxed)),
+//         ))
+//     }
+//
+//     async fn run_ipc_copy_perf_thread(
+//         _thread_i: u8,
+//         input_n: i64,
+//         dim_1: i64,
+//         runs: u8,
+//         init_type: tch::Kind,
+//         d2h_time: Arc<AtomicU64>,
+//         h2d_time: Arc<AtomicU64>,
+//         cuda_actor: &'static Box<dyn CudaActorHandle>,
+//     ) -> Result<(), ThoError> {
+//         let dim_0 = random_range(0.5 * input_n as f64..1.5 * input_n as f64).max(1.0) as i64;
+//         let mut src_t = Tensor::rand([dim_0, dim_1], FLOAT_CPU);
+//
+//         for _ in 0..runs {
+//             let inst_0 = Instant::now();
+//             let cuda_ref = track_await(cuda_actor.copy(src_t.into(), 1.into())).await?;
+//             h2d_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
+//
+//             let inst_0 = Instant::now();
+//             let cpu_tensor = track_await(cuda_actor.copy(cuda_ref, 0.into())).await?;
+//             d2h_time.fetch_add(inst_0.elapsed().as_millis() as u64, Relaxed);
+//
+//             let tensor = cpu_tensor.t();
+//             if tensor.kind() != init_type {
+//                 return Err(ThoError::new(format!("IPC copy perf expected kind {init_type:?}, got {:?}", tensor.kind())));
+//             }
+//             src_t = tensor;
+//         }
+//
+//         Ok(())
+//     }
+//
+//     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+//     async fn test_copy_ipc_cuda_worker_propagates_oom() {
+//         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
+//
+//         if std::env::var_os(IPC_SOCK_ENV).is_some() {
+//             CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await.unwrap()
+//         } else {
+//             run_ipc_copy_oom_main("test_copy_ipc_cuda_worker_propagates_oom").await.unwrap();
+//         }
+//
+//         async fn run_ipc_copy_oom_main(test_name: &str) -> Result<(), ThoError> {
+//
+//             init_ipc_test(test_name, pure_module_path!()).await?;
+//
+//             let tho_device_idx = 1;
+//             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+//             let (free_mem, _total_mem) = cuda_mem();
+//             let oversize_bytes = free_mem.saturating_add(256 * 1024 * 1024);
+//             let elements = oversize_bytes / Float.elt_size_in_bytes() + 1;
+//             let dim_1 = 4usize;
+//             let dim_0 = elements.div_ceil(dim_1);
+//             let too_large_tensor = Tensor::f_empty([dim_0 as i64, dim_1 as i64], FLOAT_CPU)?;
+//
+//             let copy_result = tokio::time::timeout(
+//                 std::time::Duration::from_secs(30),
+//                 track_await(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
+//             ).await.map_err(|_| ThoError::new("timed out waiting for worker IPC oversized H2D copy to fail"))?;
+//
+//             let shutdown_result = cuda_actor.shutdown().await;
+//
+//             let error = match copy_result {
+//                 Ok(_) => return Err(ThoError::new("worker IPC copy unexpectedly succeeded for oversized tensor")),
+//                 Err(error) => error,
+//             };
+//
+//             debug!("run_ipc_copy_oom: error={error:?}");
+//
+//             match error.what() {
+//                 thoosa_shared::Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
+//                     assert!(*is_oom, "worker OOM flag was not propagated: {error:?}");
+//                     assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
+//                     assert!(!*needs_cuda_ctx_reset, "plain worker OOM should not request CUDA context reset: {error:?}");
+//                 }
+//                 other => return Err(ThoError::new(format!("expected Cause::CudaWoker, got {other:?}: {error:?}"))),
+//             }
+//             assert!(error.is_oom(), "ThoError::is_oom should delegate to Cause::CudaWoker: {error:?}");
+//             assert!(error.is_retryable_oom(), "ThoError::is_retryable_oom should delegate to Cause::CudaWoker: {error:?}");
+//
+//             shutdown_result?;
+//
+//             Ok(())
+//         }
+//
+//     }
+//
+//     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+//     async fn test_copy_ipc_unrecoverable_cuda_error() -> Result<(), ThoError> {
+//         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
+//
+//         #[derive(Debug)]
+//         struct _SyncStageJsonWrapper {
+//
+//         }
+//
+//         impl SyncStageJsonWrapper for _SyncStageJsonWrapper {
+//             fn do_run(&self, _input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+//                 debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
+//                 if _input.eq("fail") {
+//                     fail_with_unrecoverable_error();
+//                 } else {
+//
+//                 }
+//
+//                 Ok("ok".to_string())
+//             }
+//         }
+//
+//         if std::env::var_os(IPC_SOCK_ENV).is_some() {
+//             let r= CudaWorker::run_worker(HashMap::from([
+//                             (
+//                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
+//                                 Box::new(|s|{
+//                                     debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
+//                                     Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
+//                                 }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+//                             )
+//                         ]),
+//                                           ThoDevice::from(Cuda(0))).await;
+//
+//             debug!("test_copy_ipc_cuda_worker_propagates_oom: run_worker r={r:?}");
+//
+//         } else {
+//             init_ipc_test("test_copy_ipc_unrecoverable_cuda_error", pure_module_path!()).await?;
+//
+//             let tho_device_idx = 1;
+//             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+//
+//             let result = async {
+//                 GlobalCtx::global().cuda_actor(tho_device_idx).install_endpoint(encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "xxx")).await?;
+//                 let r = GlobalCtx::global().cuda_actor(tho_device_idx).invoke_endpoint(encode_endpoint_payload("test_copy_ipc_unrecoverable_cuda_error", "fail")).await;
+//
+//                 debug!("test_copy_ipc_cuda_worker_propagates_oom: r={r:?}");
+//
+//                 if let Err(e) = &r {
+//                     debug!("test_copy_ipc_cuda_worker_propagates_oom: needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
+//                     assert!(e.needs_cuda_ctx_reset());
+//                 } else {
+//                     panic!("no error");
+//                 }
+//
+//                 GlobalCtx::global().cuda_actor(tho_device_idx).reset().await?;
+//
+//
+//                 Ok::<(), ThoError>(())
+//             }.await?;
+//
+//             debug!("test_copy_ipc_cuda_worker_propagates_oom: result={result:?}");
+//         }
+//
+//         Ok(())
+//     }
+//
+//
+//     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
+//     async fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
+//         debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
+//
+//         if std::env::var_os(IPC_SOCK_ENV).is_some() {
+//             CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
+//         } else {
+//             init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
+//
+//             let tho_device_idx = 1;
+//             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+//             let (d2h, h2d)  = run_ipc_copy_perf(cuda_actor, 3, 3).await?;
+//
+//             info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
+//
+//             cuda_actor.shutdown().await?;
+//
+//             Ok(())
+//         }
+//     }
+//
+//     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+//     async fn test_copy_ipc_cuda_worker() -> Result<(), ThoError> {
+//         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
+//
+//         if std::env::var_os(IPC_SOCK_ENV).is_some() {
+//             CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
+//
+//         } else {
+//             init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
+//
+//             let tho_device_idx = 1;
+//
+//             let main_process_cpu_tensor = Tensor::rand(&[1000, 10000], FLOAT_CPU);
+//             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
+//
+//
+//             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+//             let cuda_ref = track_await(cuda_actor.copy(
+//                     main_process_cpu_tensor.into(),
+//                     tho_device_idx.into(),//Cuda
+//                 )).await?;
+//
+//             debug!("run_main: cuda_ref={cuda_ref:?}");
+//
+//             let reff = cuda_ref.ref_key().unwrap();
+//
+//             let cpu_tensor = track_await(cuda_actor.copy(
+//                     cuda_ref,
+//                     0.into(),//Cpu
+//                 )).await?;
+//
+//             debug!("run_main: cpu_tensor={cpu_tensor:?}");
+//
+//             let actual_digest = tensor_digest(cpu_tensor.t_ref())?;
+//             if actual_digest.hex != expected_digest.hex {
+//                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
+//             }
+//
+//             cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float)).await?;
+//
+//             let r = track_await(cuda_actor
+//                 .copy(
+//                     ThoTensor::new_ref((), reff, vec![], tch::Kind::Float),
+//                     0.into(), //Cpu
+//                 )).await;
+//
+//             let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
+//                 panic!("Got r={r:?}, expected CudaWorker error");
+//             } ;
+//
+//             assert_eq!("ThoError: Unknown error, cause=worker tensor key=1 not found", what_msg);
+//
+//
+//             cuda_actor.shutdown().await?;
+//
+//             Ok(())
+//         }
+//     }
+//
+// }

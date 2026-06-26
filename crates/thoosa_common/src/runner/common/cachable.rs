@@ -22,6 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
+use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
@@ -234,8 +235,8 @@ where
 pub trait Cached: AsyncStage + Named
 where
     for <'i> Self::In<'i>: WithId + Send + Sync,
-    // Self::RunInput: AsyncStageRunInput<Self::In<'static>>,
-    <Self as Stage>::Out:  WithId + Send + Sync + 'static,//
+    // Self::In<'static>: AsyncStageRunInput<Self::In<'static>>,
+    <Self as Stage>::Out: CachedPurgeOutput +  WithId + Send + Sync + 'static,//
     // Self::RunOutput: CachedStageOutput<Self::Out>,
 {
     fn run_input_id(input: &Self::In<'static>) -> &'static <Self::In<'static> as WithId>::ID {
@@ -258,8 +259,8 @@ where
     where
         Self: Sized + OutId,
         for<'a> <Self as Stage>::In<'a>: WithId + Send + Sync,
-        <Self as Stage>::Out:CachedPurgeOutput + Clone + Send + Sync + 'static,
-        <<Self as Stage>::Out as WithId>::ID: 'static
+        <Self as Stage>::Out: CachedPurgeOutput + Clone + Send + Sync + 'static,//CachedPurgeOutput +
+        <<Self as Stage>::Out as WithId>::ID: 'static,
     {
         let key = self.out_id(Self::run_input_id(&input));
         let device_idx = ctx.tho_device_idx();
@@ -443,19 +444,11 @@ where
 }
 
 
-impl <O> WithId for Arc<DevicesWrap<O>>
+impl  <O> Output for DevicesWrap<O>
 where
-    O: WithId + Data + Send + Sync,
+    O: WithId + Data + Send + Sync + Output {
 
-{
-    type ID = O::ID;
-
-    fn id(&self) -> &Self::ID {
-        &self.id
-    }
 }
-
-
 
 struct TracingWrapper<O, D>
 where
