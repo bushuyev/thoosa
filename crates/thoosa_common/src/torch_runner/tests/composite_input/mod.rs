@@ -9,15 +9,17 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
+// use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
 use crate::torch_runner::tests::composite_input::loader_a::AStageInput;
 use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
-use crate::torch_runner::tests::load_and_clc::LoadAndClcStage;
+// use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
+// use crate::torch_runner::tests::load_and_clc::LoadAndClcStage;
 
 pub mod loader_a;
 pub mod loader_b;
 pub mod ab_clc;
 pub mod dims;
-
+//
 pub const AB_CLC_STAGE_ID:u32 = 0;
 pub const A_STAGE_ID:u32 = 1;
 pub const B_STAGE_ID:u32 = 2;
@@ -46,9 +48,9 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
 
 pub(crate) async fn run_ab_clc_with_stage<S, F>(ab_stage: Arc<ABClcStage<S>>, num_calls: F) -> Result<(), ThoError>
 where
-    for<'a> ABClcStage<S>: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = ABClcStageOutput>,
-    ABClcStage<S>: crate::runner::common::runnable::AsyncStage<RunInput = ABClcStageInput, RunOutput = Arc<DevicesWrap<ABClcStageOutput>>>,
-    ABClcStage<S>: Cached + crate::runner::common::OutId,
+    for<'a> ABClcStage<S>: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = Arc<DevicesWrap<ABClcStageOutput>>>,
+    // ABClcStage<S>: crate::runner::common::runnable::AsyncStage<In<'static> = Arc<ABClcStageInput>>,
+    // ABClcStage<S>: Cached + crate::runner::common::OutId,
     S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
     S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
     for<'f> S: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
@@ -63,6 +65,7 @@ where
         ),
         ctx.branch(false)
     ).await?;
+
 
     let value = with_data!(ctx.branch(false), out; |ctx, out:&ABClcStageOutput|{
         Ok(out.value)
@@ -87,6 +90,7 @@ where
     let value = with_data!(ctx, out; |ctx, out:&ABClcStageOutput|{
         Ok(out.value)
     })?;
+
 
     debug!("test_ab_clc: value={value:?}");
 

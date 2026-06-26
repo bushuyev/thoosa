@@ -24,7 +24,7 @@ where
 {
 }
 
-// pub trait WrappedRunInputStage: AsyncStage<RunInput = WrappedStageRunInput<Self>>
+// pub trait WrappedRunInputStage: AsyncStage<In<'static> = WrappedStageRunInput<Self>>
 // where
 //     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
 //     Self::Out: Data + WithId + Send + Sync,
@@ -33,7 +33,7 @@ where
 
 // impl<T> WrappedRunInputStage for T
 // where
-//     T: AsyncStage<RunInput = WrappedStageRunInput<T>>,
+//     T: AsyncStage<In<'static> = WrappedStageRunInput<T>>,
 //     for<'a> T::In<'a>: Data + WithId + Send + Sync,
 //     T::Out: Data + WithId + Send + Sync,
 // {
@@ -67,11 +67,11 @@ pub trait Stage: Debug {
 
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
-        for <'a> Self::In<'a>: WithId + Send + Sync,
-        Self::Out: Data + WithId + Send + Sync,
+        for <'a> Self::In<'a>:  Send + Sync,
+        Self::Out: Send + Sync,
 {
-    // type RunInput: AsyncStageRunInput<Self::In<'static>>;
-    // type RunOutput: CachedStageOutput<Self::Out>;
+    // // type RunInput: AsyncStageRunInput<Self::In<'static>>;
+    // // type RunOutput: CachedStageOutput<Self::Out>;
 
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
