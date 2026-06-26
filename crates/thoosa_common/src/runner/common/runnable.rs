@@ -24,35 +24,35 @@ where
 {
 }
 
-pub trait WrappedRunInputStage: AsyncStage<RunInput = WrappedStageRunInput<Self>>
-where
-    for<'a> Self::In<'a>: Data + WithId + Send + Sync,
-    Self::Out: Data + WithId + Send + Sync,
-{
-}
+// pub trait WrappedRunInputStage: AsyncStage<RunInput = WrappedStageRunInput<Self>>
+// where
+//     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
+//     Self::Out: Data + WithId + Send + Sync,
+// {
+// }
 
-impl<T> WrappedRunInputStage for T
-where
-    T: AsyncStage<RunInput = WrappedStageRunInput<T>>,
-    for<'a> T::In<'a>: Data + WithId + Send + Sync,
-    T::Out: Data + WithId + Send + Sync,
-{
-}
+// impl<T> WrappedRunInputStage for T
+// where
+//     T: AsyncStage<RunInput = WrappedStageRunInput<T>>,
+//     for<'a> T::In<'a>: Data + WithId + Send + Sync,
+//     T::Out: Data + WithId + Send + Sync,
+// {
+// }
 
-pub trait WrappedRunOutputStage: AsyncStage<RunOutput = WrappedStageRunOutput<Self>>
-where
-    for<'a> Self::In<'a>: Data + WithId + Send + Sync,
-    Self::Out: Data + WithId + Send + Sync,
-{
-}
+// pub trait WrappedRunOutputStage: AsyncStage<RunOutput = WrappedStageRunOutput<Self>>
+// where
+//     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
+//     Self::Out: Data + WithId + Send + Sync,
+// {
+// }
 
-impl<T> WrappedRunOutputStage for T
-where
-    T: AsyncStage<RunOutput = WrappedStageRunOutput<T>>,
-    for<'a> T::In<'a>: Data + WithId + Send + Sync,
-    T::Out: Data + WithId + Send + Sync,
-{
-}
+// impl<T> WrappedRunOutputStage for T
+// where
+//     T: AsyncStage<RunOutput = WrappedStageRunOutput<T>>,
+//     for<'a> T::In<'a>: Data + WithId + Send + Sync,
+//     T::Out: Data + WithId + Send + Sync,
+// {
+// }
 /// a Stage is just a function with explicitly defined state, execution context and input so that all three can be adjusted to handle OOM
 /// see ['thoosa_common::runner::oom_handler::Adjusters'] enum
 pub trait Stage: Debug {
@@ -70,17 +70,14 @@ where
         for <'a> Self::In<'a>: WithId + Send + Sync,
         Self::Out: Data + WithId + Send + Sync,
 {
-    type RunInput: AsyncStageRunInput<Self::In<'static>>;
-    type RunOutput: CachedStageOutput<Self::Out>;
+    // type RunInput: AsyncStageRunInput<Self::In<'static>>;
+    // type RunOutput: CachedStageOutput<Self::Out>;
 
-    fn run_input_id(input: &Self::RunInput) -> &<Self::In<'static> as WithId>::ID {
-        unimplemented!()
-    }
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
     //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
     // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
-    fn run(self: Arc<Self>, _input: Self::RunInput, _ctx: Self::Ctx) -> impl Future<Output = Result<Self::RunOutput, ThoError>> + Send
+    fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send
 
     {
         async {
