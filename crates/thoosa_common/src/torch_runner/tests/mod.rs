@@ -2,7 +2,7 @@
 
 #[cfg(test)]
 // pub(crate) mod model_test;
-// pub mod load_and_clc;
+pub mod load_and_clc;
 pub mod composite_input;
 
 #[ctor::ctor]
