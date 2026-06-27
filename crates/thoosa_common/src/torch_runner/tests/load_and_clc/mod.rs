@@ -136,7 +136,7 @@ pub(crate) struct LoadAndClcStage {
 
 impl Stage for LoadAndClcStage {
     type In<'a> = LoaderInput;
-    type Out = ThoTensor<ClcStageOutput, SynKey>;
+    type Out = Arc<DevicesWrap<ThoTensor<ClcStageOutput, SynKey>>>;
     type Ctx = RunCtxImpl;
 }
 
@@ -145,17 +145,17 @@ impl AsyncStage for LoadAndClcStage {
     // type RunInput = Arc<Self::In<'static>>;
     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        WithId::id(input)
-    }
+    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+    //     WithId::id(input)
+    // }
     async fn run(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         let ctx_for_loader = ctx.branch(false);
         let loaded = Arc::clone(&self.loader)
-            .run_cached(Arc::clone(&input), ctx_for_loader)
+            .run_cached(input, ctx_for_loader)
             .await?;
 
         let loaded_id = loaded.id().clone();
@@ -193,10 +193,10 @@ impl AsyncStage for LoadAndClcStage {
 }
 
 #[async_trait]
-impl Cached for LoadAndClcStage {
+impl Cached for LoadAndClcStage {//for test only, normally should be implemented with Derive(Cached)
     async fn cache() -> &'static DashMap<
         <<Self as Stage>::Out as WithId>::ID,
-        Shared<BoxFuture<'static, Result<Arc<DevicesWrap<Self::Out>>, ThoError>>>,
+        Shared<BoxFuture<'static, Result<Self::Out, ThoError>>>,
     >
     where
         Self: Sized,
@@ -246,7 +246,7 @@ impl LoadAndClcStage {
         }
     }
 }
-// //////////////////////////////
+//////////////////////////////
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_load_tensor_cuda_to_cuda() -> Result<(), ThoError> {
@@ -295,7 +295,7 @@ async fn do_test_loaded(
 
 
     let loaded_tensor_0_0 = Arc::clone(&loader).run_cached(
-        Arc::new("resource_1".into()),
+        "resource_1".into(),
         ctx_device_0.branch(false),
     ).await?;
 
@@ -322,7 +322,7 @@ async fn do_test_loaded(
 
     let _loaded_tensor_0_1 = Arc::clone(&loader)
         .run_cached(
-            Arc::clone(&Arc::new("resource_1".into())),
+            "resource_1".into(),
             ctx_device_0.branch(false),
         )
         .await?;
@@ -741,7 +741,7 @@ async fn heavy_test_purge_gpu_with_lock() -> Result<(), ThoError> {
 
         Arc::clone(&load_and_mut)
             .run_cached(
-                Arc::new(res.into()),
+                res.into(),
                 ctx_device.write().branch(false),
             )
             .await?;
@@ -887,7 +887,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     let multed = Arc::clone(&load_and_mut)
         .run_cached(
-            Arc::new("resource_1".into()),
+            "resource_1".into(),
             ctx_device.write().branch(false),
         )
         .await?;

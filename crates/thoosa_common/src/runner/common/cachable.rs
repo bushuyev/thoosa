@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
-use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
@@ -447,6 +447,13 @@ where
     O: WithId + Data + Send + Sync + Output {
 
 }
+
+impl  <O> Input for DevicesWrap<O>
+where
+    O: WithId + Data + Send + Sync + Input {
+
+}
+
 
 struct TracingWrapper<O, D>
 where
