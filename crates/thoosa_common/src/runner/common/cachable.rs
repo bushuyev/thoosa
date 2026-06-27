@@ -262,7 +262,7 @@ where
         <Self as Stage>::Out: CachedPurgeOutput + Clone + Send + Sync + 'static,//CachedPurgeOutput +
         <<Self as Stage>::Out as WithId>::ID: 'static,
     {
-        let key = self.out_id(Self::run_input_id(&input));
+        let key = self.out_id(input.id());
         let device_idx = ctx.tho_device_idx();
 
         debug!("Cached::run_cached: key={key:?} device_idx={device_idx} ctx.id={:?}", ctx.id());
