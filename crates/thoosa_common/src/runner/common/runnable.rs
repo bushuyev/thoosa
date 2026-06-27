@@ -63,6 +63,7 @@ pub trait SyncStage: Stage + Debug {
     }
 }
 
+//for switching between ipc proxy and local
 pub trait DynSyncStage<I, O, C>: Debug + Send + Sync + 'static
 where
     I: Input + WithId + 'static,

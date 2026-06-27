@@ -680,7 +680,6 @@ impl WithId for MotifStatsOutput {
 
 impl Output for MotifStatsOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for MotifStatsOutput {}
 
 #[derive(Debug, Named)]
 struct MotifStatsSyncStage<C>

@@ -111,7 +111,7 @@ where
 {
     type Ctx = C;
     type In<'a> = LoadMotifNetInput;
-    type Out = DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>;
+    type Out = Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>;
 }
 
 // #[async_trait]
@@ -119,15 +119,15 @@ impl <C> AsyncStage for LoadMotifNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Self::In<'static>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
+    // type RunInput = Self::In<'static>;
+    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
+    // fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+    //     thoosa_shared::traits::WithId::id(input)
+    // }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
-    async fn run(self: Arc<Self>, input: LoadMotifNetInput, ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: LoadMotifNetInput, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
         // let input = track_await(input.load_from_any_device_(0)).await?;//TODO clone_from_cpu

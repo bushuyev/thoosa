@@ -211,7 +211,6 @@ impl WithId for PurgeModelsOutput {
 
 impl Output for PurgeModelsOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for PurgeModelsOutput {}
 
 #[derive(Debug)]
 pub struct PurgeModelsStage<C>

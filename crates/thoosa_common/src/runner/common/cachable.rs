@@ -63,9 +63,7 @@ where
     }
 }
 
-pub trait PlainCachedOutput: Data + WithId + Send + Sync + 'static {}
 
-impl PlainCachedOutput for () {}
 
 
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
@@ -126,7 +124,7 @@ where
 
 impl<O> CachedPurgeOutput for Arc<O>
 where
-    O: PlainCachedOutput,
+    O: CachedPurgeOutput
 {
     fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>> {
         async { Ok(()) }.boxed()
