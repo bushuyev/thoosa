@@ -128,7 +128,7 @@ where
 //    // type RunInput = A::RunInput;
     //  // type RunOutput = B::RunOutput;
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-        let input_id = A::run_input_id(&input).clone();
+        let input_id = input.id().clone();
         debug!("ABStage::run: input.id={input_id:?} ctx={ctx:?}");
 
         let output_a = track_await(Arc::clone(&self.stage_a).run_cached(input, ctx.branch(false))).await?;
@@ -276,7 +276,7 @@ where
     <A as Stage>::Out: Clone + CachedPurgeOutput + WithId + Send + Sync,
 
     B: for<'i> Cached<In<'i>=<A as Stage>::In<'i>, Out=<A as Stage>::Out, Ctx=<A as Stage>::Ctx > + OutId  + Send + Sync + Debug + 'static,
-    
+
     Self::Out: WithId
 {
     async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Self::Out, ThoosaError>>>>

@@ -219,12 +219,7 @@ where
     S::Ctx: Adjustable + Send + Sync + 'static,
     for<'f> S: Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
-    // type RunInput = ABClcStageInput;
-    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-    //     WithId::id(input)
-    // }
 
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let a_out = Arc::clone(&self.a_stage).run_cached(Arc::clone(&input.from_a), ctx.branch(false)).await?;
