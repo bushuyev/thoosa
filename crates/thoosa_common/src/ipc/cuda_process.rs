@@ -1723,61 +1723,61 @@ where
 }
 
 
-// #[cfg(test)]
-// mod tests {
-//     use std::collections::HashMap;
-//     use std::path::PathBuf;
-//     use std::process::Stdio;
-//     use std::sync::Arc;
-//     use std::sync::atomic::AtomicU64;
-//     use std::sync::atomic::Ordering::Relaxed;
-//     use std::time::Instant;
-//     use log::{debug, info};
-//     use rand::random_range;
-//     use tch::{Device, Kind, Tensor};
-//     use tch::Device::Cuda;
-//     use tch::Kind::Float;
-//     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-//     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-//     use tokio::net::{UnixListener, UnixStream};
-//     use tokio::process::{Child, Command};
-//     use tokio::sync::Mutex;
-//     use tokio::task::JoinSet;
-//     use thoosa_shared::comp_id::SynKey;
-//     use thoosa_shared::{mono_key, Cause, ThoError};
-//     use thoosa_shared::tracked_await::track_await;
-//     use crate::copy_ctx::CudaActorHandle;
-//     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
-//     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
-//     use crate::runner::common::cachable::DevicesWrap;
-//     use crate::runner::common::RunCtx;
-//     use crate::runner::global_ctx::GlobalCtx;
-//     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-//     use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
-//     use crate::runner::run_ctx_2::RunCtxImpl;
-//     use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
-//     use crate::tho_device::ThoDevice;
-//     use crate::tho_tensor::ThoTensor;
-//     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
-//     use crate::ipc::cuda_wokrer::CudaWorker;
-//     use crate::ipc::json_ser::SyncStageJsonWrapper;
-//     use crate::ipc::tests::init_ipc_test;
-//     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
-//     use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
-//     use crate::utils::{lin_for_size, tensor_digest};
-//
-//
-//
-//     macro_rules! pure_module_path {
-//         () => {{
-//             let p = module_path!();
-//
-//             match p.split_once("::") {
-//                 Some((_crate_name, rest)) => rest,
-//                 None => "",
-//             }
-//         }};
-//     }
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::process::Stdio;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::time::Instant;
+    use log::{debug, info};
+    use rand::random_range;
+    use tch::{Device, Kind, Tensor};
+    use tch::Device::Cuda;
+    use tch::Kind::Float;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
+    use tokio::process::{Child, Command};
+    use tokio::sync::Mutex;
+    use tokio::task::JoinSet;
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::{mono_key, Cause, ThoError};
+    use thoosa_shared::tracked_await::track_await;
+    use crate::copy_ctx::CudaActorHandle;
+    use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
+    use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
+    use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::common::RunCtx;
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+    use crate::runner::run_ctx_2::RunCtxImpl;
+    // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
+    use crate::tho_device::ThoDevice;
+    use crate::tho_tensor::ThoTensor;
+    use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
+    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::json_ser::SyncStageJsonWrapper;
+    use crate::ipc::tests::init_ipc_test;
+    use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
+    // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+    use crate::utils::{lin_for_size, tensor_digest};
+
+
+
+    macro_rules! pure_module_path {
+        () => {{
+            let p = module_path!();
+
+            match p.split_once("::") {
+                Some((_crate_name, rest)) => rest,
+                None => "",
+            }
+        }};
+    }
 //
 //     async fn spawn_test_worker(test_name: &str) -> Result<(Child, UnixStream), ThoError> {
 //
@@ -2066,4 +2066,4 @@ where
 //         }
 //     }
 //
-// }
+}

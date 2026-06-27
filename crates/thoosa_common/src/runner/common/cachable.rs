@@ -26,7 +26,7 @@ use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Data, Named, Select};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, AsyncStageRunInput, ConsumeResult, Stage};
+use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
@@ -235,9 +235,7 @@ where
 pub trait Cached: AsyncStage + Named
 where
     for <'i> Self::In<'i>: WithId + Send + Sync,
-    // Self::In<'static>: AsyncStageRunInput<Self::In<'static>>,
     <Self as Stage>::Out: CachedPurgeOutput +  WithId + Send + Sync + 'static,//
-    // Self::RunOutput: CachedStageOutput<Self::Out>,
 {
     fn run_input_id(input: &Self::In<'static>) -> &'static <Self::In<'static> as WithId>::ID {
         unimplemented!()

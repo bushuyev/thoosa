@@ -11,48 +11,7 @@ pub type WrappedStageRunInput<S> = Arc<DevicesWrap<<S as Stage>::In<'static>>>;
 pub type WrappedStageRunOutput<S> = Arc<DevicesWrap<<S as Stage>::Out>>;
 pub type PlainStageRunOutput<S> = Arc<<S as Stage>::Out>;
 
-pub trait AsyncStageRunInput<I>: Send + 'static
-where
-    I: WithId,
-{
-}
 
-impl<I, T> AsyncStageRunInput<I> for T
-where
-    I: WithId,
-    T: Send + 'static,
-{
-}
-
-// pub trait WrappedRunInputStage: AsyncStage<In<'static> = WrappedStageRunInput<Self>>
-// where
-//     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
-//     Self::Out: Data + WithId + Send + Sync,
-// {
-// }
-
-// impl<T> WrappedRunInputStage for T
-// where
-//     T: AsyncStage<In<'static> = WrappedStageRunInput<T>>,
-//     for<'a> T::In<'a>: Data + WithId + Send + Sync,
-//     T::Out: Data + WithId + Send + Sync,
-// {
-// }
-
-// pub trait WrappedRunOutputStage: AsyncStage<RunOutput = WrappedStageRunOutput<Self>>
-// where
-//     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
-//     Self::Out: Data + WithId + Send + Sync,
-// {
-// }
-
-// impl<T> WrappedRunOutputStage for T
-// where
-//     T: AsyncStage<RunOutput = WrappedStageRunOutput<T>>,
-//     for<'a> T::In<'a>: Data + WithId + Send + Sync,
-//     T::Out: Data + WithId + Send + Sync,
-// {
-// }
 /// a Stage is just a function with explicitly defined state, execution context and input so that all three can be adjusted to handle OOM
 /// see ['thoosa_common::runner::oom_handler::Adjusters'] enum
 pub trait Stage: Debug {
@@ -70,8 +29,6 @@ where
         for <'a> Self::In<'a>:  Send + Sync,
         Self::Out: Send + Sync,
 {
-    // // type RunInput: AsyncStageRunInput<Self::In<'static>>;
-    // // type RunOutput: CachedStageOutput<Self::Out>;
 
 
     //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
