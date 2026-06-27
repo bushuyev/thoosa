@@ -1473,7 +1473,6 @@ pub struct SelectMotifsSavableResult {
 
 impl Output for SelectMotifsSavableResult {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for SelectMotifsSavableResult {}
 
 impl WithId for SelectMotifsSavableResult {
     type ID = RunConfigId;

@@ -558,8 +558,8 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData, SynKey>;
-    type Out = ThoTensor<ChannelsData, SynKey>;
+    type In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
+    type Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
 }
 
 // #[async_trait]
@@ -567,18 +567,13 @@ impl<C> AsyncStage for FreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        WithId::id(input)
-    }
 
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         let out_id = self.out_id(input.id());
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len()?].into();

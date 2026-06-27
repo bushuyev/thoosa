@@ -155,7 +155,6 @@ impl WithId for TrainFinalNetOutput {
 
 impl Output for TrainFinalNetOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for TrainFinalNetOutput {}
 
 #[async_trait]
 impl SavableResult for TrainFinalNetOutput {

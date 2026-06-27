@@ -223,7 +223,6 @@ impl WithId for ConvertPrecisionOutput {
 
 impl Output for ConvertPrecisionOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for ConvertPrecisionOutput {}
 
 #[derive(Debug)]
 pub struct ConvertPrecisionStage<C>

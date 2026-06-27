@@ -97,7 +97,6 @@ impl FindAndSelectMotifsResult {
 
 impl Output for FindAndSelectMotifsResult {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for FindAndSelectMotifsResult {}
 
 #[derive(Debug)]
 struct FindAndSelectEvalMetrics {

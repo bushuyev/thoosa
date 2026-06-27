@@ -92,7 +92,6 @@ impl WithId for MergeSelectedMotifsOutput {
 
 impl Output for MergeSelectedMotifsOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for MergeSelectedMotifsOutput {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct SelectedMotifKey {
