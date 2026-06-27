@@ -33,6 +33,8 @@ use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
 use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
+use crate::torch_runner::tests::model_test::common::ModelTestId;
 // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 // use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 // use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
@@ -433,91 +435,91 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu() -> Result<(), ThoEr
     }
 }
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu() -> Result<(), ThoError> {
-//     log::set_max_level(LevelFilter::Info);
-//     debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu", || async {
-//             run_model_test_pipeline(
-//                 1,
-//                 0,
-//                 vec![("file_0", 1.0), ("file_1", 0.0)],
-//                 ModelTestId("ipc_files_0_1"),
-//                 ModelTestId("ipc_lin_cls"),
-//                 2,
-//                 200,
-//                 vec![FailUntil::Never],
-//                 0.8,
-//             ).await
-//         }).await
-//     }
-// }
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu() -> Result<(), ThoError> {
+    log::set_max_level(LevelFilter::Info);
+    debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files() -> Result<(), ThoError> {
-//     log::set_max_level(LevelFilter::Info);
-//     debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files", || async {
-//             run_model_test_pipeline(
-//                 1,
-//                 0,
-//                 vec![
-//                     ("file_0", 1.0),
-//                     ("file_1", 0.0),
-//                     ("file_2", 1.0),
-//                     ("file_3", 0.0),
-//                 ],
-//                 ModelTestId("ipc_files_0_1_2_3"),
-//                 ModelTestId("ipc_lin_cls_many"),
-//                 4,
-//                 100,
-//                 vec![FailUntil::Never],
-//                 0.8,
-//             ).await
-//         }).await
-//     }
-// }
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu", || async {
+            run_model_test_pipeline(
+                1,
+                0,
+                vec![("file_0", 1.0), ("file_1", 0.0)],
+                ModelTestId("ipc_files_0_1"),
+                ModelTestId("ipc_lin_cls"),
+                2,
+                200,
+                vec![FailUntil::Never],
+                0.8,
+            ).await
+        }).await
+    }
+}
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<(), ThoError> {
-//     log::set_max_level(LevelFilter::Info);
-//     debug!("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         let files: Vec<(&'static str, f64)> = (0..16)
-//             .map(|i| {
-//                 (
-//                     Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str,
-//                     if i % 2 == 0 { 1.0 } else { 0.0 },
-//                 )
-//             })
-//             .collect();
-//
-//         run_model_test_ipc_cuda_worker("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates", || async move {
-//             run_model_test_pipeline(
-//                 1,
-//                 0,
-//                 files,
-//                 ModelTestId("ipc_files_oom_permits"),
-//                 ModelTestId("ipc_lin_cls_oom"),
-//                 16,
-//                 50,
-//                 vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(128)],
-//                 0.5,
-//             ).await
-//         }).await
-//     }
-// }
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files() -> Result<(), ThoError> {
+    log::set_max_level(LevelFilter::Info);
+    debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files", || async {
+            run_model_test_pipeline(
+                1,
+                0,
+                vec![
+                    ("file_0", 1.0),
+                    ("file_1", 0.0),
+                    ("file_2", 1.0),
+                    ("file_3", 0.0),
+                ],
+                ModelTestId("ipc_files_0_1_2_3"),
+                ModelTestId("ipc_lin_cls_many"),
+                4,
+                100,
+                vec![FailUntil::Never],
+                0.8,
+            ).await
+        }).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<(), ThoError> {
+    log::set_max_level(LevelFilter::Info);
+    debug!("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        let files: Vec<(&'static str, f64)> = (0..16)
+            .map(|i| {
+                (
+                    Box::leak(format!("file_{}", i).into_boxed_str()) as &'static str,
+                    if i % 2 == 0 { 1.0 } else { 0.0 },
+                )
+            })
+            .collect();
+
+        run_model_test_ipc_cuda_worker("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates", || async move {
+            run_model_test_pipeline(
+                1,
+                0,
+                files,
+                ModelTestId("ipc_files_oom_permits"),
+                ModelTestId("ipc_lin_cls_oom"),
+                16,
+                50,
+                vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(128)],
+                0.5,
+            ).await
+        }).await
+    }
+}
 
 mod composite_input {
     use std::collections::HashMap;
