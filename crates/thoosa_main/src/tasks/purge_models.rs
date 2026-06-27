@@ -243,21 +243,15 @@ where
 {
     type Ctx = C;
     type In<'a> = PurgeModelsInput;
-    type Out = PurgeModelsOutput;
+    type Out = Arc<PurgeModelsOutput>;
 }
 
 impl<C> AsyncStage for PurgeModelsStage<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Self::In<'static>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-        WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "PurgeModelsStage::run"))]
-    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let roots = {
             let ws_guard = self.ws.read();
             ModelRoots::from_ws(ws_guard.as_ref())

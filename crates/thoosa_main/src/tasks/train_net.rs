@@ -395,8 +395,8 @@ where
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     type Ctx = C;
-    type In<'a> = TrainNetInput;
-    type Out = TrainNetOutput<NP, RC>;
+    type In<'a> = Arc<TrainNetInput>;
+    type Out = Arc<DevicesWrap<TrainNetOutput<NP, RC>>>;
 }
 
 
@@ -414,15 +414,9 @@ where
     NP: Default + Debug + Send + Sync + 'static,
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run"))]
-    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
 
         let run_config_source = Arc::clone(&self.run_config_source);
         let device_idx = ctx.tho_device_idx();
@@ -460,6 +454,7 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
+            //TODO impl CopyToDevice for TrainNetOutput
             Ok(Arc::new(DevicesWrap::wrap_plain(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store, node_params, run_config, loss))))
         }
     }

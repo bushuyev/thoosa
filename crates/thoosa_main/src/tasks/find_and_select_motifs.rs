@@ -348,22 +348,16 @@ impl FindAndSelectMotifsStage {
 impl Stage for FindAndSelectMotifsStage {
     type Ctx = RunCtxImpl;
     type In<'a> = FindAndSelectMotifsInput;
-    type Out = FindAndSelectMotifsResult;
+    type Out = Arc<FindAndSelectMotifsResult>;
 }
 
 impl AsyncStage for FindAndSelectMotifsStage {
-    type RunInput = Self::In<'static>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindAndSelectMotifsStage::run"))]
     async fn run(
         self: Arc<Self>,
         input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<Self::Out>, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         let find_resources = parse_resources(&input.find_resources)
             .map_err(|e| ThoError::from_boxed_error("FindAndSelectMotifsStage::run parse find_resources", e))?;
 

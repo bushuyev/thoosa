@@ -225,7 +225,7 @@ impl PatchTempStore {
 pub struct BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<D, Id>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -246,7 +246,7 @@ where
 impl<RC, L, D, Id, C> BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<D, Id>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
@@ -925,34 +925,28 @@ pub fn patch_sample_ranges_flat(
 impl<RC, L, D, Id, C> Stage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<D, Id>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = BucketingInput<RC>
+    type In<'a> = Arc<BucketingInput<RC>>
     where
         Self: 'a;
-    type Out = BucketingOutput;
+    type Out = Arc<BucketingOutput>;
 }
 
 impl<RC, L, D, Id, C> AsyncStage for BucketingStage<RC, L, D, Id, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<D, Id>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<D, Id>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<D, Id>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-        WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let resources_config = input.resources_config().clone();
         let resources = track_await(resources_config.to_resources(&self.store)).await?;
 
@@ -1622,9 +1616,7 @@ mod tests {
                     norm_thickness.clone()
                 ])), motif_load_ctx.branch(false)).await?;
 
-                let norm_thickness = with_data!(motif_load_ctx.branch(false), metrics; |ctx, metrics:&MotifStatsOutput|{
-                    Ok::<_, ThoError>(metrics.channel_metric_value(&norm_thickness, 0)?.value())
-                })?;
+                let norm_thickness = metrics.channel_metric_value(&norm_thickness, 0)?.value();
 
                 debug!("heavy_run_mel_path: norm_thickness={norm_thickness:?}");
                 Ok::<_, ThoError>(norm_thickness)

@@ -152,21 +152,15 @@ where
 {
     type Ctx = C;
     type In<'a> = ExportInput;
-    type Out = ExportOutput;
+    type Out = Arc<ExportOutput>;
 }
 
 impl<C> AsyncStage for Export<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Self::In<'static>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-        WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Export::run"))]
-    async fn run(self: Arc<Self>, _input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let target_ws = self.create_target_workspace()?;
         let target_store_path = { target_ws.read().store_path().clone() };
         {
@@ -191,7 +185,7 @@ where
         };
 
         info!("Export::run: exported target_dir={:?} label_net_run_config_ids={label_net_run_config_ids:?} motif_net_run_config_ids={motif_net_run_config_ids:?} copied_models={} converted={}", self.args.target_dir, copied_models.len(), converted.len());
-        Ok(Arc::new(DevicesWrap::wrap_plain(ExportOutput::new(self.args.target_dir.clone(), label_net_run_config_ids, motif_net_run_config_ids, copied_models, converted))))
+        Ok(Arc::new(ExportOutput::new(self.args.target_dir.clone(), label_net_run_config_ids, motif_net_run_config_ids, copied_models, converted)))
     }
 }
 

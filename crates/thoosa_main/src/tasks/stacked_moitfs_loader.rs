@@ -130,7 +130,7 @@ impl Output for StackedMotifsOutput {}
 #[derive(Debug, Cached, Named)]
 pub struct StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     id:MonoKey,
@@ -143,7 +143,7 @@ where
 
 impl <ML, C> OutId for StackedMotifsLoader<ML, C>
 where
-ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>> + Cached + OutId + 'static,
+ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
 C: RunCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -154,7 +154,7 @@ C: RunCtx + Adjustable + 'static
 
 impl <ML, C> StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 {
     pub fn new(
@@ -175,30 +175,24 @@ where
 
 impl <ML, C> Stage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
     type Ctx = C;
-    type In<'a> = StackedMotifsInput;
-    type Out = StackedMotifsOutput;
+    type In<'a> = Arc<StackedMotifsInput>;
+    type Out = Arc<DevicesWrap<StackedMotifsOutput>>;
 }
 
 // #[async_trait]
 impl <ML, C> AsyncStage for StackedMotifsLoader<ML, C>
 where
-    ML: for <'i> AsyncStage<In<'i>=MotifLoaderInput, Out=DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, Ctx=C, RunInput=Arc<MotifLoaderInput>, RunOutput=Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>> + Cached + OutId + 'static,
+    ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static
 
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackedMotifsLoader::run"))]
-    async fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let device_idx = ctx.tho_device_idx();
 
         let num_channels = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(self.ws))

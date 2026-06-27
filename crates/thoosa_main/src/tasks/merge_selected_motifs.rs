@@ -155,7 +155,7 @@ fn find_motifs_aggr_to_stats(aggr: FindMotifsAggr) -> Aggr {
 #[derive(Named)]
 pub struct MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -167,7 +167,7 @@ where
 
 impl<MS, C> Debug for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -177,7 +177,7 @@ where
 
 impl<MS, C> MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, motif_stats: Arc<MS>) -> Self {
@@ -231,9 +231,7 @@ where
                 ctx.branch(false),
             )).await?;
 
-        with_data!(ctx.branch(false), stats; |_ctx, stats: &MotifStatsOutput| {
-            stats.channel_value(&metric, 0)
-        })
+        stats.channel_value(&metric, 0)
     }
 
     async fn metric_for_candidate(&self, candidate: &SelectedMotifCandidate, ctx: C) -> Result<f32, ThoError> {
@@ -275,27 +273,21 @@ where
 
 impl<MS, C> Stage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = MergeSelectedMotifsInput;
-    type Out = MergeSelectedMotifsOutput;
+    type In<'a> = Arc<MergeSelectedMotifsInput>;
+    type Out = Arc<MergeSelectedMotifsOutput>;
 }
 
 impl<MS, C> AsyncStage for MergeSelectedMotifs<MS, C>
 where
-    MS: for<'i> AsyncStage<In<'i> = MotifStatsInput, Out = MotifStatsOutput, Ctx = C, RunInput = Arc<MotifStatsInput>, RunOutput = Arc<MotifStatsOutput>> + Cached + OutId + 'static,
+    MS: for<'i> AsyncStage<In<'i> = Arc<MotifStatsInput>, Out = Arc<MotifStatsOutput>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MergeSelectedMotifs::run"))]
-    fn run(self: Arc<Self>, input: Arc<Self::In<'static>>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Arc<Self::Out>, ThoError>> + Send
+    fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -497,15 +489,8 @@ mod tests {
             )
             .await?;
 
-        let (run_config_id, merged_groups_by_channel) = output
-            .with_data_ref(
-                0,
-                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(false),
-                None,
-                |output: &MergeSelectedMotifsOutput, _ctx| Ok::<_, ThoError>((*output.id(), output.merged_groups_by_channel().clone())),
-            )
-            .await?;
+        let run_config_id = *output.id();
+        let merged_groups_by_channel = output.merged_groups_by_channel().clone();
 
         assert_eq!(run_config_id, merge_run_config_id);
         assert_eq!(merged_groups_by_channel, vec![1]);

@@ -30,6 +30,8 @@ use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shims::stream::ThoStreamGuard;
+use crate::copy_ctx::ExecSyncStageActionResult;
 
 trait DeviceCopier<O>: Debug + Send + Sync {
     fn copy<'a>(&self, src: &'a O, dst_device: usize) -> BoxFuture<'a, Result<O, ThoError>>;
@@ -570,12 +572,13 @@ where
         })
     }
 
-    pub fn with_selected_data_ref<'a, R: Send, F, P, S>(&'a self, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
+    pub fn with_selected_data_ref<'a, R, F, P, S>(&'a self, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
     where
         O: Select<S, Output = O>,
         for<'f> F: FnOnce(&O, &P) -> Result<R, ThoError> + Send + 'a,
         S: Debug + Clone + Send + 'static,
         P: RunCtx + 'a,
+        R: Send+ 'static
     {
         Box::pin(async move {
             let permits_ctx = permits_ctx;
@@ -592,7 +595,23 @@ where
                         Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
                         None => sub_t,
                     };
-                    return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
+                    let cuda_actor = GlobalCtx::global().cuda_actor(to_tho_device_idx);
+                    return match return cuda_actor.exec_sync_stage(move |stream| async move {
+                        let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose().unwrap();
+                        let out = do_run(&data, &permits_ctx);
+
+                        Ok(ExecSyncStageActionResult::Sync { stream, out})
+                    }).await? {
+                        ExecSyncStageActionResult::Sync {stream: Some(stream), out} => {
+                            stream.synchronize();
+                            out
+                        },
+                        ExecSyncStageActionResult::Sync {stream: None, out} | ExecSyncStageActionResult::NoSync(out) => {
+                            out
+                        }
+                    }
+
+                    // return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
                 }
                 drop(source_read_guard);
                 self.mark_not_resident_on_device(0);
@@ -1009,7 +1028,7 @@ pub trait WithSelectDataRef<S>: WithDataRef
 where
     S: Clone + Debug + Send + 'static,
 {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(
+    fn with_selected_data_ref<'a, 'o, R, F, P>(
         &'a self,
         to_device_idx: usize,
         _permits_ctx: P,
@@ -1019,7 +1038,8 @@ where
     ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a where
      // Self::O<'o>: Select<S, Output = Self::O<'o>>,
      for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
-     P:RunCtx + 'a;
+     P:RunCtx + 'a,
+    R:Send + 'static;
 
 }
 
@@ -1079,11 +1099,12 @@ where
     S:Debug + Clone + Send + 'static,
     O: Select<S, Output=O> + Data + WithId + Send + Sync,
 {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
         Self::O<'o>: Select<S, Output=Self::O<'o>>,
         for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
-        P:RunCtx + 'a
+        P:RunCtx + 'a,
+        R:Send + 'static
     {
         DevicesWrap::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run)
     }
@@ -1392,9 +1413,7 @@ mod tests {
             Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "f"))),
         ];
 
-
-
-        //TODO ensure that asserts were actually invoked
+        //TODO check asserts were actually invoked
         let ctx_for_data = mock_run_ctx::default(1);
         with_data!(ctx_for_data, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
             |_ctx, a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{

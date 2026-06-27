@@ -113,7 +113,7 @@ impl WithId for MotifLoaderInput {
 #[derive(Debug, Cached, Named)]
 pub struct MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: MonoKey,
@@ -126,7 +126,7 @@ where
 
 impl<L, C> MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(
@@ -147,7 +147,7 @@ where
 
 impl<L, C> OutId for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -493,33 +493,27 @@ where
 
 impl<L, C> Stage for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type In<'a> = MotifLoaderInput;
-    type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
+    type In<'a> = Arc<MotifLoaderInput>;
+    type Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>;
 
     type Ctx = C;
 }
 
 impl<L, C> AsyncStage for MotifLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifLoader::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    ) -> Result<Self::Out, ThoError>
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -596,7 +590,7 @@ where
 #[derive(cached_derive::Cached, Named, Debug)]
 pub struct RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -609,7 +603,7 @@ where
 
 impl <L,C> RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
@@ -647,11 +641,11 @@ impl WithId for SlicesLoaderInput {
 impl Input for SlicesLoaderInput {}
 impl<L, C> Stage for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type In<'a> = SlicesLoaderInput;
-    type Out = ThoTensor<MotifSlices, SynKey>;
+    type In<'a> = Arc<SlicesLoaderInput>;
+    type Out = Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>;
 
     type Ctx = C;
 }
@@ -659,7 +653,7 @@ where
 
 impl<L, C> OutId for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 
 {
@@ -672,22 +666,16 @@ where
 
 impl<L, C> AsyncStage for RandomSlicesLoader<L, C>
 where
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RandomSlicesLoader::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<SlicesLoaderInput>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    ) -> Result<Self::Out, ThoError>
     where
             for<'a> Self::In<'a>: Send + Sync,
     {
@@ -784,7 +772,7 @@ async fn load_motif_resource_tensors<L, C>(
 ) -> Result<TmpCached<LoadedMotifResource>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
 {
     let loaded_resources = track_await(TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}"))).await;
     let mut loaded_resources_count = 0usize;
@@ -887,7 +875,7 @@ pub(crate) async fn load_random_slices<L, C>(
 ) -> Result<(u32, TmpCached<ThoTensor<ChannelsMotifsSlices, SynKey>>), ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
 {
     let device_idx = ctx.tho_device_idx();
     debug!("load_random_slices: find_motifs_run_config_id={find_motifs_run_config_id} slices={slices:?} descr={descr}");
@@ -998,8 +986,8 @@ pub mod mock_motif_loader {
         impl Stage for MotifLoader {
             type Ctx = MockRunCtx;
 
-            type In<'a> = MotifLoaderInput;
-            type Out = DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>;
+            type In<'a> = Arc<MotifLoaderInput>;
+            type Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>;
         }
 
         impl OutId for MotifLoader {
@@ -1008,8 +996,6 @@ pub mod mock_motif_loader {
 
         // #[async_trait]
         impl AsyncStage for MotifLoader {
-            type RunInput = Arc<Self::In<'static>>;
-            type RunOutput = Arc<DevicesWrap<Self::Out>>;
         }
 
         #[async_trait]
@@ -1018,9 +1004,9 @@ pub mod mock_motif_loader {
             async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, ThoError >>>>;
             async fn run_cached(
                 self: Arc<Self>,
-                input: Arc<<MockMotifLoader as Stage>::In<'static>>,
+                input: <MockMotifLoader as Stage>::In<'static>,
                 ctx: <MockMotifLoader as Stage>::Ctx,
-            ) -> Result<Arc<DevicesWrap<<MockMotifLoader as Stage>::Out>>, ThoError>;
+            ) -> Result<<MockMotifLoader as Stage>::Out, ThoError>;
         }
     }
 

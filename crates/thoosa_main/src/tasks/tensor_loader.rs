@@ -57,8 +57,8 @@ impl<C> Stage for RawTensorLoader<C>
 where
     C: RunCtx + 'static,
 {
-    type In<'a> = Resource;
-    type Out = ThoTensor<ChannelsData, SynKey>;
+    type In<'a> = Arc<Resource>;
+    type Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
     type Ctx = C;
 }
 
@@ -67,19 +67,13 @@ impl<C> AsyncStage for RawTensorLoader<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RawTensorLoader::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<Self::In<'static>>,
+        input: Self::In<'static>,
         _ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         // TODO(perf): add a shared raw-resource tensor cache/prefetch layer here; traced runs repeatedly reload tens of thousands of raw tensors through this stage.
         let tensor = (self.loader_fn)(input.as_ref(), &self.device)?;
 
@@ -146,9 +140,9 @@ pub(crate) mod mock_tensor_loader {
         impl Stage for TensorLoader {
             type Ctx = MockRunCtx;
 
-            type In<'a>  = Resource;
+            type In<'a>  = Arc<Resource>;
 
-            type Out = ThoTensor<ChannelsData, SynKey>;
+            type Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
         }
 
         impl OutId for TensorLoader {
@@ -157,8 +151,6 @@ pub(crate) mod mock_tensor_loader {
 
         // #[async_trait]
         impl AsyncStage for TensorLoader {
-            type RunInput = Arc<Self::In<'static>>;
-            type RunOutput = Arc<DevicesWrap<Self::Out>>;
         }
 
         #[async_trait]
@@ -167,9 +159,9 @@ pub(crate) mod mock_tensor_loader {
             async fn cache() -> &'static DashMap<<<Self as Stage>::Out as WithId>::ID, Shared<BoxFuture<'static, Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey >>>, ThoError >>>>;
             async fn run_cached(
                     self: Arc<Self>,
-                    input: Arc<<MockTensorLoader as Stage>::In<'static>>,
+                    input: <MockTensorLoader as Stage>::In<'static>,
                     ctx: <MockTensorLoader as Stage>::Ctx,
-                ) -> Result<Arc<DevicesWrap<<MockTensorLoader as Stage>::Out>>, ThoError>;
+                ) -> Result<<MockTensorLoader as Stage>::Out, ThoError>;
         }
     }
 
