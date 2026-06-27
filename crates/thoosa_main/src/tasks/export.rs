@@ -7,7 +7,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use thoosa_common::runner::common::cachable::{CachedStageOutput, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{ DevicesWrap, WithDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::ws::{FsWorkspace, Workspace};
