@@ -1130,18 +1130,16 @@ where
 
 impl<O> WithDataRef for Arc<O>
 where
-    O: PlainCachedOutput,
+    O:WithDataRef,
 {
-    type O<'o> = O;
+    type O<'o> = O::O<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
-        P: RunCtx + 'a,
+            for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+            P: RunCtx + 'a
     {
-        async move {
-            DevicesWrap::<O>::do_run_trace_ref(trace_ctx, |data| do_run(data, &permits_ctx), self.as_ref())
-        }
+        self.as_ref().with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)
     }
 }
 

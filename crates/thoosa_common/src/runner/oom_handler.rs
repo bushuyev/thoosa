@@ -53,7 +53,6 @@ pub trait Adjuster<AC>: Debug + Send + Sync {
 pub trait InputContext<'a, R>: Debug + Send + Sync
 where
     R: Stage + 'a,
-    // <R as Stage>::In<'a>: Data
 {
     async fn add_partial_output(&mut self, out: R::Out);
     fn all_done(&self) -> bool;
@@ -129,7 +128,6 @@ pub trait RunCtxContext: Debug {}
 pub struct Contexts<'a, R, IC, RC, RCC>
 where
     R: Stage + 'a,
-    // <R as Stage>::In<'a>: Data,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -143,7 +141,6 @@ where
 impl<'a, R, IC, RC, RCC> Contexts<'a, R, IC, RC, RCC>
 where
     R: Stage + 'a,
-    // <R as Stage>::In<'a>: Data,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -162,7 +159,7 @@ where
 pub enum Adjusters<'a, R, IC, RC, RCC, S>
 where
     R: Stage + 'a,
-    <R as Stage>::In<'a>: /*Data + Select<S> +*/ Debug,
+    <R as Stage>::In<'a>: Debug,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
@@ -179,11 +176,10 @@ where
     R: Stage + 'a,
     IC: InputContext<'a, R>,
     R: Adjustable,
-    <R as Stage>::In<'a>: /*Data + Select<S> +*/ Debug,
+    <R as Stage>::In<'a>: Debug,
     RC: RunnableContext,
     RCC: RunCtxContext,
     <R as Stage>::Ctx: Adjustable,
-    // <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
     fn degrade(&self, adjust_context: &mut Contexts<'a, R, IC, RC, RCC>) -> bool {
@@ -230,17 +226,14 @@ impl RunCtxContext for NoopRunCtxContext {}
 pub struct OOMHandler<'a, 'z, R, IC, RC, RCC, S>
 where
     R: SyncStage + Adjustable,
-    // for<'i> <R as Stage>::In<'i>: Data,
     R::Ctx: Adjustable,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + 'static,
 
-    // <R as Stage>::Out: Data + WithId,
-    // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
-    for<'i> <R as Stage>::In<'i>: WithId
+    for<'i> <R as Stage>::In<'i>: WithId//used only for debug
 {
     adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
     #[allow(dead_code)]
@@ -297,10 +290,8 @@ where
     RC: RunnableContext,
     RCC: RunCtxContext,
     S: Adjustable + Debug + Clone + Default + Send + 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
-    // <R as Stage>::Out: Data + WithId,
-    // <R as Stage>::In<'a>: Select<S, Output=<R as Stage>::In<'a>> + Send + Sync ,
 
-    for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Data + Send + Sync,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
 {
     pub fn new(
