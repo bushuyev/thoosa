@@ -1260,10 +1260,9 @@ mod tests {
         let input = TrainMotifNetInput::new(thoosa_common::train_nets::MotifsBy::SelectMotifsRunIds { select_motifs_run_config_ids: vec![select_motifs_run_config_id] }, Arc::new(OptConfig::new(100, 10)));
 
         let mut run_ctx = mock_run_ctx::default(1);
-        let result: Arc<DevicesWrap<thoosa_common::train_nets::TrainMotifsNetsResult>> = train_motif_nets
+        let result = train_motif_nets
             .run(input, run_ctx.branch(false))
             .await?;
-        let result = result.load_from_any_device_(1).await?;
 
 
         debug!("train_motif_nets: result={result:?}");

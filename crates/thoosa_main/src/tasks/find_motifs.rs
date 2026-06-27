@@ -70,7 +70,7 @@ type DistsTrackerStage<C> = DistsTracker<C>;
 enum FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     CrossLoader {
@@ -93,7 +93,7 @@ where
 impl<RC, L, C> Clone for FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn clone(&self) -> Self {
@@ -107,7 +107,7 @@ where
 impl<RC, L, C> FindMotifsStages<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new_cross_loader(
@@ -211,7 +211,7 @@ fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
 pub struct FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     run_config_stages: Vec<FindMotifsStages<RC, LoaderStageChoice<L, C>, C>>,
@@ -221,7 +221,7 @@ where
 impl<RC, L, C> FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync+ Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>  + Cached + OutId + Send + Sync + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>  + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub async fn new(
@@ -307,13 +307,13 @@ where
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
 
-                                    let dists: ThoTensor<ChannelsMotifsDists, SynKey> = with_data!(ctx, motif_stats; |ctx: C, t:&MotifStatsOutput| {
-                                        let metric_val = t.channels_motifs_dists(&comparison_metric)?;
+                                    let dists: ThoTensor<ChannelsMotifsDists, SynKey> = {
+                                        let metric_val = motif_stats.channels_motifs_dists(&comparison_metric)?;
                                         let metric_val_id = metric_val.id().clone();
                                         debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 
                                         ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)
-                                    })?;
+                                    }?;
                                     MasksCtx::PrecalculatedDist { dists }
                                 }
                                 SlicesFilter::ExactS(v) => {
@@ -477,15 +477,15 @@ where
 impl<RC, L, C> Stage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + 'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = ResourcesConfigInput<RC>
+    type In<'a> = Arc<ResourcesConfigInput<RC>>
     where
         Self: 'a;
-    type Out = FindMotifsSavableResult;
+    type Out = Arc<FindMotifsSavableResult>;
 }
 
 
@@ -493,23 +493,17 @@ where
 impl<RC, L, C> AsyncStage for FindMotifsStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
-    L: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
-    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> +  'static,
+    L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + Send + Sync + 'static,
+    LoaderStageChoice<L, C>: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> +  'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="FindMotifsStage::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<ResourcesConfigInput<RC>>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<Self::Out>, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
 
 
 
@@ -548,7 +542,7 @@ where
 pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
-    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i>=Resource, Out=ThoTensor<ChannelsData, SynKey>, Ctx=C, RunInput=Arc<Resource>, RunOutput=Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
+    L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match find_motifs_run_config.freq_filter.as_deref() {
         None | Some([]) => {
@@ -730,10 +724,7 @@ mod tests {
             Arc::new(ResourcesConfigInput::new(Simple::new(Group(resources_group.into())))), ctx.branch(false),
         ).await?;
 
-        with_data!(ctx.branch(false), result; |ctx, result:&FindMotifsSavableResult|{
-            debug!("result={result:?}");
-            Ok::<_, ThoError>(())
-        })?;
+        debug!("result={result:?}");
 
 
         Ok(())

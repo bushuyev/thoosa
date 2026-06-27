@@ -253,21 +253,15 @@ where
 {
     type Ctx = C;
     type In<'a> = ConvertPrecisionInput;
-    type Out = ConvertPrecisionOutput;
+    type Out = Arc<ConvertPrecisionOutput>;
 }
 
 impl<C> AsyncStage for ConvertPrecisionStage<C>
 where
     C: RunCtx + 'static,
 {
-    type RunInput = Self::In<'static>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ConvertPrecisionStage::run"))]
-    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError> {
+    async fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let entries = {
             let ws_guard = self.ws.read();
             selected_entries(ws_guard.as_ref(), self.args.nets_by())?

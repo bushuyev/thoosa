@@ -262,3 +262,17 @@ pub trait SavableResult: Sync + Send + Debug {
         p: Self::P<'_>
     ) -> Result<Self::R, ThoError>;
 }
+
+#[async_trait]
+impl<S> SavableResult for Arc<S>
+where
+    S: SavableResult,
+    for<'a> S::P<'a>: Send,
+{
+    type P<'a> = S::P<'a>;
+    type R = S::R;
+
+    async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
+        Arc::get_mut(self).ok_or_else(|| ThoError::new("SavableResult::save: result should not be shared"))?.save(store, ws, p).await
+    }
+}
