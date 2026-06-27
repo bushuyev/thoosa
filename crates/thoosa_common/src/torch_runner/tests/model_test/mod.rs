@@ -1,9 +1,9 @@
 // use std::collections::HashMap;
 // use std::sync::Arc;
-// 
+//
 // use tch::Kind;
 // use thoosa_shared::ThoError;
-// 
+//
 // use crate::ipc::json_ser::SyncStageJsonWrapper;
 // use crate::runner::common::cachable::{Cached, WithDataRef};
 // use crate::runner::common::runnable::AsyncStage;
@@ -14,38 +14,38 @@
 // use crate::runner::test::FailUntil;
 // use crate::tho_device::ThoDevice;
 // use crate::tho_tensor::ThoTensor;
-// 
+//
 // pub(crate) mod batch_builder;
 // pub(crate) mod classifier;
 // pub(crate) mod common;
 // pub(crate) mod join_and_classify;
 // pub(crate) mod loader;
-// 
+//
 // use batch_builder::new_file_list_input_cache;
 // use classifier::{sync_classifier_endpoint_init, Classifier, SYNC_CLASSIFIER_ENDPOINT};
 // use common::{ClsOut, FileListInput, ModelTestId};
 // use join_and_classify::JoinAndClassifyTask;
 // use loader::ABLoader;
-// 
+//
 // #[ctor::ctor]
 // fn init() {
 //     thoosa_shared::test_utils::init_test_logging();
 // }
-// 
+//
 // fn init_devices_once() {
 //     static INIT: std::sync::Once = std::sync::Once::new();
 //     INIT.call_once(|| {
-//         let _ = RealGlobalCtx::init_devices(2);
+//         let _ = RealGlobalCtx::init_devices(2);sync_model_test_endpoint_inits
 //     });
 // }
-// 
+//
 // pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
 //     HashMap::from([(
 //         SYNC_CLASSIFIER_ENDPOINT.to_string(),
 //         Box::new(sync_classifier_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
 //     )])
 // }
-// 
+//
 // pub(crate) async fn run_model_test_pipeline(
 //     ctx_device_idx: usize,
 //     check_device_idx: usize,
@@ -77,7 +77,7 @@
 //     let acc = Arc::clone(&join_and_cls)
 //         .run_cached(input_cache, ctx.branch(false))
 //         .await?;
-// 
+//
 //     acc.with_data_ref(check_device_idx,
 //                       ctx.branch(false), None, |acc_t: &ThoTensor<ClsOut, ModelTestId>, _ctx| {
 //               let v = ClsOut::accuracy(acc_t);
@@ -85,10 +85,10 @@
 //               Ok(())
 //           })
 //     .await?;
-// 
+//
 //     Ok(())
 // }
-// 
+//
 // #[tokio::test]
 // async fn test_ab_loader_and_classifier_cpu() -> Result<(), ThoError> {
 //     unsafe {
@@ -96,7 +96,7 @@
 //     }
 //     init_devices_once();
 //     let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-// 
+//
 //     run_model_test_pipeline(
 //         1,
 //         0,
@@ -109,7 +109,7 @@
 //         0.8,
 //     ).await
 // }
-// 
+//
 // #[tokio::test]
 // async fn test_ab_loader_and_classifier_cpu_many_files() -> Result<(), ThoError> {
 //     unsafe {
@@ -117,7 +117,7 @@
 //     }
 //     init_devices_once();
 //     let _global_mock_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-// 
+//
 //     run_model_test_pipeline(
 //         0,
 //         1,
@@ -135,7 +135,7 @@
 //         0.8,
 //     ).await
 // }
-// 
+//
 // #[tokio::test]
 // async fn test_classifier_oom_max_parallel_escalates() -> Result<(), ThoError> {
 //     unsafe {
@@ -144,7 +144,7 @@
 //     }
 //     init_devices_once();
 //     let _global_ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, false);
-// 
+//
 //     let files: Vec<(&'static str, f64)> = (0..16)
 //         .map(|i| {
 //             (
@@ -153,7 +153,7 @@
 //             )
 //         })
 //         .collect();
-// 
+//
 //     run_model_test_pipeline(
 //         1,
 //         1,
