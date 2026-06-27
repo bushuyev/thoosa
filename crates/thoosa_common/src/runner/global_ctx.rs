@@ -616,6 +616,22 @@ pub mod mock_global_ctx {
             self
         }
 
+        pub fn with_is_all_on_cpu(mut self, is_all_on_cpu:bool) -> Self {
+            if let Some(real) = self.real {
+                self.mock.expect_is_all_on_cpu().times(0..).returning({
+                    move |device_idx, force| {
+                        real.is_all_on_cpu(device_idx, force)
+                    }
+                });
+            } else {
+                let _ = self.mock.expect_is_all_on_cpu().times(0..)
+                    .returning(move |device_idx, force| is_all_on_cpu);
+            }
+
+            self
+        }
+
+
         pub fn finish(self) -> MockGlobalCtx {
             self.mock
         }
@@ -666,6 +682,7 @@ pub mod mock_global_ctx {
             .with_remove_cache()
             .with_run_purge_gpu()
             .with_is_ipc(is_ipc)
+            .with_is_all_on_cpu(true)
             .finish()
     }
 
