@@ -96,7 +96,6 @@ impl ExtendMotifsSavableResult {
 
 impl Output for ExtendMotifsSavableResult {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for ExtendMotifsSavableResult {}
 
 impl WithId for ExtendMotifsSavableResult {
     type ID = RunConfigId;

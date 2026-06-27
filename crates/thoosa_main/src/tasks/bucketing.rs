@@ -144,7 +144,6 @@ impl Data for BucketingOutput {
 
 impl Output for BucketingOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for BucketingOutput {}
 
 
 #[derive(Debug)]

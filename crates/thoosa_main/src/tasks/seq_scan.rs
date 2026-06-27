@@ -44,7 +44,6 @@ impl SeqScanOutput {
 
 impl Output for SeqScanOutput {}
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for SeqScanOutput {}
 
 #[async_trait]
 impl SavableResult for SeqScanOutput {

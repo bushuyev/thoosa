@@ -38,8 +38,8 @@ pub type MotifNetsOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Ve
 struct ApplyNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput, RunOutput = Arc<DevicesWrap<MotifNetsOutput>>> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     apply_motif_nets: Arc<AMN>,
     apply_label_net: Arc<ApplyLabelNet<C>>
@@ -52,8 +52,8 @@ where
 pub struct ApplyLabelNets<C, AMN = ApplyCosine2DMotifNets<C>>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput, RunOutput = Arc<DevicesWrap<MotifNetsOutput>>> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     id: SynKey,
     apply_nets: Vec<ApplyNets<C, AMN>>,
@@ -153,8 +153,8 @@ where
 impl<C, AMN> ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput, RunOutput = Arc<DevicesWrap<MotifNetsOutput>>> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     pub async fn new_with_motif_nets_builder<R, F, Fut>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -226,32 +226,32 @@ where
 impl<C, AMN> Stage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput, RunOutput = Arc<DevicesWrap<MotifNetsOutput>>> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData, SynKey>;
-    type Out = ThoTensor<LabelProbability, SynKey>;
+    type In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
+    type Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>;
 }
 
 impl<C, AMN> AsyncStage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput, RunOutput = Arc<DevicesWrap<MotifNetsOutput>>> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
+    // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
 
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
+    // fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+    //     thoosa_shared::traits::WithId::id(input)
+    // }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run"))]
     async fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    ) -> Result<Self::Out, ThoError> {
         debug!("ApplyLabelNets::run: input={input:?}");
         let input_id = input.id().clone();
 
@@ -350,8 +350,8 @@ where
 impl<C, AMN> OutId for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = MotifNetsOutput, RunOutput = Arc<DevicesWrap<MotifNetsOutput>>> + thoosa_common::runner::common::runnable::WrappedRunInputStage,
-    for<'a> AMN: Stage<In<'a> = ThoTensor<ChannelsData, SynKey>>,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -403,27 +403,27 @@ where
     C: RunCtx + Adjustable,
 {
     type Ctx = C;
-    type In<'a> = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
-    type Out = ThoTensor<LabelProbability, SynKey>;//TODO it's Batch<LabelProbability>
+    type In<'a> = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>;
+    type Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>;//TODO it's Batch<LabelProbability>
 }
 
 impl<C> AsyncStage for ApplyLabelNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
+    // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
+    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
+    //
+    // fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
+    //     thoosa_shared::traits::WithId::id(input)
+    // }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::run"))]
     fn run(
         self: Arc<Self>,
-        input: Arc<DevicesWrap<Self::In<'static>>>,
+        input: Self::In<'static>,
         mut ctx: Self::Ctx,
-    ) -> impl Future<Output=Result<Arc<DevicesWrap<Self::Out>>, ThoError>> + Send {
+    ) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
         debug!("ApplyLabelNet::run: id={:?} input={input:?}", self.id);
 
         let net_wrapper = Arc::clone(&self.net_wrapper);

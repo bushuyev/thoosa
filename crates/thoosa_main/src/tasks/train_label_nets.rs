@@ -275,7 +275,6 @@ impl Output for TrainLabelNetsOutput {
 
 }
 
-impl thoosa_common::runner::common::cachable::PlainCachedOutput for TrainLabelNetsOutput {}
 
 #[async_trait]
 impl SavableResult for TrainLabelNetsOutput {
