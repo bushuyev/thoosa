@@ -97,8 +97,8 @@ where
     OutD: Dims + 'static,
 {
     type Ctx = C;
-    type In<'a> = ThoTensor<InD, SynKey>;
-    type Out = ThoTensor<OutD, SynKey>;
+    type In<'a> = Arc<DevicesWrap<ThoTensor<InD, SynKey>>>;
+    type Out = Arc<DevicesWrap<ThoTensor<OutD, SynKey>>>;
 }
 
 impl<C, InD, OutD> AsyncStage for Stft<C, InD, OutD>
@@ -107,14 +107,8 @@ where
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
-    type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-        WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "Stft::run"))]
-    async fn run(self: Arc<Self>, input: Arc<DevicesWrap<Self::In<'static>>>, mut ctx: Self::Ctx) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError> {
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         let required_ids: std::collections::HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = std::collections::HashMap::new();
         let oom_handler: OOMHandler<'_, '_, _, _, _, _, SyncStftSelector> = OOMHandler::new(
             vec![

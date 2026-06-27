@@ -223,7 +223,7 @@ where
 pub struct WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
@@ -236,7 +236,7 @@ where
 impl<RC, L, C> WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     pub fn new(store: Arc<Box<dyn Store>>, loader: Arc<L>, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Self {
@@ -266,7 +266,7 @@ where
 impl<RC, L, C> OutId for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -277,32 +277,26 @@ where
 impl<RC, L, C> Stage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = FrequenciesStatsInput<RC>;
-    type Out = ThoTensor<ChannelsWelchPsd, SynKey>;
+    type In<'a> = Arc<FrequenciesStatsInput<RC>>;
+    type Out = Arc<DevicesWrap<ThoTensor<ChannelsWelchPsd, SynKey>>>;
 }
 
 impl<RC, L, C> AsyncStage for WelchPSD<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Send + Sync + Clone + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + Send + Sync + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<DevicesWrap<Self::Out>>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="WelchPSD::run"))]
     async fn run(
         self: Arc<Self>,
         input: Arc<FrequenciesStatsInput<RC>>,
         mut ctx: Self::Ctx,
-    ) -> Result<Arc<DevicesWrap<Self::Out>>, ThoError>
+    ) -> Result<Self::Out, ThoError>
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -342,7 +336,7 @@ where
                 .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
                     ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
                 })).await?;
-            let welch_input = Arc::new(DevicesWrap::wrap_plain(welch_input));
+            let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 
             let welch_input_size = welch_input.size().clone();
             let out_id = welch_stage.out_id(welch_input.id());

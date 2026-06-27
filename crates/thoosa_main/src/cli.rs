@@ -1824,19 +1824,12 @@ where
         ctx.branch(false),
     )).await?;
 
-    let metrics_for_plot: Vec<(String, f32)> = track_await(track_await(motif_stats
-        .run/*_cached*/(clc_input, ctx.branch(false))).await?
-        .with_data_ref(
-            0,
-            ctx.branch(false),
-            None,
-            move |stats: &MotifStatsOutput, _ctx| {
-                metrics
-                    .iter()
-                    .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
-                    .collect::<Result<Vec<_>, ThoError>>()
-            },
-        )).await.unwrap_or(vec![]);
+    let stats = track_await(motif_stats.run(clc_input, ctx.branch(false))).await?;
+    let metrics_for_plot: Vec<(String, f32)> = metrics
+        .iter()
+        .map(|metric| Ok((format!("{metric:?}"), stats.channel_value(metric, 0)?)))
+        .collect::<Result<Vec<_>, ThoError>>()
+        .unwrap_or(vec![]);
 
     let metrics_for_plot = Arc::new(metrics_for_plot);
 
@@ -1917,7 +1910,7 @@ where
 pub async fn run_grid<RCRV, F, RC, ST, CtxF>(
     input_run_config_ids: Option<Vec<RunConfigId>>,
     rcrv: RCRV,
-    input: ST::RunInput,
+    input: ST::In<'static>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     f: F,
@@ -1968,7 +1961,7 @@ where
 
 pub async fn run_opt<RCRV, F, RC, ST, CtxF>(
     rcrv: RCRV,
-    input: ST::RunInput,
+    input: ST::In<'static>,
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,
     init_stage: F,

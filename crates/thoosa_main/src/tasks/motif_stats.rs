@@ -25,7 +25,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{Cached, CachedPurgeOutput, ConsumeData, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -680,6 +680,36 @@ impl WithId for MotifStatsOutput {
 
 impl Output for MotifStatsOutput {}
 
+impl CachedPurgeOutput for MotifStatsOutput {
+    fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn dump_to_cpu_if_last_ref<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn drop_device<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn is_on_device(&self, device_idx: usize) -> bool {
+        device_idx == 0
+    }
+
+    fn is_on_cpu_before(&self, _purge_until: u64) -> bool {
+        true
+    }
+
+    fn is_uniquely_held(&self) -> bool {
+        true
+    }
+
+    fn mem_size(&self) -> u64 {
+        0
+    }
+}
+
 
 #[derive(Debug, Named)]
 struct MotifStatsSyncStage<C>
@@ -823,8 +853,8 @@ where
 pub struct MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     id: SynKey,
     store: Arc<Box<dyn Store>>,
@@ -839,8 +869,8 @@ where
 impl<ML, L, C> Debug for MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MotifStats").finish()
@@ -850,8 +880,8 @@ where
 impl<ML, L, C> MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     pub fn new(
         store: Arc<Box<dyn Store>>,
@@ -875,8 +905,8 @@ where
 impl<ML, L, C> OutId for MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     fn out_id(&self, input_id: &<<Self as Stage>::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -886,28 +916,22 @@ where
 impl<ML, L, C> Stage for MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
     type Ctx = C;
-    type In<'a> = MotifStatsInput;
-    type Out = MotifStatsOutput;
+    type In<'a> = Arc<MotifStatsInput>;
+    type Out = Arc<MotifStatsOutput>;
 }
 
 impl<ML, L, C> AsyncStage for MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
-    type RunInput = Arc<Self::In<'static>>;
-    type RunOutput = Arc<Self::Out>;
-
-    fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-        thoosa_shared::traits::WithId::id(input)
-    }
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="MotifStats::run"))]
-    async fn run(self: Arc<Self>, input: Arc<MotifStatsInput>, mut ctx: Self::Ctx) -> Result<Arc<Self::Out>, ThoError>
+    async fn run(self: Arc<Self>, input: Arc<MotifStatsInput>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError>
     where
         for<'a> Self::In<'a>: Send + Sync,
     {
@@ -1073,8 +1097,8 @@ where
 impl<ML, L, C> Adjustable for MotifStats<ML, L, C>
 where
     C: RunCtx + Adjustable + 'static,
-    L: for<'i> AsyncStage<In<'i> = Resource, Out = ThoTensor<ChannelsData, SynKey>, Ctx = C, RunInput = Arc<Resource>, RunOutput = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>> + Cached + OutId + 'static,
-    ML: for<'i> AsyncStage<In<'i> = MotifLoaderInput, Out = LoadedMotif, Ctx = C, RunInput = Arc<MotifLoaderInput>, RunOutput = Arc<DevicesWrap<LoadedMotif>>> + Cached + OutId + 'static,
+    L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
+    ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {}
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="random_non_overlapping_slices"))]
@@ -1260,17 +1284,10 @@ mod tests {
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-            .branch(false);
-        let size = output
-            .with_data_ref(0, ctx_for_data, None, |stats: &MotifStatsOutput, _ctx| {
-                let t = stats.channels_motifs_dists(&metric)?;
-                debug!("t=\n{}", t.as_ref());
-                assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
-
-                Ok::<_, ThoError>(t.t_ref().size())
-            })
-            .await?;
+        let t = output.channels_motifs_dists(&metric)?;
+        debug!("t=\n{}", t.as_ref());
+        assert!(Tensor::from_slice(&[4.0825f32, 4.0825, 4.0825]).view((3, 1)).allclose(t.as_ref(), 0.02, 0.02, false));
+        let size = t.t_ref().size();
 
         assert_eq!(size, vec![3, 1]);
 
@@ -1323,15 +1340,7 @@ mod tests {
             )
             .await?;
 
-        let value = output
-            .with_data_ref(
-                0,
-                thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-                .branch(false),
-                None,
-                |stats: &MotifStatsOutput, _ctx| stats.channel_value(&metric, 0),
-            )
-            .await?;
+        let value = output.channel_value(&metric, 0)?;
 
         assert!((value - 6.6666665).abs() < 1e-4, "unexpected merged motif metric: {value}");
 
