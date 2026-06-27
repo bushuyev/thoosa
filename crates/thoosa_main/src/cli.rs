@@ -81,7 +81,7 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CudaActorHandle;
 
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
-use thoosa_common::runner::common::cachable::{Cached, CachedStageOutput, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::AsyncStage;
@@ -862,7 +862,7 @@ where
                     ConvertPrecisionInput::new(),
                     root_ctx.branch(true),
                 )).await?;
-            let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
+            // let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
             info!("ConvertPrecision done, converted={}", output.converted().len());
         }
 
@@ -873,7 +873,7 @@ where
                     ExportInput::new(),
                     root_ctx.branch(true),
                 )).await?;
-            let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
+            // let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
             info!("Export done, target_dir={:?} label_nets={} motif_nets={} copied_models={} converted={}", output.target_dir(), output.label_net_run_config_ids().len(), output.motif_net_run_config_ids().len(), output.copied_models().len(), output.converted().len());
         }
 
@@ -884,7 +884,7 @@ where
                     PurgeModelsInput::new(),
                     root_ctx.branch(true),
                 )).await?;
-            let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
+            // let output = track_await(CachedStageOutput::take_data(output, 0)).await?;
             info!("PurgeModels done, purged={}", output.purged().len());
         }
 
@@ -1955,7 +1955,8 @@ where
 
     debug!("run_grid: stage={stage:?}");
 
-    let mut savable = track_await(CachedStageOutput::take_data(track_await(stage.run(input, ctx_f())).await?, 0)).await?;
+    // let mut savable = track_await(CachedStageOutput::take_data(track_await(stage.run(input, ctx_f())).await?, 0)).await?;
+    let mut savable = track_await(stage.run(input, ctx_f())).await?;
 
     debug!("run_grid: savable={savable:?}");
 
@@ -1994,7 +1995,7 @@ where
 
     let stage = track_await(init_stage(opt_run_configs)).await?;
 
-    let mut savable = track_await(CachedStageOutput::take_data(track_await(stage.run(input, ctx_f())).await?, 0)).await?;
+    let mut savable = track_await(stage.run(input, ctx_f())).await?;
 
     let run_config_id = panic_to_err_async!(savable.save(store, ws, <<ST as Stage>::Out as SavableResult>::P::default()))?;
 

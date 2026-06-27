@@ -84,13 +84,6 @@ pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
     fn mem_size(&self) -> u64;
 }
 
-pub trait CachedStageOutput<O>: CachedPurgeOutput
-where
-    O: Data + WithId + Send + Sync + 'static,
-{
-
-    fn take_data(self, to_device_idx: usize) -> BoxFuture<'static, Result<O, ThoError>>;
-}
 
 impl<O> CachedPurgeOutput for Arc<DevicesWrap<O>>
 where
@@ -130,18 +123,6 @@ where
     }
 }
 
-impl<O> CachedStageOutput<O> for Arc<DevicesWrap<O>>
-where
-    O: Data + WithId + Send + Sync + 'static,
-{
-
-    fn take_data(self, to_device_idx: usize) -> BoxFuture<'static, Result<O, ThoError>> {
-        async move {
-            let data = Arc::into_inner(self).ok_or_else(|| ThoError::new("CachedStageOutput::take_data: stage output should not be shared"))?;
-            track_await(data.take_data(to_device_idx)).await
-        }.boxed()
-    }
-}
 
 impl<O> CachedPurgeOutput for Arc<O>
 where
@@ -175,20 +156,6 @@ where
         0
     }
 }
-
-impl<O> CachedStageOutput<O> for Arc<O>
-where
-    O: PlainCachedOutput,
-{
-
-    fn take_data(self, _to_device_idx: usize) -> BoxFuture<'static, Result<O, ThoError>> {
-        async move {
-            Arc::into_inner(self).ok_or_else(|| ThoError::new("CachedStageOutput::take_data: plain stage output should not be shared"))
-        }.boxed()
-    }
-}
-
-
 
 #[async_trait]
 pub trait Cached: AsyncStage + Named
