@@ -22,12 +22,17 @@ use crate::runner::common::runnable::{AsyncStage, SyncStage};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
+use crate::runner::test::FailUntil::NaxParallel;
 // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
 // use crate::runner::test::FailUntil::NaxParallel;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
+use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
+use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 // use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 // use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
@@ -76,198 +81,198 @@ pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, T
     Ok(ctx)
 }
 
-// fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) {
-//     let self_k = parse_numeric_part(resource).unwrap_or(1.0);
-//     let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())
-//         .sum_dim_intlist(1, false, out.t_ref().kind())
-//         .view((-1, 1));
-//     let ok = expected.allclose(out.t_ref(), 0.1, 0.1, false);
-//     debug!("check_sum_result: resource={resource} expected=\n{expected} actual=\n{}", out.t_ref());
-//     assert!(ok);
-// }
+fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<ClcStageOutput, SynKey>) {
+    let self_k = parse_numeric_part(resource).unwrap_or(1.0);
+    let expected = lin_for_size(self_k * mul_k, size, out.t_ref().kind(), &out.t_ref().device())
+        .sum_dim_intlist(1, false, out.t_ref().kind())
+        .view((-1, 1));
+    let ok = expected.allclose(out.t_ref(), 0.1, 0.1, false);
+    debug!("check_sum_result: resource={resource} expected=\n{expected} actual=\n{}", out.t_ref());
+    assert!(ok);
+}
 
-// fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
-//     HashMap::from([
-//         (
-//             SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
-//             Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-//         ),
-//         (
-//             SYNC_CLC_ENDPOINT.to_string(),
-//             Box::new(sync_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
-//         )
-//     ])
-// }
+fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
+    HashMap::from([
+        (
+            SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
+            Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+        ),
+        (
+            SYNC_CLC_ENDPOINT.to_string(),
+            Box::new(sync_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+        )
+    ])
+}
 
-// impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
-//     fn from(t: ThoTensor) -> Self {
-//         let ThoTensor { id, inner, .. } = t;
-//         match inner {
-//             ThoTensorInner::Val { .. } => {
-//                 todo!()
-//             }
-//             ThoTensorInner::Ref { key, size, kind } => {
-//                 ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float)
-//             }
-//         }
-//     }
-// }
+impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
+    fn from(t: ThoTensor) -> Self {
+        let ThoTensor { id, inner, .. } = t;
+        match inner {
+            ThoTensorInner::Val { .. } => {
+                todo!()
+            }
+            ThoTensorInner::Ref { key, size, kind } => {
+                ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float)
+            }
+        }
+    }
+}
 
-// async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static str], use_matmul: bool) -> Result<(), ThoError> {
-//     debug!("run_load_and_clc_ipc_cuda_worker: test_name={test_name} resources={resources:?}");
-//     let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
-//
-//     let tho_device_idx = 1;
-//     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-//     let size = [3, 10];
-//     const MUL_K: f64 = 2.;
-//     let clc_dim = if use_matmul { size[0] } else { size[1] };
-//
-//     // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
-//
-//     let mut tasks = JoinSet::new();
-//     let counter = Arc::new(AtomicUsize::new(0));
-//     for resource in resources {
-//         let resource = *resource;
-//         debug!("run_load_and_clc_ipc_cuda_worker: resource={resource:?}");
-//
-//         let cuda_actor = cuda_actor;
-//         let counter = Arc::clone(&counter);
-//         tasks.spawn(async move {
-//             debug!("run_load_and_clc_ipc_cuda_worker: spawned resource={resource:?}");
-//
-//             let input_id = SynKey::new([mono_key!(resource, "resource key")]);
-//             let self_k = parse_numeric_part(resource).unwrap_or(1.0);
-//             let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu);
-//
-//             let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.into();
-//             debug!("run_load_and_clc_ipc_cuda_worker: worker_ref={worker_ref:?}");
-//
-//             let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
-//             //further logging is duplicated somehow
-//             counter.fetch_add(1, Acquire);
-//             debug!("run_load_and_clc_ipc_cuda_worker: loaded={loaded:?} counter={}", counter.load(Acquire));
-//
-//
-//             let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
-//             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_clc");
-//             let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
-//             let out_key = with_data!(ctx, output_ref; |_ctx, output_ref:&ThoTensor::<ClcStageOutput, SynKey>|{
-//                  output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))
-//             })?;
-//
-//             debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
-//
-//             let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-//                 .copy(ThoTensor::new_ref((), out_key, vec![], tch::Kind::Float), 0.into()).await?;
-//             let cpu_out: ThoTensor<ClcStageOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
-//
-//
-//             assert_eq!(cpu_out.id(), &clc_task.out_id(loaded.id()));
-//             if use_matmul {
-//                 check_sum_result(MUL_K, size, resource, &cpu_out);
-//             } else {
-//                 mul_check(MUL_K, size.into(), resource, &cpu_out, 0.1, 0.1);
-//             }
-//
-//
-//             Ok::<(), ThoError>(())
-//         });
-//     }
-//
-//
-//
-//     let result = async {
-//         while let Some(joined) = tasks.join_next().await {
-//             joined.map_err(|e| ThoError::new(format!("IPC load/mul task join failed: {e:?}")))??;
-//         }
-//
-//         Ok::<(), ThoError>(())
-//     }.await;
-//
-//     debug!("run_load_and_clc_ipc_cuda_worker: counter={:?}", counter.load(Acquire));
-//
-//     let shutdown_result = cuda_actor.shutdown().await;
-//
-//     match (result, shutdown_result) {
-//         (Ok(()), Ok(())) => Ok(()),
-//         (Err(error), _) => Err(error),
-//         (Ok(()), Err(error)) => Err(error),
-//     }
-// }
+async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static str], use_matmul: bool) -> Result<(), ThoError> {
+    debug!("run_load_and_clc_ipc_cuda_worker: test_name={test_name} resources={resources:?}");
+    let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
 
-// async fn run_load_and_clc_ipc_cuda_worker_oom_stage(
-//     test_name: &str,
-//     stage_id: &'static str,
-//     size: [i64; 2],
-//     fail_until: Vec<FailUntil>,
-//     oom_config: OOMRunnerConfig,
-//     resources: &[&'static str],
-//     assert_all_on_cpu: bool,
-// ) -> Result<(), ThoError> {
-//     let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
-//
-//     let tho_device_idx = 1;
-//     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-//
-//     let result = async {
-//         let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
-//         let expected_smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
-//         let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
-//         assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
-//         let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
-//         assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
-//
-//         const MUL_K: f64 = 2.;
-//         let load_and_clc = Arc::new(LoadAndClcStage::new(
-//             LoadAndClcStageId(stage_id),
-//             MUL_K,
-//             fail_until,
-//             size.into(),
-//             ClcOOMRunner::new(
-//                 oom_config,
-//                 Box::new(move |id| {
-//                     SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
-//                         id,
-//                         1,
-//                         &size,
-//                         (Float, Device::Cpu),
-//                         BuildAs::Append,
-//                     ).expect("single dim output builder").copy_partial_outputs_to_device(0)
-//                 }),
-//             ),
-//             Float,
-//             Device::Cuda(0).into(),
-//             false,
-//         ).await);
-//
-//         run_mul_task_invocations(
-//             Arc::clone(&load_and_clc),
-//             resources,
-//             tho_device_idx,
-//             0,
-//             |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-//             move |res, out| {
-//                 mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
-//             },
-//             false,
-//         ).await?;
-//
-//         if assert_all_on_cpu {
-//             assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
-//         }
-//
-//         Ok::<(), ThoError>(())
-//     }.await;
-//
-//     let shutdown_result = cuda_actor.shutdown().await;
-//
-//     match (result, shutdown_result) {
-//         (Ok(()), Ok(())) => Ok(()),
-//         (Err(error), _) => Err(error),
-//         (Ok(()), Err(error)) => Err(error),
-//     }
-// }
+    let tho_device_idx = 1;
+    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+    let size = [3, 10];
+    const MUL_K: f64 = 2.;
+    let clc_dim = if use_matmul { size[0] } else { size[1] };
+
+    // cuda_actor.install_endpoint(serde_json::to_string(&SyncClcTaskInit::new(mono_key!(0, "sync_task_0").into(), MUL_K, clc_dim, vec![], false))?).await?;
+
+    let mut tasks = JoinSet::new();
+    let counter = Arc::new(AtomicUsize::new(0));
+    for resource in resources {
+        let resource = *resource;
+        debug!("run_load_and_clc_ipc_cuda_worker: resource={resource:?}");
+
+        let cuda_actor = cuda_actor;
+        let counter = Arc::clone(&counter);
+        tasks.spawn(async move {
+            debug!("run_load_and_clc_ipc_cuda_worker: spawned resource={resource:?}");
+
+            let input_id = SynKey::new([mono_key!(resource, "resource key")]);
+            let self_k = parse_numeric_part(resource).unwrap_or(1.0);
+            let cpu_tensor = lin_for_size(self_k, size, Float, &Device::Cpu);
+
+            let worker_ref: ThoTensor<LoadedTensor, SynKey> = track_await(cuda_actor.copy(cpu_tensor.into(), tho_device_idx.into())).await?.into();
+            debug!("run_load_and_clc_ipc_cuda_worker: worker_ref={worker_ref:?}");
+
+            let loaded = Arc::new(DevicesWrap::wrap(worker_ref));
+            //further logging is duplicated somehow
+            counter.fetch_add(1, Acquire);
+            debug!("run_load_and_clc_ipc_cuda_worker: loaded={loaded:?} counter={}", counter.load(Acquire));
+
+
+            let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
+            let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_clc");
+            let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
+            let out_key = with_data!(ctx, output_ref; |_ctx, output_ref:&ThoTensor::<ClcStageOutput, SynKey>|{
+                 output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))
+            })?;
+
+            debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
+
+            let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
+                .copy(ThoTensor::new_ref((), out_key, vec![], tch::Kind::Float), 0.into()).await?;
+            let cpu_out: ThoTensor<ClcStageOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
+
+
+            assert_eq!(cpu_out.id(), &clc_task.out_id(loaded.id()));
+            if use_matmul {
+                check_sum_result(MUL_K, size, resource, &cpu_out);
+            } else {
+                mul_check(MUL_K, size.into(), resource, &cpu_out, 0.1, 0.1);
+            }
+
+
+            Ok::<(), ThoError>(())
+        });
+    }
+
+
+
+    let result = async {
+        while let Some(joined) = tasks.join_next().await {
+            joined.map_err(|e| ThoError::new(format!("IPC load/mul task join failed: {e:?}")))??;
+        }
+
+        Ok::<(), ThoError>(())
+    }.await;
+
+    debug!("run_load_and_clc_ipc_cuda_worker: counter={:?}", counter.load(Acquire));
+
+    let shutdown_result = cuda_actor.shutdown().await;
+
+    match (result, shutdown_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+    }
+}
+
+async fn run_load_and_clc_ipc_cuda_worker_oom_stage(
+    test_name: &str,
+    stage_id: &'static str,
+    size: [i64; 2],
+    fail_until: Vec<FailUntil>,
+    oom_config: OOMRunnerConfig,
+    resources: &[&'static str],
+    assert_all_on_cpu: bool,
+) -> Result<(), ThoError> {
+    let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
+
+    let tho_device_idx = 1;
+    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+
+    let result = async {
+        let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
+        let expected_smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
+        let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
+        assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
+        let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
+        assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
+
+        const MUL_K: f64 = 2.;
+        let load_and_clc = Arc::new(LoadAndClcStage::new(
+            LoadAndClcStageId(stage_id),
+            MUL_K,
+            fail_until,
+            size.into(),
+            ClcOOMRunner::new(
+                oom_config,
+                Box::new(move |id| {
+                    SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
+                        id,
+                        1,
+                        &size,
+                        (Float, Device::Cpu),
+                        BuildAs::Append,
+                    ).expect("single dim output builder").copy_partial_outputs_to_device(0)
+                }),
+            ),
+            Float,
+            Device::Cuda(0).into(),
+            false,
+        ).await);
+
+        run_mul_task_invocations(
+            Arc::clone(&load_and_clc),
+            resources,
+            tho_device_idx,
+            0,
+            |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+            move |res, out| {
+                mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
+            },
+            false,
+        ).await?;
+
+        if assert_all_on_cpu {
+            assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
+        }
+
+        Ok::<(), ThoError>(())
+    }.await;
+
+    let shutdown_result = cuda_actor.shutdown().await;
+
+    match (result, shutdown_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+    }
+}
 
 async fn run_model_test_ipc_cuda_worker<F, Fut>(test_name: &str, run: F) -> Result<(), ThoError>
 where
@@ -288,145 +293,145 @@ where
 }
 
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-// async fn test_load_and_clc_ipc_cuda_worker_no_oom_tensor() {
-//     debug!("test_load_and_clc_ipc_cuda_worker_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
-//     } else {
-//         run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await.unwrap();
-//     }
-// }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_load_and_clc_ipc_cuda_worker_no_oom_tensor() {
+    debug!("test_load_and_clc_ipc_cuda_worker_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
+    } else {
+        run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await.unwrap();
+    }
+}
 
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-// async fn test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor() {
-//     debug!("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
-//     } else {
-//         run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
-//     }
-// }
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor() {
+    debug!("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor() -> Result<(), ThoError> {
-//     debug!("test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         run_load_and_clc_ipc_cuda_worker_oom_stage(
-//             "test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor",
-//             "ipc_load_and_clc_oom_till_min_max_parallel_id",
-//             [3, 10],
-//             vec![NaxParallel(20)],
-//             OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
-//             &["resource_1", "resource_2", "resource_3"],
-//             false,
-//         ).await
-//     }
-// }
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
+    } else {
+        run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
+    }
+}
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor() -> Result<(), ThoError> {
-//     debug!("test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         run_load_and_clc_ipc_cuda_worker_oom_stage(
-//             "test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor",
-//             "ipc_load_and_clc_oom_compete_for_max_parallel_id",
-//             [3, 10],
-//             vec![NaxParallel(MAX_PARALLEL)],
-//             OOMRunnerConfig::MaxParallel {
-//                 max: MAX_PARALLEL,
-//                 step: *MaxParallelStep::TEN,
-//             },
-//             &["resource_1", "resource_2", "resource_3"],
-//             false,
-//         ).await
-//     }
-// }
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor() -> Result<(), ThoError> {
+    debug!("test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), ThoError> {
-//     debug!("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         run_load_and_clc_ipc_cuda_worker_oom_stage(
-//             "test_load_and_clc_ipc_cuda_worker_oom_splits_tensor",
-//             "ipc_load_and_clc_oom_splits_id",
-//             [3, 10],
-//             vec![FailUntil::MemLimit(12)],
-//             OOMRunnerConfig::Splits {},
-//             &[
-//                 "resource_1",
-//                 "resource_2",
-//                 "resource_3",
-//                 "resource_4",
-//                 "resource_5",
-//             ],
-//             false,
-//         ).await
-//     }
-// }
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        run_load_and_clc_ipc_cuda_worker_oom_stage(
+            "test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor",
+            "ipc_load_and_clc_oom_till_min_max_parallel_id",
+            [3, 10],
+            vec![NaxParallel(20)],
+            OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
+            &["resource_1", "resource_2", "resource_3"],
+            false,
+        ).await
+    }
+}
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
-//     debug!("test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         let resources = (0..3)
-//             .map(|i| &*format!("resource_{i}").leak())
-//             .collect::<Vec<_>>();
-//
-//         run_load_and_clc_ipc_cuda_worker_oom_stage(
-//             "test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor",
-//             "ipc_load_and_clc_oom_max_parallel_and_splits_id",
-//             [3, 100],
-//             vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
-//             OOMRunnerConfig::MaxParallelAndSplits {
-//                 max: MAX_PARALLEL,
-//                 step: *MaxParallelStep::TEN,
-//             },
-//             resources.as_slice(),
-//             false,
-//         ).await
-//     }
-// }
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor() -> Result<(), ThoError> {
+    debug!("test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-// #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
-// async fn test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu() -> Result<(), ThoError> {
-//     debug!("test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-//
-//     if std::env::var_os(IPC_SOCK_ENV).is_some() {
-//         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
-//     } else {
-//         run_load_and_clc_ipc_cuda_worker_oom_stage(
-//             "test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu",
-//             "ipc_load_and_clc_dump_to_cpu_id",
-//             [3, 100],
-//             vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
-//             OOMRunnerConfig::DumpedToCpu {},
-//             &[
-//                 "resource_1",
-//                 "resource_2",
-//                 "resource_3",
-//                 "resource_4",
-//                 "resource_5",
-//             ],
-//             true,
-//         ).await
-//     }
-// }
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        run_load_and_clc_ipc_cuda_worker_oom_stage(
+            "test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor",
+            "ipc_load_and_clc_oom_compete_for_max_parallel_id",
+            [3, 10],
+            vec![NaxParallel(MAX_PARALLEL)],
+            OOMRunnerConfig::MaxParallel {
+                max: MAX_PARALLEL,
+                step: *MaxParallelStep::TEN,
+            },
+            &["resource_1", "resource_2", "resource_3"],
+            false,
+        ).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), ThoError> {
+    debug!("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        run_load_and_clc_ipc_cuda_worker_oom_stage(
+            "test_load_and_clc_ipc_cuda_worker_oom_splits_tensor",
+            "ipc_load_and_clc_oom_splits_id",
+            [3, 10],
+            vec![FailUntil::MemLimit(12)],
+            OOMRunnerConfig::Splits {},
+            &[
+                "resource_1",
+                "resource_2",
+                "resource_3",
+                "resource_4",
+                "resource_5",
+            ],
+            false,
+        ).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
+    debug!("test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        let resources = (0..3)
+            .map(|i| &*format!("resource_{i}").leak())
+            .collect::<Vec<_>>();
+
+        run_load_and_clc_ipc_cuda_worker_oom_stage(
+            "test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor",
+            "ipc_load_and_clc_oom_max_parallel_and_splits_id",
+            [3, 100],
+            vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
+            OOMRunnerConfig::MaxParallelAndSplits {
+                max: MAX_PARALLEL,
+                step: *MaxParallelStep::TEN,
+            },
+            resources.as_slice(),
+            false,
+        ).await
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu() -> Result<(), ThoError> {
+    debug!("test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        run_load_and_clc_ipc_cuda_worker_oom_stage(
+            "test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu",
+            "ipc_load_and_clc_dump_to_cpu_id",
+            [3, 100],
+            vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
+            OOMRunnerConfig::DumpedToCpu {},
+            &[
+                "resource_1",
+                "resource_2",
+                "resource_3",
+                "resource_4",
+                "resource_5",
+            ],
+            true,
+        ).await
+    }
+}
 
 // #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 // async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu() -> Result<(), ThoError> {
