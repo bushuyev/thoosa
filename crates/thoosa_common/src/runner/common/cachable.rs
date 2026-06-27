@@ -67,47 +67,6 @@ pub trait PlainCachedOutput: Data + WithId + Send + Sync + 'static {}
 
 impl PlainCachedOutput for () {}
 
-pub trait LoadDataFromAnyDevice<O>: Debug + Send + Sync
-where
-    O: Data + WithId + Send + Sync,
-{
-    type Guard<'a>: Deref<Target = O> + Debug + Send
-    where
-        Self: 'a,
-        O: 'a;
-
-    fn load_from_any_device_<'a>(&'a self, to_tho_device_idx: usize) -> BoxFuture<'a, Result<Self::Guard<'a>, ThoError>>;
-}
-
-impl<O> LoadDataFromAnyDevice<O> for Arc<O>
-where
-    O: PlainCachedOutput,
-{
-    type Guard<'a>
-        = PlainDataGuard<'a, O>
-    where
-        Self: 'a,
-        O: 'a;
-
-    fn load_from_any_device_<'a>(&'a self, _to_tho_device_idx: usize) -> BoxFuture<'a, Result<Self::Guard<'a>, ThoError>> {
-        async move { Ok(PlainDataGuard(self.as_ref())) }.boxed()
-    }
-}
-
-impl<O> LoadDataFromAnyDevice<O> for Arc<DevicesWrap<O>>
-where
-    O: Data + WithId + Send + Sync,
-{
-    type Guard<'a>
-        = RwLockReadGuard<'a, O>
-    where
-        Self: 'a,
-        O: 'a;
-
-    fn load_from_any_device_<'a>(&'a self, to_tho_device_idx: usize) -> BoxFuture<'a, Result<Self::Guard<'a>, ThoError>> {
-        DevicesWrap::load_from_any_device_(self.as_ref(), to_tho_device_idx).boxed()
-    }
-}
 
 pub trait CachedPurgeOutput: Clone + Send + Sync + 'static {
     fn dump_to_cpu<'a>(&'a self, device_idx: usize) -> BoxFuture<'a, Result<(), ThoError>>;
