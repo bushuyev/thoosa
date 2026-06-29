@@ -334,7 +334,7 @@ where
 
             let welch_input = track_await(loaded
                 .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-                    ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())
+                    std::future::ready(ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone()))
                 })).await?;
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 

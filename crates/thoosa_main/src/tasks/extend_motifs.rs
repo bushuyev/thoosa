@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
@@ -771,16 +772,17 @@ impl WithId for SelectMotifsInputSelectorWrap {
 impl WithDataRef for SelectMotifsInputSelectorWrap {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        F: for <'f> FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
             let t_1_batch = self.batch.clone();
             let stacked_motifs = Arc::clone(&self.stacked_motifs);
             let motifs_stats = Arc::clone(&self.motifs_stats);
-            with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
+            let future = with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
                 |
                  ctx,
                  batch_v:&[&ThoTensor<ChannelsData, SynKey>],
@@ -788,24 +790,26 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
                  motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
                 |{
 
-                    do_run(&ClcResourcesMotifsDistInput::new_with_offsets(
+                    Ok::<_, ThoError>(do_run(&ClcResourcesMotifsDistInput::new_with_offsets(
                         batch_v,
                         self.resource_ids.clone(),
                         self.resource_offsets.clone(),
                         stacked_motifs,
                         motifs_stats,
-                    ), &ctx)
+                    ), &ctx))
 
-            })
+            })?;
+            track_await(future).await
         }
     }
 }
 
 impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
         P: RunCtx + 'a,
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
     {
         async move {
 
@@ -837,7 +841,7 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
             let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
             let motifs_stats = Arc::clone(&self.motifs_stats);
 
-            with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
+            let future = with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
                 |
                  ctx,
                  batch_v:&[&ThoTensor<ChannelsData, SynKey>],
@@ -852,8 +856,9 @@ impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorW
                         motifs_stats,
                     );
 
-                    do_run(&inpt, &ctx)
-            })
+                    Ok::<_, ThoError>(do_run(&inpt, &ctx))
+            })?;
+            track_await(future).await
         }
     }
 }
@@ -1344,7 +1349,7 @@ mod tests {
 
         let mut ctx_for_data = ctx.branch(false);
         let motifs_stats_t: Tensor = motifs_stats
-            .with_data_ref(0, ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| Ok(motifs_stats.t_ref().shallow_clone()))
+            .with_data_ref(0, ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| std::future::ready(Ok(motifs_stats.t_ref().shallow_clone())))
             .await?;
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);
 

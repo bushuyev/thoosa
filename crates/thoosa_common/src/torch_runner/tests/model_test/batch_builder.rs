@@ -108,7 +108,7 @@ impl AsyncStage for BatchBuilder {
             let row = feat.with_data_ref(0, ctx.branch(false), None, move |b_t: &ThoTensor<ABData, ModelTestId>, _ctx| {
                 let t: &Tensor = b_t.as_ref();
                 let y = Tensor::full([t.size()[0], 1], label, (t.kind(), t.device()));
-                Ok(Tensor::cat(&[t.copy(), y], 1))
+                std::future::ready(Ok(Tensor::cat(&[t.copy(), y], 1)))
             }).await?;
             rows.push(row);
         }

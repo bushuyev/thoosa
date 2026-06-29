@@ -2,6 +2,7 @@ use std::any::Any;
 use std::cmp::min;
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{DivAssign, Range};
 use std::sync::Arc;
@@ -280,16 +281,17 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type O<'o> = ClcResourcesMotifsDistInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        F: for <'f> FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        F: for <'f> FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P:RunCtx + 'a
     {
         async move {
             let t_1_batch= self.batch.clone();
             let stacked_motifs = Arc::clone(&self.stacked_motifs);
             let motifs_stats = Arc::clone(&self.motifs_stats);
-            with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
+            let future = with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
                 |
                  ctx,
                  batch_v:&[&ThoTensor<ChannelsData, SynKey>],
@@ -297,14 +299,15 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
                  motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
                 |{
 
-                    do_run(&ClcResourcesMotifsDistInput::new(
+                    Ok::<_, ThoError>(do_run(&ClcResourcesMotifsDistInput::new(
                         batch_v,
                         self.resource_ids.clone(),
                         stacked_motifs,
                         motifs_stats,
-                    ), &ctx)
+                    ), &ctx))
 
-            })
+            })?;
+            track_await(future).await
         }
     }
 }
@@ -331,10 +334,11 @@ impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
 
 impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, ctx: P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, ctx: P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
         P:RunCtx + 'a,
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a
+        for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
     {
         async move {
 
@@ -346,7 +350,7 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
             let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
             let motifs_stats = Arc::clone(&self.motifs_stats);
 
-            with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
+            let future = with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
                 |
                  ctx,
                  batch_v:&[&ThoTensor<ChannelsData, SynKey>],
@@ -360,8 +364,9 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
                         motifs_stats,
                     );
 
-                    do_run(&inpt, &ctx)
-            })
+                    Ok::<_, ThoError>(do_run(&inpt, &ctx))
+            })?;
+            track_await(future).await
         }
     }
 }

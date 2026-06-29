@@ -1161,7 +1161,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
             trace!("motif.t={} dist={dist}", t.data().t_ref());
 
-            Ok(true)
+            std::future::ready(Ok(true))
         }).await?;
 
         assert_eq!(r, true);
@@ -1243,7 +1243,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
                 trace!("random slices: \t{} dist={dist}", t.t_ref());
 
-                Ok(true)
+                std::future::ready(Ok(true))
             },
         ).await?;
         // assert_eq!(r, true);

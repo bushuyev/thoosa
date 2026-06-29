@@ -397,22 +397,24 @@ impl WithId for SelectBucketsSyncInputWrapper {
 impl WithDataRef for SelectBucketsSyncInputWrapper {
     type O<'o> = SelectBucketsSyncInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
             let input = SelectBucketsSyncInput::new(&self.select_config);
-            do_run(&input, &permits_ctx)
+            track_await(do_run(&input, &permits_ctx)).await
         }
     }
 }
 
 impl WithSelectDataRef<()> for SelectBucketsSyncInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {

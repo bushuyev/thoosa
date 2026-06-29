@@ -411,9 +411,10 @@ where
 {
     type O<'o> = BucketingSyncInput<'o, D, Id>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
@@ -421,7 +422,8 @@ where
 
             track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
                 let input = BucketingSyncInput::new(resource_id, tensor, 0);
-                do_run(&input, ctx)
+                let future = do_run(&input, ctx);
+                async move { track_await(future).await }
             })).await
         }
     }
@@ -451,9 +453,10 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
@@ -467,9 +470,10 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, permits_ctx: P, selector: SelectBucketsInputSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, selector: SelectBucketsInputSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
@@ -477,18 +481,21 @@ where
             let bucket_window_samples = self.bucket_window_samples;
             let bucket_step_samples = self.bucket_step_samples;
             track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
-                let audio = tensor.t_ref();
-                let audio_size = audio.size();
-                if audio_size.len() != 2 {
-                    return Err(ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: expected audio shape [channels, samples], got {audio_size:?}")));
-                }
-                let sample_range = bucket_selector_sample_range(&selector, audio_size[1], bucket_window_samples, bucket_step_samples)?;
-                debug!("BucketingTensorInput::with_selected_data_ref: selector={selector:?} sample_range={sample_range:?} audio_size={audio_size:?}");
-                let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: invalid sample_range={sample_range:?}")))?;
-                let selected_audio = audio.f_narrow(1, sample_range.start, sample_len)?;
-                let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
-                let input = BucketingSyncInput::new(resource_id, &selected_tensor, sample_range.start);
-                do_run(&input, ctx)
+                let future = (|| {
+                    let audio = tensor.t_ref();
+                    let audio_size = audio.size();
+                    if audio_size.len() != 2 {
+                        return Err(ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: expected audio shape [channels, samples], got {audio_size:?}")));
+                    }
+                    let sample_range = bucket_selector_sample_range(&selector, audio_size[1], bucket_window_samples, bucket_step_samples)?;
+                    debug!("BucketingTensorInput::with_selected_data_ref: selector={selector:?} sample_range={sample_range:?} audio_size={audio_size:?}");
+                    let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: invalid sample_range={sample_range:?}")))?;
+                    let selected_audio = audio.f_narrow(1, sample_range.start, sample_len)?;
+                    let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
+                    let input = BucketingSyncInput::new(resource_id, &selected_tensor, sample_range.start);
+                    Ok::<_, ThoError>(do_run(&input, ctx))
+                })();
+                async move { track_await(future?).await }
             })).await
         }
     }

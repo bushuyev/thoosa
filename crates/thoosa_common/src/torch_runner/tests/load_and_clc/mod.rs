@@ -316,7 +316,7 @@ async fn do_test_loaded(
                     .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
             );
 
-            Ok(tensor_data_0_0.t_ref().shallow_clone())
+            std::future::ready(Ok(tensor_data_0_0.t_ref().shallow_clone()))
         })
         .await?;
 
@@ -333,7 +333,7 @@ async fn do_test_loaded(
                 // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
                 assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
-                Ok(())
+                std::future::ready(Ok(()))
             })
         .await?;
     // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
@@ -905,7 +905,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
                 debug!("Ok");
 
-                Ok(())
+                std::future::ready(Ok(()))
             })
         .await?;
 
@@ -1058,4 +1058,3 @@ async fn test_with_data() -> Result<(), ThoError> {
     Ok(())
 
 }
-

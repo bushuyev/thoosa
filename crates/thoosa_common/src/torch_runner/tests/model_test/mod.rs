@@ -82,7 +82,7 @@ pub(crate) async fn run_model_test_pipeline(
                       ctx.branch(false), None, |acc_t: &ThoTensor<ClsOut, ModelTestId>, _ctx| {
               let v = ClsOut::accuracy(acc_t);
               assert!(v >= min_accuracy, "training accuracy too low: {v}");
-              Ok(())
+              std::future::ready(Ok(()))
           })
     .await?;
 

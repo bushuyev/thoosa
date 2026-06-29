@@ -8,6 +8,7 @@ use parking_lot::{Mutex, RwLock};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{format, Debug};
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::path::PathBuf;
@@ -918,7 +919,7 @@ impl WithId for ApplyMotifNetInputWrapper {
 impl WithDataRef for ApplyMotifNetInputWrapper {
     type O<'o> = ApplyMotifNetInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(
         &'a self,
         _to_device_idx: usize,
         mut permits_ctx: P,
@@ -926,14 +927,15 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
         do_run: F,
     ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
             debug!("ApplyMotifNetInputWrapper::with_data_ref: 00. ctx.id={:?}", permits_ctx.id());
             // let x_ctx = permits_ctx.branch(Some("xxx"), false);
 
-            with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
+            let future = with_data!(permits_ctx, self.batch, self.motif_net; move |mut ctx:P, batch:&ThoTensor<ChannelsData, SynKey>, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>|{
                 let input = ApplyMotifNetInput::new(batch, motif_net);
 
                 debug!("ApplyMotifNetInputWrapper::with_data_ref: 0. ctx.id={:?}", ctx.id());
@@ -946,8 +948,9 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
 
                 debug!("ApplyMotifNetInputWrapper::with_data_ref: 1. ctx.id={id:?}");
 
-                r
-            })
+                Ok::<_, ThoError>(r)
+            })?;
+            track_await(future).await
         }
     }
     
@@ -955,7 +958,7 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
 }
 
 impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(
         &'a self,
         _to_device_idx: usize,
         mut permits_ctx: P,
@@ -964,12 +967,13 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
         do_run: F,
     ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move {
 
-            with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData, SynKey>|{
+            let future = with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData, SynKey>|{
                 let b = batch.subview(selector)?;
                 let input = ApplyMotifNetInput::new(&b, motif_net);
                 debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
@@ -979,8 +983,9 @@ impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
                 drop(ctx);
                 debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 1. ctx.id={id:?}");
 
-                r
-            })
+                Ok::<_, ThoError>(r)
+            })?;
+            track_await(future).await
         }
     }
 }
