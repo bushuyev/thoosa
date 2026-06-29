@@ -10,6 +10,7 @@ use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
@@ -124,7 +125,7 @@ where
 {
     type O<'o> = CrossInput<'o, R>;
 
-    fn with_data_ref<'b, Rt: Send + 'b, F, P>(
+    fn with_data_ref<'b, Rt: Send + 'b, F, P, FF>(
         &'b self,
         _to_device_idx: usize,
         permits_ctx: P,
@@ -132,12 +133,13 @@ where
         do_run: F,
     ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'b
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send + 'b,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'b,
+        FF: Future<Output = Result<Rt, ThoError>> + Send + 'b,
         P: RunCtx + 'b,
     {
         async move {
             debug!("CrossInput::with_data_ref: do_run");
-            do_run(self, &permits_ctx)
+            track_await(do_run(self, &permits_ctx)).await
         }
     }
 
@@ -148,7 +150,7 @@ impl<'a, R> WithSelectDataRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Debug + Send + Sync + 'static,
 {
-    fn with_selected_data_ref<'b, 'o, Rt: Send + 'b, F, P>(
+    fn with_selected_data_ref<'b, 'o, Rt: Send + 'b, F, P, FF>(
         &'b self,
         _to_device_idx: usize,
         permits_ctx: P,
@@ -157,7 +159,8 @@ where
         do_run: F,
     ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'b
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send + 'b,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'b,
+        FF: Future<Output = Result<Rt, ThoError>> + Send + 'b,
         P: RunCtx + 'b,
     {
         async move {
@@ -177,7 +180,7 @@ where
                 self.id.clone(), // + &mono_key!(0, "todo"),
             );
 
-            do_run(&input, &permits_ctx)
+            track_await(do_run(&input, &permits_ctx)).await
         }
     }
 }

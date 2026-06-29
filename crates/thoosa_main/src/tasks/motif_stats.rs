@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
+use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -278,10 +279,11 @@ impl MotifStatsCalcInputWrapper {
         Self { id, data: MotifStatsCalcInputDataWrapper::Motifs(motifs), metrics, quantiles }
     }
 
-    async fn with_calc_input<R, F, P>(&self, permits_ctx: P, do_run: F) -> Result<R, ThoError>
+    async fn with_calc_input<'a, R, F, P, FF>(&'a self, permits_ctx: P, do_run: F) -> Result<R, ThoError>
     where
-        for<'f> F: FnOnce(&MotifStatsCalcInput<'f>, &P) -> Result<R, ThoError>,
-        P: RunCtx,
+        for<'f> F: FnOnce(&MotifStatsCalcInput<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
+        P: RunCtx + 'a,
     {
         let id = self.id.clone();
         let metrics = self.metrics.clone();
@@ -289,16 +291,18 @@ impl MotifStatsCalcInputWrapper {
 
         match &self.data {
             MotifStatsCalcInputDataWrapper::Managed(motif) => {
-                with_data!(permits_ctx, motif; move |ctx: P, motif: &LoadedMotif| {
+                let future = with_data!(permits_ctx, motif; move |ctx: P, motif: &LoadedMotif| {
                     let input = MotifStatsCalcInput::from_managed(id, motif, metrics, quantiles);
-                    do_run(&input, &ctx)
-                })
+                    Ok::<_, ThoError>(do_run(&input, &ctx))
+                })?;
+                track_await(future).await
             }
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
-                with_data!(permits_ctx, [motifs]; move |ctx: P, motifs: &[&LoadedMotif]| {
+                let future = with_data!(permits_ctx, [motifs]; move |ctx: P, motifs: &[&LoadedMotif]| {
                     let input = MotifStatsCalcInput::from_motifs(id, motifs.to_vec(), metrics, quantiles);
-                    do_run(&input, &ctx)
-                })
+                    Ok::<_, ThoError>(do_run(&input, &ctx))
+                })?;
+                track_await(future).await
             }
         }
     }
@@ -315,9 +319,10 @@ impl WithId for MotifStatsCalcInputWrapper {
 impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInputWrapper {
     type O<'o> = MotifStatsCalcInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move { track_await(self.with_calc_input(permits_ctx, do_run)).await }
@@ -327,9 +332,10 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
 }
 
 impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifStatsCalcInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P: RunCtx + 'a,
     {
         async move { track_await(self.with_calc_input(permits_ctx, do_run)).await }

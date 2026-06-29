@@ -1693,7 +1693,7 @@ where
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
     track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout)
+        std::future::ready(plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout))
     })).await?;
 
     if let Some(freq_filters) = freq_filters {
@@ -1706,7 +1706,7 @@ where
 
         let filtered_channels = channels.clone();
         track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout)
+            std::future::ready(plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout))
         })).await?;
     }
 
@@ -1745,7 +1745,7 @@ where
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
     track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-        plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout)
+        std::future::ready(plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout))
     })).await?;
 
 
@@ -1759,7 +1759,7 @@ where
 
         let channel_only_filtered = vec![channel];
         track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-            plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout)
+            std::future::ready(plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout))
         })).await?;
 
         filtered
@@ -1777,24 +1777,27 @@ where
     track_await(filtered_or_raw.with_data_ref(0, ctx.branch(false), None, {
         let motif_net = Arc::clone(&motif_net);
         move |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-            let out = apply_motif_net_forward(
-                mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
-                tensor,
-                motif_net.as_ref(),
-                motif_slices_step,
-                tensor.id(),
-            )?;
+            let result = (|| {
+                let out = apply_motif_net_forward(
+                    mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
+                    tensor,
+                    motif_net.as_ref(),
+                    motif_slices_step,
+                    tensor.id(),
+                )?;
 
-            plot_single_line_tensor(
-                ws,
-                &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
-                &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_config_id={find_motifs_run_config_id} net={net_path:?}"),
-                out.t_ref(),
-                resolution,
-                print_to_stdout,
-            )?;
+                plot_single_line_tensor(
+                    ws,
+                    &format!("resource_{resource_id}_motif_net_applied_{motif_id}_{channel}_{net_path_sfx}"),
+                    &format!("Resource {resource_id} motif-net output motif_id={motif_id} channel={channel} find_run_config_id={find_motifs_run_config_id} net={net_path:?}"),
+                    out.t_ref(),
+                    resolution,
+                    print_to_stdout,
+                )?;
 
-            Ok(())
+                Ok(())
+            })();
+            std::future::ready(result)
         }
     })).await?;
 
@@ -1836,8 +1839,9 @@ where
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
     let r = track_await(motif.with_data_ref(ctx.tho_device_idx(), ctx.branch(false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
-        let run_config_id = motif.extra().find_motifs_run_config_id;
-        let channel = motif.extra().channel;
+        let result = (|| {
+            let run_config_id = motif.extra().find_motifs_run_config_id;
+            let channel = motif.extra().channel;
 
         trace!("plot_motif: motif.t={}", motif.data().t_ref());
         let all_slices = motif.data().t_ref().unbind(0);
@@ -1902,7 +1906,9 @@ where
         )?;
 
 
-        Ok(true)
+            Ok(true)
+        })();
+        std::future::ready(result)
     })).await?;
     Ok(())
 }

@@ -161,24 +161,26 @@ impl ABClcSyncStageInputWrapper {
 impl WithDataRef for ABClcSyncStageInputWrapper {
     type O<'o> = ABClcSyncStageInput<'o>;
 
-    fn with_data_ref<'a, R: Send + 'a, F, P>(&'a self, _to_device_idx: usize, ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
     where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+            for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+            FF: Future<Output = Result<R, ThoError>> + Send + 'a,
             P: RunCtx + 'a,
     {
         async move {
-            with_data!(ctx, self.a_out, self.b_out; |ctx, a, b|{
-                do_run(&ABClcSyncStageInput::new(a, b), &ctx)
-            })
+            let a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
+            let b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
+            track_await(do_run(&ABClcSyncStageInput::new(&a, &b), &ctx)).await
         }
     }
 }
 
 //required only when SplitAdjuster is used
 impl WithSelectDataRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P>(&'a self, to_device_idx: usize, ctx: P, selector: ABClcSyncStageInputWrapperSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
+    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, ctx: P, _selector: ABClcSyncStageInputWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
     where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<R, ThoError> + Send + 'a,
+            for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+            FF: Future<Output = Result<R, ThoError>> + Send + 'a,
             P: RunCtx + 'a
     {
         async move {

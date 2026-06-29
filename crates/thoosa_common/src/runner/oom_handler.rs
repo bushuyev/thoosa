@@ -325,7 +325,7 @@ where
                     0,
                     run_context,
                     None,
-                    |data, ctx| Arc::clone(&task).do_run(data.borrow(), ctx),
+                    |data, ctx| std::future::ready(Arc::clone(&task).do_run(data.borrow(), ctx)),
                 )).await;
         }
 
@@ -365,8 +365,11 @@ where
                                         selector,
                                         None,
                                         |data, ctx| {
-                                            let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
-                                            Arc::clone(&task).do_run(data.borrow(), ctx)
+                                            let out = (|| {
+                                                let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
+                                                Arc::clone(&task).do_run(data.borrow(), ctx)
+                                            })();
+                                            std::future::ready(out)
                                         },
                                     )).await
                             } else {
@@ -377,8 +380,11 @@ where
                                         run_ctx,
                                         None,
                                         |data, ctx| {
-                                            let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
-                                            Arc::clone(&task).do_run(data.borrow(), ctx)
+                                            let out = (|| {
+                                                let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
+                                                Arc::clone(&task).do_run(data.borrow(), ctx)
+                                            })();
+                                            std::future::ready(out)
                                         },
                                     )).await
                             };

@@ -14,6 +14,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use std::fmt::Debug;
+use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Range};
 use std::sync::Arc;
@@ -936,7 +937,7 @@ impl WithDataRef for CrossInputSelectorWrap
 {
     type O<'o> = CrossInput<'o, Arc<Resource>>;
 
-    fn with_data_ref<'a, Rt: Send + 'a, F, P>(
+    fn with_data_ref<'a, Rt: Send + 'a, F, P, FF>(
         &'a self,
         _to_device_idx: usize,
         permits_ctx: P,
@@ -944,27 +945,29 @@ impl WithDataRef for CrossInputSelectorWrap
         do_run: F,
     ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'a
     where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> Result<Rt, ThoError> + Send + 'a,
+            for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+            FF: Future<Output = Result<Rt, ThoError>> + Send + 'a,
             P: RunCtx + 'a,
     {
         async move {
             let t_0_batch= self.batch_0.clone();
             let t_1_batch= self.batch_1.clone();
-            with_data!(permits_ctx, [t_0_batch], [t_1_batch];
+            let future = with_data!(permits_ctx, [t_0_batch], [t_1_batch];
                 |
                  ctx,
                  batch_0:&[&ThoTensor<ChannelsData, SynKey>],
                  batch_1:&[&ThoTensor<ChannelsData, SynKey>],
                 |{
 
-                    do_run(&CrossInput::new(
+                    Ok::<_, ThoError>(do_run(&CrossInput::new(
                         [batch_0,batch_1].concat().as_slice(),
                         self.resources_0.as_slice(),
                         self.resources_1.as_slice(),
                         self.id.clone()
-                    ), &ctx)
+                    ), &ctx))
 
-            })
+            })?;
+            track_await(future).await
         }
     }
 
@@ -972,7 +975,7 @@ impl WithDataRef for CrossInputSelectorWrap
 
 
 impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
-    fn with_selected_data_ref<'a, 'o, Rt: Send + 'a, F, C>(
+    fn with_selected_data_ref<'a, 'o, Rt: Send + 'a, F, C, FF>(
         &'a self,
         _to_device_idx: usize,
         mut run_ctx: C,
@@ -981,7 +984,8 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
         do_run: F,
     ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'a
     where
-            for<'f> F: FnOnce(&Self::O<'f>, &C) -> Result<Rt, ThoError> + Send + 'a,
+            for<'f> F: FnOnce(&Self::O<'f>, &C) -> FF + Send + 'a,
+            FF: Future<Output = Result<Rt, ThoError>> + Send + 'a,
             C: RunCtx + 'a,
     {
         async move {
@@ -1014,7 +1018,7 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
                 }
             };
 
-            with_data!(run_ctx, [t_0_batch], [t_1_batch];
+            let future = with_data!(run_ctx, [t_0_batch], [t_1_batch];
                 |
                  ctx,
                  batch_0:&[&ThoTensor<ChannelsData, SynKey>],
@@ -1023,14 +1027,15 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
 
                     debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: batch_0={batch_0:?} batch_1={batch_1:?}");
 
-                    do_run(&CrossInput::new(
+                    Ok::<_, ThoError>(do_run(&CrossInput::new(
                         [batch_0,batch_1].concat().as_slice(),
                         resources_0,
                         resources_1,
                         self.id.clone()
-                    ), &ctx)
+                    ), &ctx))
 
-            })
+            })?;
+            track_await(future).await
         }
     }
 }
@@ -1472,7 +1477,7 @@ mod tests {
             assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t_ref().to_device(Cpu), 0.02, 0.02, false));
 
             debug!("data={data:?}");
-            Ok(())
+            std::future::ready(Ok(()))
         }).await?;
 
 
@@ -1526,7 +1531,7 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
-                Ok(())
+                std::future::ready(Ok(()))
             })
             .await?;
 
@@ -1542,7 +1547,7 @@ mod tests {
         input
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
-                Ok(())
+                std::future::ready(Ok(()))
             })
             .await?;
 
@@ -1605,7 +1610,7 @@ mod tests {
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
-                Ok(())
+                std::future::ready(Ok(()))
             })
             .await?;
 
@@ -1622,7 +1627,7 @@ mod tests {
             .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
                 assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
-                Ok(())
+                std::future::ready(Ok(()))
             })
             .await?;
 
@@ -1639,7 +1644,7 @@ mod tests {
             .with_selected_data_ref(1, run_ctx.branch(false), selector, None, |data, _ctx| {
                 assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
                 assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
-                Ok(())
+                std::future::ready(Ok(()))
             })
             .await?;
 

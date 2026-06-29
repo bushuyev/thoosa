@@ -168,18 +168,21 @@ where
 
 
                             let (hash_value, config) = track_await(net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, _ctx|{
-                                let channel = module_with_store.extra().channel();
-                                let motif_width = module_with_store.extra().motif_net_params.num_features();
+                                let result = (|| {
+                                    let channel = module_with_store.extra().channel();
+                                    let motif_width = module_with_store.extra().motif_net_params.num_features();
 
-                                let hash_value = stft_config.hash_value();
+                                    let hash_value = stft_config.hash_value();
 
-                                debug!("ApplyMotifNets::new: loaded module_with_store={module_with_store:?} hash_value={hash_value:?}");
+                                    debug!("ApplyMotifNets::new: loaded module_with_store={module_with_store:?} hash_value={hash_value:?}");
 
-                                for tensor_part in extract_cosine_conv_2d_parts(channel, motif_width, hash_value, trained_net_id, trained_net_idx, module_with_store.data().module())? {
-                                    tmp_cache.lock().insert(tensor_part);
-                                }
+                                    for tensor_part in extract_cosine_conv_2d_parts(channel, motif_width, hash_value, trained_net_id, trained_net_idx, module_with_store.data().module())? {
+                                        tmp_cache.lock().insert(tensor_part);
+                                    }
 
-                                Ok((hash_value, stft_config))
+                                    Ok((hash_value, stft_config))
+                                })();
+                                std::future::ready(result)
                             })).await?;
 
                             Ok::<_, ThoError>(Some((hash_value, config)))
