@@ -303,7 +303,7 @@ where
 
                            res_cnt_arc.fetch_add(1, Relaxed);
 
-                           Ok(())
+                           std::future::ready(Ok(()))
                        })
                     .await?;
 
@@ -1000,7 +1000,7 @@ mod tests {
            ctx_device_1_data, None, |data: &DLoadedTensor, _ctx| {
                            assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
 
-                           Ok(())
+                           std::future::ready(Ok(()))
                        })
             .await?;
 
@@ -1107,7 +1107,7 @@ mod tests {
                                                (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
                                            );
 
-                                           Ok(())
+                                           std::future::ready(Ok(()))
                                        })
             .await?;
 
