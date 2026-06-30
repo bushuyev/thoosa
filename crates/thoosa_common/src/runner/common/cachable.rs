@@ -287,6 +287,38 @@ where
     pd: PhantomData<O>,
 }
 
+struct ThoDataRef<'a, D>
+where
+    D: WithId + Data + Send + Sync
+{
+    _pd: PhantomData<&'a()>,
+    data:D,
+}
+
+
+// #[async_trait]
+impl <S, O> BorrowRef<S> for DevicesWrap<O>
+where
+    S:Debug + Send,
+    O: WithId + Data + CopyToDevice + Send + Sync,
+{
+    type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a, S:'a;
+
+    async fn borrow<'o>(&self, to_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
+    where
+        O:'o,
+        S:'o,
+        Self:'o
+    {
+        Ok(ThoDataRef {
+            _pd: Default::default(),
+            data: self.cached_data[to_device_idx].read().await.as_ref().unwrap().copy_to_device(to_device_idx).await?,
+        })
+    }
+
+}
+
+
 enum InflightRole {
     Leader(Arc<Notify>),
     Follower(OwnedNotified),
@@ -1017,9 +1049,26 @@ where
     }
 }
 
+// #[async_trait]
+trait BorrowRef<S>
+where
+    S:  Debug + Send
+{
+    type Out<'a> where Self: 'a, S:'a;
+
+    async fn borrow<'o>(&self, to_device_idx: usize, selector:Option<S>) ->Result<Self::Out<'o>, ThoError>
+    where
+        S:'o, Self:'o{
+        todo!()
+    }
+
+}
+
+
 ///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
 pub trait WithDataRef: WithId + Debug + Send + Sync {
-    type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync;
+    type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync /*where
+        Self: 'o*/;
 
     fn with_data_ref<'a, R: Send + 'a, F, P, FF>(
         &'a self,
@@ -1029,11 +1078,9 @@ pub trait WithDataRef: WithId + Debug + Send + Sync {
         do_run: F,
     ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
     where
-       for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+        for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
         FF: Future<Output = Result<R, ThoError>> + Send + 'a,
         P:RunCtx + 'a;
-
-
 
 }
 ///it's used when OOMHandler tries to execute a stage on subset of the input data. It usually makes
@@ -1056,6 +1103,10 @@ where
      FF: Future<Output = Result<R, ThoError>> + Send + 'a,
      P:RunCtx + 'a,
     R:Send + 'static;
+
+    async fn get_data<'f>(&self, to_device_idx: usize, selector:Option<S>) ->Result<<Self as WithDataRef>::O<'f>, ThoError>{
+        todo!()
+    }
 
 }
 
@@ -1093,7 +1144,6 @@ where
     }
 
 
-
 }
 
 impl<O> WithDataRef for Arc<O>
@@ -1110,6 +1160,7 @@ where
     {
         self.as_ref().with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)
     }
+
 }
 
 impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
@@ -1128,6 +1179,52 @@ where
         DevicesWrap::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run)
     }
 
+    async fn get_data<'f>(&self, to_tho_device_idx: usize, selector: Option<S>) -> Result<<Self as WithDataRef>::O<'f>, ThoError> {
+        // if self.is_resident_on_device(to_tho_device_idx) {
+        //     let lock = &self.cached_data[to_tho_device_idx];
+        //     let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
+        //     if read_guard.is_some() {
+        //         let base: &O = read_guard
+        //             .as_ref()
+        //             .expect("no value behind guard");
+        //         return match selector {
+        //             None => {base.clone()}
+        //             Some(_) => {base.subview(selector.clone())?}
+        //         };
+        //     }
+        //
+        //     drop(read_guard);
+        //     self.mark_not_resident_on_device(to_tho_device_idx);
+        // }
+
+        todo!()
+
+        // for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+        //     if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
+        //         continue;
+        //     }
+        //
+        //     let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
+        //
+        //     if let Some(src) = source_read_guard.as_ref() {
+        //         let sub_t: O = src.subview(selector.clone())?;
+        //
+        //         debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
+        //
+        //         let data = match &self.copy_to_device {
+        //             Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
+        //             None => sub_t,
+        //         };
+        //         return if trace_ctx.is_none() {
+        //             track_await(do_run(&data, &permits_ctx)).await
+        //         } else {
+        //             track_await(do_run(&TracingWrapper::new(&data, trace_ctx), &permits_ctx)).await
+        //         };
+        //     }
+        //     drop(source_read_guard);
+        //     self.mark_not_resident_on_device(source_device_idx);
+        // }
+    }
 }
 
 impl <D, E> DevicesWrap<DataWithExtra<D, E>>
