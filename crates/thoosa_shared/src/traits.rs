@@ -542,7 +542,7 @@ impl From<usize> for MonoMetrics<0, 1> {
 pub trait Data: Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default;
 
-    type M;
+    type M;//TODO remove
 
     fn size(&self) -> Self::Metrics;
 
