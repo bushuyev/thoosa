@@ -355,8 +355,8 @@ where
                 track_await(oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
-                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        track_await(cuda_actor.exec_sync_stage(move |stream| async move {
+                        // let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                        // track_await(cuda_actor.exec_sync_stage(move |stream| async move {
                             let out = if let Some(selector) = selector {
                                 track_await(input
                                     .with_selected_data_ref(
@@ -366,7 +366,7 @@ where
                                         None,
                                         |data, ctx| {
                                             let out = (|| {
-                                                let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
+                                                // let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
                                                 Arc::clone(&task).do_run(data.borrow(), ctx)
                                             })();
                                             std::future::ready(out)
@@ -381,7 +381,7 @@ where
                                         None,
                                         |data, ctx| {
                                             let out = (|| {
-                                                let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
+                                                // let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
                                                 Arc::clone(&task).do_run(data.borrow(), ctx)
                                             })();
                                             std::future::ready(out)
@@ -389,8 +389,9 @@ where
                                     )).await
                             };
 
-                            Ok(ExecSyncStageActionResult::Sync { stream, out })
-                        })).await?
+                        out
+                        // Ok(ExecSyncStageActionResult::Sync { stream, out })
+                        // })).await?
                     },
                     job_id_to_rerun
                 )).await

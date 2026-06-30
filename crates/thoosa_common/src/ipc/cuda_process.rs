@@ -36,7 +36,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::copy_ctx::{CopyCtx, CudaActorHandle, ExecSyncStageActionResult};
+use crate::copy_ctx::{CopyCtx, CudaActorHandle, ExecSyncStageActionResult, GuardOrNot};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -1647,6 +1647,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
+    async fn guard(&self) -> Result<GuardOrNot, ThoError> {
+        Ok(GuardOrNot::IPC)
     }
 }
 

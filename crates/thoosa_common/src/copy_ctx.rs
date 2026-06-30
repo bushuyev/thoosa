@@ -24,8 +24,8 @@ use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Named;
 use crate::dims::Dims;
-use crate::runner::common::cachable::WithDataRef;
-use crate::runner::common::runnable::SyncStage;
+use crate::runner::common::cachable::{WithDataRef, WithSelectDataRef};
+use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -50,6 +50,11 @@ pub enum CudaActorMessage {
 pub enum ExecSyncStageActionResult<T> {
     Sync { stream: Option<Guard<ThoCudaStream>>, out: T },
     NoSync(T),
+}
+
+    pub enum GuardOrNot {
+    Local(Guard<ThoCudaStream>),
+    IPC
 }
 
 #[async_trait]
@@ -79,6 +84,8 @@ pub trait CudaActorHandle: Debug + Send + Sync {
     async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError> {
         Ok(())
     }
+
+    async fn guard(&self) -> Result<GuardOrNot, ThoError>;
 }
 
 impl dyn CudaActorHandle + '_ {
@@ -103,6 +110,33 @@ impl dyn CudaActorHandle + '_ {
                 .map_err(|_| ThoError::new("CudaActorHandle::exec_sync_stage result type mismatch"))
         })
     }
+
+    pub async fn exec_sync_2<S, W, SL>(&self, stage:Arc<S>, data: W, selector: Option<SL>, ctx:S::Ctx) -> Result<S::Out, ThoError>
+    where
+        S:SyncStage + Send + Sync,
+        SL: Clone + Debug + Send + 'static,
+        for<'a> W:WithSelectDataRef<SL, O<'a>=S::In<'a>>,
+        S::Out:Send + Sync + 'static,
+        for<'a> <S as Stage>::In<'a>: Sync
+    {
+        // data.with_selected_data_ref(0, ctx, selector.unwrap(), None,  async move |data, ctx|{
+        //
+        //         let _guard = self.guard().await?;
+        //         let r = stage.do_run(&data, ctx);
+        //
+        //         match _guard {
+        //             GuardOrNot::Local(s) => {
+        //                 s.synchronize()?;
+        //             }
+        //             GuardOrNot::IPC => {}
+        //         }
+        //
+        //         r
+        //
+        // }).await
+        todo!()
+    }
+
 }
 
 
@@ -363,6 +397,13 @@ impl CudaActorHandle for CudaLocalActorHandle {
                 ExecSyncStageActionResult::NoSync(out) => Ok(out),
             }
         })
+    }
+
+    async fn guard(&self) -> Result<GuardOrNot, ThoError> {
+        let stream = self.acquire_exec_stream().await?;
+
+        // Ok(GuardOrNot::Local(ThoStreamGuard::new(&stream)?))
+        Ok(GuardOrNot::Local(stream))
     }
 }
 
