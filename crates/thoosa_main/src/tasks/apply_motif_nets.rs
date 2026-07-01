@@ -27,7 +27,7 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -856,8 +856,8 @@ where
 
 #[derive(Debug)]
 struct ApplyMotifNetInput<'a> {
-    batch: &'a ThoTensor<ChannelsData, SynKey>,
-    motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>
+    batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
+    motif_net: ThoDataRef<'a, DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>
 }
 
 
@@ -880,7 +880,11 @@ impl Data for ApplyMotifNetInput<'_> {
 
 impl <'a> ApplyMotifNetInput<'a> {
     pub fn new(batch: &'a ThoTensor<ChannelsData, SynKey>, motif_net: &'a DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>) -> Self {
-        Self {  batch, motif_net }
+        Self { batch: ThoDataRef::Borrowed(batch), motif_net: ThoDataRef::Borrowed(motif_net) }
+    }
+
+    fn from_data_refs(batch: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>, motif_net: ThoDataRef<'a, DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>) -> Self {
+        Self { batch, motif_net }
     }
 }
 
@@ -955,6 +959,22 @@ impl WithDataRef for ApplyMotifNetInputWrapper {
     }
     
 
+}
+
+impl BorrowRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
+    type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsData2Selector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        ChannelsData2Selector: 'a,
+        Self: 'a,
+    {
+        async move {
+            let batch = track_await(self.batch.borrow_to(to_device_idx, selector)).await?;
+            let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
+            Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
+        }
+    }
 }
 
 impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
@@ -1069,7 +1089,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        let motif_id = input.motif_net.extra().motif_id();
+        let motif_id = input.motif_net.as_ref().extra().motif_id();
 
         debug!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t={:?}", self.id, input.batch.t_ref());
         trace!("ApplyMotifNet::do_run, self.id={:?} motif_id={motif_id} input.batch.t=\n{}", self.id, input.batch.t_ref());
@@ -1082,7 +1102,7 @@ impl <C> SyncStage for ApplyMotifNet<C> where
 
         let out_id = self.out_id(&input.id());
 
-        let out = apply_motif_net_forward(out_id, input.batch, input.motif_net, self.slice_step, input.id())?;
+        let out = apply_motif_net_forward(out_id, &input.batch, input.motif_net.as_ref(), self.slice_step, input.id())?;
 
         trace!("ApplyMotifNet::do_run, self.id={:?} out=\n{}", self.id, out.t_ref());
         debug!("ApplyMotifNet::do_run, ok: motif_id={motif_id} input.id={:?} out.id()={:?} out.size={:?}", input.id(), out.id(), out.size());

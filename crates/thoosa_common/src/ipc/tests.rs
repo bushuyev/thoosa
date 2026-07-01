@@ -607,14 +607,14 @@ mod composite_input {
     }
 
     #[derive(Serialize)]
-    struct ABClcSyncStageIpcInputRef<'a, 'f> {
+    struct ABClcSyncStageIpcInputRef<'a> {
         id: &'a SynKey,
-        from_a: &'f ThoTensor<AStageOutputDims, ()>,
-        from_b: &'f ThoTensor<BStageOutputDims, ()>,
+        from_a: &'a ThoTensor<AStageOutputDims, ()>,
+        from_b: &'a ThoTensor<BStageOutputDims, ()>,
     }
 
-    impl<'a, 'f> ABClcSyncStageIpcInputRef<'a, 'f> {
-        fn new(input: &'a ABClcSyncStageInput<'f>) -> Self {
+    impl<'a> ABClcSyncStageIpcInputRef<'a> {
+        fn new(input: &'a ABClcSyncStageInput<'_>) -> Self {
             Self {
                 id: input.id(),
                 from_a: input.from_a_value(),
