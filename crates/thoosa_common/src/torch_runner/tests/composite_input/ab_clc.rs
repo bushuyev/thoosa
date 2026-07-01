@@ -16,7 +16,7 @@ use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, WithId};
 use thoosa_with_data::with_data;
-use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
@@ -191,19 +191,6 @@ impl BorrowRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrappe
     }
 }
 
-//required only when SplitAdjuster is used
-impl WithSelectDataRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, ctx: P, _selector: ABClcSyncStageInputWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
-    where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-            FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-            P: RunCtx + 'a
-    {
-        async move {
-            track_await(self.with_data_ref(to_device_idx, ctx, None, do_run)).await
-        }
-    }
-}
 
 impl WithId for ABClcSyncStageInputWrapper {
     type ID = SynKey;

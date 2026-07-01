@@ -15,7 +15,7 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -849,64 +849,6 @@ impl BorrowRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
     }
 }
 
-impl WithSelectDataRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, mut ctx: P, selector: SelectMotifsInputSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        P: RunCtx + 'a,
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-    {
-        async move {
-
-            debug!("SelectMotifsInputSelectorWrap::with_selected_data_ref: selector={selector:?}");
-
-            let (t_1_batch, resource_ids, resource_offsets) = match selector.batch_selector {
-                RangeOrSlice::Full => (self.batch.clone(), self.resource_ids.clone(), self.resource_offsets.clone()),
-                RangeOrSlice::Range(range) => {
-                    let range = range.start as usize..range.end as usize;
-                    (
-                        self.batch[range.clone()].to_vec(),
-                        self.resource_ids[range.clone()].to_vec(),
-                        self.resource_offsets[range].to_vec(),
-                    )
-                }
-                RangeOrSlice::Slice((i, range)) => {
-                    let t = self.batch.get(i).ok_or_else(|| ThoError::new(format!("SelectMotifsInputSelectorWrap: invalid slice idx {i}")))?;
-                    let channels = t.size().dim_0();
-                    let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                    let selected = Arc::new(DevicesWrap::wrap(track_await(t.with_selected_data(ctx.tho_device_idx(), ctx.branch(false), selector, |data, _ctx| {
-                        Ok(data)
-                    })).await?));
-                    let offset = self.resource_offsets.get(i).copied().unwrap_or(0);
-                    let range_offset = u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch slice start: {}", range.start)))?;
-                    (vec![selected], vec![self.resource_ids[i]], vec![offset + range_offset])
-                }
-            };
-
-            let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
-            let motifs_stats = Arc::clone(&self.motifs_stats);
-
-            let future = with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
-                |
-                 ctx,
-                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
-                 stacked_motifs_output:&StackedMotifsOutput,
-                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-                |{
-                    let inpt = ClcResourcesMotifsDistInput::new_with_offsets(
-                        batch_v,
-                        resource_ids,
-                        resource_offsets,
-                        stacked_motifs_output,
-                        motifs_stats,
-                    );
-
-                    Ok::<_, ThoError>(do_run(&inpt, &ctx))
-            })?;
-            track_await(future).await
-        }
-    }
-}
 
 
 #[derive(Debug)]

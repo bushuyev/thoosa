@@ -6,7 +6,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -1006,72 +1006,6 @@ impl WithDataRef for CrossInputSelectorWrap
 }
 
 
-impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
-    fn with_selected_data_ref<'a, 'o, Rt: Send + 'a, F, C, FF>(
-        &'a self,
-        _to_device_idx: usize,
-        mut run_ctx: C,
-        selector: CrossInputSelector,
-        _trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'a
-    where
-            for<'f> F: FnOnce(&Self::O<'f>, &C) -> FF + Send + 'a,
-            FF: Future<Output = Result<Rt, ThoError>> + Send + 'a,
-            C: RunCtx + 'a,
-    {
-        async move {
-
-            debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: selector.batch_0_selector={:?} selector.batch_1_selector={:?}", selector.batch_0_selector, selector.batch_1_selector);
-
-            let t_0_batch = track_await(selector.batch_0_selector.select(self.batch_0.clone(), run_ctx.branch(false))).await?;
-            let t_1_batch = track_await(selector.batch_1_selector.select(self.batch_1.clone(), run_ctx.branch(false))).await?;
-
-            //TODO move to RangeOrSlice::select
-            let resources_0 = match &selector.batch_0_selector {
-                RangeOrSlice::Full => self.resources_0.as_slice(),
-                RangeOrSlice::Range(range) => {
-                    let range = range.start as usize..range.end as usize;
-                    &self.resources_0[range.clone()]
-                }
-                RangeOrSlice::Slice((i, range)) => {
-                    std::slice::from_ref(&self.resources_0[*i])
-                }
-            };
-
-            let resources_1 = match &selector.batch_1_selector {
-                RangeOrSlice::Full => self.resources_1.as_slice(),
-                RangeOrSlice::Range(range) => {
-                    let range = range.start as usize..range.end as usize;
-                    &self.resources_1[range.clone()]
-                }
-                RangeOrSlice::Slice((i, range)) => {
-                    std::slice::from_ref(&self.resources_1[*i])
-                }
-            };
-
-            let future = with_data!(run_ctx, [t_0_batch], [t_1_batch];
-                |
-                 ctx,
-                 batch_0:&[&ThoTensor<ChannelsData, SynKey>],
-                 batch_1:&[&ThoTensor<ChannelsData, SynKey>],
-                |{
-
-                    debug!("WithSelectDataRef<CrossInputSelector> for CrossInput2::with_data: batch_0={batch_0:?} batch_1={batch_1:?}");
-
-                    Ok::<_, ThoError>(do_run(&CrossInput::new(
-                        [batch_0,batch_1].concat().as_slice(),
-                        resources_0,
-                        resources_1,
-                        self.id.clone()
-                    ), &ctx))
-
-            })?;
-            track_await(future).await
-        }
-    }
-}
-
 impl  BorrowRef<CrossInputSelector> for CrossInputSelectorWrap {
     type Out<'a> = CrossInput<'a, Arc<Resource>>;
 
@@ -1522,17 +1456,17 @@ mod tests {
         let mut selector = CrossInputSelector::default();
 
         let mut run_ctx = RunCtxImpl::new(1, "test");
-        let r = input.with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, ctx|{
-            assert_eq!(data.tensors().len(), 4);
+        let data = input.borrow_to(1, None).await?;
 
-            assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t_ref().to_device(Cpu), 0.02, 0.02, false));
-            assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].t_ref().to_device(Cpu), 0.02, 0.02, false));
-            assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].t_ref().to_device(Cpu), 0.02, 0.02, false));
-            assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t_ref().to_device(Cpu), 0.02, 0.02, false));
+        assert_eq!(data.tensors().len(), 4);
 
-            debug!("data={data:?}");
-            std::future::ready(Ok(()))
-        }).await?;
+        assert!(Tensor::arange_start(0, 1000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[0].t_ref().to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(1000, 2000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[1].t_ref().to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(2000, 3000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[2].t_ref().to_device(Cpu), 0.02, 0.02, false));
+        assert!(Tensor::arange_start(3000, 4000, FLOAT_CPU).view((1, -1)).allclose(&data.tensors()[3].t_ref().to_device(Cpu), 0.02, 0.02, false));
+
+        debug!("data={data:?}");
+
 
 
         Ok(())
@@ -1582,12 +1516,10 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 4));
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
-        input
-            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
-                std::future::ready(Ok(()))
-            })
-            .await?;
+        let data = input.borrow_to(1, Some(selector.clone())).await?;
+
+        assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
+
 
         let dummy_output = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output).await;
@@ -1598,12 +1530,10 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
-        input
-            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
-                std::future::ready(Ok(()))
-            })
-            .await?;
+        let data = input.borrow_to(1, Some(selector.clone())).await?;
+
+        assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
+
 
         Ok(())
     }
@@ -1660,13 +1590,10 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 3));
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
-        input
-            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-                assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
-                std::future::ready(Ok(()))
-            })
-            .await?;
+        let data = input.borrow_to(1, Some(selector.clone())).await?;
+
+        assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
+        assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
 
         let dummy_output_0 = CrossUnfoldClcOutput::new(TestBatchOutput::new(0), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_0).await;
@@ -1677,13 +1604,11 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
-        input
-            .with_selected_data_ref(1, run_ctx.branch(false), selector.clone(), None, |data, _ctx| {
-                assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
-                assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
-                std::future::ready(Ok(()))
-            })
-            .await?;
+        let data = input.borrow_to(1, Some(selector.clone())).await?;
+
+        assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
+        assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
+
 
         let dummy_output_1 = CrossUnfoldClcOutput::new(TestBatchOutput::new(1), SlicesIter::new(1, vec![]), SlicesIter::new(1, vec![]), mono_key!("CrossUnfoldClcOutput", "stage").into());
         context.add_partial_output(dummy_output_1).await;
@@ -1694,13 +1619,11 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
-        input
-            .with_selected_data_ref(1, run_ctx.branch(false), selector, None, |data, _ctx| {
-                assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
-                assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
-                std::future::ready(Ok(()))
-            })
-            .await?;
+        let data = input.borrow_to(1, Some(selector)).await?;
+
+        assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
+        assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
+
 
         Ok(())
     }

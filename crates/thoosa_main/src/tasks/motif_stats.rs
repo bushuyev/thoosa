@@ -361,16 +361,6 @@ impl BorrowRef<()> for MotifStatsCalcInputWrapper {
     }
 }
 
-impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifStatsCalcInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move { track_await(self.with_calc_input(permits_ctx, do_run)).await }
-    }
-}
 
 #[derive(Debug)]
 struct MotifStatsLoadedChannelsInput {

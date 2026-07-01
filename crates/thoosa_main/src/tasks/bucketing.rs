@@ -20,7 +20,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -452,58 +452,7 @@ impl From<Range<i64>> for SelectBucketsInputSelector {
 
 impl Adjustable for SelectBucketsInputSelector {}
 
-impl<D, Id> WithSelectDataRef<()> for BucketingTensorInput<D, Id>
-where
-    D: Dims + Send + Sync + 'static,
-    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-{
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, _selector: (), trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-            track_await(self.with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)).await
-        }
-    }
-}
 
-impl<D, Id> WithSelectDataRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
-where
-    D: Dims + Send + Sync + 'static,
-    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-{
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, selector: SelectBucketsInputSelector, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-            let resource_id = self.resource_id;
-            let bucket_window_samples = self.bucket_window_samples;
-            let bucket_step_samples = self.bucket_step_samples;
-            track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
-                let future = (|| {
-                    let audio = tensor.t_ref();
-                    let audio_size = audio.size();
-                    if audio_size.len() != 2 {
-                        return Err(ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: expected audio shape [channels, samples], got {audio_size:?}")));
-                    }
-                    let sample_range = bucket_selector_sample_range(&selector, audio_size[1], bucket_window_samples, bucket_step_samples)?;
-                    debug!("BucketingTensorInput::with_selected_data_ref: selector={selector:?} sample_range={sample_range:?} audio_size={audio_size:?}");
-                    let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::with_selected_data_ref: invalid sample_range={sample_range:?}")))?;
-                    let selected_audio = audio.f_narrow(1, sample_range.start, sample_len)?;
-                    let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
-                    let input = BucketingSyncInput::new(resource_id, &selected_tensor, sample_range.start);
-                    Ok::<_, ThoError>(do_run(&input, ctx))
-                })();
-                async move { track_await(future?).await }
-            })).await
-        }
-    }
-}
 
 impl<D, Id> BorrowRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
 where
