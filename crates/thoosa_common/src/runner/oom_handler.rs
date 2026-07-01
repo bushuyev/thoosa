@@ -317,8 +317,9 @@ where
     where
         W: WithSelectDataRef<S> + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
-        W: BorrowRef<S, Out<'z>=R::In<'z>>,
+        // W: BorrowRef<S, Out<'z>=R::In<'z>>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
+        for<'f> W:BorrowRef<S, Out<'f>=R::In<'f>>,
     {
         if run_context.tho_device_idx() == 0 {
             return track_await(input

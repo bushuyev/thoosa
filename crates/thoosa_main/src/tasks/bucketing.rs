@@ -20,7 +20,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -498,6 +498,26 @@ where
                 async move { track_await(future?).await }
             })).await
         }
+    }
+}
+
+impl<D, Id> BorrowRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
+where
+    D: Dims + Send + Sync + 'static,
+    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
+{
+    type Out<'a>
+    where
+        Self: 'a,
+        SelectBucketsInputSelector: 'a
+    = BucketingSyncInput<'a, D, Id>;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        SelectBucketsInputSelector: 'o,
+        Self: 'o
+    {
+        todo!()
     }
 }
 

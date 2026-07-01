@@ -6,7 +6,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -1037,6 +1037,18 @@ impl WithSelectDataRef<CrossInputSelector> for CrossInputSelectorWrap {
             })?;
             track_await(future).await
         }
+    }
+}
+
+impl  BorrowRef<CrossInputSelector> for CrossInputSelectorWrap {
+    type Out<'a> = CrossInput<'a, Arc<Resource>>;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<CrossInputSelector>) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        CrossInputSelector: 'o,
+        Self: 'o
+    {
+        todo!()
     }
 }
 
