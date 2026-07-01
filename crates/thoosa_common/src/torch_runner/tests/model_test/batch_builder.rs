@@ -8,7 +8,7 @@ use thoosa_shared::traits::WithId;
 use thoosa_shared::{Cause, ThoError};
 
 use crate as thoosa_common;
-use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, Stage};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -105,12 +105,13 @@ impl AsyncStage for BatchBuilder {
         let mut rows: Vec<Tensor> = Vec::with_capacity(label_vec.len());
         for (idx, feat) in feats.iter().enumerate() {
             let label = label_vec[idx];
-            let row = feat.with_data_ref(0, ctx.branch(false), None, move |b_t: &ThoTensor<ABData, ModelTestId>, _ctx| {
-                let t: &Tensor = b_t.as_ref();
-                let y = Tensor::full([t.size()[0], 1], label, (t.kind(), t.device()));
-                std::future::ready(Ok(Tensor::cat(&[t.copy(), y], 1)))
-            }).await?;
-            rows.push(row);
+            let b_t= feat.borrow_to(0, None).await?;
+
+            let t: &Tensor = b_t.as_ref().as_ref();
+            let y = Tensor::full([t.size()[0], 1], label, (t.kind(), t.device()));
+
+
+            rows.push(Tensor::cat(&[t.copy(), y], 1));
         }
         let output = Tensor::cat(&rows, 0);
 

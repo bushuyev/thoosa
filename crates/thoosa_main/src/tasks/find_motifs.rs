@@ -38,7 +38,7 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::{SqlStore, Store};
 use tokio::task::{JoinError, JoinSet};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::cuda_utils::pack_bits_bool;
 use thoosa_common::dims::{ChannelsData, MotifSlices};
@@ -571,7 +571,7 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::{mock_tensor_loader, RawTensorLoader};
     use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{DevicesWrap};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};

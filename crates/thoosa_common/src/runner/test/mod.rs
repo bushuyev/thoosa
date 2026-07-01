@@ -17,7 +17,7 @@ use thoosa_shared::comp_id::SynKey;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap, WithDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -258,8 +258,9 @@ where
     R::Out: CachedPurgeOutput +  Clone + Send + Sync,
     <R as Stage>::In<'static>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
-    CF: Fn(&'static str, &<<R as Stage>::Out as WithDataRef>::O<'_>) + Send + Sync + Clone + 'static,
-    for<'o> <R as Stage>::Out:WithId+WithDataRef
+    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef<()>>::Out<'_>)  + Send + Sync + Clone + 'static,
+    for<'o> <R as Stage>::Out:WithId+BorrowRef<()>+Debug,
+    for<'o> <<R as Stage>::Out as BorrowRef<()>>::Out<'o>: Debug
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -293,21 +294,16 @@ where
                     )
                     .await?;
 
-                multed
-                    .with_data_ref(check_device_idx,
-                                   ctx_device.branch(false), None, |guard, _ctx| {
-                           // let guard = multed.load_from_any_device(device_idx, "in test".into()).await;
+                let guard = multed.borrow_to(check_device_idx, None).await?;
 
-                           check_arc(res, guard);
 
-                           debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
-                           debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
+               check_arc(res, &guard);
 
-                           res_cnt_arc.fetch_add(1, Relaxed);
+               debug!("run_mul_task_invocations: task {idx}: device_idx={device_idx} thread id={:?} done",std::thread::current().id());
+               debug!("run_mul_task_invocations: task {idx}: multed=\n{:?}", guard);
 
-                           std::future::ready(Ok(()))
-                       })
-                    .await?;
+               res_cnt_arc.fetch_add(1, Relaxed);
+
 
                 debug!("run_mul_task_invocations: task {idx}: all done");
 
@@ -567,11 +563,11 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, WithId};
+    use thoosa_shared::traits::{Data, Select, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
-    use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;
@@ -783,6 +779,14 @@ mod tests {
     struct DMulTaskOutput {
         id: DMulTaskOutputId,
         data: DummyTensor,
+    }
+
+    impl Select<()> for DMulTaskOutput{
+        type Output = DMulTaskOutput;
+
+        fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+            unimplemented!()
+        }
     }
 
     #[async_trait]
@@ -997,14 +1001,10 @@ mod tests {
             .await?;
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
-        loaded_tensor_1_0
-            .with_data_ref(1,
-           ctx_device_1_data, None, |data: &DLoadedTensor, _ctx| {
-                           assert_eq!(data.data.0, [0.0, 1.0, 2.0]);
+        let data = loaded_tensor_1_0.borrow_to(1, None).await?;
 
-                           std::future::ready(Ok(()))
-                       })
-            .await?;
+       assert_eq!(data.as_ref().data.0, [0.0, 1.0, 2.0]);
+
 
         // assert!(loaded_tensor_1_0.is_ok());
         assert!(Arc::ptr_eq(
@@ -1101,17 +1101,13 @@ mod tests {
             )
             .await?;
 
-        multed
-            .with_data_ref(1,
-                           ctx_device_0_data, None, |data: &DMulTaskOutput, _ctx| {
-                                           assert_eq!(
-                                               data.data.0,
-                                               (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
-                                           );
+        let data = multed.borrow_to(1, None).await?;
+           assert_eq!(
+               data.as_ref().data.0,
+               (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()
+           );
 
-                                           std::future::ready(Ok(()))
-                                       })
-            .await?;
+
 
         debug!("multed={multed:?}");
 
@@ -1157,7 +1153,7 @@ mod tests {
             device_idx,
             |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
-                mul_check(MUL_K, res, out);
+                mul_check(MUL_K, res, out.as_ref());
             },
             true,
         )
@@ -1195,7 +1191,7 @@ mod tests {
             device_idx,
             |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
-                mul_check(MUL_K, res, out);
+                mul_check(MUL_K, res, out.as_ref());
             },
             true,
         )
@@ -1236,7 +1232,7 @@ mod tests {
             device_idx,
             |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
             move |res, out| {
-                mul_check(MUL_K, res, out);
+                mul_check(MUL_K, res, out.as_ref());
             },
             true,
         )
@@ -1273,7 +1269,7 @@ mod tests {
             device_idx,
             |device_idx, _cache_area, name| RunCtxImpl::new(device_idx, name),
             |res, out| {
-                mul_check(MUL_K, res, out);
+                mul_check(MUL_K, res, out.as_ref());
             },
             true,
         )

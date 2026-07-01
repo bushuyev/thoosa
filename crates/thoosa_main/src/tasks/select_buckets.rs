@@ -15,7 +15,7 @@ use std::sync::Arc;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -394,21 +394,6 @@ impl WithId for SelectBucketsSyncInputWrapper {
     }
 }
 
-impl WithDataRef for SelectBucketsSyncInputWrapper {
-    type O<'o> = SelectBucketsSyncInput<'o>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-            let input = SelectBucketsSyncInput::new(&self.select_config);
-            track_await(do_run(&input, &permits_ctx)).await
-        }
-    }
-}
 
 impl BorrowRef<()> for SelectBucketsSyncInputWrapper {
     type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;

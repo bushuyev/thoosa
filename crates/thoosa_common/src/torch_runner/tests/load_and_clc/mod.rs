@@ -20,7 +20,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, EnvFilter};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
-use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
 use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -301,24 +301,22 @@ async fn do_test_loaded(
 
     debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
-    let tensor_data_0_0 = loaded_tensor_0_0
-        .with_data_ref(load_to_device, ctx_device_0.branch(false), None, |tensor_data_0_0: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
-            debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
+    let tensor_data_0_0=loaded_tensor_0_0.borrow_to(load_to_device, None).await?;
 
-            assert!(
-                Tensor::from_slice(&[
-                    0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
-                    17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29.
-                ])
-                    .totype(Float)
-                    .to_device(Device::Cuda(0))
-                    .view((10, 3))
-                    .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
-            );
+    debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
-            std::future::ready(Ok(tensor_data_0_0.t_ref().shallow_clone()))
-        })
-        .await?;
+    assert!(
+        Tensor::from_slice(&[
+            0., 1., 2., 3., 4., 5., 6., 7., 8., 9., 10., 11., 12., 13., 14., 15., 16.,
+            17., 18., 19., 20., 21., 22., 23., 24., 25., 26., 27., 28., 29.
+        ])
+            .totype(Float)
+            .to_device(Device::Cuda(0))
+            .view((10, 3))
+            .allclose(&(*tensor_data_0_0).t_ref(), 0.01, 0.01, false)
+    );
+
+
 
     let _loaded_tensor_0_1 = Arc::clone(&loader)
         .run_cached(
@@ -327,15 +325,12 @@ async fn do_test_loaded(
         )
         .await?;
 
-    loaded_tensor_0_0
-        .with_data_ref(load_to_device,
-                       ctx_device_0.branch(false), None, move|tensor_data_0_1: &ThoTensor<LoadedTensor, SynKey>, _ctx| {
-                // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
+    let tensor_data_0_1 = loaded_tensor_0_0.borrow_to(load_to_device, None).await?;
 
-                assert_eq!(&tensor_data_0_0, tensor_data_0_1.t_ref());
-                std::future::ready(Ok(()))
-            })
-        .await?;
+    // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
+
+    assert_eq!(tensor_data_0_0.t_ref(), tensor_data_0_1.as_ref().t_ref());
+
     // let tensor_data_0_0 = loaded_tensor_0_0.load_from_any_device(load_to_device, None).await?;
 
     Ok(())
@@ -894,20 +889,16 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     debug!("multed={multed:?}");
 
-    multed
-        .with_data_ref(1,
-                       ctx_device.write().branch(false), None, |r: &ThoTensor<ClcStageOutput, SynKey>, _ctx| {
-                mul_check_with_exp_f(MUL_K as f64, "resource_1", r, 0.01, 0.01, |k, t| {
-                    lin_for_size(k, size, t.kind(), &t.device())
-                        .sum_dim_intlist(1, false, t.kind())
-                        .view((-1, 1))
-                });
+    let r = multed.borrow_to(1, None).await?;
+    mul_check_with_exp_f(MUL_K as f64, "resource_1", r.as_ref(), 0.01, 0.01, |k, t| {
+        lin_for_size(k, size, t.kind(), &t.device())
+            .sum_dim_intlist(1, false, t.kind())
+            .view((-1, 1))
+    });
 
-                debug!("Ok");
+    debug!("Ok");
 
-                std::future::ready(Ok(()))
-            })
-        .await?;
+
 
     Ok(())
 }

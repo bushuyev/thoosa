@@ -320,20 +320,6 @@ impl WithId for MotifStatsCalcInputWrapper {
     }
 }
 
-impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInputWrapper {
-    type O<'o> = MotifStatsCalcInput<'o>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move { track_await(self.with_calc_input(permits_ctx, do_run)).await }
-    }
-
-
-}
 
 impl BorrowRef<()> for MotifStatsCalcInputWrapper {
     type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
@@ -1235,7 +1221,6 @@ mod tests {
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::WithDataRef;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};

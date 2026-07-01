@@ -15,7 +15,7 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -769,40 +769,6 @@ impl WithId for SelectMotifsInputSelectorWrap {
     }
 }
 
-impl WithDataRef for SelectMotifsInputSelectorWrap {
-    type O<'o> = ClcResourcesMotifsDistInput<'o>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        F: for <'f> FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-            let t_1_batch = self.batch.clone();
-            let stacked_motifs = Arc::clone(&self.stacked_motifs);
-            let motifs_stats = Arc::clone(&self.motifs_stats);
-            let future = with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
-                |
-                 ctx,
-                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
-                 stacked_motifs:&StackedMotifsOutput,
-                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-                |{
-
-                    Ok::<_, ThoError>(do_run(&ClcResourcesMotifsDistInput::new_with_offsets(
-                        batch_v,
-                        self.resource_ids.clone(),
-                        self.resource_offsets.clone(),
-                        stacked_motifs,
-                        motifs_stats,
-                    ), &ctx))
-
-            })?;
-            track_await(future).await
-        }
-    }
-}
 
 impl BorrowRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
@@ -1253,7 +1219,7 @@ mod tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Tensor;
     use thoosa_common::runner::adjusters::splits::OutputBuilder;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1273,6 +1239,7 @@ mod tests {
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::tasks::slices_iter::SlicesIter;
     use crate::tasks::stacked_moitfs_loader::{StackedMotifsOutput, StackedMotifsOutputId};
+    use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoader;
 
@@ -1335,9 +1302,9 @@ mod tests {
             .await?;
 
         let mut ctx_for_data = ctx.branch(false);
-        let motifs_stats_t: Tensor = motifs_stats
-            .with_data_ref(0, ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| std::future::ready(Ok(motifs_stats.t_ref().shallow_clone())))
-            .await?;
+        let motifs_stats = motifs_stats.borrow_to(0, Some(SyncStftSelector)).await?;
+        let motifs_stats_t =  motifs_stats.t_ref().shallow_clone();
+
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);
 
         let values = to_vec_f32(&motifs_stats_t);

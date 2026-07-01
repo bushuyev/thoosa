@@ -16,7 +16,6 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::traits::{CachableIdTr, Data};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use crate::runner::common::cachable::WithDataRef;
 use thoosa_shared::tracked_await::track_await;
 
 pub const PURGE_GPU_CONCURRENCY_LIMIT: usize = 10;

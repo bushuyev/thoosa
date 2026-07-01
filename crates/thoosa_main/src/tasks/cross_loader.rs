@@ -6,7 +6,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -928,30 +928,6 @@ impl RangeOrSlice {
         }
     }
 
-    pub async fn select<R>(&self, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut run_ctx: R) -> Result<Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ThoError>
-    where
-        R:RunCtx
-    {
-        debug!("RangeOrSlice::select: batch={batch:?} self={self:?}");
-
-        Ok(match self {
-            RangeOrSlice::Range(range) => {
-                batch[range.start as usize..range.end as usize].to_vec()
-            }
-            RangeOrSlice::Slice((i, range)) => {
-                let channels = batch[*i].size().dim_0();
-                let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
-                vec![
-                    Arc::new(DevicesWrap::wrap(batch[*i].with_selected_data(run_ctx.tho_device_idx(), run_ctx.branch(false), selector, |data, run_ctx|{
-                        Ok(data)
-                    }).instrument(tracing::debug_span!("select/1", file = file!(), line = line!())).await?))
-                ]
-            }
-            RangeOrSlice::Full => {
-                batch
-            }
-        })
-    }
 }
 
 
@@ -963,47 +939,6 @@ pub struct CrossInputSelector {
 }
 
 impl Adjustable for CrossInputSelector {}
-
-
-impl WithDataRef for CrossInputSelectorWrap
-{
-    type O<'o> = CrossInput<'o, Arc<Resource>>;
-
-    fn with_data_ref<'a, Rt: Send + 'a, F, P, FF>(
-        &'a self,
-        _to_device_idx: usize,
-        permits_ctx: P,
-        _trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'a
-    where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-            FF: Future<Output = Result<Rt, ThoError>> + Send + 'a,
-            P: RunCtx + 'a,
-    {
-        async move {
-            let t_0_batch= self.batch_0.clone();
-            let t_1_batch= self.batch_1.clone();
-            let future = with_data!(permits_ctx, [t_0_batch], [t_1_batch];
-                |
-                 ctx,
-                 batch_0:&[&ThoTensor<ChannelsData, SynKey>],
-                 batch_1:&[&ThoTensor<ChannelsData, SynKey>],
-                |{
-
-                    Ok::<_, ThoError>(do_run(&CrossInput::new(
-                        [batch_0,batch_1].concat().as_slice(),
-                        self.resources_0.as_slice(),
-                        self.resources_1.as_slice(),
-                        self.id.clone()
-                    ), &ctx))
-
-            })?;
-            track_await(future).await
-        }
-    }
-
-}
 
 
 impl  BorrowRef<CrossInputSelector> for CrossInputSelectorWrap {

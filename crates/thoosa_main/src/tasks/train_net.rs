@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
@@ -540,35 +540,6 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
     }
 }
 
-impl<DI: Dims, DO: Dims> WithDataRef for TrainStepInput<DI, DO> {
-    type O<'o> = TrainStepInput<DI, DO>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-            if self.x.device_idx() == to_device_idx {
-                track_await(do_run(self, &permits_ctx)).await
-
-            } else {
-
-                let (x, lengths) = (
-                    track_await(self.x.copy_to_device(to_device_idx)).await?,
-                    self.lengths.clone(),
-                );
-
-                let expected_y = track_await(self.expected_y.copy_to_device(to_device_idx)).await?;
-
-                let input = TrainStepInput::new(x, lengths, expected_y);
-                track_await(do_run(&input, &permits_ctx)).await
-            }
-        }
-
-    }
-}
 
 impl<DI: Dims, DO: Dims> BorrowRef<()> for TrainStepInput<DI, DO> {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;

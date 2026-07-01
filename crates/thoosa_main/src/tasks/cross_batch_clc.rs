@@ -3,7 +3,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
@@ -126,32 +126,6 @@ impl From<Range<i64>> for CrossInputBatch1Selector {
 
 impl Adjustable for CrossInputBatch1Selector {}
 
-impl<'a, R> WithDataRef for CrossInput<'a, R>
-where
-    R: AsRef<Resource> + Debug + Send + Sync + 'static,
-{
-    type O<'o> = CrossInput<'o, R>;
-
-    fn with_data_ref<'b, Rt: Send + 'b, F, P, FF>(
-        &'b self,
-        _to_device_idx: usize,
-        permits_ctx: P,
-        _trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'b
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'b,
-        FF: Future<Output = Result<Rt, ThoError>> + Send + 'b,
-        P: RunCtx + 'b,
-    {
-        async move {
-            debug!("CrossInput::with_data_ref: do_run");
-            track_await(do_run(self, &permits_ctx)).await
-        }
-    }
-
-
-}
 
 
 impl<'a, R> BorrowRef<CrossInputBatch1Selector> for CrossInput<'a, R>

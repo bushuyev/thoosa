@@ -10,7 +10,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use crate::ipc::cuda_process::encode_endpoint_payload;
 use crate::ipc::json_ser::{self, encode_json_sync_stage_run_input, SyncStageJsonWrapper};
 use crate as thoosa_common;
-use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
+use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
 use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use crate::runner::global_ctx::GlobalCtx;

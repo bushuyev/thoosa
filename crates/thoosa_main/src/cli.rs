@@ -65,7 +65,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{run_id, OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
-use thoosa_shared::traits::{Adjustable, Data, DataId, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
 use thoosa_shared::{collect_futures_with_progress, cuda_activity_gate, mono_key, panic_to_err_async, parse_resources, simple_id, CopyToDevice, RangeOrValue, FuturesOrdering};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -81,7 +81,7 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CudaActorHandle;
 
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::AsyncStage;
@@ -1693,9 +1693,11 @@ where
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-        std::future::ready(plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor, raw_channels.as_ref(), resolution, print_to_stdout))
-    })).await?;
+    let tensor = raw.borrow_to(0, None::<()>).await?;
+
+
+    plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor.as_ref(), raw_channels.as_ref(), resolution, print_to_stdout)?;
+
 
     if let Some(freq_filters) = freq_filters {
         let filter_frag = sanitize_plot_path_segment(&freq_filters.iter().map(|f|format!("{:?}", f)).collect::<String>());//TODO remove "*Params"
@@ -1706,9 +1708,10 @@ where
             )).await?;
 
         let filtered_channels = channels.clone();
-        track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-            std::future::ready(plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor, filtered_channels.as_ref(), resolution, print_to_stdout))
-        })).await?;
+        let tensor = filtered.borrow_to(0, None::<()>).await?;
+
+        plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor.as_ref(), filtered_channels.as_ref(), resolution, print_to_stdout)?;
+
     }
 
     Ok(())
@@ -1745,10 +1748,9 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    track_await(raw.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-        std::future::ready(plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor, Some(&channel_only), resolution, print_to_stdout))
-    })).await?;
+    let tensor = raw.borrow_to(0, None::<()>).await?;
 
+    plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor.as_ref(), Some(&channel_only), resolution, print_to_stdout)?;
 
 
     let filtered_or_raw = if let Some(freq_filters) = find_motifs_run_config.freq_filter.clone() {
@@ -1759,9 +1761,12 @@ where
             )).await?;
 
         let channel_only_filtered = vec![channel];
-        track_await(filtered.with_data_ref(0, ctx.branch(false), None, |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-            std::future::ready(plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor, Some(&channel_only_filtered), resolution, print_to_stdout))
-        })).await?;
+
+        {
+            let tensor = filtered.borrow_to(0, None::<()>).await?;
+
+            plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor.as_ref(), Some(&channel_only_filtered), resolution, print_to_stdout)?;
+        }
 
         filtered
     } else {
@@ -1775,13 +1780,15 @@ where
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
     let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
-    track_await(filtered_or_raw.with_data_ref(0, ctx.branch(false), None, {
+    let tensor = filtered_or_raw.borrow_to(0, None::<()>).await?;
+
+
         let motif_net = Arc::clone(&motif_net);
-        move |tensor: &ThoTensor<ChannelsData, SynKey>, _ctx| {
+
             let result = (|| {
                 let out = apply_motif_net_forward(
                     mono_key!(format!("plot_motif_net_applied_resource_{resource_id}"), format!("motif_{motif_id}_channel_{channel}")) + tensor.id(),
-                    tensor,
+                    tensor.as_ref(),
                     motif_net.as_ref(),
                     motif_slices_step,
                     tensor.id(),
@@ -1796,11 +1803,9 @@ where
                     print_to_stdout,
                 )?;
 
-                Ok(())
+                Ok::<_, ThoError>(())
             })();
-            std::future::ready(result)
-        }
-    })).await?;
+
 
     Ok(())
 }
@@ -1839,78 +1844,80 @@ where
 
 
     let metrics_for_plot_ref = Arc::clone(&metrics_for_plot);
-    let r = track_await(motif.with_data_ref(ctx.tho_device_idx(), ctx.branch(false), None, move |motif: &DataWithExtra<ThoTensor<_, SynKey>, MotifMeta>, _ctx| {
-        let result = (|| {
-            let run_config_id = motif.extra().find_motifs_run_config_id;
-            let channel = motif.extra().channel;
-
-        trace!("plot_motif: motif.t={}", motif.data().t_ref());
-        let all_slices = motif.data().t_ref().unbind(0);
-        let slices_len = all_slices.len();
-        let mut color_iter = DistinctColorIter::new();
-
-        let target_dit = ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}"));
-
-        fs::create_dir_all(&target_dit)?;
-        let mut specs = vec![];
-        for (i, slice) in all_slices.iter().enumerate() {
-            let spec = slice.stft(
-                16000,
-                4000,
-                16000,
-                None::<Tensor>,
-                false,
-                true,
-                true,
-                true
-            );
-            let spec_abs =spec.squeeze_dim(0).abs().transpose(0,1);
+    let data_ref = motif.borrow_to(ctx.tho_device_idx(), None).await?;
+    let motif= data_ref.as_ref();
 
 
-            plot_spectrogram(
-                &spec_abs,
-                &target_dit.join(format!("spec_{i}_{}.png", motif_id)),
-                1200,
-                600,
-            )?;
-            specs.push(spec_abs);
-        }
-        let all_spects_t = Tensor::stack(&specs, 0).sum_dim_intlist(0, false, None);
+    let result = (|| {
+        let run_config_id = motif.extra().find_motifs_run_config_id;
+        let channel = motif.extra().channel;
+
+    trace!("plot_motif: motif.t={}", motif.data().t_ref());
+    let all_slices = motif.data().t_ref().unbind(0);
+    let slices_len = all_slices.len();
+    let mut color_iter = DistinctColorIter::new();
+
+    let target_dit = ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}"));
+
+    fs::create_dir_all(&target_dit)?;
+    let mut specs = vec![];
+    for (i, slice) in all_slices.iter().enumerate() {
+        let spec = slice.stft(
+            16000,
+            4000,
+            16000,
+            None::<Tensor>,
+            false,
+            true,
+            true,
+            true
+        );
+        let spec_abs =spec.squeeze_dim(0).abs().transpose(0,1);
+
 
         plot_spectrogram(
-            &all_spects_t,
-            &target_dit.join(format!("spec_all_{}.png", motif_id)),
+            &spec_abs,
+            &target_dit.join(format!("spec_{i}_{}.png", motif_id)),
             1200,
             600,
         )?;
+        specs.push(spec_abs);
+    }
+    let all_spects_t = Tensor::stack(&specs, 0).sum_dim_intlist(0, false, None);
 
-        let plot_data = all_slices
-            .into_iter()
-            .enumerate()
-            .map(|(i, t)| {
-                Ok::<_, ThoError>((
-                    format!("{i}"),
-                    color_iter.next().unwrap_or(BLACK),
-                    t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
-                ))
-            })
-            .collect::<Result<Vec<_>, ThoError>>()?;
+    plot_spectrogram(
+        &all_spects_t,
+        &target_dit.join(format!("spec_all_{}.png", motif_id)),
+        1200,
+        600,
+    )?;
 
-        emit_or_plot_series_with_sidebar_values(
-            print_to_stdout,
-            plot_data,
-            format!("Motif: {motif_id} run id: {run_config_id} channel: {channel} number of slices: {slices_len}").as_str(),
-            resolution.plot_size((2600, 1200)),
-            &ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
-            "Motif Metrics",
-            metrics_for_plot_ref.as_slice(),
-        )?;
+    let plot_data = all_slices
+        .into_iter()
+        .enumerate()
+        .map(|(i, t)| {
+            Ok::<_, ThoError>((
+                format!("{i}"),
+                color_iter.next().unwrap_or(BLACK),
+                t.iter::<f64>()?.enumerate().map(|(i, v)| (i as f32, v as f32)).collect::<Vec<(f32, f32)>>(),
+            ))
+        })
+        .collect::<Result<Vec<_>, ThoError>>()?;
+
+    emit_or_plot_series_with_sidebar_values(
+        print_to_stdout,
+        plot_data,
+        format!("Motif: {motif_id} run id: {run_config_id} channel: {channel} number of slices: {slices_len}").as_str(),
+        resolution.plot_size((2600, 1200)),
+        &ws.read().plots_path().join(format!("{run_config_id}{select_motif_run_config_ids_sfx}")).join(format!("motif_{}.png", motif_id)),
+        "Motif Metrics",
+        metrics_for_plot_ref.as_slice(),
+    )?;
 
 
-            Ok(true)
-        })();
-        std::future::ready(result)
-    })).await?;
+        Ok::<_, ThoError>(true)
+    })();
+
     Ok(())
 }
 
@@ -2156,7 +2163,7 @@ mod cli_tests {
     use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
