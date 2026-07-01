@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{MaxParallelCtx, RunCtx};
-use crate::runner::common::cachable::{ConsumeData, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{BorrowRef, ConsumeData, WithDataRef, WithSelectDataRef};
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
 use crate::copy_ctx::ExecSyncStageActionResult;
@@ -317,6 +317,7 @@ where
     where
         W: WithSelectDataRef<S> + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
+        W: BorrowRef<S, Out<'z>=R::In<'z>>,
         for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
     {
         if run_context.tho_device_idx() == 0 {
@@ -355,41 +356,42 @@ where
                 track_await(oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
-                        // let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+                        cuda_actor.run_stage(task, input, selector, &run_ctx).await
                         // track_await(cuda_actor.exec_sync_stage(move |stream| async move {
-                            let out = if let Some(selector) = selector {
-                                track_await(input
-                                    .with_selected_data_ref(
-                                        tho_device_idx,
-                                        run_ctx,
-                                        selector,
-                                        None,
-                                        |data, ctx| {
-                                            let out = (|| {
-                                                // let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
-                                                Arc::clone(&task).do_run(data.borrow(), ctx)
-                                            })();
-                                            std::future::ready(out)
-                                        },
-                                    )).await
-                            } else {
-                                debug!("OOMHandler::run: input={input:?}");
-                                track_await(input
-                                    .with_data_ref(
-                                        tho_device_idx,
-                                        run_ctx,
-                                        None,
-                                        |data, ctx| {
-                                            let out = (|| {
-                                                // let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
-                                                Arc::clone(&task).do_run(data.borrow(), ctx)
-                                            })();
-                                            std::future::ready(out)
-                                        },
-                                    )).await
-                            };
-
-                        out
+                        //     let out = if let Some(selector) = selector {
+                        //         track_await(input
+                        //             .with_selected_data_ref(
+                        //                 tho_device_idx,
+                        //                 run_ctx,
+                        //                 selector,
+                        //                 None,
+                        //                 |data, ctx| {
+                        //                     let out = (|| {
+                        //                         // let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
+                        //                         Arc::clone(&task).do_run(data.borrow(), ctx)
+                        //                     })();
+                        //                     std::future::ready(out)
+                        //                 },
+                        //             )).await
+                        //     } else {
+                        //         debug!("OOMHandler::run: input={input:?}");
+                        //         track_await(input
+                        //             .with_data_ref(
+                        //                 tho_device_idx,
+                        //                 run_ctx,
+                        //                 None,
+                        //                 |data, ctx| {
+                        //                     let out = (|| {
+                        //                         // let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose()?;
+                        //                         Arc::clone(&task).do_run(data.borrow(), ctx)
+                        //                     })();
+                        //                     std::future::ready(out)
+                        //                 },
+                        //             )).await
+                        //     };
+                        //
+                        // out
                         // Ok(ExecSyncStageActionResult::Sync { stream, out })
                         // })).await?
                     },

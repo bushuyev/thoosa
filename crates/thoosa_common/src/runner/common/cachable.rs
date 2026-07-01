@@ -1074,7 +1074,7 @@ where
 }
 
 
-trait BorrowRef<S>
+pub trait BorrowRef<S>
 where
     S: Clone + Debug + Send
 {
@@ -1088,6 +1088,23 @@ where
     }
 
 }
+
+impl <S, BR> BorrowRef<S> for Arc<BR>
+where
+    BR:BorrowRef<S>,
+    S: Clone + Debug + Send
+{
+    type Out<'a> = BR::Out<'a> where Self: 'a, S: 'a, BR:'a;
+
+    async fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
+    where
+        S: 'o,
+        Self: 'o
+    {
+        self.as_ref().borrow_to(to_tho_device_idx, selector).await
+    }
+}
+
 
 
 ///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
