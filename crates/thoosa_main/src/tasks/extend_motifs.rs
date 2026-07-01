@@ -1253,7 +1253,7 @@ mod tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Tensor;
     use thoosa_common::runner::adjusters::splits::OutputBuilder;
-    use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, WithDataRef};
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1273,6 +1273,7 @@ mod tests {
     use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
     use crate::tasks::slices_iter::SlicesIter;
     use crate::tasks::stacked_moitfs_loader::{StackedMotifsOutput, StackedMotifsOutputId};
+    use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::tensor_loader::mock_tensor_loader::MockTensorLoader;
 
@@ -1335,9 +1336,9 @@ mod tests {
             .await?;
 
         let mut ctx_for_data = ctx.branch(false);
-        let motifs_stats_t: Tensor = motifs_stats
-            .with_data_ref(0, ctx_for_data, None, |motifs_stats: &ThoTensor<_, _>, _ctx| std::future::ready(Ok(motifs_stats.t_ref().shallow_clone())))
-            .await?;
+        let motifs_stats = motifs_stats.borrow_to(0, Some(SyncStftSelector)).await?;
+        let motifs_stats_t =  motifs_stats.t_ref().shallow_clone();
+
         assert_eq!(motifs_stats_t.size(), vec![2, 4]);
 
         let values = to_vec_f32(&motifs_stats_t);
