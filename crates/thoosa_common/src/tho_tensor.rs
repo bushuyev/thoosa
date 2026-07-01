@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::ops::Deref;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde::ser::SerializeStruct;
 use tch::{Device, Kind, Tensor};
@@ -20,6 +21,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use thoosa_shared::tracked_await::track_await;
+use crate::runner::common::cachable::ThoDataRef;
 use crate::runner::common::RunCtx;
 
 //TODO remove, it should be in DevicesWrap between async
@@ -118,6 +120,28 @@ where
 }
 
 
+impl <'a, D, Id> Deref for ThoDataRef<'a, ThoTensor<D, Id>>
+where
+    D:Dims,
+    Id: Named+Debug+Clone
+{
+    type Target = ThoTensor<D, Id>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            ThoDataRef::Borrowed(v) => {
+                v
+            }
+            ThoDataRef::ReadLocked(v) => {
+                v
+            }
+            ThoDataRef::Owned(v) => {
+                v
+            }
+        }
+    }
+}
+
 impl<D: Dims, Id: Named + Debug + Clone> Borrow<Tensor> for ThoTensor<D, Id> {
     fn borrow(&self) -> &Tensor {
         self.t_ref()
@@ -145,99 +169,6 @@ impl From<Tensor> for ThoTensor {
         }
     }
 }
-
-
-
-#[derive(Debug)]
-struct ThoTensorRef<'a, D, Id>
-where
-    D:Dims,
-    Id:Named + Debug + Clone + Sync + Send
-{
-    tho_tensor: &'a ThoTensor<D, Id>,
-}
-
-impl <'a, D, Id> WithId for ThoTensorRef<'a, D, Id>
-where
-    D:Dims,
-    Id:Named + CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug + 'a
-
-{
-    type ID = Id;
-
-    fn id(&self) -> &Id {
-        self.tho_tensor.id()
-    }
-}
-
-impl <'a, D, Id> Data for ThoTensorRef<'a, D, Id>
-where
-    D:Dims,
-    Id:Named + Debug + Clone + Sync + Send
-{
-    type Metrics = D::Metrics;
-    type M = ();
-
-    fn size(&self) -> D::Metrics {
-        Data::size(&self.tho_tensor)
-    }
-
-    fn device(&self) -> usize {
-        self.tho_tensor.device()
-    }
-
-    fn mem_size(&self) -> u64 {
-        self.tho_tensor.mem_size()
-    }
-}
-//
-// impl <D, Id> WithDataRef for ThoTensor<D, Id>
-// where
-//     D:Dims,
-//     Id:Named + CachableIdTr + Send + Sync + Eq + Hash + Clone + Debug
-// {
-//     type O<'o> = ThoTensorRef<'o, D, Id> where
-//         Self: 'o;
-//
-//     fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
-//     where
-//         F: FnOnce(&Self::O<'a>, &P) -> FF + Send + 'a,
-//         FF: Future<Output=Result<R, ThoError>> + Send + 'a,
-//         P: RunCtx + 'a
-//     {
-//         async {
-//             todo!()
-//         }
-//     }
-// }
-//
-// impl <S> WithSelectDataRef<S> for ThoTensor
-// where
-//     S: Clone + Debug + Send + 'static,
-// {
-//     fn with_selected_data_ref<'a, 'o, R, F, P, FF>(&'a self, to_device_idx: usize, _permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
-//     where
-//             for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-//             FF: Future<Output=Result<R, ThoError>> + Send + 'a,
-//             P: RunCtx + 'a,
-//             R: Send + 'static
-//     {
-//         async {
-//             todo!()
-//         }
-//     }
-//
-//     async fn get_data<'f>(&self, to_device_idx: usize, selector: Option<S>) -> Result<<Self as WithDataRef>::O<'f>, ThoError> {
-//         todo!()
-//     }
-//
-//
-//     // async fn get_data<'f>(&self, to_device_idx: usize, selector: Option<S>) -> Result<<Self as WithDataRef>::O<'f>, ThoError> {
-//     //     Ok(ThoTensorRef {
-//     //         tho_tensor: &self,
-//     //     })
-//     // }
-// }
 
 
 impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
