@@ -19,7 +19,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};

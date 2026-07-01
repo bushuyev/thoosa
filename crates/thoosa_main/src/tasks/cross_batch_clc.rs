@@ -3,7 +3,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
@@ -153,44 +153,6 @@ where
 
 }
 
-impl<'a, R> WithSelectDataRef<CrossInputBatch1Selector> for CrossInput<'a, R>
-where
-    R: AsRef<Resource> + Debug + Send + Sync + 'static,
-{
-    fn with_selected_data_ref<'b, 'o, Rt: Send + 'b, F, P, FF>(
-        &'b self,
-        _to_device_idx: usize,
-        permits_ctx: P,
-        selector: CrossInputBatch1Selector,
-        _trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<Rt, ThoError>> + Send + 'b
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'b,
-        FF: Future<Output = Result<Rt, ThoError>> + Send + 'b,
-        P: RunCtx + 'b,
-    {
-        async move {
-            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
-            let batch_0_len = self.resources_0.len();
-            let batch_1_offset = batch_0_len + range.start;
-            let batch_1_end = batch_0_len + range.end;
-
-            let mut selected_tensors = Vec::with_capacity(batch_0_len + (range.end - range.start));
-            selected_tensors.extend(self.tensors[..batch_0_len].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
-            selected_tensors.extend(self.tensors[batch_1_offset..batch_1_end].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
-
-            let input = CrossInput::from_data_refs(
-                selected_tensors,
-                self.resources_0,
-                &self.resources_1[range.clone()],
-                self.id.clone(), // + &mono_key!(0, "todo"),
-            );
-
-            track_await(do_run(&input, &permits_ctx)).await
-        }
-    }
-}
 
 impl<'a, R> BorrowRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where

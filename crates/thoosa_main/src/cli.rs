@@ -488,7 +488,8 @@ where
     // Creates CPU plus GPU device wrappers for the async runner. Big tensors crossing awaits should remain in run_cached/TmpCached so OOM handling can dump them to CPU.
     if tch::Cuda::is_available() {
         kick_register_cuda_hooks();
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+        // thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![]).await?;
     } else {
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices(1);
     }

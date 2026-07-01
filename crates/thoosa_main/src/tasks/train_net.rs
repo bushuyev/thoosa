@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
@@ -587,16 +587,6 @@ impl<DI: Dims, DO: Dims> BorrowRef<()> for TrainStepInput<DI, DO> {
     }
 }
 
-impl<DI: Dims, DO: Dims> WithSelectDataRef<()> for TrainStepInput<DI, DO> {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, _permits_ctx: P, _selector: (), _trace_ctx: Option<&'static str>, _do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-       async move { unimplemented!() }//TODO fix OOMHandler to accept inputs without WithSelectDataRef impl
-    }
-}
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: Device,

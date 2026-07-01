@@ -16,7 +16,7 @@ use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, MaxParallelCtx, OutId, RunCtx};
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -355,43 +355,6 @@ impl From<Range<i64>> for ClcResourcesMotifsDistInputDeviceWrapperSelector {
 impl Adjustable for ClcResourcesMotifsDistInputDeviceWrapperSelector {}
 
 
-impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, ctx: P, selector: ClcResourcesMotifsDistInputDeviceWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        P:RunCtx + 'a,
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-    {
-        async move {
-
-            debug!("ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref: selector={selector:?}");
-
-
-            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
-            let t_1_batch= self.batch[range.clone()].to_vec();
-            let stacked_motifs_output = Arc::clone(&self.stacked_motifs);
-            let motifs_stats = Arc::clone(&self.motifs_stats);
-
-            let future = with_data!(ctx, [t_1_batch], stacked_motifs_output, motifs_stats;
-                |
-                 ctx,
-                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
-                 stacked_motifs_output:&StackedMotifsOutput,
-                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-                |{
-                    let inpt = ClcResourcesMotifsDistInput::new(
-                        &batch_v,
-                        self.resource_ids[range].to_vec(),
-                        stacked_motifs_output,
-                        motifs_stats,
-                    );
-
-                    Ok::<_, ThoError>(do_run(&inpt, &ctx))
-            })?;
-            track_await(future).await
-        }
-    }
-}
 
 
 #[derive(Debug)]

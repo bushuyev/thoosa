@@ -54,7 +54,7 @@ macro_rules! pure_module_path {
 }
 
 #[ctor::ctor]
-fn init() {
+pub fn init() {
     thoosa_shared::test_utils::init_test_logging();
 }
 
