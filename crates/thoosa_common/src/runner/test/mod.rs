@@ -17,7 +17,7 @@ use thoosa_shared::comp_id::SynKey;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{Cached, CachedPurgeOutput, DevicesWrap, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap, WithDataRef, WithSelectDataRef};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -98,7 +98,8 @@ where
         required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>, size: <R::In<'z> as Data>::Metrics,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
-        for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>>, // + WithId<ID=<R::In<'a> as WithId>::ID>,
+        for <'f> W: WithSelectDataRef<S, O<'f>=<R as Stage>::In<'f>> + BorrowRef<S, Out<'f>=<R as Stage>::In<'f>> , // + WithId<ID=<R::In<'a> as WithId>::ID>,
+
         W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 
         R: SyncStage + Adjustable + Send + Sync + 'static,

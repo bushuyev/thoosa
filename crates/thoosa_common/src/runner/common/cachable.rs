@@ -305,24 +305,25 @@ where
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a, S:'a;
 
-    async fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
     where
         O:'o,
         S:'o,
         Self:'o,
     {
+        async move {
+            let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
 
-        let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
-
-        match selector {
-            None => {
-                Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
-                    read_guard,
-                    |val: &O| val,
-                )))
-            }
-            Some(selector) => {
-                Ok(ThoDataRef::Owned(read_guard.subview(selector)?))
+            match selector {
+                None => {
+                    Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
+                        read_guard,
+                        |val: &O| val,
+                    )))
+                }
+                Some(selector) => {
+                    Ok(ThoDataRef::Owned(read_guard.subview(selector)?))
+                }
             }
         }
     }
@@ -1074,20 +1075,41 @@ where
 }
 
 
-trait BorrowRef<S>
+pub trait BorrowRef<S>
 where
     S: Clone + Debug + Send
 {
     type Out<'a> where Self: 'a, S:'a;
 
-    async fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
     where
         S:'o, Self:'o,
     {
-        todo!()
+        async {
+            todo!()
+        }
     }
 
 }
+
+impl <S, BR> BorrowRef<S> for Arc<BR>
+where
+    BR:BorrowRef<S> + Sync + Send,
+    S: Clone + Debug + Send
+{
+    type Out<'a> = BR::Out<'a> where Self: 'a, S: 'a, BR:'a;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
+    where
+        S: 'o,
+        Self: 'o
+    {
+        async move {
+            self.as_ref().borrow_to(to_tho_device_idx, selector).await
+        }
+    }
+}
+
 
 
 ///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
