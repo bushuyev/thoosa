@@ -27,7 +27,7 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef, WithDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -977,38 +977,6 @@ impl BorrowRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     }
 }
 
-impl WithSelectDataRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
-    fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(
-        &'a self,
-        _to_device_idx: usize,
-        mut permits_ctx: P,
-        selector: ChannelsData2Selector,
-        _trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-
-            let future = with_data!(permits_ctx, self.motif_net, self.batch; |mut ctx:P, motif_net:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, batch:&ThoTensor<ChannelsData, SynKey>|{
-                let b = batch.subview(selector)?;
-                let input = ApplyMotifNetInput::new(&b, motif_net);
-                debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 0. ctx.id={:?}", ctx.id());
-                let r = do_run(&input, &ctx);
-
-                let id = ctx.id().clone();
-                drop(ctx);
-                debug!("ApplyMotifNetInputWrapper::with_selected_data_ref: 1. ctx.id={id:?}");
-
-                Ok::<_, ThoError>(r)
-            })?;
-            track_await(future).await
-        }
-    }
-}
 
 #[derive(Debug)]
 struct ApplyMotifNet<C>

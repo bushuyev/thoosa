@@ -1133,32 +1133,6 @@ pub trait WithDataRef: WithId + Debug + Send + Sync {
         P:RunCtx + 'a;
 
 }
-///it's used when OOMHandler tries to execute a stage on subset of the input data. It usually makes
-/// to try to split input after dumping all other tensors to CPU thus it's important to avoid loading whole input to GPU and then spliting.
-/// Instead, current split should be fetched on CPU and then copied to GPU.
-pub trait WithSelectDataRef<S>: WithDataRef
-where
-    S: Clone + Debug + Send + 'static,
-{
-    fn with_selected_data_ref<'a, 'o, R, F, P, FF>(
-        &'a self,
-        to_device_idx: usize,
-        _permits_ctx: P,
-        selector: S,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a where
-     // Self::O<'o>: Select<S, Output = Self::O<'o>>,
-     for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-     FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-     P:RunCtx + 'a,
-    R:Send + 'static;
-
-    async fn get_data<'f>(&self, to_device_idx: usize, selector:Option<S>) ->Result<<Self as WithDataRef>::O<'f>, ThoError>{
-        todo!()
-    }
-
-}
 
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
 pub trait ConsumeData {
@@ -1213,69 +1187,6 @@ where
 
 }
 
-impl<O, S> WithSelectDataRef<S> for DevicesWrap<O>
-where
-    S:Debug + Clone + Send + 'static,
-    O: Select<S, Output=O> + Data + WithId + Send + Sync,
-{
-    fn with_selected_data_ref<'a, 'o, R, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        Self::O<'o>: Select<S, Output=Self::O<'o>>,
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P:RunCtx + 'a,
-        R:Send + 'static
-    {
-        DevicesWrap::with_selected_data_ref(self, to_device_idx, permits_ctx, selector, trace_ctx, do_run)
-    }
-
-    async fn get_data<'f>(&self, to_tho_device_idx: usize, selector: Option<S>) -> Result<<Self as WithDataRef>::O<'f>, ThoError> {
-        // if self.is_resident_on_device(to_tho_device_idx) {
-        //     let lock = &self.cached_data[to_tho_device_idx];
-        //     let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
-        //     if read_guard.is_some() {
-        //         let base: &O = read_guard
-        //             .as_ref()
-        //             .expect("no value behind guard");
-        //         return match selector {
-        //             None => {base.clone()}
-        //             Some(_) => {base.subview(selector.clone())?}
-        //         };
-        //     }
-        //
-        //     drop(read_guard);
-        //     self.mark_not_resident_on_device(to_tho_device_idx);
-        // }
-
-        todo!()
-
-        // for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-        //     if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
-        //         continue;
-        //     }
-        //
-        //     let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
-        //
-        //     if let Some(src) = source_read_guard.as_ref() {
-        //         let sub_t: O = src.subview(selector.clone())?;
-        //
-        //         debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
-        //
-        //         let data = match &self.copy_to_device {
-        //             Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
-        //             None => sub_t,
-        //         };
-        //         return if trace_ctx.is_none() {
-        //             track_await(do_run(&data, &permits_ctx)).await
-        //         } else {
-        //             track_await(do_run(&TracingWrapper::new(&data, trace_ctx), &permits_ctx)).await
-        //         };
-        //     }
-        //     drop(source_read_guard);
-        //     self.mark_not_resident_on_device(source_device_idx);
-        // }
-    }
-}
 
 impl <D, E> DevicesWrap<DataWithExtra<D, E>>
 where
