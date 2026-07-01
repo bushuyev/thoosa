@@ -16,7 +16,7 @@ use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, WithId};
 use thoosa_with_data::with_data;
-use crate::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
@@ -175,6 +175,22 @@ impl WithDataRef for ABClcSyncStageInputWrapper {
     }
 }
 
+impl BorrowRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
+    type Out<'a> = ABClcSyncStageInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        ABClcSyncStageInputWrapperSelector: 'a,
+        Self: 'a,
+    {
+        async move {
+            let from_a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
+            let from_b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
+            Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
+        }
+    }
+}
+
 //required only when SplitAdjuster is used
 impl WithSelectDataRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
     fn with_selected_data_ref<'a, 'o, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, ctx: P, _selector: ABClcSyncStageInputWrapperSelector, _trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
@@ -272,7 +288,7 @@ impl ABClcSyncStage {
     }
 
     pub(crate) fn do_run_inner<'f>(&self, input: &ABClcSyncStageInput<'f>, _ctx: &RunCtxImpl) -> Result<ABClcStageOutput, ThoError> {
-        self.do_run_values(input.id(), &input.from_a.value, &input.from_b.value)
+        self.do_run_values(input.id(), &input.from_a.as_ref().value, &input.from_b.as_ref().value)
     }
 
     pub(crate) fn do_run_values(&self, input_id: &SynKey, from_a: &ThoTensor<AStageOutputDims, ()>, from_b: &ThoTensor<BStageOutputDims, ()>) -> Result<ABClcStageOutput, ThoError> {
@@ -303,8 +319,8 @@ impl WithId for ABClcSyncStageInput<'_> {
 #[derive(Debug)]
 pub(crate) struct ABClcSyncStageInput<'a> {
     id:SynKey,
-    from_a:&'a AStageOutput,
-    from_b:&'a BStageOutput,
+    from_a:ThoDataRef<'a, AStageOutput>,
+    from_b:ThoDataRef<'a, BStageOutput>,
 }
 
 impl <'a> ABClcSyncStageInput<'a> {
@@ -312,17 +328,21 @@ impl <'a> ABClcSyncStageInput<'a> {
 
         Self {
             id: from_a.id() + from_b.id(),
-            from_a,
-            from_b
+            from_a: ThoDataRef::Borrowed(from_a),
+            from_b: ThoDataRef::Borrowed(from_b)
         }
     }
 
-    pub(crate) fn from_a_value(&self) -> &'a ThoTensor<AStageOutputDims, ()> {
-        &self.from_a.value
+    fn from_data_refs(from_a: ThoDataRef<'a, AStageOutput>, from_b: ThoDataRef<'a, BStageOutput>) -> Self {
+        Self { id: from_a.as_ref().id() + from_b.as_ref().id(), from_a, from_b }
     }
 
-    pub(crate) fn from_b_value(&self) -> &'a ThoTensor<BStageOutputDims, ()> {
-        &self.from_b.value
+    pub(crate) fn from_a_value(&self) -> &ThoTensor<AStageOutputDims, ()> {
+        &self.from_a.as_ref().value
+    }
+
+    pub(crate) fn from_b_value(&self) -> &ThoTensor<BStageOutputDims, ()> {
+        &self.from_b.as_ref().value
     }
 }
 
@@ -331,16 +351,16 @@ impl Data for ABClcSyncStageInput<'_> {
     type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
-        &self.from_a.size() + &self.from_b.size()
+        &self.from_a.as_ref().size() + &self.from_b.as_ref().size()
     }
 
     fn device(&self) -> usize {
-        assert_eq!(self.from_a.device(), self.from_b.device());
-        self.from_a.device()
+        assert_eq!(self.from_a.as_ref().device(), self.from_b.as_ref().device());
+        self.from_a.as_ref().device()
     }
 
     fn mem_size(&self) -> u64 {
-        self.from_a.mem_size() + self.from_b.mem_size()
+        self.from_a.as_ref().mem_size() + self.from_b.as_ref().mem_size()
     }
 }
 

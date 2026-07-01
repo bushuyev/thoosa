@@ -290,13 +290,22 @@ where
 }
 
 
+#[derive(Debug)]
 pub enum ThoDataRef<'a, D> {
     Borrowed(&'a D),
     ReadLocked(RwLockReadGuard<'a, D>),
     Owned(D),
 }
 
-
+impl<D> ThoDataRef<'_, D> {
+    pub fn as_ref(&self) -> &D {
+        match self {
+            Self::Borrowed(value) => value,
+            Self::ReadLocked(value) => value,
+            Self::Owned(value) => value,
+        }
+    }
+}
 
 impl <S, O> BorrowRef<S> for DevicesWrap<O>
 where
@@ -312,17 +321,20 @@ where
         Self:'o,
     {
         async move {
-            let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
-
             match selector {
                 None => {
+                    let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
                     Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
                         read_guard,
                         |val: &O| val,
                     )))
                 }
                 Some(selector) => {
-                    Ok(ThoDataRef::Owned(read_guard.subview(selector)?))
+                    let read_guard = self.load_from_any_device_(0).await?;
+                    let selected = read_guard.subview(selector)?;
+                    drop(read_guard);
+                    let selected = if to_tho_device_idx == 0 { selected } else { track_await(selected.copy_to_device(to_tho_device_idx)).await? };
+                    Ok(ThoDataRef::Owned(selected))
                 }
             }
         }
@@ -333,11 +345,7 @@ where
 
 impl<'a, D> Borrow<D> for ThoDataRef<'a, D> {
     fn borrow(&self) -> &D {
-        match self {
-            ThoDataRef::Borrowed(v) => v,
-            ThoDataRef::ReadLocked(v) => &*v,
-            ThoDataRef::Owned(v) => v,
-        }
+        self.as_ref()
     }
 }
 
@@ -1083,12 +1091,7 @@ where
 
     fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
     where
-        S:'o, Self:'o,
-    {
-        async {
-            todo!()
-        }
-    }
+        S:'o, Self:'o;
 
 }
 

@@ -26,7 +26,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{Cached, CachedPurgeOutput, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -179,17 +179,21 @@ pub struct MotifStatsCalcInput<'a> {
 
 #[derive(Debug)]
 enum MotifStatsCalcInputData<'a> {
-    Managed(&'a LoadedMotif),
-    Motifs(Vec<&'a LoadedMotif>),
+    Managed(ThoDataRef<'a, LoadedMotif>),
+    Motifs(Vec<ThoDataRef<'a, LoadedMotif>>),
 }
 
 impl<'a> MotifStatsCalcInput<'a> {
     fn from_managed(id: SynKey, motif: &'a LoadedMotif, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
-        Self { id, data: MotifStatsCalcInputData::Managed(motif), metrics, quantiles }
+        Self { id, data: MotifStatsCalcInputData::Managed(ThoDataRef::Borrowed(motif)), metrics, quantiles }
     }
 
     fn from_motifs(id: SynKey, motifs: Vec<&'a LoadedMotif>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
-        Self { id, data: MotifStatsCalcInputData::Motifs(motifs), metrics, quantiles }
+        Self { id, data: MotifStatsCalcInputData::Motifs(motifs.into_iter().map(ThoDataRef::Borrowed).collect()), metrics, quantiles }
+    }
+
+    fn from_data_refs(id: SynKey, data: MotifStatsCalcInputData<'a>, metrics: Vec<Metrics>, quantiles: Option<Vec<f32>>) -> Self {
+        Self { id, data, metrics, quantiles }
     }
 
     fn data(&self) -> &MotifStatsCalcInputData<'a> {
@@ -212,9 +216,9 @@ impl<'a> MotifStatsCalcInput<'a> {
         }
     }
 
-    fn motifs_size(motifs: &[&LoadedMotif]) -> <ThoTensor<ChannelsMotifsSlices, SynKey> as Data>::Metrics {
-        let num_slices = motifs.iter().map(|motif| motif.data().t_ref().size()[0]).sum::<i64>();
-        let window = motifs.first().map(|motif| motif.data().t_ref().size()[1]).unwrap_or(0);
+    fn motifs_size(motifs: &[ThoDataRef<'_, LoadedMotif>]) -> <ThoTensor<ChannelsMotifsSlices, SynKey> as Data>::Metrics {
+        let num_slices = motifs.iter().map(|motif| motif.as_ref().data().t_ref().size()[0]).sum::<i64>();
+        let window = motifs.first().map(|motif| motif.as_ref().data().t_ref().size()[1]).unwrap_or(0);
         [1, num_slices, window].into()
     }
 
@@ -236,22 +240,22 @@ impl Data for MotifStatsCalcInput<'_> {
 
     fn size(&self) -> Self::Metrics {
         match self.data() {
-            MotifStatsCalcInputData::Managed(motif) => Self::channels_size_from_tensor(motif.data().size().as_slice()),
+            MotifStatsCalcInputData::Managed(motif) => Self::channels_size_from_tensor(motif.as_ref().data().size().as_slice()),
             MotifStatsCalcInputData::Motifs(motifs) => Self::motifs_size(motifs.as_slice()),
         }
     }
 
     fn device(&self) -> usize {
         match self.data() {
-            MotifStatsCalcInputData::Managed(motif) => motif.data().device(),
-            MotifStatsCalcInputData::Motifs(motifs) => motifs.first().map(|motif| motif.data().device()).unwrap_or(0),
+            MotifStatsCalcInputData::Managed(motif) => motif.as_ref().data().device(),
+            MotifStatsCalcInputData::Motifs(motifs) => motifs.first().map(|motif| motif.as_ref().data().device()).unwrap_or(0),
         }
     }
 
     fn mem_size(&self) -> u64 {
         match self.data() {
-            MotifStatsCalcInputData::Managed(motif) => motif.data().mem_size(),
-            MotifStatsCalcInputData::Motifs(motifs) => motifs.iter().map(|motif| motif.data().mem_size()).sum(),
+            MotifStatsCalcInputData::Managed(motif) => motif.as_ref().data().mem_size(),
+            MotifStatsCalcInputData::Motifs(motifs) => motifs.iter().map(|motif| motif.as_ref().data().mem_size()).sum(),
         }
     }
 }
@@ -329,6 +333,32 @@ impl thoosa_common::runner::common::cachable::WithDataRef for MotifStatsCalcInpu
     }
 
 
+}
+
+impl BorrowRef<()> for MotifStatsCalcInputWrapper {
+    type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<()>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let data = match &self.data {
+                MotifStatsCalcInputDataWrapper::Managed(motif) => {
+                    let motif = track_await(motif.load_from_any_device_(to_device_idx)).await?;
+                    MotifStatsCalcInputData::Managed(ThoDataRef::ReadLocked(motif))
+                }
+                MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
+                    let mut loaded = Vec::with_capacity(motifs.len());
+                    for motif in motifs {
+                        loaded.push(ThoDataRef::ReadLocked(track_await(motif.load_from_any_device_(to_device_idx)).await?));
+                    }
+                    MotifStatsCalcInputData::Motifs(loaded)
+                }
+            };
+            Ok(MotifStatsCalcInput::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone()))
+        }
+    }
 }
 
 impl thoosa_common::runner::common::cachable::WithSelectDataRef<()> for MotifStatsCalcInputWrapper {
@@ -736,8 +766,9 @@ where
 
     fn run_input(&self, input: &MotifStatsCalcInput<'_>) -> Result<MotifStatsOutput, ThoError> {
         match input.data() {
-            MotifStatsCalcInputData::Managed(motif) => calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), motif.data().t_ref()),
+            MotifStatsCalcInputData::Managed(motif) => calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), motif.as_ref().data().t_ref()),
             MotifStatsCalcInputData::Motifs(motifs) => {
+                let motifs = motifs.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
                 let channels_motifs_slices = merged_motifs_tensor(input.id(), motifs.as_slice())?;
                 calc_metrics(self.out_id(input.id()), input.id(), input.metrics(), input.quantiles(), channels_motifs_slices.t_ref())
             }

@@ -6,7 +6,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -36,7 +36,7 @@ use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::mono_key;
 use thoosa_store::Store;
@@ -896,6 +896,38 @@ impl Default for RangeOrSlice {
 }
 
 impl RangeOrSlice {
+    async fn borrow_to<'a>(&self, batch: &'a [Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>], to_device_idx: usize) -> Result<Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, ThoError> {
+        match self {
+            Self::Full => {
+                let mut loaded = Vec::with_capacity(batch.len());
+                for tensor in batch {
+                    loaded.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                }
+                Ok(loaded)
+            }
+            Self::Range(range) => {
+                let mut loaded = Vec::with_capacity((range.end - range.start) as usize);
+                for tensor in &batch[range.start as usize..range.end as usize] {
+                    loaded.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                }
+                Ok(loaded)
+            }
+            Self::Slice((i, range)) => {
+                let channels = batch[*i].size().dim_0();
+                let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
+                Ok(vec![track_await(batch[*i].borrow_to(to_device_idx, Some(selector))).await?])
+            }
+        }
+    }
+
+    fn select_resources<'a, R>(&self, resources: &'a [R]) -> &'a [R] {
+        match self {
+            Self::Full => resources,
+            Self::Range(range) => &resources[range.start as usize..range.end as usize],
+            Self::Slice((i, _)) => std::slice::from_ref(&resources[*i]),
+        }
+    }
+
     pub async fn select<R>(&self, batch: Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut run_ctx: R) -> Result<Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, ThoError>
     where
         R:RunCtx
@@ -1048,7 +1080,17 @@ impl  BorrowRef<CrossInputSelector> for CrossInputSelectorWrap {
         CrossInputSelector: 'o,
         Self: 'o
     {
-        todo!()
+        async move {
+            let selector = selector.unwrap_or_default();
+            let mut tensors = track_await(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?;
+            tensors.extend(track_await(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
+            Ok(CrossInput::from_data_refs(
+                tensors,
+                selector.batch_0_selector.select_resources(&self.resources_0),
+                selector.batch_1_selector.select_resources(&self.resources_1),
+                self.id.clone(),
+            ))
+        }
     }
 }
 
