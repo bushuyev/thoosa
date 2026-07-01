@@ -1,5 +1,7 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
+
+use std::borrow::Borrow;
 use crate as thoosa_common;
 
 use mockall_double::double;
@@ -287,36 +289,58 @@ where
     pd: PhantomData<O>,
 }
 
-struct ThoDataRef<'a, D>
-where
-    D: WithId + Data + Send + Sync
-{
-    _pd: PhantomData<&'a()>,
-    data:D,
+
+pub enum ThoDataRef<'a, D> {
+    Borrowed(&'a D),
+    ReadLocked(RwLockReadGuard<'a, D>),
+    Owned(D),
 }
 
 
-// #[async_trait]
+
 impl <S, O> BorrowRef<S> for DevicesWrap<O>
 where
-    S:Debug + Send,
-    O: WithId + Data + CopyToDevice + Send + Sync,
+    S:Clone + Debug + Send,
+    O: Select<S, Output = O> + WithId + Data + CopyToDevice + Send + Sync,
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a, S:'a;
 
-    async fn borrow<'o>(&self, to_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
+    async fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
     where
         O:'o,
         S:'o,
-        Self:'o
+        Self:'o,
     {
-        Ok(ThoDataRef {
-            _pd: Default::default(),
-            data: self.cached_data[to_device_idx].read().await.as_ref().unwrap().copy_to_device(to_device_idx).await?,
-        })
-    }
 
+        let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
+
+        match selector {
+            None => {
+                Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
+                    read_guard,
+                    |val: &O| val,
+                )))
+            }
+            Some(selector) => {
+                Ok(ThoDataRef::Owned(read_guard.subview(selector)?))
+            }
+        }
+    }
 }
+
+
+
+impl<'a, D> Borrow<D> for ThoDataRef<'a, D> {
+    fn borrow(&self) -> &D {
+        match self {
+            ThoDataRef::Borrowed(v) => v,
+            ThoDataRef::ReadLocked(v) => &*v,
+            ThoDataRef::Owned(v) => v,
+        }
+    }
+}
+
+
 
 
 enum InflightRole {
@@ -1049,16 +1073,17 @@ where
     }
 }
 
-// #[async_trait]
+
 trait BorrowRef<S>
 where
-    S:  Debug + Send
+    S: Clone + Debug + Send
 {
     type Out<'a> where Self: 'a, S:'a;
 
-    async fn borrow<'o>(&self, to_device_idx: usize, selector:Option<S>) ->Result<Self::Out<'o>, ThoError>
+    async fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> Result<Self::Out<'o>, ThoError>
     where
-        S:'o, Self:'o{
+        S:'o, Self:'o,
+    {
         todo!()
     }
 
