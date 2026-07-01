@@ -389,7 +389,6 @@ mod tests {
     use std::collections::HashMap;
     use tch::Tensor;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::WithDataRef;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};

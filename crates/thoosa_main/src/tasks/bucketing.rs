@@ -20,7 +20,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -408,30 +408,30 @@ where
     }
 }
 
-impl<D, Id> WithDataRef for BucketingTensorInput<D, Id>
-where
-    D: Dims + Send + Sync + 'static,
-    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-{
-    type O<'o> = BucketingSyncInput<'o, D, Id>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        async move {
-            let resource_id = self.resource_id;
-
-            track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
-                let input = BucketingSyncInput::new(resource_id, tensor, 0);
-                let future = do_run(&input, ctx);
-                async move { track_await(future).await }
-            })).await
-        }
-    }
-}
+// impl<D, Id> WithDataRef for BucketingTensorInput<D, Id>
+// where
+//     D: Dims + Send + Sync + 'static,
+//     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
+// {
+//     type O<'o> = BucketingSyncInput<'o, D, Id>;
+//
+//     fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
+//     where
+//         for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
+//         FF: Future<Output = Result<R, ThoError>> + Send + 'a,
+//         P: RunCtx + 'a,
+//     {
+//         async move {
+//             let resource_id = self.resource_id;
+//
+//             track_await(self.tensor.with_data_ref(to_device_idx, permits_ctx, trace_ctx, move |tensor, ctx| {
+//                 let input = BucketingSyncInput::new(resource_id, tensor, 0);
+//                 let future = do_run(&input, ctx);
+//                 async move { track_await(future).await }
+//             })).await
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone)]
 struct SelectBucketsInputSelector {

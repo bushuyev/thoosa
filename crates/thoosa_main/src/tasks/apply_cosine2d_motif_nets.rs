@@ -17,7 +17,7 @@ use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -166,9 +166,10 @@ where
                     match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
 
+                            let module_with_store = net.borrow_to(0, None::<()>).await?;
+                            let module_with_store = module_with_store.as_ref();
 
-                            let (hash_value, config) = track_await(net.with_data_ref(0, load_ctx_2, None, |module_with_store:&DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>, _ctx|{
-                                let result = (|| {
+                                let (hash_value, config) = (|| {
                                     let channel = module_with_store.extra().channel();
                                     let motif_width = module_with_store.extra().motif_net_params.num_features();
 
@@ -180,10 +181,9 @@ where
                                         tmp_cache.lock().insert(tensor_part);
                                     }
 
-                                    Ok((hash_value, stft_config))
-                                })();
-                                std::future::ready(result)
-                            })).await?;
+                                    Ok::<_, ThoError>((hash_value, stft_config))
+                                })()?;
+
 
                             Ok::<_, ThoError>(Some((hash_value, config)))
                         }

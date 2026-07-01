@@ -330,11 +330,45 @@ where
                     )))
                 }
                 Some(selector) => {
-                    let read_guard = self.load_from_any_device_(0).await?;
-                    let selected = read_guard.subview(selector)?;
-                    drop(read_guard);
-                    let selected = if to_tho_device_idx == 0 { selected } else { track_await(selected.copy_to_device(to_tho_device_idx)).await? };
-                    Ok(ThoDataRef::Owned(selected))
+                    if self.is_resident_on_device(to_tho_device_idx) {
+                        let guard = track_await(self.cached_data[to_tho_device_idx].read()).await;
+                        match guard.as_ref() {
+                            None => {
+                                self.mark_not_resident_on_device(to_tho_device_idx);
+                                warn!("BorrowRef<S> for DevicesWrap::borrow_to: resident_on_device  flag for {to_tho_device_idx} was stale")
+                            }
+                            Some(data) => {
+                                let sub_t: O = data.subview(selector.clone())?;
+                                return Ok(ThoDataRef::Owned(sub_t));
+                            }
+                        }
+                    }
+
+                    for (source_device_idx, op) in self.cached_data.iter().enumerate() {
+                        if !self.is_resident_on_device(source_device_idx) {
+                            continue;
+                        }
+
+                        let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
+
+                        if let Some(src) = source_read_guard.as_ref() {
+                            let sub_t: O = src.subview(selector.clone())?;
+
+                            debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
+
+                            let data = match &self.copy_to_device {
+                                Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
+                                None => sub_t,
+                            };
+
+                            return Ok(ThoDataRef::Owned(data))
+
+                        }
+                        drop(source_read_guard);
+
+                    }
+
+                    Err(Cause::NotFound.into())
                 }
             }
         }
@@ -621,175 +655,7 @@ where
         Ok(())
     }
 
-    pub fn with_data_ref<'a, R: Send, F, P, FF>(&'a self, to_tho_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        F: FnOnce(&O, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P: RunCtx + 'a,
-    {
-        Box::pin(async move {
-            match track_await(self.load_from_any_device_(to_tho_device_idx)).await {
-                Ok(v) => {
-                    let data = v.deref();
-                    if trace_ctx.is_none() {
-                        track_await(do_run(data, &permits_ctx)).await
-                    } else {
-                        track_await(do_run(&TracingWrapper::new(data, trace_ctx), &permits_ctx)).await
-                    }
-                }
-                Err(e) => Err(e),
-            }
-        })
-    }
 
-    pub fn with_selected_data_ref<'a, R, F, P, S, FF>(&'a self, to_tho_device_idx: usize, permits_ctx: P, selector: S, trace_ctx: Option<&'static str>, do_run: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        O: Select<S, Output = O>,
-        for<'f> F: FnOnce(&O, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        S: Debug + Clone + Send + 'static,
-        P: RunCtx + 'a,
-        R: Send+ 'static
-    {
-        Box::pin(async move {
-            let permits_ctx = permits_ctx;
-
-            //TODO it's assumed dump_all_to_cpu was executed
-            // if GlobalCtx::global().is_ipc() && to_tho_device_idx != 0 && self.is_resident_on_device(0) {
-            //     let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(self.cached_data[0].read()).await;
-            //     if let Some(src) = source_read_guard.as_ref() {
-            //         let sub_t: O = src.subview(selector.clone())?;
-            //
-            //         debug!("DevicesWrap::with_selected_data_ref: cpu sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
-            //
-            //         let data = match &self.copy_to_device {
-            //             Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
-            //             None => sub_t,
-            //         };
-            //         let cuda_actor = GlobalCtx::global().cuda_actor(to_tho_device_idx);
-            //         return match return cuda_actor.exec_sync_stage(move |stream| async move {
-            //             let _guard = stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose().unwrap();
-            //             let out = do_run(&data, &permits_ctx);
-            //
-            //             Ok(ExecSyncStageActionResult::Sync { stream, out})
-            //         }).await? {
-            //             ExecSyncStageActionResult::Sync {stream: Some(stream), out} => {
-            //                 stream.synchronize();
-            //                 out
-            //             },
-            //             ExecSyncStageActionResult::Sync {stream: None, out} | ExecSyncStageActionResult::NoSync(out) => {
-            //                 out
-            //             }
-            //         }
-            //
-            //         // return DevicesWrap::<O>::do_run_trace_owned(trace_ctx, |data| do_run(data, &permits_ctx), data);
-            //     }
-            //     drop(source_read_guard);
-            //     self.mark_not_resident_on_device(0);
-            // }
-
-            if self.is_resident_on_device(to_tho_device_idx) {
-                let lock = &self.cached_data[to_tho_device_idx];
-                let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
-                if read_guard.is_some() {
-                    let base: &O = read_guard
-                        .as_ref()
-                        .expect("no value behind guard");
-                    let data: O = base.subview(selector.clone())?;
-                    return if trace_ctx.is_none() {
-                        track_await(do_run(&data, &permits_ctx)).await
-                    } else {
-                        track_await(do_run(&TracingWrapper::new(&data, trace_ctx), &permits_ctx)).await
-                    };
-                }
-
-                drop(read_guard);
-                self.mark_not_resident_on_device(to_tho_device_idx);
-            }
-
-            for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-                if source_device_idx == to_tho_device_idx || !self.is_resident_on_device(source_device_idx) {
-                    continue;
-                }
-
-                let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
-
-                if let Some(src) = source_read_guard.as_ref() {
-                    let sub_t: O = src.subview(selector.clone())?;
-
-                    debug!("DevicesWrap::with_selected_data_ref: sub_t.size={:?} copying to to_device_idx={to_tho_device_idx}", sub_t.size());
-
-                    let data = match &self.copy_to_device {
-                        Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_tho_device_idx)).await?,
-                        None => sub_t,
-                    };
-                    return if trace_ctx.is_none() {
-                        track_await(do_run(&data, &permits_ctx)).await
-                    } else {
-                        track_await(do_run(&TracingWrapper::new(&data, trace_ctx), &permits_ctx)).await
-                    };
-                }
-                drop(source_read_guard);
-                self.mark_not_resident_on_device(source_device_idx);
-            }
-
-            Err(Cause::NotFound.into())
-        })
-    }
-
-    pub async fn with_selected_data<S, R, P>(
-        &self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        selector: S,
-        do_run: impl FnOnce(<O as Select<S>>::Output, &P) -> Result<R, ThoError>,
-    ) -> Result<R, ThoError>
-    where
-        O: Select<S, Output = O>,
-        <O as Select<S>>::Output: Data + WithId + Send + Sync,
-        P:RunCtx,
-        S: Clone,
-    {
-        let permits_ctx = permits_ctx;
-
-        if self.is_resident_on_device(to_device_idx) {
-            let lock = &self.cached_data[to_device_idx];
-            let read_guard: RwLockReadGuard<'_, Option<O>> = track_await(lock.read()).await;
-            if read_guard.is_some() {
-                let data = read_guard
-                    .as_ref()
-                    .expect("no value behind guard")
-                    .subview(selector.clone())?;
-                return do_run(data, &permits_ctx);
-            }
-
-            drop(read_guard);
-            self.mark_not_resident_on_device(to_device_idx);
-        }
-
-        for (source_device_idx, op) in self.cached_data.iter().enumerate() {
-            if source_device_idx == to_device_idx || !self.is_resident_on_device(source_device_idx) {
-                continue;
-            }
-
-            let source_read_guard: RwLockReadGuard<'_, Option<O>> = track_await(op.read()).await;
-
-            if let Some(src) = source_read_guard.as_ref() {
-                let sub_t = src.subview(selector.clone())?;
-                debug!("DataCacheWrapper::with_selected_data: sub_t.size={:?} copying to to_device_idx={to_device_idx}", sub_t.size());
-
-                let data = match &self.copy_to_device {
-                    Some(copy_to_device) => track_await(copy_to_device.copy(&sub_t, to_device_idx)).await?,
-                    None => sub_t,
-                };
-                return do_run(data, &permits_ctx);
-            }
-            drop(source_read_guard);
-            self.mark_not_resident_on_device(source_device_idx);
-        }
-
-        Err(Cause::NotFound.into())
-    }
 
     pub fn is_on_cpu_before(&self, threshold_age: u64) -> bool {
         let on_cpu_since = perf_log!(sync_read_lock!(&self.on_cpu_since), "DevicesWrap::is_on_cpu_before on_cpu_since.read");
@@ -842,7 +708,7 @@ where
             let source_read_guard = track_await(op.read()).await;
 
             if source_read_guard.is_some() && self.copy_to_device.is_none() {
-                return Ok(tokio::sync::RwLockReadGuard::map(
+                return Ok(RwLockReadGuard::map(
                     source_read_guard,
                     |val: &Option<O>| val.as_ref().expect("no value behind guard"),
                 ));
@@ -1114,26 +980,6 @@ where
 }
 
 
-
-///To let OOMHandler accept both plain wrapped data as it's stored in caches and composite inputs like module + tensor or batch + motif
-pub trait WithDataRef: WithId + Debug + Send + Sync {
-    type O<'o>: Data + /*CopyToDevice +*/ WithId + Send + Sync /*where
-        Self: 'o*/;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(
-        &'a self,
-        to_device_idx: usize,
-        permits_ctx: P,
-        trace_ctx: Option<&'static str>,
-        do_run: F,
-    ) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P:RunCtx + 'a;
-
-}
-
 /// Owned-data analogue of WithDataRef for sync-stage consume paths that need executor-controlled materialization.
 pub trait ConsumeData {
     type O: Data + WithId + Send + Sync;
@@ -1152,40 +998,6 @@ pub trait ConsumeData {
     fn burp(o:Self::O) -> impl Future<Output = Self> + Send;
 }
 
-impl <O> WithDataRef for DevicesWrap<O>
-where
-    O: Data + WithId + Send + Sync,
-{
-    type O<'o> = O;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-            for <'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-            FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-            P:RunCtx + 'a
-    {
-        DevicesWrap::with_data_ref(self, to_device_idx, permits_ctx, trace_ctx, do_run)
-    }
-
-
-}
-
-impl<O> WithDataRef for Arc<O>
-where
-    O:WithDataRef,
-{
-    type O<'o> = O::O<'o>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, to_device_idx: usize, permits_ctx: P, trace_ctx: Option<&'static str>, do_run: F) -> impl Future<Output=Result<R, ThoError>> + Send + 'a
-    where
-            for<'f> F: FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-            FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-            P: RunCtx + 'a
-    {
-        self.as_ref().with_data_ref(to_device_idx, permits_ctx, trace_ctx, do_run)
-    }
-
-}
 
 
 impl <D, E> DevicesWrap<DataWithExtra<D, E>>
@@ -1230,7 +1042,7 @@ mod tests {
     use crate::runner::cache_areas::CacheArea;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx;
-    use crate::runner::common::cachable::{DevicesWrap, InflightRole, WithDataRef, join_or_start_inflight};
+    use crate::runner::common::cachable::{DevicesWrap, InflightRole, join_or_start_inflight, BorrowRef};
     use crate::runner::common::mock_run_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;
@@ -1435,7 +1247,6 @@ mod tests {
         assert!(tested.inflights[0].lock().is_none());
     }
 
-
     #[tokio::test]
     async fn test_dump_to_cpu() -> Result<(), ThoError> {
 
@@ -1448,14 +1259,12 @@ mod tests {
         assert!(track_await(lock.read()).await.is_none());
 
         let ctx_for_data = mock_run_ctx::default(1);
-        tested
-            .with_data_ref(1,
-               ctx_for_data, None, |data_on_1: &MockDataWithId, _ctx| {
-                   assert_eq!(data_on_1.device(), &1);
 
-                   std::future::ready(Ok(()))
-               })
-            .await?;
+        let data_on_1 = tested.borrow_to(1, None).await?;
+
+        assert_eq!(data_on_1.as_ref().device(), &1);
+        drop(data_on_1);//dump_to_cpu: can't drop self.id=DummyCachableId("id"), locked
+
 
         let lock = &tested.cached_data[1];
         assert!(track_await(lock.read()).await.is_some());
@@ -1469,6 +1278,8 @@ mod tests {
 
         Ok(())
     }
+
+
 
     #[tokio::test]
     async fn test_with_data() -> Result<(), ThoError> {

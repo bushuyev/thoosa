@@ -220,7 +220,7 @@ pub(crate) mod mock_tensor_loader {
 mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use crate::tasks::tensor_loader::RawTensorLoader;
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::common::RunCtx;

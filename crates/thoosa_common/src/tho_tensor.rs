@@ -16,7 +16,6 @@ use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, 
 use torch_sys::IntList;
 use log::{debug, info, trace, warn};
 use mockall_double::double;
-use thoosa_common::runner::common::cachable::{WithDataRef};
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;

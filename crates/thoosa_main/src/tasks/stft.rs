@@ -136,7 +136,7 @@ where
 }
 
 #[derive(Clone, Debug, Default)]
-struct SyncStftSelector;
+pub struct SyncStftSelector;
 
 impl Adjustable for SyncStftSelector {}
 
@@ -147,7 +147,8 @@ where
     type Output = ThoTensor<D, SynKey>;
 
     fn subview(&self, _selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
-        Err(ThoError::new("SyncStftSelector::subview: input selection is not supported"))
+        // Err(ThoError::new("SyncStftSelector::subview: input selection is not supported"))
+        ThoTensor::new(self.id.clone(), self.as_ref().copy())
     }
 }
 

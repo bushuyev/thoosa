@@ -17,7 +17,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -332,10 +332,9 @@ where
                     ctx.branch(false),
                 )).await?;
 
-            let welch_input = track_await(loaded
-                .with_data_ref(0, ctx.branch(false), None, |loaded: &ThoTensor<ChannelsData, SynKey>, _ctx| {
-                    std::future::ready(ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone()))
-                })).await?;
+            let loaded = loaded.borrow_to(0, None::<()>).await?;
+            let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())?;
+
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
 
             let welch_input_size = welch_input.size().clone();
