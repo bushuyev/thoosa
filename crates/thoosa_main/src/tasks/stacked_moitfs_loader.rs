@@ -10,7 +10,7 @@ use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use thoosa_common::dims::MotifSlices;
 use thoosa_named_derive::Named;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef};
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_device::ThoDevice;

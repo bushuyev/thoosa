@@ -16,7 +16,7 @@ use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, MaxParallelCtx, OutId, RunCtx};
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -279,39 +279,6 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
     }
 }
 
-impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
-    type O<'o> = ClcResourcesMotifsDistInput<'o>;
-
-    fn with_data_ref<'a, R: Send + 'a, F, P, FF>(&'a self, _to_device_idx: usize, permits_ctx: P, _trace_ctx: Option<&'static str>, do_run: F) -> impl std::future::Future<Output = Result<R, ThoError>> + Send + 'a
-    where
-        F: for <'f> FnOnce(&Self::O<'f>, &P) -> FF + Send + 'a,
-        FF: Future<Output = Result<R, ThoError>> + Send + 'a,
-        P:RunCtx + 'a
-    {
-        async move {
-            let t_1_batch= self.batch.clone();
-            let stacked_motifs = Arc::clone(&self.stacked_motifs);
-            let motifs_stats = Arc::clone(&self.motifs_stats);
-            let future = with_data!(permits_ctx, [t_1_batch], stacked_motifs, motifs_stats;
-                |
-                 ctx,
-                 batch_v:&[&ThoTensor<ChannelsData, SynKey>],
-                 stacked_motifs:&StackedMotifsOutput,
-                 motifs_stats:&ThoTensor<ChannelsMotifsDists, SynKey>
-                |{
-
-                    Ok::<_, ThoError>(do_run(&ClcResourcesMotifsDistInput::new(
-                        batch_v,
-                        self.resource_ids.clone(),
-                        stacked_motifs,
-                        motifs_stats,
-                    ), &ctx))
-
-            })?;
-            track_await(future).await
-        }
-    }
-}
 
 impl BorrowRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;

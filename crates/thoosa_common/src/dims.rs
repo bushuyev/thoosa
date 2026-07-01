@@ -6,12 +6,20 @@ use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, SimpleId};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Select, SimpleId};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
 pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
+}
+
+impl Select<()> for ThoTensor<ChannelsData, SynKey> {
+    type Output = ThoTensor<ChannelsData, SynKey>;
+
+    fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+        unimplemented!()
+    }
 }
 
 

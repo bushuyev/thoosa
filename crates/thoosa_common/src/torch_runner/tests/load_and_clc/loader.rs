@@ -16,7 +16,7 @@ use thoosa_shared::{mono_key, CopyToDevice, ThoError};
 use crate::copy_ctx::CudaActorHandle;
 use crate::dims::Dims;
 use crate::ipc::cuda_process::encode_endpoint_payload;
-use crate::runner::common::cachable::{DevicesWrap, WithDataRef};
+use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;

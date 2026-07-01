@@ -25,7 +25,7 @@ use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Named;
 use crate::dims::Dims;
-use crate::runner::common::cachable::{BorrowRef, WithDataRef};
+use crate::runner::common::cachable::{BorrowRef};
 use crate::runner::common::RunCtx;
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
