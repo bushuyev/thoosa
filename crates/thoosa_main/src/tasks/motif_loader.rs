@@ -1062,7 +1062,7 @@ mod tests {
     use parking_lot::RwLock;
     use tch::Tensor;
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
-    use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap, WithDataRef};
+    use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, WithDataRef};
     use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
@@ -1088,6 +1088,7 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_store::RunConfigRow;
+    use crate::tasks::stft::SyncStftSelector;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_load_motifs() -> Result<(), ThoError> {
@@ -1154,17 +1155,15 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
             )
             .await?;
 
-        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
-        .branch(false);
-        let r = motif.with_data_ref(0, ctx_for_data, None, |t: &DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>, _ctx|{
-            let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
+        let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx)).branch(false);
 
-            trace!("motif.t={} dist={dist}", t.data().t_ref());
+        let t = motif.borrow_to(0, Some(SyncStftSelector)).await?;
 
-            std::future::ready(Ok(true))
-        }).await?;
+        let dist = 0.; //average_euclidean_distance(t.t_ref()).unwrap();
 
-        assert_eq!(r, true);
+        trace!("motif.t={} dist={dist}", t.as_ref().data().t_ref());
+
+
         //TODO check data
 
         Ok(())
@@ -1236,16 +1235,12 @@ use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, 
 
         let mut ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(ctx))
         .branch(false);
-        let r = slices.with_data_ref(
-            0,
-            ctx_for_data, None, |t: &ThoTensor<MotifSlices, SynKey>, _ctx| {
-                let dist = average_euclidean_distance(t.t_ref()).unwrap();
+        let t = slices.borrow_to(0, Some(SyncStftSelector)).await?;
 
-                trace!("random slices: \t{} dist={dist}", t.t_ref());
+        let dist = average_euclidean_distance(t.t_ref())?;
 
-                std::future::ready(Ok(true))
-            },
-        ).await?;
+        trace!("random slices: \t{} dist={dist}", t.t_ref());
+
         // assert_eq!(r, true);
         //TODO check data
 

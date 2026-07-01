@@ -5,7 +5,7 @@ use tch::Kind;
 use thoosa_shared::ThoError;
 
 use crate::ipc::json_ser::SyncStageJsonWrapper;
-use crate::runner::common::cachable::{Cached, WithDataRef};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef};
 use crate::runner::common::runnable::AsyncStage;
 use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
@@ -26,6 +26,7 @@ use classifier::{sync_classifier_endpoint_init, Classifier, SYNC_CLASSIFIER_ENDP
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyTask;
 use loader::ABLoader;
+use thoosa_shared::traits::Select;
 
 #[ctor::ctor]
 fn init() {
@@ -44,6 +45,14 @@ pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(Str
         SYNC_CLASSIFIER_ENDPOINT.to_string(),
         Box::new(sync_classifier_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
     )])
+}
+
+impl Select<()> for ThoTensor<ClsOut, ModelTestId> {
+    type Output = ThoTensor<ClsOut, ModelTestId>;
+
+    fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+        unimplemented!()
+    }
 }
 
 pub(crate) async fn run_model_test_pipeline(
@@ -74,17 +83,15 @@ pub(crate) async fn run_model_test_pipeline(
     ));
     let input = FileListInput::new(files, input_id);
 
-    let acc = Arc::clone(&join_and_cls)
+    let acc: Arc<DevicesWrap<ThoTensor<ClsOut, ModelTestId>>> = Arc::clone(&join_and_cls)
         .run_cached(input, ctx.branch(false))
         .await?;
 
-    acc.with_data_ref(check_device_idx,
-                      ctx.branch(false), None, |acc_t: &ThoTensor<ClsOut, ModelTestId>, _ctx| {
-              let v = ClsOut::accuracy(acc_t);
-              assert!(v >= min_accuracy, "training accuracy too low: {v}");
-              std::future::ready(Ok(()))
-          })
-    .await?;
+    let acc_t = acc.borrow_to(check_device_idx, None).await?;
+
+    let v = ClsOut::accuracy(acc_t.as_ref());
+    assert!(v >= min_accuracy, "training accuracy too low: {v}");
+
 
     Ok(())
 }

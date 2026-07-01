@@ -17,6 +17,7 @@ where
     extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
 }
 
+
 impl<D, E> DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId,
@@ -100,7 +101,7 @@ where
 impl <Selector, D, E> Select<Selector> for DataWithExtra<D, E>
 where
     D: Data + CopyToDevice + WithId + Select<Selector, Output=D> + Sync,
-    E:Debug + Send + Sync,
+    E: Debug + Send + Sync,
 {
     type Output = Self;
 
