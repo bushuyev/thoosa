@@ -36,7 +36,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::copy_ctx::{CopyCtx, CudaActorHandle, ExecSyncStageActionResult, GuardOrNot};
+use crate::copy_ctx::{CopyCtx, CudaActorHandle, ExecSyncStageActionResult, GuardOrNot, HandleCtx};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -1562,6 +1562,14 @@ impl CudaIPCActorHandle {
 
 }
 
+struct IPCHanldeCTx {
+
+}
+#[async_trait]
+impl HandleCtx for IPCHanldeCTx {
+
+}
+
 #[async_trait]
 impl CudaActorHandle for CudaIPCActorHandle {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
@@ -1652,6 +1660,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
     async fn guard(&self) -> Result<GuardOrNot, ThoError> {
         Ok(GuardOrNot::IPC)
     }
+
+    async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
+        Ok(Box::new(IPCHanldeCTx{}))
+    }
+
 }
 
 pub(crate) async fn write_text_frame<W>(

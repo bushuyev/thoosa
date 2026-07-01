@@ -5,6 +5,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use log::{debug, info};
 use std::any::Any;
+use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::sync::Arc;
@@ -24,7 +25,8 @@ use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::Named;
 use crate::dims::Dims;
-use crate::runner::common::cachable::{WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{BorrowRef, WithDataRef, WithSelectDataRef};
+use crate::runner::common::RunCtx;
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
@@ -57,6 +59,24 @@ pub enum ExecSyncStageActionResult<T> {
     IPC
 }
 
+pub trait SyncCtx {}
+
+impl SyncCtx for (){}
+
+#[async_trait]
+pub trait HandleCtx:Send {
+
+    fn sync_ctx(&self) ->Result<Box<dyn SyncCtx>, ThoError> {
+        Ok(Box::new(()))
+    }
+
+     fn on_after_run(&mut self) ->Result<(), ThoError> {
+         Ok(())
+     }
+
+}
+
+
 #[async_trait]
 pub trait CudaActorHandle: Debug + Send + Sync {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError>;
@@ -86,6 +106,8 @@ pub trait CudaActorHandle: Debug + Send + Sync {
     }
 
     async fn guard(&self) -> Result<GuardOrNot, ThoError>;
+
+    async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
 }
 
 impl dyn CudaActorHandle + '_ {
@@ -111,30 +133,34 @@ impl dyn CudaActorHandle + '_ {
         })
     }
 
-    pub async fn exec_sync_2<S, W, SL>(&self, stage:Arc<S>, data: W, selector: Option<SL>, ctx:S::Ctx) -> Result<S::Out, ThoError>
+
+    pub async fn run_stage<S, W, SL>(
+        &self,
+        stage: Arc<S>,
+        input: W,
+        selector: Option<SL>,
+        ctx:&S::Ctx
+    ) -> Result<S::Out, ThoError>
     where
-        S:SyncStage + Send + Sync,
+        S: SyncStage,
         SL: Clone + Debug + Send + 'static,
-        for<'a> W:WithSelectDataRef<SL, O<'a>=S::In<'a>>,
-        S::Out:Send + Sync + 'static,
-        for<'a> <S as Stage>::In<'a>: Sync
+        W: Sync,
+        for<'a> W: BorrowRef<SL> + 'a,
+        for<'a> <W as BorrowRef<SL>>::Out<'a>: Borrow<S::In<'a>>,
     {
-        // data.with_selected_data_ref(0, ctx, selector.unwrap(), None,  async move |data, ctx|{
-        //
-        //         let _guard = self.guard().await?;
-        //         let r = stage.do_run(&data, ctx);
-        //
-        //         match _guard {
-        //             GuardOrNot::Local(s) => {
-        //                 s.synchronize()?;
-        //             }
-        //             GuardOrNot::IPC => {}
-        //         }
-        //
-        //         r
-        //
-        // }).await
-        todo!()
+
+
+        let borrowed = input.borrow_to(0, selector).await?;
+
+        let mut handle_ctx = self.init_handle_ctx().await?;
+
+        let sync_ctx = handle_ctx.sync_ctx()?;
+
+        let out = stage.do_run(borrowed.borrow(), ctx);
+
+        handle_ctx.on_after_run()?;
+
+        out
     }
 
 }
@@ -372,6 +398,23 @@ impl CudaLocalActorHandle {
 
 }
 
+struct LocalHandleCtx {
+    stream: Guard<ThoCudaStream>,
+}
+
+impl SyncCtx for ThoStreamGuard {}
+#[async_trait]
+impl HandleCtx for LocalHandleCtx {
+
+    fn sync_ctx(&self) -> Result<Box<dyn SyncCtx>, ThoError> {
+        Ok(Box::new(ThoStreamGuard::new(&self.stream)?))
+    }
+
+    fn on_after_run(&mut self) -> Result<(), ThoError> {
+        self.stream.synchronize()
+    }
+}
+
 #[async_trait]
 impl CudaActorHandle for CudaLocalActorHandle {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
@@ -402,9 +445,17 @@ impl CudaActorHandle for CudaLocalActorHandle {
     async fn guard(&self) -> Result<GuardOrNot, ThoError> {
         let stream = self.acquire_exec_stream().await?;
 
-        // Ok(GuardOrNot::Local(ThoStreamGuard::new(&stream)?))
         Ok(GuardOrNot::Local(stream))
     }
+
+    async fn init_handle_ctx(&self) -> Result<Box<dyn HandleCtx>, ThoError> {
+
+        let stream = self.acquire_exec_stream().await?;
+
+
+        Ok(Box::new(LocalHandleCtx { stream }))
+    }
+
 }
 
 //TODO to be renamed to StreamCtx?
