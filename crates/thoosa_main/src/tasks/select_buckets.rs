@@ -15,7 +15,7 @@ use std::sync::Arc;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -407,6 +407,17 @@ impl WithDataRef for SelectBucketsSyncInputWrapper {
             let input = SelectBucketsSyncInput::new(&self.select_config);
             track_await(do_run(&input, &permits_ctx)).await
         }
+    }
+}
+
+impl BorrowRef<()> for SelectBucketsSyncInputWrapper {
+    type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, _to_device_idx: usize, _selector: Option<()>) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move { Ok(SelectBucketsSyncInput::new(&self.select_config)) }
     }
 }
 

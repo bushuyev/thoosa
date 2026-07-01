@@ -16,7 +16,7 @@ use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, MaxParallelCtx, OutId, RunCtx};
-use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -112,13 +112,14 @@ where
 
         let unfold_params = UnfoldParams::new(
             1,
-            input.stacked_motifs_output.motifs.extra().1.window as i64,
-            input.stacked_motifs_output.motifs.extra().1.step as i64,
+            input.stacked_motifs_output.as_ref().motifs.extra().1.window as i64,
+            input.stacked_motifs_output.as_ref().motifs.extra().1.step as i64,
         );
 
-        let (batch_1_t, batch_1_sizes) = unfold_and_cat(input.batch, &unfold_params)?;
+        let batch = input.batch.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
+        let (batch_1_t, batch_1_sizes) = unfold_and_cat(batch.as_slice(), &unfold_params)?;
 
-        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} motifs_stats.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.motifs.data().t_ref().size(), input.motifs_stats.t_ref().size(), input.resource_ids);
+        debug!("ClcResourcesMotifsDist::do_run: self.num_channels={} batch_1_t.size={:?} batch_1_t.device={:?} motifs.size={:?} motifs_stats.size={:?} input.resource_ids={:?}",self.num_channels, batch_1_t.size(), batch_1_t.device(), input.stacked_motifs_output.as_ref().motifs.data().t_ref().size(), input.motifs_stats.t_ref().size(), input.resource_ids);
 
         #[cfg(test)]
         if self.fail_if_size_bigger_than.map(|v| v < batch_1_t.size()[1] as usize).unwrap_or(false) {
@@ -155,12 +156,12 @@ where
         let channel_masks_dists_ids = {
 
 
-            let find_motifs_run_config = input.stacked_motifs_output.motifs.extra().1.as_ref();
+            let find_motifs_run_config = input.stacked_motifs_output.as_ref().motifs.extra().1.as_ref();
             let cross_loader_run_config = find_motifs_run_config.cross_loader_run_config().ok_or_else(|| ThoError::new(format!("ClcResourcesMotifsDist::run: find_motifs_run_config_id={:?} is not a CrossLoader config", find_motifs_run_config.id)))?;
 
             let (mask, dists)  = thoosa_motifs::distance::clc_d2_similarity_and_mask(
                 input
-                        .stacked_motifs_output
+                        .stacked_motifs_output.as_ref()
                         .motifs
                         .data()
                         .t_ref(),
@@ -172,7 +173,7 @@ where
 
             (0..self.num_channels)
                 .map(|c| {
-                    let ids = &input.stacked_motifs_output.motifs.extra().0[c];
+                    let ids = &input.stacked_motifs_output.as_ref().motifs.extra().0[c];
                     if ids.is_empty() {
                         Ok(None) //no motifs in channel c
                     } else {
@@ -206,7 +207,7 @@ where
         };
 
         let select_motifs_run_config_id = input
-            .stacked_motifs_output
+            .stacked_motifs_output.as_ref()
             .motifs
             .extra()
             .1
@@ -312,6 +313,27 @@ impl WithDataRef for ClcResourcesMotifsDistInputDeviceWrapper {
     }
 }
 
+impl BorrowRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
+    type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ClcResourcesMotifsDistInputDeviceWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        ClcResourcesMotifsDistInputDeviceWrapperSelector: 'a,
+        Self: 'a,
+    {
+        async move {
+            let range = selector.map(|selector| selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize).unwrap_or(0..self.batch.len());
+            let mut batch = Vec::with_capacity(range.len());
+            for tensor in &self.batch[range.clone()] {
+                batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+            }
+            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids[range.clone()].to_vec(), vec![0; range.len()], ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapperSelector {
     resources_batch_range:Range<i64>
@@ -375,11 +397,11 @@ impl WithSelectDataRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for Clc
 #[derive(Debug)]
 pub struct ClcResourcesMotifsDistInput<'a> {//TODO remove unused
     id: SynKey,
-    batch: &'a [&'a ThoTensor<ChannelsData, SynKey>],
+    batch: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>,
     resource_ids: Vec<ResourceId>,
     resource_offsets: Vec<u32>,
-    stacked_motifs_output: &'a StackedMotifsOutput,
-    motifs_stats: &'a ThoTensor<ChannelsMotifsDists, SynKey>,
+    stacked_motifs_output: ThoDataRef<'a, StackedMotifsOutput>,
+    motifs_stats: ThoDataRef<'a, ThoTensor<ChannelsMotifsDists, SynKey>>,
 }
 
 
@@ -404,12 +426,17 @@ impl<'a> ClcResourcesMotifsDistInput<'a> {
         assert_eq!(resource_ids.len(), resource_offsets.len());
         Self {
             id: SynKey::new([mono_key!("ClcResourcesMotifsDistInput", "stage")]),
-            batch,
+            batch: batch.iter().map(|tensor| ThoDataRef::Borrowed(*tensor)).collect(),
             resource_ids,
             resource_offsets,
-            stacked_motifs_output: batched_motifs_output,
-            motifs_stats,
+            stacked_motifs_output: ThoDataRef::Borrowed(batched_motifs_output),
+            motifs_stats: ThoDataRef::Borrowed(motifs_stats),
         }
+    }
+
+    pub(crate) fn from_data_refs(batch: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, resource_ids: Vec<ResourceId>, resource_offsets: Vec<u32>, stacked_motifs_output: ThoDataRef<'a, StackedMotifsOutput>, motifs_stats: ThoDataRef<'a, ThoTensor<ChannelsMotifsDists, SynKey>>) -> Self {
+        assert_eq!(resource_ids.len(), resource_offsets.len());
+        Self { id: SynKey::new([mono_key!("ClcResourcesMotifsDistInput", "stage")]), batch, resource_ids, resource_offsets, stacked_motifs_output, motifs_stats }
     }
 
 }
@@ -430,7 +457,7 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     fn mem_size(&self) -> u64 {
 
         let batch_mem_size = self.batch.iter().map(|t|t.mem_size()).sum::<u64>();
-        let motifs_output_mem_size =  self.stacked_motifs_output.motifs.mem_size();
+        let motifs_output_mem_size =  self.stacked_motifs_output.as_ref().motifs.mem_size();
         let motifs_stats_mem_size = self.motifs_stats.mem_size();
 
         debug!("ClcResourcesMotifsDistInput::mem_size: batch_mem_size={} motifs_output_mem_size={} motifs_stats_mem_size={}", batch_mem_size, motifs_output_mem_size, motifs_stats_mem_size);

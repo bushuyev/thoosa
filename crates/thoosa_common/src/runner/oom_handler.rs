@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{MaxParallelCtx, RunCtx};
-use crate::runner::common::cachable::{BorrowRef, ConsumeData, WithDataRef, WithSelectDataRef};
+use crate::runner::common::cachable::{BorrowRef, ConsumeData};
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
 use crate::copy_ctx::ExecSyncStageActionResult;
@@ -311,24 +311,17 @@ where
         &self,
         task: &Arc<R>,
         input: Arc<W>,
-        mut run_context: R::Ctx,
+        run_context: R::Ctx,
         contexts: Contexts<'a, R, IC, RC, RCC>,
     ) -> Result<R::Out, ThoError>
     where
-        W: WithSelectDataRef<S> + Send + Sync + 'static,
+        W: BorrowRef<S> + Debug + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
-        // W: BorrowRef<S, Out<'z>=R::In<'z>>,
-        for<'f> <W as WithDataRef>::O<'f>: Borrow<<R as Stage>::In<'f>>,
-        for<'f> W:BorrowRef<S, Out<'f>=R::In<'f>>,
+        for<'f> <W as BorrowRef<S>>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
     {
         if run_context.tho_device_idx() == 0 {
-            return track_await(input
-                .with_data_ref(
-                    0,
-                    run_context,
-                    None,
-                    |data, ctx| std::future::ready(Arc::clone(&task).do_run(data.borrow(), ctx)),
-                )).await;
+            let borrowed = track_await(input.borrow_to(0, None)).await?;
+            return Arc::clone(task).do_run(borrowed.borrow(), &run_context);
         }
 
         let tho_device_idx = run_context.tho_device_idx();
@@ -358,7 +351,7 @@ where
                     run_ctx.max_other_parallel().into(),
                     async move {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        cuda_actor.run_stage(task, input, selector, &run_ctx).await
+                        cuda_actor.run_stage(task, input, selector, tho_device_idx, &run_ctx).await
                         // track_await(cuda_actor.exec_sync_stage(move |stream| async move {
                         //     let out = if let Some(selector) = selector {
                         //         track_await(input

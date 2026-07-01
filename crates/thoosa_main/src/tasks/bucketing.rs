@@ -20,7 +20,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -32,7 +32,7 @@ use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{collect_futures_with_progress, panic_to_err, FuturesOrdering, TensorIdSliceIdx, ThoError};
+use thoosa_shared::{collect_futures_with_progress, panic_to_err, CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
 use thoosa_store::{IdSlice, Store};
@@ -317,7 +317,7 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
     resource_id: ResourceId,
-    tensor: &'a ThoTensor<D, Id>,
+    tensor: ThoDataRef<'a, ThoTensor<D, Id>>,
     sample_offset: i64,
 }
 
@@ -327,6 +327,10 @@ where
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
     fn new(resource_id: ResourceId, tensor: &'a ThoTensor<D, Id>, sample_offset: i64) -> Self {
+        Self { resource_id, tensor: ThoDataRef::Borrowed(tensor), sample_offset }
+    }
+
+    fn from_data_ref(resource_id: ResourceId, tensor: ThoDataRef<'a, ThoTensor<D, Id>>, sample_offset: i64) -> Self {
         Self { resource_id, tensor, sample_offset }
     }
 }
@@ -352,15 +356,15 @@ where
     type M = CpuOnly<Self>;
 
     fn size(&self) -> Self::Metrics {
-        Data::size(self.tensor)
+        Data::size(&*self.tensor)
     }
 
     fn device(&self) -> usize {
-        Data::device(self.tensor)
+        Data::device(&*self.tensor)
     }
 
     fn mem_size(&self) -> u64 {
-        Data::mem_size(self.tensor)
+        Data::mem_size(&*self.tensor)
     }
 }
 
@@ -506,18 +510,55 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    type Out<'a>
-    where
-        Self: 'a,
-        SelectBucketsInputSelector: 'a
-    = BucketingSyncInput<'a, D, Id>;
+    type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
 
     fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
     where
         SelectBucketsInputSelector: 'o,
         Self: 'o
     {
-        todo!()
+        async move {
+            let (tensor, sample_offset) = match selector {
+                None => {
+                    let tensor = track_await(self.tensor.load_from_any_device_(to_tho_device_idx)).await?;
+                    (ThoDataRef::ReadLocked(tensor), 0)
+                }
+                Some(selector) => {
+                    let tensor = track_await(self.tensor.load_from_any_device_(0)).await?;
+                    let audio = tensor.t_ref();
+                    let audio_size = audio.size();
+                    if audio_size.len() != 2 {
+                        return Err(ThoError::new(format!("BucketingTensorInput::borrow_to: expected audio shape [channels, samples], got {audio_size:?}")));
+                    }
+                    let sample_range = bucket_selector_sample_range(&selector, audio_size[1], self.bucket_window_samples, self.bucket_step_samples)?;
+                    let sample_len = sample_range.end.checked_sub(sample_range.start).ok_or_else(|| ThoError::new(format!("BucketingTensorInput::borrow_to: invalid sample_range={sample_range:?}")))?;
+                    let selected_audio = audio.f_narrow(1, sample_range.start, sample_len)?;
+                    let selected_tensor = ThoTensor::new(tensor.id().clone(), selected_audio)?;
+                    drop(tensor);
+                    let selected_tensor = if to_tho_device_idx == 0 { selected_tensor } else { track_await(selected_tensor.copy_to_device(to_tho_device_idx)).await? };
+                    (ThoDataRef::Owned(selected_tensor), sample_range.start)
+                }
+            };
+            Ok(BucketingSyncInput::from_data_ref(self.resource_id, tensor, sample_offset))
+        }
+    }
+}
+
+impl<D, Id> BorrowRef<()> for BucketingTensorInput<D, Id>
+where
+    D: Dims + Send + Sync + 'static,
+    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
+{
+    type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<()>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let tensor = track_await(self.tensor.load_from_any_device_(to_device_idx)).await?;
+            Ok(BucketingSyncInput::from_data_ref(self.resource_id, ThoDataRef::ReadLocked(tensor), 0))
+        }
     }
 }
 

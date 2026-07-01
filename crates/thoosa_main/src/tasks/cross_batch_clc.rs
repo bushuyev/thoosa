@@ -3,7 +3,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_common::runner::common::cachable::{DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
@@ -32,7 +32,7 @@ use thoosa_shared::tracked_await::track_await;
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
     id: SynKey,
-    tensors: &'a [&'a ThoTensor<ChannelsData, SynKey>],
+    tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>,
     resources_0: &'a [R],
     resources_1: &'a [R],
 }
@@ -58,14 +58,21 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
 
         Self {
             id: &id + batch_id,
-            tensors,
+            tensors: tensors.iter().map(|tensor| ThoDataRef::Borrowed(*tensor)).collect(),
             resources_0: b_0,
             resources_1: b_1,
         }
     }
 
-    pub fn tensors(&self) -> &'a [&'a ThoTensor<ChannelsData, SynKey>] {
-        self.tensors
+    pub(crate) fn from_data_refs(tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, b_0: &'a [R], b_1: &'a [R], id: SynKey) -> Self {
+        let batch_0_ids = b_0.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
+        let batch_1_ids = b_1.iter().map(|r| r.as_ref().id()).collect::<Vec<_>>();
+        let batch_id = mono_key!(format!("cross_input_b0={batch_0_ids:?}_b1={batch_1_ids:?}"), "CrossInput");
+        Self { id: &id + batch_id, tensors, resources_0: b_0, resources_1: b_1 }
+    }
+
+    pub fn tensors(&self) -> Vec<&ThoTensor<ChannelsData, SynKey>> {
+        self.tensors.iter().map(ThoDataRef::as_ref).collect()
     }
 
     pub fn batch_0(&self) -> &'a [R] {
@@ -102,7 +109,7 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     }
 
     fn mem_size(&self) -> u64 {
-        self.tensors.iter().map(|tensor| tensor.mem_size()).sum()
+        self.tensors.iter().map(|tensor| tensor.as_ref().mem_size()).sum()
     }
 }
 
@@ -170,17 +177,39 @@ where
             let batch_1_end = batch_0_len + range.end;
 
             let mut selected_tensors = Vec::with_capacity(batch_0_len + (range.end - range.start));
-            selected_tensors.extend_from_slice(&self.tensors[..batch_0_len]);
-            selected_tensors.extend_from_slice(&self.tensors[batch_1_offset..batch_1_end]);
+            selected_tensors.extend(self.tensors[..batch_0_len].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
+            selected_tensors.extend(self.tensors[batch_1_offset..batch_1_end].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
 
-            let input = CrossInput::new(
-                selected_tensors.as_slice(),
+            let input = CrossInput::from_data_refs(
+                selected_tensors,
                 self.resources_0,
                 &self.resources_1[range.clone()],
                 self.id.clone(), // + &mono_key!(0, "todo"),
             );
 
             track_await(do_run(&input, &permits_ctx)).await
+        }
+    }
+}
+
+impl<'a, R> BorrowRef<CrossInputBatch1Selector> for CrossInput<'a, R>
+where
+    R: AsRef<Resource> + Debug + Send + Sync + 'static,
+{
+    type Out<'o> = CrossInput<'o, R> where Self: 'o, CrossInputBatch1Selector: 'o;
+
+    fn borrow_to<'o>(&'o self, _to_device_idx: usize, selector: Option<CrossInputBatch1Selector>) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    where
+        CrossInputBatch1Selector: 'o,
+        Self: 'o,
+    {
+        async move {
+            let batch_0_len = self.resources_0.len();
+            let range = selector.map(|selector| selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize).unwrap_or(0..self.resources_1.len());
+            let mut tensors = Vec::with_capacity(batch_0_len + range.len());
+            tensors.extend(self.tensors[..batch_0_len].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
+            tensors.extend(self.tensors[batch_0_len + range.start..batch_0_len + range.end].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
+            Ok(CrossInput::from_data_refs(tensors, self.resources_0, &self.resources_1[range], self.id.clone()))
         }
     }
 }
@@ -438,7 +467,8 @@ where
         debug!("CrossUnfoldClc::do_run: input.id={:?} input.tensors.len={} input.resources_0.len={} input.resources_1.len={}", input.id, input.tensors.len(), input.resources_0.len(), input.resources_1.len());
 
         //FIXME tensors which are too small (because of freq_filter) are already removed from batch_0_t and batch_1_t but still present in sizes (as 0) so that resources_0/1 can be filtered. Do it all in unfold_and_cat
-        let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&input.tensors[0..input.resources_0.len()], &unfold_params)?;
+        let tensors = input.tensors();
+        let (batch_0_t, batch_0_sizes) =  unfold_and_cat(&tensors[0..input.resources_0.len()], &unfold_params)?;
         // let (batch_0_t, batch_0_sizes) =  cat_and_unfold(&input.tensors[0..input.resources_0.len()], &unfold_params)?; TODO doesn't work because sizes need to match splits to track mask, i.e. single spit can't come from more than one resource
 
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_sizes={batch_0_sizes:?}", input.id);
@@ -457,7 +487,7 @@ where
             .collect();
 
 
-        let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&input.tensors[input.resources_0.len()..], &unfold_params)?;
+        let (batch_1_t, batch_1_sizes) =  unfold_and_cat(&tensors[input.resources_0.len()..], &unfold_params)?;
 
         // assert_eq!(batch_1_sizes.len(), input.resources_1.len());
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_1_sizes={batch_1_sizes:?}", input.id);

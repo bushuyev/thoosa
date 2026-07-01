@@ -15,7 +15,7 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, WithDataRef, WithSelectDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef, WithDataRef, WithSelectDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -33,7 +33,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, Data, WithId};
+use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::dims::ChannelsData;
@@ -800,6 +800,51 @@ impl WithDataRef for SelectMotifsInputSelectorWrap {
 
             })?;
             track_await(future).await
+        }
+    }
+}
+
+impl BorrowRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
+    type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<SelectMotifsInputSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        SelectMotifsInputSelector: 'a,
+        Self: 'a,
+    {
+        async move {
+            let selector = selector.map(|selector| selector.batch_selector).unwrap_or(RangeOrSlice::Full);
+            let (batch_wrappers, resource_ids, resource_offsets) = match &selector {
+                RangeOrSlice::Full => (self.batch.as_slice(), self.resource_ids.as_slice(), self.resource_offsets.as_slice()),
+                RangeOrSlice::Range(range) => {
+                    let range = range.start as usize..range.end as usize;
+                    (&self.batch[range.clone()], &self.resource_ids[range.clone()], &self.resource_offsets[range])
+                }
+                RangeOrSlice::Slice((i, _)) => (std::slice::from_ref(&self.batch[*i]), std::slice::from_ref(&self.resource_ids[*i]), std::slice::from_ref(&self.resource_offsets[*i])),
+            };
+
+            let mut batch = Vec::with_capacity(batch_wrappers.len());
+            match selector {
+                RangeOrSlice::Slice((_, range)) => {
+                    let channels = batch_wrappers[0].size().dim_0();
+                    let tensor_selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
+                    batch.push(track_await(batch_wrappers[0].borrow_to(to_device_idx, Some(tensor_selector))).await?);
+                    let range_offset = u32::try_from(range.start).map_err(|_| ThoError::new(format!("invalid batch slice start: {}", range.start)))?;
+                    let resource_offsets = vec![resource_offsets[0] + range_offset];
+                    let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+                    let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+                    return Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, resource_ids.to_vec(), resource_offsets, ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)));
+                }
+                RangeOrSlice::Full | RangeOrSlice::Range(_) => {
+                    for tensor in batch_wrappers {
+                        batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+                    }
+                }
+            }
+
+            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, resource_ids.to_vec(), resource_offsets.to_vec(), ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
         }
     }
 }

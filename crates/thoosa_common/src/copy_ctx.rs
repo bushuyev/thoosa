@@ -139,6 +139,7 @@ impl dyn CudaActorHandle + '_ {
         stage: Arc<S>,
         input: W,
         selector: Option<SL>,
+        to_device_idx: usize,
         ctx:&S::Ctx
     ) -> Result<S::Out, ThoError>
     where
@@ -150,7 +151,7 @@ impl dyn CudaActorHandle + '_ {
     {
 
 
-        let borrowed = input.borrow_to(0, selector).await?;
+        let borrowed = input.borrow_to(to_device_idx, selector).await?;
 
         let mut handle_ctx = self.init_handle_ctx().await?;
 
