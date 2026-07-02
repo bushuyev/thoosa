@@ -1282,7 +1282,7 @@ pub fn lin_for_size(k: f64, size: [i64; 2], kind: Kind, device: &Device) -> Tens
     }
 
     trace!("lin_for_size:t=\n{t}");
-    debug!("lin_for_size: t.size()={:?}", t.size());
+    debug!("lin_for_size: t.size={:?}", t.size());
 
     t
 }

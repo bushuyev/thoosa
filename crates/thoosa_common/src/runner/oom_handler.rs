@@ -703,7 +703,7 @@ where
                             &mut contexts,
                         )).await;
 
-                        debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={} adjuster error ",os_thread_id());
+                        debug!("OOMHandler::run, error: on adjust_result ={adjust_result:?} os_thread_id={}",os_thread_id());
 
                         if let Err(te) = adjust_result {
                             exclusive_job.update_from_error(&te);

@@ -166,6 +166,7 @@ where
         input_len: <<R as Stage>::In<'a> as Data>::Metrics,
         output_builder: B,
     ) -> Self {
+        debug!("SplitsAdjusterContextImpl::new: input_len={input_len:?}");
         Self {
             done_to: input_len.default_end(),
             split_len: input_len.clone(),

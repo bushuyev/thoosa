@@ -99,7 +99,7 @@ impl Debug for ThoTensorInner {
                 .field("key", key)
                 .field("size", size)
                 .field("kind", kind)
-                // .field("selector", selector)
+                .field("selector", selector)
                 .finish(),
         }
     }
@@ -412,6 +412,18 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
     pub fn tho_device(&self) -> ThoDevice {
         ThoDevice::from(self.t_ref().device())
+    }
+
+
+    pub fn selector(&self)->Option<Box<dyn ThoSelector>> {
+        match &self.inner {
+            ThoTensorInner::Val { .. } => {
+                None
+            }
+            ThoTensorInner::Ref { selector, .. } => {
+                selector.as_ref().map(|v|v.clone_box())
+            }
+        }
     }
 }
 

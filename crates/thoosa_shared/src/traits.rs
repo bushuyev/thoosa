@@ -643,7 +643,7 @@ impl Data for (){
 }
 
 #[typetag::serde(tag = "type")]
-pub trait ThoSelector:Send + Sync {
+pub trait ThoSelector:Debug + Send + Sync {
     fn clone_box(&self)->Box<dyn ThoSelector>;
 }
 

@@ -7,6 +7,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tch::{Kind, Tensor};
+use tracing::debug;
 use thoosa_shared::ThoError;
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::runner::adjusters::max_parallel::MaxParallel;
@@ -66,6 +67,7 @@ where
             ctx.set_max_other_parallel(max_other_parallel);
         }
         let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
+        debug!("JsonSyncStageWrapper::do_run: out={out:?}");
         out.encode_from_worker(all_cuda_tensors)
     }
 }

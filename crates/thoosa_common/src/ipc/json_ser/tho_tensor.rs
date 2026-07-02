@@ -1,65 +1,46 @@
 use std::fmt::Debug;
-use log::warn;
+use log::{debug, warn};
 use serde::de::Error as DeError;
 use serde::ser::{Error as SerError, SerializeStruct};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Kind;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::Named;
+use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
-#[derive(Debug, Clone)]
-struct ThoTensorRef<Id> {
-    id: Id,
-    ref_key: u64,
-    size: Vec<i64>,
-    kind: Kind,
-}
 
-impl<Id> Serialize for ThoTensorRef<Id>
+
+impl<'de, Id, DM> Deserialize<'de> for ThoTensor<DM,Id>
 where
-    Id: Serialize,
-{
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("ThoTensorRef", 4)?;
-
-        state.serialize_field("id", &self.id)?;
-        state.serialize_field("ref_key", &self.ref_key)?;
-        state.serialize_field("size", &self.size)?;
-        state.serialize_field("kind", &SerdeKind(self.kind))?;
-
-        state.end()
-    }
-}
-
-impl<'de, Id> Deserialize<'de> for ThoTensorRef<Id>
-where
-    Id: Deserialize<'de>,
+    DM: Dims,
+    Id: Debug + Named + Clone + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
+        #[derive(Debug, Deserialize)]
         struct Helper<Id> {
             id: Id,
             ref_key: u64,
             size: Vec<i64>,
             kind: SerdeKind,
+            selector:Option<Box<dyn ThoSelector>>
         }
 
         let helper = Helper::deserialize(deserializer)?;
 
-        Ok(Self {
-            id: helper.id,
-            ref_key: helper.ref_key,
-            size: helper.size,
-            kind: helper.kind.0,
-        })
+        debug!("Deserialize<'de> for ThoTensor: helper={helper:?}");
+
+        Ok(ThoTensor::new_ref(
+            helper.id,
+            helper.ref_key,
+            helper.size,
+            helper.kind.0,
+            helper.selector
+        ))
+
     }
 }
 
@@ -176,19 +157,5 @@ where
             }
             ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
         }
-    }
-}
-
-impl<'de, D, Id> Deserialize<'de> for ThoTensor<D, Id>
-where
-    D: Dims,
-    Id: Named + Debug + Clone + Deserialize<'de>,
-{
-    fn deserialize<De>(deserializer: De) -> Result<Self, De::Error>
-    where
-        De: Deserializer<'de>,
-    {
-        let tensor_ref = ThoTensorRef::deserialize(deserializer)?;
-        Ok(ThoTensor::new_ref(tensor_ref.id, tensor_ref.ref_key, tensor_ref.size, tensor_ref.kind, None))
     }
 }
