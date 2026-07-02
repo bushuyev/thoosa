@@ -7,7 +7,7 @@ use cached_derive::Cached;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
 use tch::{Device, IndexOp, Kind, Tensor};
-use thoosa_common::dims::Dims;
+use thoosa_common::dims::{Dims, LocalSelect};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use thoosa_common::ws::Workspace;
@@ -62,15 +62,15 @@ impl From<Range<MonoMetrics<0, 2>>> for WelchChannelsSelector {
     }
 }
 
-impl Select<WelchChannelsSelector> for ThoTensor<WelchInputChannels, SynKey> {
+impl LocalSelect<SynKey, WelchChannelsSelector> for ThoTensor<WelchInputChannels, SynKey> {
     type Output = ThoTensor<WelchInputChannels, SynKey>;
 
-    fn subview(&self, selector: WelchChannelsSelector) -> Result<Self::Output, ThoError> {
-        let size: MonoMetrics<0, 2> = self.size().try_into()?;
+    fn local_subview(id:&SynKey, t:&Tensor, selector: WelchChannelsSelector) -> Result<Self::Output, ThoError> {
+        let size: MonoMetrics<0, 2> = t.size().try_into()?;
         let ranges = MonoMetrics::<0, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
         debug!("WelchChannelsSelector::subview: ranges={ranges:?} size={size:?}");
-        let sub_t = self.t_ref().f_i((ranges[0].clone(), ranges[1].clone()))?;
-        ThoTensor::new(self.id().clone(), sub_t)
+        let sub_t = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
+        ThoTensor::new(id.clone(), sub_t)
     }
 }
 

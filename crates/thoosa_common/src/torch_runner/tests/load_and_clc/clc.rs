@@ -217,7 +217,7 @@ impl SyncStage for SyncClcStage {
         Self: Sized,
     {
 
-        debug!("MulTask::do_run: loaded.id={:?} self.fail_until={:?}", input.id(), self.fail_until);
+        debug!("MulTask::do_run: loaded.id={:?} input.size={:?} self.fail_until={:?}", input.id(), input.size(), self.fail_until);
 
         let device_idx = ctx.tho_device_idx();
 

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use log::debug;
 use thoosa_shared::ThoError;
 use thoosa_with_data::with_data;
-use crate::runner::common::cachable::{Cached, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -67,9 +67,9 @@ where
     ).await?;
 
 
-    let value = with_data!(ctx.branch(false), out; |ctx, out:&ABClcStageOutput|{
-        Ok(out.value)
-    })?;
+    let val = out.borrow_to(0, None::<()>).await?;
+
+    let value = val.as_ref().value;
 
     debug!("test_ab_clc: value={value:?}");
 
@@ -87,9 +87,9 @@ where
         ctx.branch(false)
     ).await?;
 
-    let value = with_data!(ctx, out; |ctx, out:&ABClcStageOutput|{
-        Ok(out.value)
-    })?;
+    let val = out.borrow_to(0, None::<()>).await?;
+
+    let value = val.as_ref().value;
 
 
     debug!("test_ab_clc: value={value:?}");
