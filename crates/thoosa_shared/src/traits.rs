@@ -15,6 +15,7 @@ use crate::ThoError;
 use uuid::Uuid;
 use async_trait::async_trait;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use thoosa_dummy_data_derive::DummyData;
 use crate::copy_mode::CpuOnly;
 
@@ -619,6 +620,42 @@ impl Data for (){
     fn mem_size(&self) -> u64 {
         0
     }
+}
+
+#[typetag::serde(tag = "type")]
+pub trait ThoSelector {
+
+}
+
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct VoidSelector;
+
+#[typetag::serde]
+impl ThoSelector for VoidSelector {
+
+}
+
+impl Deref for VoidSelector {
+    type Target = ();
+    fn deref(&self) -> &Self::Target {
+        &()
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct RangeSelector(Range<[usize; 1]>);
+
+impl Deref for RangeSelector {
+    type Target = Range<[usize; 1]>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[typetag::serde]
+impl ThoSelector for RangeSelector {
+
 }
 
 

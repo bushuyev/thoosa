@@ -93,7 +93,7 @@ impl MockDataWithId {
 }
 
 #[cfg(test)]
-impl Select<std::ops::Range<[usize; 1]>> for MockDataWithId {
+impl Select<Range<[usize; 1]>> for MockDataWithId {
     type Output = MockDataWithId;
 
     fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoError> {

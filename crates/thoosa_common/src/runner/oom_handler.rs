@@ -689,7 +689,7 @@ where
 
                     loop {
                         i += 1;
-                        if i > 10000 {//TODO Config
+                        if i > 100 {//TODO Config
                             return Err(ThoError::new(format!("OOMHandler: ctx_id={ctx_id:?}  i={i}")));
                         }
 
@@ -876,7 +876,7 @@ pub mod test_types {
     use crate::runner::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use thoosa_shared::traits::{Select, WithId};
+    use thoosa_shared::traits::{Select, ThoSelector, WithId};
     use thoosa_shared::CopyToDevice;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
@@ -893,6 +893,7 @@ pub mod test_types {
         pub id: TestId,
         pub data: DummyTensor,
     }
+    
 
     impl Select<std::ops::Range<[usize;1]>> for TestInput {
         type Output = TestInput;
