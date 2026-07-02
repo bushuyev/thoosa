@@ -84,20 +84,22 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 }
 
 
+
 pub/*TODO*/ enum ThoTensorInner {
     Val { t: Tensor },
-    Ref { key: u64, size:Vec<i64>, kind:Kind },
+    Ref { key: u64, size:Vec<i64>, kind:Kind/*, selector:Option<Box<dyn Serialize>>*/ },
 }
 
 impl Debug for ThoTensorInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ThoTensorInner::Val { t } => f.debug_struct("Val").field("t", t).finish(),
-            ThoTensorInner::Ref { key, size, kind } => f
+            ThoTensorInner::Ref { key, size, kind/*, selector*/ } => f
                 .debug_struct("Ref")
                 .field("key", key)
                 .field("size", size)
                 .field("kind", kind)
+                // .field("selector", selector)
                 .finish(),
         }
     }

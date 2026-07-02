@@ -359,6 +359,8 @@ where
 {
     fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         let input_ref = serde_json::from_str::<Self>(&input)?;
+        debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
+
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
         let input_tensor = tokio::task::block_in_place(|| {
             let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());

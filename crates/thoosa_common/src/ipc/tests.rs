@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
 use log::{debug, LevelFilter};
+use serde::de::Unexpected::Option;
 use tch::Device;
 use tch::Device::Cuda;
 use tch::Kind::Float;
@@ -113,7 +114,7 @@ impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
             ThoTensorInner::Val { .. } => {
                 todo!()
             }
-            ThoTensorInner::Ref { key, size, kind } => {
+            ThoTensorInner::Ref { key, size, kind, /*selector:Option<Box<dyn Serialize>>*/ } => {
                 ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float)
             }
         }
