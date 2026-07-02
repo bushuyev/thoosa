@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thoosa_named_derive::Named;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, SimpleId, ThoSelector, WithId};
 use tokio::sync::Mutex;
 use tch::{IndexOp, Kind, Tensor};
 use log::debug;
@@ -105,12 +105,19 @@ impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
 }
 
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct  LoadedRange {
     range:std::ops::Range<MonoMetrics<1, 2>>
 }
 
 impl Adjustable for LoadedRange {}
+
+#[typetag::serde]
+impl ThoSelector for LoadedRange {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+}
 
 impl From<std::ops::Range<MonoMetrics<1, 2>>> for LoadedRange {
     fn from(value: std::ops::Range<MonoMetrics<1, 2>>) -> Self {

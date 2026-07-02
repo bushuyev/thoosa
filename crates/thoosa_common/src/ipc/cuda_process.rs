@@ -1084,7 +1084,7 @@ impl CudaIPCActor {
                             }
                             debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, done.tensor_digest_hex);
 
-                            Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, vec![], tch::Kind::Float))
+                            Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, vec![], tch::Kind::Float, None))
                         }.await;
 
                         if final_result.is_err() {
@@ -2064,11 +2064,11 @@ mod tests {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }
 
-            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float)).await?;
+            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float, None)).await?;
 
             let r = track_await(cuda_actor
                 .copy(
-                    ThoTensor::new_ref((), reff, vec![], tch::Kind::Float),
+                    ThoTensor::new_ref((), reff, vec![], tch::Kind::Float, None),
                     0.into(), //Cpu
                 )).await;
 

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use log::debug;
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::VoidSelector;
 use thoosa_with_data::with_data;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::RunCtx;
@@ -67,7 +68,7 @@ where
     ).await?;
 
 
-    let val = out.borrow_to(0, None::<()>).await?;
+    let val = out.borrow_to(0, None::<VoidSelector>).await?;
 
     let value = val.as_ref().value;
 
@@ -87,7 +88,7 @@ where
         ctx.branch(false)
     ).await?;
 
-    let val = out.borrow_to(0, None::<()>).await?;
+    let val = out.borrow_to(0, None::<VoidSelector>).await?;
 
     let value = val.as_ref().value;
 

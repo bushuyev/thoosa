@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 use async_trait::async_trait;
-use thoosa_shared::traits::Adjustable;
+use thoosa_shared::traits::{Adjustable, ThoSelector};
 use crate::applicables_runner::{Input, Output};
 use crate::{CopyToDevice, ThoError};
 use crate::copy_mode::CpuOrGpu;
@@ -98,14 +98,15 @@ where
 }
 
 
-impl <Selector, D, E> Select<Selector> for DataWithExtra<D, E>
+impl <S, D, E> Select<S> for DataWithExtra<D, E>
 where
-    D: Data + CopyToDevice + WithId + Select<Selector, Output=D> + Sync,
+    S:ThoSelector,
+    D: Data + CopyToDevice + WithId + Select<S, Output=D> + Sync,
     E: Debug + Send + Sync,
 {
     type Output = Self;
 
-    fn subview(&self, selector: Selector) -> Result<Self::Output, ThoError> {
+    fn subview(&self, selector: S) -> Result<Self::Output, ThoError> {
         Ok(DataWithExtra {
             data: self.data.subview(selector)?,
             extra: self.extra.clone()

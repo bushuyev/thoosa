@@ -6,7 +6,7 @@ use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, Select, SimpleId};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, Select, SimpleId, ThoSelector, VoidSelector};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
@@ -16,6 +16,7 @@ pub trait Dims: Send + Sync + Clone + Debug {
 
 impl <D, Id, S> Select<S> for ThoTensor<D, Id>
 where
+    S:ThoSelector + 'static,
     D:Dims,
     Id:Named + Debug + Clone,
     Self:LocalSelect<Id, S, Output = ThoTensor<D, Id>>,
@@ -27,8 +28,8 @@ where
             ThoTensorInner::Val { t } => {
                 Self::local_subview(self.id(), t, selector)
             }
-            ThoTensorInner::Ref { key, size, kind } => {
-                Ok(ThoTensor::new_ref(self.id().clone(), *key, size.clone(), *kind))
+            ThoTensorInner::Ref { key, size, kind, .. } => {//TOO compose with 'parent' selector ?
+                Ok(ThoTensor::new_ref(self.id().clone(), *key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>)))
             }
         }
     }
@@ -40,10 +41,10 @@ pub trait LocalSelect<Id, S> {
     fn local_subview(id:&Id, t:&Tensor, selector: S) -> Result<Self::Output, ThoError>;
 }
 
-impl LocalSelect<SynKey, ()> for ThoTensor<ChannelsData, SynKey> {
+impl LocalSelect<SynKey, VoidSelector> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, selector: ()) -> Result<Self::Output, ThoError> {
+    fn local_subview(id:&SynKey, t:&Tensor, selector: VoidSelector) -> Result<Self::Output, ThoError> {
         unimplemented!()
     }
 }

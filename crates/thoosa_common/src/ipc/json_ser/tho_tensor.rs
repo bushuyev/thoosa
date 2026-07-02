@@ -161,7 +161,7 @@ where
         S: Serializer
     {
         match &self.inner {
-            ThoTensorInner::Ref { key, size, kind/*, selector*/ } => {
+            ThoTensorInner::Ref { key, size, kind, selector } => {
 
                 let mut state = serializer.serialize_struct("ThoTensor", 4)?;
 
@@ -169,9 +169,9 @@ where
                 state.serialize_field("ref_key", key)?;
                 state.serialize_field("size", size)?;
                 state.serialize_field("kind", kind_to_str(kind).map_err(S::Error::custom)?)?;
-                // if let Some(selector) = selector {
-                //     state.serialize_field("selector", selector)?;
-                // }
+                if let Some(selector) = selector {
+                    state.serialize_field("selector", selector)?;
+                }
                 state.end()
             }
             ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
@@ -189,6 +189,6 @@ where
         De: Deserializer<'de>,
     {
         let tensor_ref = ThoTensorRef::deserialize(deserializer)?;
-        Ok(ThoTensor::new_ref(tensor_ref.id, tensor_ref.ref_key, tensor_ref.size, tensor_ref.kind))
+        Ok(ThoTensor::new_ref(tensor_ref.id, tensor_ref.ref_key, tensor_ref.size, tensor_ref.kind, None))
     }
 }

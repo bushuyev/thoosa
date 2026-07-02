@@ -23,7 +23,7 @@ use thoosa_motifs::distance::clc_dist_d2;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, WithId};
+use thoosa_shared::traits::{Adjustable, Data, ThoSelector, WithId};
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
@@ -113,9 +113,16 @@ impl<'a, R: AsRef<Resource> + Debug + Send + Sync> Data for CrossInput<'a, R> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CrossInputBatch1Selector {
     resources_batch_range: Range<i64>,
+}
+
+#[typetag::serde]
+impl ThoSelector for CrossInputBatch1Selector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 }
 
 impl From<Range<i64>> for CrossInputBatch1Selector {

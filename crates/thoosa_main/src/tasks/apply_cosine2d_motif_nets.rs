@@ -36,7 +36,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, FuturesOrdering, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, VoidSelector, WithId};
 use thoosa_store::{Store, TrainedNet};
 use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
@@ -166,7 +166,7 @@ where
                     match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
 
-                            let module_with_store = net.borrow_to(0, None::<()>).await?;
+                            let module_with_store = net.borrow_to(0, None::<VoidSelector>).await?;
                             let module_with_store = module_with_store.as_ref();
 
                                 let (hash_value, config) = (|| {

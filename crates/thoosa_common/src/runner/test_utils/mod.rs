@@ -7,6 +7,7 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::copy_mode::CpuOrGpu;
 #[cfg(test)]
 use thoosa_shared::traits::{Data, DummyCachableId, MockData, MockWithId, Select, WithId};
+use thoosa_shared::traits::RangeSelector;
 
 #[derive(Debug, Clone)]
 pub struct DummyTensor(pub Vec<f32>);
@@ -93,10 +94,10 @@ impl MockDataWithId {
 }
 
 #[cfg(test)]
-impl Select<Range<[usize; 1]>> for MockDataWithId {
+impl Select<RangeSelector> for MockDataWithId {
     type Output = MockDataWithId;
 
-    fn subview(&self, selector: Range<[usize; 1]>) -> Result<Self::Output, ThoError> {
+    fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
         let mut data = MockData::new();
         let len = selector.end[0].saturating_sub(selector.start[0]);
         data.expect_size().return_const([len]);

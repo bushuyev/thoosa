@@ -31,7 +31,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, VoidSelector, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
@@ -395,10 +395,10 @@ impl WithId for SelectBucketsSyncInputWrapper {
 }
 
 
-impl BorrowRef<()> for SelectBucketsSyncInputWrapper {
+impl BorrowRef<VoidSelector> for SelectBucketsSyncInputWrapper {
     type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, _to_device_idx: usize, _selector: Option<()>) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, _to_device_idx: usize, _selector: Option<VoidSelector>) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
@@ -546,7 +546,7 @@ where
             let select_config = select_config.clone();
             async move {
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-                let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, _, _, _, _, VoidSelector> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                         Adjusters::RunContext(Box::new(DumpToCpu::new("select_buckets"))),

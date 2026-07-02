@@ -5,7 +5,7 @@ use tch::{IndexOp, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::dims::{AnyMetrics, Batch, ChannelsData, Dims, LocalSelect};
 use thoosa_shared::{mono_key, ThoError};
-use thoosa_shared::traits::{Adjustable, DataId, Select};
+use thoosa_shared::traits::{Adjustable, DataId, Select, ThoSelector};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
 use thoosa_shared::comp_id::SynKey;
@@ -45,8 +45,15 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ChannelsData2Selector(pub Range<MonoMetrics<1, 2>>);
+
+#[typetag::serde]
+impl ThoSelector for ChannelsData2Selector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+}
 
 impl LocalSelect<SynKey, ChannelsData2Selector> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;

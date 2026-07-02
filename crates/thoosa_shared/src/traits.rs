@@ -339,6 +339,26 @@ pub struct MonoMetrics<const IDX:usize, const SIZE:usize> {
      dims: [i64; SIZE]
 }
 
+impl<const IDX: usize, const SIZE: usize> Serialize for MonoMetrics<IDX, SIZE> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.dims.as_slice().serialize(serializer)
+    }
+}
+
+impl<'de, const IDX: usize, const SIZE: usize> Deserialize<'de> for MonoMetrics<IDX, SIZE> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let dims = Vec::<i64>::deserialize(deserializer)?;
+        let dims = dims.try_into().map_err(|dims: Vec<i64>| serde::de::Error::invalid_length(dims.len(), &"an array matching the metric size"))?;
+        Ok(Self { dims })
+    }
+}
+
 impl <const IDX:usize, const SIZE:usize> Metrics for MonoMetrics<IDX, SIZE> {
     fn default_end(&self) -> Self {
         MonoMetrics {
@@ -623,18 +643,23 @@ impl Data for (){
 }
 
 #[typetag::serde(tag = "type")]
-pub trait ThoSelector {
-
+pub trait ThoSelector:Send + Sync {
+    fn clone_box(&self)->Box<dyn ThoSelector>;
 }
 
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct VoidSelector;
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct VoidSelector;
 
 #[typetag::serde]
 impl ThoSelector for VoidSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(VoidSelector)
+    }
 
 }
+
+impl Adjustable for VoidSelector {}
 
 impl Deref for VoidSelector {
     type Target = ();
@@ -644,7 +669,9 @@ impl Deref for VoidSelector {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct RangeSelector(Range<[usize; 1]>);
+pub struct RangeSelector(Range<[usize; 1]>);
+
+impl Adjustable for RangeSelector {}
 
 impl Deref for RangeSelector {
     type Target = Range<[usize; 1]>;
@@ -655,12 +682,31 @@ impl Deref for RangeSelector {
 
 #[typetag::serde]
 impl ThoSelector for RangeSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(RangeSelector(self.0.clone()))
+    }
 
+}
+
+#[typetag::serde(name = "UnitSelector")]
+impl ThoSelector for () {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(())
+    }
+}
+
+#[typetag::serde(name = "I64RangeSelector")]
+impl ThoSelector for Range<i64> {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 }
 
 
 #[delegatable_trait]
-pub trait Select<S> {
+pub trait Select<S>
+where S:ThoSelector
+{
     type Output;
 
     fn subview(&self, selector: S) -> Result<Self::Output, ThoError>;

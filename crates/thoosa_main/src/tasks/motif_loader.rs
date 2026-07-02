@@ -24,7 +24,7 @@ use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
-use thoosa_shared::traits::{CachableIdTr, Data, DataId, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DataId, VoidSelector, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -564,7 +564,7 @@ where
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
-        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, _, _, _, _, VoidSelector> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(Box::new(DumpToCpu::new("motif_loader"))),

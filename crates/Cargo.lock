@@ -5272,6 +5272,7 @@ dependencies = [
  "tokio",
  "torch-sys",
  "tracing",
+ "typetag",
 ]
 
 [[package]]

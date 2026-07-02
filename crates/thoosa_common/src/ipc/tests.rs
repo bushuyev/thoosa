@@ -114,8 +114,8 @@ impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
             ThoTensorInner::Val { .. } => {
                 todo!()
             }
-            ThoTensorInner::Ref { key, size, kind, /*selector:Option<Box<dyn Serialize>>*/ } => {
-                ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float)
+            ThoTensorInner::Ref { key, size, kind, .. } => {
+                ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float, None)
             }
         }
     }
@@ -167,7 +167,7 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
             debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
 
             let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .copy(ThoTensor::new_ref((), out_key, vec![], tch::Kind::Float), 0.into()).await?;
+                .copy(ThoTensor::new_ref((), out_key, vec![], tch::Kind::Float, None), 0.into()).await?;
             let cpu_out: ThoTensor<ClcStageOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
 
 

@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, ThoSelector, VoidSelector, WithId};
 use tokio::task::JoinSet;
 
 use thoosa_shared::comp_id::SynKey;
@@ -75,7 +75,7 @@ where
     R: Stage + Adjustable + 'static,
     R::Ctx: Adjustable,
     for<'i> <R as Stage>::In<'i>: Adjustable,
-    S:Debug+Default+Clone+Adjustable + 'static,
+    S:ThoSelector + Debug+Default+Clone+Adjustable + 'static,
     B:OutputBuilder<O = <R as Stage>::Out>,
     <R as Stage>::Out:WithId
 {
@@ -258,9 +258,9 @@ where
     R::Out: CachedPurgeOutput +  Clone + Send + Sync,
     <R as Stage>::In<'static>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
-    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef<()>>::Out<'_>)  + Send + Sync + Clone + 'static,
-    for<'o> <R as Stage>::Out:WithId+BorrowRef<()>+Debug,
-    for<'o> <<R as Stage>::Out as BorrowRef<()>>::Out<'o>: Debug
+    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef<VoidSelector>>::Out<'_>)  + Send + Sync + Clone + 'static,
+    for<'o> <R as Stage>::Out:WithId+BorrowRef<VoidSelector>+Debug,
+    for<'o> <<R as Stage>::Out as BorrowRef<VoidSelector>>::Out<'o>: Debug
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -333,16 +333,17 @@ where
 // Shared fixtures for tests that must bypass the MockGlobalCtx from `tests`.
 pub mod fixtures {
     use std::cmp::min;
-    use std::ops::Range;
+    use std::ops::{Deref, Range};
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::Arc;
 
     use async_trait::async_trait;
+    use serde::{Deserialize, Serialize};
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Data, Select, WithId};
+    use thoosa_shared::traits::{Data, Select, ThoSelector, WithId};
     use thoosa_shared::ThoError;
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::runner::common::OutId;
@@ -386,10 +387,36 @@ pub mod fixtures {
         pub data: DummyTensor,
     }
 
-    impl Select<std::ops::Range<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor {
+    #[derive(Debug, Serialize, Deserialize, Clone, Default)]
+    pub(crate) struct MetricsRangeSelector(Range<<DLoadedTensor as Data>::Metrics>);
+
+    impl Adjustable for MetricsRangeSelector {}
+
+    impl From<Range<<DLoadedTensor as Data>::Metrics>> for MetricsRangeSelector {
+        fn from(value: Range<<DLoadedTensor as Data>::Metrics>) -> Self {
+            Self(value)
+        }
+    }
+
+    #[typetag::serde]
+    impl ThoSelector for MetricsRangeSelector {
+        fn clone_box(&self) -> Box<dyn ThoSelector> {
+            Box::new(MetricsRangeSelector(self.0.clone()))
+        }
+    }
+
+    impl Deref for MetricsRangeSelector {
+        type Target = Range<<DLoadedTensor as Data>::Metrics>;
+
+        fn deref(&self) -> &Self::Target {
+            &self.0
+        }
+    }
+
+    impl Select<MetricsRangeSelector> for DLoadedTensor {
         type Output = DLoadedTensor;
 
-        fn subview(&self, selector: Range<<DLoadedTensor as Data>::Metrics>) -> Result<Self::Output, ThoError> {
+        fn subview(&self, selector: MetricsRangeSelector) -> Result<Self::Output, ThoError> {
             Ok(DLoadedTensor {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start as usize..min(self.data.0.len(), selector.end as usize)].to_vec()),
@@ -548,7 +575,7 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock, OnceLock};
     use std::time::Duration;
-    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId};
+    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId, MetricsRangeSelector};
     use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
     use async_trait::async_trait;
     use clap::{Args, Parser, Subcommand};
@@ -563,7 +590,7 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, Select, WithId};
+    use thoosa_shared::traits::{Data, Select, VoidSelector, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
@@ -781,10 +808,10 @@ mod tests {
         data: DummyTensor,
     }
 
-    impl Select<()> for DMulTaskOutput{
+    impl Select<VoidSelector> for DMulTaskOutput{
         type Output = DMulTaskOutput;
 
-        fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+        fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
             unimplemented!()
         }
     }
@@ -874,7 +901,7 @@ mod tests {
 
         loader: Arc<DummyLoader>,
         mul: Arc<DMulTask>,
-        mul_oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>,DMulTaskOutputBuilder>,
+        mul_oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector, DMulTaskOutputBuilder>,
     }
 
     impl OutId for DLoadAndClcStage {
@@ -892,7 +919,7 @@ mod tests {
             k: f32,
             fail_until: FailUntil,
             len: usize,
-            oom_runner: ClcOOMRunner<DMulTask, std::ops::Range<<DLoadedTensor as Data>::Metrics>, DMulTaskOutputBuilder>,
+            oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector, DMulTaskOutputBuilder>,
         ) -> Self {
             Self {
                 id,

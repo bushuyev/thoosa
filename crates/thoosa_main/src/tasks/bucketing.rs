@@ -34,7 +34,7 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, panic_to_err, CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, ThoSelector, VoidSelector, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
@@ -433,9 +433,16 @@ where
 //     }
 // }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct SelectBucketsInputSelector {
     bucket_slice_range: Range<i64>,
+}
+
+#[typetag::serde]
+impl ThoSelector for SelectBucketsInputSelector {
+    fn clone_box(&self)->Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 }
 
 impl Default for SelectBucketsInputSelector {
@@ -493,14 +500,14 @@ where
     }
 }
 
-impl<D, Id> BorrowRef<()> for BucketingTensorInput<D, Id>
+impl<D, Id> BorrowRef<VoidSelector> for BucketingTensorInput<D, Id>
 where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
     type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<()>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
