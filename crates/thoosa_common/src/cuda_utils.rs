@@ -717,27 +717,6 @@ fn ceil_div(a: i64, b: i64) -> i64 {
     }
 }
 
-pub async fn with_pooled_cuda_stream<F, R>(
-    tho_device_idx: usize,
-    f: F,
-) -> Result<R, ThoError>
-where
-    F: FnOnce(Option<&ThoCudaStream>) -> Result<R, ThoError> + Send,
-    R: Send + 'static,
-{
-    if tho_device_idx == 0 {
-        return f(None);
-    }
-
-    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-    track_await(cuda_actor.exec_sync_stage(move |stream| async move {
-        let out = match stream.as_ref() {
-            Some(stream) => thoosa_shims::stream::with_stream(stream, || f(Some(stream)))??,
-            None => f(None)?,
-        };
-        Ok(ExecSyncStageActionResult::Sync { stream, out })
-    })).await
-}
 
 pub fn fail_with_unrecoverable_error(){
     debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run");
