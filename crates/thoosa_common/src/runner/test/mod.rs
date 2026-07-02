@@ -95,7 +95,8 @@ where
         runnable: &Arc<R>,
         input: Arc<W>,
         mut ctx: <R as Stage>::Ctx,
-        required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>, size: <R::In<'z> as Data>::Metrics,
+        required_ids: &'z HashMap<&'static str, &HashSet<&dyn CachableIdTr>>,
+        size: <R::In<'z> as Data>::Metrics,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
         W: BorrowRef<S> + Debug,

@@ -5,7 +5,7 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 use dashmap::DashMap;
-use log::debug;
+use log::{debug, error};
 use parking_lot::RwLock;
 use thoosa_shared::{panic_to_err, ThoError};
 use tokio::net::UnixStream;
@@ -14,11 +14,11 @@ use tch::Tensor;
 use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use thoosa_shared::traits::Named;
+use thoosa_shared::traits::{Named, Select, ThoSelector};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
-use crate::dims::Dims;
+use crate::dims::{Dims, LocalSelect};
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -262,6 +262,7 @@ impl CudaWorker {
                             let r = panic_to_err!({
                                 let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
+
                                 let response = endpoint.do_run(input.to_string(), &all_cuda_tensors);
                                 let sync_result = stream.synchronize();
                                 match (response, sync_result) {
@@ -275,7 +276,9 @@ impl CudaWorker {
 
                             if let  Err(e) = &r {
 
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
+                                error!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
+                            }  else {
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} r={r:?}",);
                             }
                             r
                         },
@@ -358,18 +361,31 @@ where
     Id: Named + Debug + Clone + DeserializeOwned,
 {
     fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        debug!("ThoTensor::decode_for_worker: input={input:?}");
         let input_ref = serde_json::from_str::<Self>(&input)?;
         debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
 
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
         let input_tensor = tokio::task::block_in_place(|| {
             let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
-            Ok::<_, ThoError>(tensors
+
+            let tensor = tensors
                 .get(&input_key)
                 .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?
-                .shallow_clone())
+                .shallow_clone();
+
+            let tensor:ThoTensor= match input_ref.selector() {
+                None => {tensor.into()}
+                Some(selector) => {
+                    Into::<ThoTensor>::into(tensor).subview(*selector)?
+                }
+            };
+
+
+            Ok::<_, ThoError>(tensor)
+
         })?;
-        ThoTensor::new(input_ref.id().clone(), input_tensor)
+        Ok(input_tensor)
     }
 }
 
@@ -381,8 +397,11 @@ where
     fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
+        let size = out_tensor.size();
+        let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
-        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key, vec![], tch::Kind::Float, None))?)
+
+        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None))?)
     }
 }
 

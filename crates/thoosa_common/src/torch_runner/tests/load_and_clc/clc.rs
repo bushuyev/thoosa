@@ -226,7 +226,8 @@ impl SyncStage for SyncClcStage {
                 FailUntil::MemLimit(mem_limit) => {
                     let _device_idx = device_idx;
 
-                    if input.size()[0] > *mem_limit as i64 {
+
+                    if input.size()[1] > *mem_limit as i64 {
                         debug!("MulTask::do_run: MyError::OutOfMemory on MemLimit mem_limit={mem_limit}");
                         return Err(ThoError::oom());
                     }
@@ -308,7 +309,7 @@ impl SyncStage for ProxySyncClcStage {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("ProxySyncClcTask::new: input={input:?}");
 
-
+        //this is on  main side because worker doesn't know if is_all_on_cpu
         if self.fail_until_dump_to_cpu {
             let device_idx = ctx.tho_device_idx();
             let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
@@ -319,16 +320,20 @@ impl SyncStage for ProxySyncClcStage {
         }
 
 
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                let input_str = serde_json::to_string(input)?;
+                debug!("ProxySyncClcTask::new: input_str={input_str:?}");
 
-            let response = GlobalCtx::global()
-                .cuda_actor(ctx.tho_device_idx())
-                .invoke_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &encode_json_sync_stage_run_input(serde_json::to_string(input)?, ctx)?))
-                .await?;
+                let response = GlobalCtx::global()
+                    .cuda_actor(ctx.tho_device_idx())
+                    .invoke_endpoint(encode_endpoint_payload(SYNC_CLC_ENDPOINT, &encode_json_sync_stage_run_input(input_str, ctx)?))
+                    .await?;
 
 
-            serde_json::from_str::<ThoTensor<ClcStageOutput, SynKey>>(&response).map_err(ThoError::from)
-        }))
+                serde_json::from_str::<ThoTensor<ClcStageOutput, SynKey>>(&response).map_err(ThoError::from)
+            })
+        })
 
     }
 }
