@@ -6,7 +6,7 @@ use tch::{IndexOp, Kind, Tensor};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics, Select, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 
 use crate::dims::{Dims, LocalSelect};
@@ -138,12 +138,19 @@ impl Dims for ABData {
     type Metrics = ABMetrics;
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ABRange {
     pub(crate) range: Range<ABMetrics>,
 }
 
 impl Adjustable for ABRange {}
+
+#[typetag::serde]
+impl ThoSelector for ABRange {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+}
 
 impl LocalSelect<ModelTestId, ABRange> for ThoTensor<ABData, ModelTestId> {
     type Output = ThoTensor<ABData, ModelTestId>;
@@ -163,7 +170,7 @@ impl From<Range<ABMetrics>> for ABRange {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ABMetrics {
     pub(crate) dim_0: i64,
     pub(crate) dim_1: i64,

@@ -23,7 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::task::spawn_blocking;
 use thoosa_shared::{os_thread_id, panic_to_err_async};
-use thoosa_shared::traits::{Adjustable, Data, WithId};
+use thoosa_shared::traits::{Adjustable, Data, ThoSelector, WithId};
 use thoosa_shared::{Cause, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_shared::tracked_await::track_await;
@@ -289,7 +289,7 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + Send + 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
+    S: ThoSelector + Adjustable + Debug + Clone + Default + Send + 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
 
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,

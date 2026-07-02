@@ -14,7 +14,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, ThoSelector, VoidSelector, WithId};
 use thoosa_with_data::with_data;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -190,10 +190,15 @@ impl WithId for ABClcSyncStageInputWrapper {
         &self.id
     }
 }
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ABClcSyncStageInputWrapperSelector {}
 
+#[typetag::serde]
+impl ThoSelector for ABClcSyncStageInputWrapperSelector {fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 
+}
 impl Adjustable for ABClcSyncStageInputWrapperSelector {}
 
 

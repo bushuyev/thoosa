@@ -43,7 +43,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, VoidSelector, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
@@ -541,10 +541,10 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 }
 
 
-impl<DI: Dims, DO: Dims> BorrowRef<()> for TrainStepInput<DI, DO> {
+impl<DI: Dims, DO: Dims> BorrowRef<VoidSelector> for TrainStepInput<DI, DO> {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<()>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {

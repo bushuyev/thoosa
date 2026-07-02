@@ -36,7 +36,7 @@ use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, ThoSelector, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::mono_key;
 use thoosa_store::Store;
@@ -882,7 +882,7 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum RangeOrSlice {
     Full,
     Range(Range<i64>), //range of tensors
@@ -931,11 +931,18 @@ impl RangeOrSlice {
 }
 
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct CrossInputSelector {
     batch_0_selector: RangeOrSlice,
     batch_1_selector: RangeOrSlice,
 
+}
+
+#[typetag::serde]
+impl ThoSelector for CrossInputSelector {
+    fn clone_box(&self)->Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 }
 
 impl Adjustable for CrossInputSelector {}

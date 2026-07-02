@@ -21,7 +21,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, ThoSelector, VoidSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::Store;
@@ -47,8 +47,15 @@ impl Dims for ChannelsWelchPsd {
     type Metrics = MonoMetrics<0, 2>; // channels x frequency_bins
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WelchChannelsSelector(pub Range<MonoMetrics<0, 2>>);
+
+#[typetag::serde]
+impl ThoSelector for WelchChannelsSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+}
 
 impl Default for WelchChannelsSelector {
     fn default() -> Self {
