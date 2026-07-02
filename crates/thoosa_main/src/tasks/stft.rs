@@ -20,7 +20,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, Select, ThoSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 
 use crate::tasks::stage_ids::STFT;
@@ -135,8 +135,15 @@ where
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct SyncStftSelector;
+
+#[typetag::serde]
+impl ThoSelector for SyncStftSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+}
 
 impl Adjustable for SyncStftSelector {}
 

@@ -26,7 +26,7 @@ use classifier::{sync_classifier_endpoint_init, Classifier, SYNC_CLASSIFIER_ENDP
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyTask;
 use loader::ABLoader;
-use thoosa_shared::traits::Select;
+use thoosa_shared::traits::{Select, VoidSelector};
 
 #[ctor::ctor]
 fn init() {
@@ -47,10 +47,10 @@ pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(Str
     )])
 }
 
-impl Select<()> for ThoTensor<ClsOut, ModelTestId> {
+impl Select<VoidSelector> for ThoTensor<ClsOut, ModelTestId> {
     type Output = ThoTensor<ClsOut, ModelTestId>;
 
-    fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+    fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
         unimplemented!()
     }
 }

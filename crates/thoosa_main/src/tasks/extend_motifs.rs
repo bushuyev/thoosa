@@ -33,7 +33,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, Data, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, Select, ThoSelector, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_with_data::with_data;
 use thoosa_common::dims::ChannelsData;
@@ -955,12 +955,19 @@ impl OutputBuilder for SelectMotifsClcOutputBuilder {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct SelectMotifsInputSelector {
     batch_selector: RangeOrSlice,
 }
 
 impl Adjustable for SelectMotifsInputSelector {}
+
+#[typetag::serde]
+impl ThoSelector for SelectMotifsInputSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Batch1SplitMode {

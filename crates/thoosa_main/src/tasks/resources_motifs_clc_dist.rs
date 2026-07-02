@@ -23,7 +23,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::ResourceId;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, ThoSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_with_data::with_data;
@@ -301,9 +301,16 @@ impl BorrowRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResource
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ClcResourcesMotifsDistInputDeviceWrapperSelector {
     resources_batch_range:Range<i64>
+}
+
+#[typetag::serde]
+impl ThoSelector for ClcResourcesMotifsDistInputDeviceWrapperSelector {
+    fn clone_box(&self) -> Box<dyn ThoSelector> {
+        Box::new(self.clone())
+    }
 }
 
 impl ClcResourcesMotifsDistInputDeviceWrapperSelector {

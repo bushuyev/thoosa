@@ -26,7 +26,7 @@ use thoosa_shared::Cause;
 use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::traits::{Data, Named, Select};
+use thoosa_shared::traits::{Data, Named, Select, ThoSelector};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
 use thoosa_shared::ThoError;
@@ -309,7 +309,7 @@ impl<D> ThoDataRef<'_, D> {
 
 impl <S, O> BorrowRef<S> for DevicesWrap<O>
 where
-    S:Clone + Debug + Send,
+    S:ThoSelector + Clone + Debug + Send,
     O: Select<S, Output = O> + WithId + Data + CopyToDevice + Send + Sync,
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a, S:'a;
@@ -951,7 +951,7 @@ where
 
 pub trait BorrowRef<S>
 where
-    S: Clone + Debug + Send
+    S: ThoSelector + Clone + Debug + Send
 {
     type Out<'a> where Self: 'a, S:'a;
 
@@ -964,7 +964,7 @@ where
 impl <S, BR> BorrowRef<S> for Arc<BR>
 where
     BR:BorrowRef<S> + Sync + Send,
-    S: Clone + Debug + Send
+    S:ThoSelector + Clone + Debug + Send
 {
     type Out<'a> = BR::Out<'a> where Self: 'a, S: 'a, BR:'a;
 

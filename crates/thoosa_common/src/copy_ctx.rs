@@ -23,7 +23,7 @@ use tracing::error;
 use tub::{Guard, Pool};
 use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::Named;
+use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
 use crate::runner::common::cachable::{BorrowRef};
 use crate::runner::common::RunCtx;
@@ -144,7 +144,7 @@ impl dyn CudaActorHandle + '_ {
     ) -> Result<S::Out, ThoError>
     where
         S: SyncStage,
-        SL: Clone + Debug + Send + 'static,
+        SL: ThoSelector + Clone + Debug + Send + 'static,
         W: Debug + Sync,
         for<'a> W: BorrowRef<SL> + 'a,
         for<'a> <W as BorrowRef<SL>>::Out<'a>: Borrow<S::In<'a>>,
