@@ -767,7 +767,6 @@ mod tests {
     use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::global_ctx::CopyCtx;
     use crate as thoosa_common;
-    use crate::cuda_utils::with_pooled_cuda_stream;
     use crate::dims::AnyDims;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::tmp_cache::TmpCached;
@@ -910,87 +909,4 @@ mod tests {
     }
 
 
-    //nsys profile   -t cuda,osrt,nvtx   -s cpu   --cuda-memory-usage=true   --cudabacktrace=sync:1000000,memory:1000000,kernel:1000000   --force-overwrite=true   -o /tmp/tch-heavy   cargo test test_parallel_load -- --nocapture
-    //nsys profile   --trace=cuda,osrt,nvtx   --gpu-metrics-devices=all   --cuda-memory-usage=true   -f true   -o /tmp/tch-heavy   cargo test test_parallel_load -- --nocapture
-    //nsys-ui /tmp/tch-heavy.nsys-rep
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn test_parallel_load() -> Result<(), ThoError> {
-        // let cu_ctx = ThoCudaContext::new(0 as i32).expect("failed to create CUDA context");
-        // cu_ctx.bind_to_thread()?;
-        GlobalCtx::init_devices(2);
-
-
-        fn run_heavy(cycles: usize, n: i64, i:usize, inst:Arc<Instant>, input: Tensor) -> Result<Tensor, ThoError> {
-            debug!("run_heavy: starting {i} elapsed={:?}", inst.elapsed());
-            // Power of two makes the division exact in Float32.
-            let mut a = input;
-
-            // sync_probe(&format!("{i}/after ones"), &inst);
-
-            for _ in 0..cycles {
-                a = a
-                    .f_matmul(&a)?
-                    .f_div_scalar(n as f64)?;
-            }
-            // tch::Cuda::synchronize(0);
-
-            // sync_probe(&format!("{i}/before return"), &inst);
-
-            debug!("run_heavy: {i} done  elapsed={:?}", inst.elapsed());
-            Ok(a)
-        }
-
-        let cycles = 10;
-
-        let inst = Arc::new(Instant::now());
-
-        let results = futures::stream::iter(0..100).map(|i| {
-            let inst = Arc::clone(&inst);
-
-            let n = rng().random_range(1_000..10_000);
-
-            tokio::task::spawn(async move {
-                let kind = Float;
-                let cpu_input = Tensor::ones(&[n, n], FLOAT_CPU);
-                let cuda_input = GlobalCtx::global().cuda_actor(Cuda(0)).copy(cpu_input.into(), 1.into()).await?.t();
-                // let cuda_input = cpu_input.to(Cuda(0));
-
-                let cuda_t =
-                with_pooled_cuda_stream(1, |_|{
-                    run_heavy(cycles, n, i, inst, cuda_input)
-                }).await
-                ?;
-
-
-                Ok(GlobalCtx::global().cuda_actor(Cuda(0)).copy(cuda_t.into(), 0.into()).await?.t())
-                // Ok(cuda_t.to(Cpu))
-            })
-        })
-            .buffer_unordered(3)
-            .map_err(ThoError::from)
-            .and_then(future::ready)
-            .try_collect::<Vec<_>>()
-            .await?;
-
-        // tch::Cuda::synchronize(0);
-
-
-
-        let max_err = results.into_iter().map(|r|r
-            .subtract_scalar(1.0)
-            .abs()
-            .max()
-            .double_value(&[])).sum::<f64>();
-        // let r = Tensor::f_cat(results.as_slice(), 0)?;
-
-        // Force CUDA work to finish before measuring / checking.
-        // let max_err = 0f64;
-
-
-        debug!("run heavy={cycles} max_err={max_err} elapsed={}ms",inst.elapsed().as_millis());
-
-        // assert!(max_err < 1e-6, "expected tensor full of 1.0, max_err={max_err}");
-
-        Ok(())
-    }
 }

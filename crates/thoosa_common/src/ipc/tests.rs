@@ -490,7 +490,7 @@ async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files() -> Resul
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<(), ThoError> {
-    log::set_max_level(LevelFilter::Info);
+    log::set_max_level(LevelFilter::Debug);
     debug!("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {

@@ -105,21 +105,9 @@ fn expand_with_data(input: WithDataInput, with_stream: bool) -> proc_macro2::Tok
         }
     }
 
-    let invoke_closure = if with_stream {
-        quote! {
-            if __device_idx > 0 {
-                thoosa_common::cuda_utils::with_pooled_cuda_stream(__device_idx, |_| {
-                    (#closure)(__with_data_ctx #(, #arg_refs)*)
-                }).await
-            } else {
-                (#closure)(__with_data_ctx #(, #arg_refs)*)
-            }
-        }
-    } else {
-        quote! {
-            let __with_data_result: ::std::result::Result<_, thoosa_shared::ThoError> = (#closure)(__with_data_ctx #(, #arg_refs)*);
-            __with_data_result
-        }
+    let invoke_closure = quote! {
+        let __with_data_result: ::std::result::Result<_, thoosa_shared::ThoError> = (#closure)(__with_data_ctx #(, #arg_refs)*);
+        __with_data_result
     };
 
 
