@@ -14,7 +14,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, CopyToDevice, ThoError};
 use crate::copy_ctx::CudaActorHandle;
-use crate::dims::Dims;
+use crate::dims::{Dims, LocalSelect};
 use crate::ipc::cuda_process::encode_endpoint_payload;
 use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
@@ -88,15 +88,15 @@ impl Dims for LoadedTensor {
 
 impl LoadedTensor {}
 
-impl Select<LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
+impl LocalSelect<SynKey, LoadedRange> for ThoTensor<LoadedTensor, SynKey> {
     type Output = ThoTensor<LoadedTensor, SynKey>;
 
-    fn subview(&self, selector: LoadedRange) -> Result<Self::Output, ThoError> {
+    fn local_subview(id:&SynKey, t:&Tensor, selector: LoadedRange) -> Result<Self::Output, ThoError> {
         let ranges = MonoMetrics::<1,2>::map_to_ranges(&selector.range.start, &selector.range.end)?;//TODO unwrap
 
-        let sub_tensor = self.t_ref().i((ranges[0].clone(), ranges[1].clone()));
+        let sub_tensor = t.f_i((ranges[0].clone(), ranges[1].clone()))?;
 
-        let new_id = self.id().clone(); //SimpleId::from(format!("{}:{ranges:?}", self.id().0));
+        let new_id = id.clone(); //SimpleId::from(format!("{}:{ranges:?}", self.id().0));
 
         debug!("Select for ThoTensor2<LoadedTensor, SimpleId>: ranges={ranges:?} sub_tensor={sub_tensor:?}");
 

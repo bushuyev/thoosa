@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tch::Kind::Float;
 use tch::Tensor;
-use thoosa_common::dims::{Batch, Dims, MotifSlices, Spectorgram};
+use thoosa_common::dims::{Batch, Dims, LocalSelect, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::common::cachable::DevicesWrap;
@@ -140,15 +140,15 @@ pub struct SyncStftSelector;
 
 impl Adjustable for SyncStftSelector {}
 
-impl<D> Select<SyncStftSelector> for ThoTensor<D, SynKey>
+impl<D> LocalSelect<SynKey, SyncStftSelector> for ThoTensor<D, SynKey>
 where
     D: Dims,
 {
     type Output = ThoTensor<D, SynKey>;
 
-    fn subview(&self, _selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
+    fn local_subview(id:&SynKey, t:&Tensor, _selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
         // Err(ThoError::new("SyncStftSelector::subview: input selection is not supported"))
-        ThoTensor::new(self.id.clone(), self.as_ref().copy())
+        ThoTensor::new(id.clone(), t.copy())//TODO
     }
 }
 
