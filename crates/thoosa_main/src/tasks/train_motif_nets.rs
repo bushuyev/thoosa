@@ -439,7 +439,7 @@ where
                                 ))));
                                 let motif_meta = motif_meta.clone();
                                 async move {
-                                    let stft_input = with_data_on_str!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                    let stft_input = with_data!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                                         copy_motif(motif.data())
                                     })?;
 
@@ -501,7 +501,7 @@ where
                                     let params = MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone());
 
 
-                                    let cosine_motif = Some(with_data_on_str!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                    let cosine_motif = Some(with_data!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
 
                                         let src = motif.data().as_ref();
                                         let mut dst = src.f_zeros_like()?;
@@ -517,7 +517,7 @@ where
                                     debug!("TrainMotifNets::run: motif_id={} motif_width={motif_width}", motif_id_rate.0);
 
 
-                                    let stft_input = with_data_on_str!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                    let stft_input = with_data!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
                                         copy_motif(motif.data())
                                     })?;
 

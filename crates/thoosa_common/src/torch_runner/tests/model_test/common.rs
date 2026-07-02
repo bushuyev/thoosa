@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use tch::IndexOp;
+use tch::{IndexOp, Kind};
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOnly;
@@ -10,7 +10,7 @@ use thoosa_shared::traits::{Adjustable, Data, Metrics, MonoMetrics, Select, With
 use thoosa_shared::{CopyToDevice, ThoError};
 
 use crate::dims::Dims;
-use crate::tho_tensor::ThoTensor;
+use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
 pub(crate) struct FileInputId(pub(crate) &'static str);
@@ -149,11 +149,20 @@ impl Select<ABRange> for ThoTensor<ABData, ModelTestId> {
     type Output = ThoTensor<ABData, ModelTestId>;
 
     fn subview(&self, selector: ABRange) -> Result<Self::Output, ThoError> {
-        use std::cmp::min;
-        let size = ABMetrics::from(self.size());
-        let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
 
-        ThoTensor::new(self.id().clone(), self.t_ref().i((d0, ..)))
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                use std::cmp::min;
+                let size = ABMetrics::from(self.size());
+                let d0 = selector.range.start.dim_0..min(size.dim_0, selector.range.end.dim_0);
+
+                ThoTensor::new(self.id().clone(), t.i((d0, ..)))
+            }
+            ThoTensorInner::Ref { key, size, kind } => {
+
+                Ok(ThoTensor::new_ref(self.id().clone(), *key, size.clone(), *kind))
+            }
+        }
     }
 }
 

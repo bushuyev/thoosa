@@ -1,5 +1,9 @@
 export LD_LIBRARY_PATH=$LIBTORCH/lib/ && ...
 
+nsys profile   -t cuda,osrt,nvtx   -s cpu   --cuda-memory-usage=true   --cudabacktrace=sync:1000000,memory:1000000,kernel:1000000   --force-overwrite=true   -o /tmp/tch-heavy   cargo test test_... -- --nocapture
+nsys profile   --trace=cuda,osrt,nvtx   --gpu-metrics-devices=all   --cuda-memory-usage=true   -f true   -o /tmp/tch-heavy   cargo test test_.. -- --nocapture
+nsys-ui /tmp/tch-heavy.nsys-rep
+
 cargo --config 'build.rustflags=["--cfg","tho_debug"]' build --release
 
 cargo nextest run --release   --config 'build.rustflags=["--cfg","tho_debug"]'
