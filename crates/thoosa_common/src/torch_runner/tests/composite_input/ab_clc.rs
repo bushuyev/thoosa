@@ -14,7 +14,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, VoidSelector, WithId};
 use thoosa_with_data::with_data;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -67,10 +67,10 @@ pub(crate) struct ABClcStageOutput {
     pub(super) value:f32
 }
 
-impl Select<()> for ABClcStageOutput{
+impl Select<VoidSelector> for ABClcStageOutput{
     type Output = ABClcStageOutput;
 
-    fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+    fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
         unimplemented!()
     }
 }

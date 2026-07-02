@@ -21,7 +21,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, WithId};
+use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, VoidSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::Store;
@@ -332,7 +332,7 @@ where
                     ctx.branch(false),
                 )).await?;
 
-            let loaded = loaded.borrow_to(0, None::<()>).await?;
+            let loaded = loaded.borrow_to(0, None::<VoidSelector>).await?;
             let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())?;
 
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));

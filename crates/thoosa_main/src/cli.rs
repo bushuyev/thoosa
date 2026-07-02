@@ -65,7 +65,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{run_id, OptRunConfigs, RunConfig, RunConfigId, RUN_ID};
-use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, Select, SimpleId, VoidSelector, WithId};
 use thoosa_shared::{collect_futures_with_progress, cuda_activity_gate, mono_key, panic_to_err_async, parse_resources, simple_id, CopyToDevice, RangeOrValue, FuturesOrdering};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -1693,7 +1693,7 @@ where
     let raw_channels = channels.clone();
     let channels_frag = sanitize_plot_path_segment(&format!("{channels:?}", ));
 
-    let tensor = raw.borrow_to(0, None::<()>).await?;
+    let tensor = raw.borrow_to(0, None::<VoidSelector>).await?;
 
 
     plot_resource_channels::<C>(ws, resource_id, prefix, &format!("raw_{channels_frag}",), &format!("Resource {resource_id} raw channels: {raw_channels:?}"), tensor.as_ref(), raw_channels.as_ref(), resolution, print_to_stdout)?;
@@ -1708,7 +1708,7 @@ where
             )).await?;
 
         let filtered_channels = channels.clone();
-        let tensor = filtered.borrow_to(0, None::<()>).await?;
+        let tensor = filtered.borrow_to(0, None::<VoidSelector>).await?;
 
         plot_resource_channels::<C>(ws, resource_id, prefix, &format!("freq_filtered_{channels_frag}_{filter_frag}"), &format!("Resource {resource_id} channels: {filtered_channels:?} filters {freq_filters:?}"), tensor.as_ref(), filtered_channels.as_ref(), resolution, print_to_stdout)?;
 
@@ -1748,7 +1748,7 @@ where
     let channel_only = vec![channel];
     let net_path_sfx = sanitize_plot_path_segment(&net_path.to_string_lossy());
 
-    let tensor = raw.borrow_to(0, None::<()>).await?;
+    let tensor = raw.borrow_to(0, None::<VoidSelector>).await?;
 
     plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_raw_ch_{channel}"), &format!("Resource {resource_id} motif-net input raw channel={channel}"), tensor.as_ref(), Some(&channel_only), resolution, print_to_stdout)?;
 
@@ -1763,7 +1763,7 @@ where
         let channel_only_filtered = vec![channel];
 
         {
-            let tensor = filtered.borrow_to(0, None::<()>).await?;
+            let tensor = filtered.borrow_to(0, None::<VoidSelector>).await?;
 
             plot_resource_channels::<C>(ws, resource_id, "", &format!("motif_net_input_prefiltered_ch_{channel}_{net_path_sfx}"), &format!("Resource {resource_id} motif-net prefiltered channel={channel} find_run_config_id={find_motifs_run_config_id}"), tensor.as_ref(), Some(&channel_only_filtered), resolution, print_to_stdout)?;
         }
@@ -1780,7 +1780,7 @@ where
     let motif_slices_step = 5u32; //motif_net_params.stride() as u32;
     let motif_net = Arc::new(DataWithExtra::new(motif_net, MotifNetMeta::new(motif_id, channel, motif_net_params)));
 
-    let tensor = filtered_or_raw.borrow_to(0, None::<()>).await?;
+    let tensor = filtered_or_raw.borrow_to(0, None::<VoidSelector>).await?;
 
 
         let motif_net = Arc::clone(&motif_net);

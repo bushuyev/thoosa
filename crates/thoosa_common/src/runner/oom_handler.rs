@@ -876,7 +876,7 @@ pub mod test_types {
     use crate::runner::test_utils::DummyTensor;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use thoosa_shared::traits::{Select, ThoSelector, WithId};
+    use thoosa_shared::traits::{RangeSelector, Select, ThoSelector, WithId};
     use thoosa_shared::CopyToDevice;
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
@@ -893,12 +893,12 @@ pub mod test_types {
         pub id: TestId,
         pub data: DummyTensor,
     }
-    
 
-    impl Select<std::ops::Range<[usize;1]>> for TestInput {
+
+    impl Select<RangeSelector> for TestInput {
         type Output = TestInput;
 
-        fn subview(&self, selector: std::ops::Range<[usize; 1]>) -> Result<Self::Output, ThoError> {
+        fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
             Ok(TestInput {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start[0]..selector.end[0]].to_vec())//.0[selector.start..selector.end])

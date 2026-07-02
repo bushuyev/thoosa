@@ -629,7 +629,7 @@ pub trait ThoSelector {
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct VoidSelector;
+pub struct VoidSelector;
 
 #[typetag::serde]
 impl ThoSelector for VoidSelector {
@@ -644,7 +644,7 @@ impl Deref for VoidSelector {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct RangeSelector(Range<[usize; 1]>);
+pub struct RangeSelector(Range<[usize; 1]>);
 
 impl Deref for RangeSelector {
     type Target = Range<[usize; 1]>;

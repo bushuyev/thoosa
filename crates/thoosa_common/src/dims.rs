@@ -6,7 +6,7 @@ use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, Select, SimpleId};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, Select, SimpleId, VoidSelector};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
@@ -40,10 +40,10 @@ pub trait LocalSelect<Id, S> {
     fn local_subview(id:&Id, t:&Tensor, selector: S) -> Result<Self::Output, ThoError>;
 }
 
-impl LocalSelect<SynKey, ()> for ThoTensor<ChannelsData, SynKey> {
+impl LocalSelect<SynKey, VoidSelector> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, selector: ()) -> Result<Self::Output, ThoError> {
+    fn local_subview(id:&SynKey, t:&Tensor, selector: VoidSelector) -> Result<Self::Output, ThoError> {
         unimplemented!()
     }
 }

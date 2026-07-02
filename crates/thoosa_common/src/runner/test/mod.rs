@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, VoidSelector, WithId};
 use tokio::task::JoinSet;
 
 use thoosa_shared::comp_id::SynKey;
@@ -258,9 +258,9 @@ where
     R::Out: CachedPurgeOutput +  Clone + Send + Sync,
     <R as Stage>::In<'static>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
-    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef<()>>::Out<'_>)  + Send + Sync + Clone + 'static,
-    for<'o> <R as Stage>::Out:WithId+BorrowRef<()>+Debug,
-    for<'o> <<R as Stage>::Out as BorrowRef<()>>::Out<'o>: Debug
+    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef<VoidSelector>>::Out<'_>)  + Send + Sync + Clone + 'static,
+    for<'o> <R as Stage>::Out:WithId+BorrowRef<VoidSelector>+Debug,
+    for<'o> <<R as Stage>::Out as BorrowRef<VoidSelector>>::Out<'o>: Debug
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -563,7 +563,7 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, Select, WithId};
+    use thoosa_shared::traits::{Data, Select, VoidSelector, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
@@ -781,10 +781,10 @@ mod tests {
         data: DummyTensor,
     }
 
-    impl Select<()> for DMulTaskOutput{
+    impl Select<VoidSelector> for DMulTaskOutput{
         type Output = DMulTaskOutput;
 
-        fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+        fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
             unimplemented!()
         }
     }

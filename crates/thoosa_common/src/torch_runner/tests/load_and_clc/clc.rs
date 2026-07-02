@@ -8,7 +8,7 @@ use tch::Device::Cuda;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{simple_id, ThoError};
-use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, SimpleId};
+use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, SimpleId, VoidSelector};
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use crate::copy_ctx::CudaActorHandle;
@@ -193,10 +193,10 @@ impl Stage for ClcStage {
     type Ctx = RunCtxImpl;
 }
 
-impl Select<()> for ThoTensor<ClcStageOutput, SynKey> {
+impl Select<VoidSelector> for ThoTensor<ClcStageOutput, SynKey> {
     type Output = ThoTensor<ClcStageOutput, SynKey>;
 
-    fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+    fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
         unimplemented!()
     }
 }
