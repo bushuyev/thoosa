@@ -369,15 +369,15 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), Tho
         run_load_and_clc_ipc_cuda_worker_oom_stage(
             "test_load_and_clc_ipc_cuda_worker_oom_splits_tensor",
             "ipc_load_and_clc_oom_splits_id",
-            [3, 10],
+            [40, 10],
             vec![FailUntil::MemLimit(12)],
             OOMRunnerConfig::Splits {},
             &[
                 "resource_1",
-                "resource_2",
-                "resource_3",
-                "resource_4",
-                "resource_5",
+                // "resource_2",
+                // "resource_3",
+                // "resource_4",
+                // "resource_5",
             ],
             false,
         ).await

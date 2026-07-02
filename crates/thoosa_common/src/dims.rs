@@ -1,12 +1,12 @@
 use std::cmp::min;
-use crate::tho_tensor::ThoTensor;
+use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use async_trait::async_trait;
 use std::fmt::Debug;
 use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Select, SimpleId};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, Select, SimpleId};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
@@ -14,10 +14,36 @@ pub trait Dims: Send + Sync + Clone + Debug {
     type Metrics: Metrics + Debug + Clone + Send + Sync + Default + TryFrom<Vec<i64>>;
 }
 
-impl Select<()> for ThoTensor<ChannelsData, SynKey> {
+impl <D, Id, S> Select<S> for ThoTensor<D, Id>
+where
+    D:Dims,
+    Id:Named + Debug + Clone,
+    Self:LocalSelect<Id, S, Output = ThoTensor<D, Id>>,
+{
+    type Output = ThoTensor<D, Id>;
+
+    fn subview(&self, selector: S) -> Result<Self::Output, ThoError> {
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                Self::local_subview(self.id(), t, selector)
+            }
+            ThoTensorInner::Ref { key, size, kind } => {
+                Ok(ThoTensor::new_ref(self.id().clone(), *key, size.clone(), *kind))
+            }
+        }
+    }
+}
+
+pub trait LocalSelect<Id, S> {
+    type Output;
+
+    fn local_subview(id:&Id, t:&Tensor, selector: S) -> Result<Self::Output, ThoError>;
+}
+
+impl LocalSelect<SynKey, ()> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
-    fn subview(&self, selector: ()) -> Result<Self::Output, ThoError> {
+    fn local_subview(id:&SynKey, t:&Tensor, selector: ()) -> Result<Self::Output, ThoError> {
         unimplemented!()
     }
 }
@@ -32,14 +58,14 @@ impl Dims for ChannelsData {
 }
 impl ChannelsData {
 
-    pub fn sub_single(t: &ThoTensor<ChannelsData, SynKey>, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Result<Tensor, ThoError> {
+    pub fn sub_single(t: &Tensor, range: &Range<MonoMetrics<1, 2>>, size: &MonoMetrics<1, 2>) -> Result<Tensor, ThoError> {
         let channel_range = range.start.dim_0()..min(size.dim_0(), range.end.dim_0());
         let data_range = range.start.dim_1()..min(size.dim_1(), range.end.dim_1());
 
         debug!("ChannelsData2::subview: channel_range={channel_range:?} data_range={data_range:?} size={size:?}");
-        trace!("ChannelsData2::subview: t=\n{}", t.t_ref());
+        trace!("ChannelsData2::subview: t=\n{}", t);
 
-        let sub_t = t.t_ref().f_i((channel_range.clone(), data_range.clone()))?;
+        let sub_t = t.f_i((channel_range.clone(), data_range.clone()))?;
 
         // assert_eq!(sub_t.size(), [])
         Ok(sub_t)

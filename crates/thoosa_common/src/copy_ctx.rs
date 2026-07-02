@@ -145,11 +145,11 @@ impl dyn CudaActorHandle + '_ {
     where
         S: SyncStage,
         SL: Clone + Debug + Send + 'static,
-        W: Sync,
+        W: Debug + Sync,
         for<'a> W: BorrowRef<SL> + 'a,
         for<'a> <W as BorrowRef<SL>>::Out<'a>: Borrow<S::In<'a>>,
     {
-
+        debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
         let borrowed = input.borrow_to(to_device_idx, selector).await?;
 

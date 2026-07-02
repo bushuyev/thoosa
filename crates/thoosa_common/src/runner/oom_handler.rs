@@ -352,7 +352,7 @@ where
                     async move {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
                         cuda_actor.run_stage(task, input, selector, tho_device_idx, &run_ctx).await
-                       
+
                     },
                     job_id_to_rerun
                 )).await
@@ -390,6 +390,7 @@ where
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
                     } else {
                         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+
                         track_await(cuda_actor.exec_sync_stage(move |stream| async move {
                             let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
                                 match stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose() {
@@ -689,7 +690,7 @@ where
                     loop {
                         i += 1;
                         if i > 10000 {//TODO Config
-                            return Err(ThoError::new("OOMHandler: ctx_id={ctx_id:?}  i={i}"));
+                            return Err(ThoError::new(format!("OOMHandler: ctx_id={ctx_id:?}  i={i}")));
                         }
 
                         debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
