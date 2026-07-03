@@ -26,7 +26,6 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, DataId, Metrics, MonoMetrics, Named, Select, ThoSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use thoosa_with_data::with_data;
 use crate::tasks::stacked_moitfs_loader::StackedMotifsOutput;
 use crate::tasks::cross_batch_clc::{unfold_and_cat, UnfoldParams};
 use crate::tasks::cross_dims::ChannelsMotifsDists;

@@ -2163,7 +2163,7 @@ mod cli_tests {
     use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
@@ -2175,7 +2175,7 @@ mod cli_tests {
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MotifTrackerStore, SlicesMatch, SqlMotifTrackerStore, SqlStore, Store};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_with_data::with_data;
+    use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::slices_stats::{Aggr, Metrics};
     use thoosa_common::dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
@@ -2586,13 +2586,15 @@ mod cli_tests {
             let pulse_triangle_filtered_t = Arc::clone(&freq_filter).run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_triangle_t.shallow_clone())?)), ctx.branch(false)).await?;
             let pulse_sin_filtered_t = freq_filter.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), pulse_sin_t.shallow_clone())?)), ctx.branch(false)).await?;
 
-            with_data!(ctx.branch(false), pulse_triangle_filtered_t, pulse_sin_filtered_t; |ctx, pulse_triangle_t:&ThoTensor<ChannelsData, SynKey>, pulse_sin_t:&ThoTensor<ChannelsData, SynKey> |{
+            {
+                let pulse_triangle_t = pulse_triangle_filtered_t.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let pulse_sin_t = pulse_sin_filtered_t.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
 
-                debug_plot!(pulse_triangle_t.as_ref(), "pulse_triangle_{freq}_filtered_t")?;
-                debug_plot!(pulse_sin_t.as_ref(), "pulse_sin_{freq}_filtered_t")?;
+                debug_plot!(pulse_triangle_t.as_ref().as_ref(), "pulse_triangle_{freq}_filtered_t")?;
+                debug_plot!(pulse_sin_t.as_ref().as_ref(), "pulse_sin_{freq}_filtered_t")?;
 
                 Ok::<_, ThoError>(())
-            })?;
+            }?;
         }
 
 

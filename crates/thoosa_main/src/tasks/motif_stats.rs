@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use cached_derive::Cached;
+use futures_util::future::try_join_all;
 use log::debug;
 use parking_lot::RwLock;
 use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
@@ -35,7 +36,6 @@ use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, VoidS
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
 use thoosa_common::copy_ctx;
 use thoosa_store::Store;
-use thoosa_with_data::with_data;
 use tracing::error;
 use thoosa_common::runs::Simple;
 use thoosa_common::transforms::filters::InputFilterLengthAdjuster;
@@ -43,6 +43,7 @@ use crate::tasks::cross_dims::{ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::motif_loader::{load_random_slices, MotifLoaderInput, MotifMeta};
 use crate::tasks::slices_stats::{metric_quantiles_for_motif, metric_scalar_for_motif};
 use crate::tasks::stage_ids::{MOTIF_STATS, MOTIF_STATS_SYNC_STAGE};
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::tracked_await::track_await;
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
@@ -292,24 +293,23 @@ impl MotifStatsCalcInputWrapper {
         let id = self.id.clone();
         let metrics = self.metrics.clone();
         let quantiles = self.quantiles.clone();
+        let to_device_idx = permits_ctx.tho_device_idx();
 
         match &self.data {
             MotifStatsCalcInputDataWrapper::Managed(motif) => {
-                let future = with_data!(permits_ctx, motif; move |ctx: P, motif: &LoadedMotif| {
-                    let input = MotifStatsCalcInput::from_managed(id, motif, metrics, quantiles);
-                    Ok::<_, ThoError>(do_run(&input, &ctx))
-                })?;
-                track_await(future).await
+                let motif = motif.borrow_to(to_device_idx, None::<SyncStftSelector>).await?;
+                let input = MotifStatsCalcInput::from_managed(id, motif.as_ref(), metrics, quantiles);
+                track_await(do_run(&input, &permits_ctx)).await
             }
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
-                let future = with_data!(permits_ctx, [motifs]; move |ctx: P, motifs: &[&LoadedMotif]| {
-                    let input = MotifStatsCalcInput::from_motifs(id, motifs.to_vec(), metrics, quantiles);
-                    Ok::<_, ThoError>(do_run(&input, &ctx))
-                })?;
-                track_await(future).await
+                let motif_refs = try_join_all(motifs.iter().map(|motif| motif.borrow_to(to_device_idx, None::<SyncStftSelector>))).await?;
+                let motifs = motif_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
+                let input = MotifStatsCalcInput::from_motifs(id, motifs, metrics, quantiles);
+                track_await(do_run(&input, &permits_ctx)).await
             }
         }
     }
+
 }
 
 impl WithId for MotifStatsCalcInputWrapper {

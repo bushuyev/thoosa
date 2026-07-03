@@ -12,7 +12,7 @@ use tch::kind::Kind;
 use tch::Device::Cpu;
 use tch::Tensor;
 use thoosa_common::transforms::filters::InputFilter;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
@@ -27,7 +27,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::ThoError;
 use thoosa_store::Store;
-use thoosa_with_data::with_data;
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::runs::SavableResult;
 use async_trait::async_trait;
 use thoosa_shared::tracked_await::track_await;
@@ -236,9 +236,10 @@ where
                     batch_tensors.clear();
                     batch_len = 0;
 
-                    with_data!(ctx.branch(false), loaded; |_ctx, tensor: &ThoTensor<ChannelsData, SynKey>| {
+                    {
+                        let tensor = loaded.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                         assign_resource_to_buckets_chunked(resource, tensor.t_ref(), &configured_stage.run_config, max_chunk_len, &mut buckets)
-                    })?;
+                    }?;
                     continue;
                 }
 
@@ -297,12 +298,13 @@ where
         return Ok(());
     }
 
-    with_data!(ctx, [batch_tensors];|_ctx, tensors: &[&ThoTensor<ChannelsData, SynKey>]| {
+    let tensors = futures_util::future::try_join_all(batch_tensors.iter().map(|tensor| tensor.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+    {
         for (resource, tensor) in batch_resources.iter().zip(tensors.iter()) {
             assign_resource_to_buckets(resource, tensor.t_ref(), run_config, buckets)?;
         }
         Ok::<_, ThoError>(())
-    })?;
+    }?;
 
     Ok(())
 }

@@ -28,7 +28,6 @@ use thoosa_shared::traits::{CachableIdTr, Data, DataId, VoidSelector, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
-use thoosa_with_data::with_data;
 use crate::tasks::cross_dims::{ChannelsDataVec, ChannelsMotifsSlices};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
@@ -38,7 +37,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -54,6 +53,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::utils::load_run_config;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
@@ -784,7 +784,8 @@ where
         let resource_cache = Arc::new(resource);
         let raw_tensor = track_await(Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(false))).await?;
-        let channel_tensor = with_data!(ctx.branch(false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
+        let channel_tensor = {
+            let raw_tt = raw_tensor.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             let size = raw_tt.size();
             let mut valid_slices = Vec::with_capacity(slices.len());
 
@@ -809,7 +810,7 @@ where
             }
 
             ThoTensor::new(raw_tt.id().clone(), dst)
-        })?;
+        }?;
         drop(raw_tensor);
         loaded_resources.insert(LoadedMotifResource {
             id: LoadedMotifResourceId::new(resource_id),
@@ -912,7 +913,7 @@ where
         let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        let resource_slices = with_data!(ctx.branch(false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
+        let raw_tt = raw_tensor.borrow_to(ctx.tho_device_idx(), None::<VoidSelector>).await?;
             let resource_id = resource_id;
             let resource_slice_count = slices.len() as i64;
             let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
@@ -937,15 +938,14 @@ where
 
             debug!("load_random_slices: resource_id={resource_id} with_data_done");
 
-            if slice_i == 0 {
+            let resource_slices = if slice_i == 0 {
                 Ok::<_, ThoError>(None)
             } else {
                 Ok::<_, ThoError>(Some(ThoTensor::new(
                     mono_key!(resource_id, format!("random_slices_resource_id={resource_id}")).into(),
                     motif_t.t_ref().f_i((.., 0..slice_i, ..))?,
                 )?))
-            }
-        })?;
+            }?;
 
         if let Some(resource_slices) = resource_slices {
             tmp_cache.insert(resource_slices);

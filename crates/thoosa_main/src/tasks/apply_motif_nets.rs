@@ -47,7 +47,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
 use thoosa_store::{Store, TrainedNet};
-use thoosa_with_data::with_data;
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -1222,7 +1221,7 @@ pub(crate) mod tests {
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
@@ -1245,7 +1244,7 @@ pub(crate) mod tests {
     use thoosa_shared::traits::{Adjustable, Named, SimpleId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_store::{MockStoreBuilder, RunConfigRow, Store, TrainedNet};
-    use thoosa_with_data::with_data;
+    use crate::tasks::stft::SyncStftSelector;
 
     #[ctor::ctor]
     fn init() {
@@ -1411,7 +1410,9 @@ pub(crate) mod tests {
         let motif_width = motif_0_0.t_ref().size()[1] as i64;
         let slices = ((input_n_0 as i64 - motif_width) / apply_motif_net_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
-        with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
+        {
+            let r = out.borrow_to(ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices, slices, slices]);
             assert_eq!(r.data().t_ref().size(), vec![3, slices]);
@@ -1425,7 +1426,7 @@ pub(crate) mod tests {
             assert_close(sin_interval_starts_in_resources_a as f64, apply_motif_net_step as f64 * sin_matches_idx.double_value(&[0]), apply_motif_net_step as f64 * 3.);
 
             Ok::<_, ThoError>(())
-        })?;
+        }?;
 
         Ok(())
     }
@@ -1555,11 +1556,13 @@ pub(crate) mod tests {
         ];
         let max_len = *expected_lengths.iter().max().expect("no max len");
 
-        with_data!(mock_run_ctx::default(1), out; |_ctx, out:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>| {
+        {
+            let out = out.borrow_to(1, None::<SyncStftSelector>).await?;
+            let out = out.as_ref();
             assert_eq!(out.extra().as_slice(), expected_lengths.as_slice());
             assert_eq!(out.data().t_ref().size(), vec![2, max_len]);
             Ok::<_, ThoError>(())
-        })?;
+        }?;
 
         Ok(())
     }
@@ -1670,7 +1673,9 @@ pub(crate) mod tests {
 
         let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
 
-        with_data!(ctx_for_data, out; |_ctx, r:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
+        {
+            let r = out.borrow_to(ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices]);
             assert_eq!(r.data().t_ref().size(), vec![1, slices]);
@@ -1680,7 +1685,7 @@ pub(crate) mod tests {
             assert_close(pulse_interval_starts_in_resources_a as f64, step as f64 * pulse_matches_idx.double_value(&[0]), step as f64 * 3.);
 
             Ok::<_, ThoError>(())
-        })?;
+        }?;
 
         Ok(())
     }

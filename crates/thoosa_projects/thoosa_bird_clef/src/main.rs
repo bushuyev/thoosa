@@ -22,7 +22,7 @@ use tch::kind::FLOAT_CPU;
 use tokio::task::JoinHandle;
 use thoosa_common::dims::{ChannelsData, LabelProbability};
 use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
-use thoosa_common::runner::common::cachable::DevicesWrap;
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
 use thoosa_common::runner::common::runnable::AsyncStage;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -33,12 +33,12 @@ use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
+use thoosa_main::tasks::stft::SyncStftSelector;
 use thoosa_shared::{collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, FuturesOrdering, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
-use thoosa_with_data::with_data;
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
 use std::cell::Cell;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
@@ -337,9 +337,10 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
 
         match track_await(Arc::clone(&apply_label_nets).run(Arc::clone(&oggs_tt), ctx.branch(false))).await{
             Ok(results) => {
-                with_data!(ctx.branch(false), results; |ctx, results:&ThoTensor<LabelProbability, SynKey>| {
+                {
+                    let results = results.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
 
-                    let probs = to_vec_f32(results.as_ref());
+                    let probs = to_vec_f32(results.as_ref().as_ref());
                     info!("{label_i} label={label:?}");// slice={slice} path={path:?}{entry_i}
                     debug!("{label_i} label={label:?}  probs={probs:?}");// slice={slice} path={path:?}{entry_i}
                     assert_eq!(probs.len(), num_files * 12, "label={label} probs.len={}", probs.len()); //600 files * minute
@@ -347,8 +348,8 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
                     label_results.insert(label.to_string(), probs);
 
 
-                    Ok(())
-                })?;
+                    Ok::<(), ThoError>(())
+                }?;
 
             }
             Err(e) => {

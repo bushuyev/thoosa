@@ -1034,9 +1034,8 @@ mod tests {
     use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock};
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::traits::{DummyCachableId, WithId};
+    use thoosa_shared::traits::{DummyCachableId, RangeSelector, WithId};
     use crate::runner::global_ctx::MockGlobalCtx;
-    use thoosa_with_data::with_data;
     extern crate self as caching_runner;
     pub use crate::runner::common::*;
     use crate::runner::cache_areas::CacheArea;
@@ -1303,16 +1302,19 @@ mod tests {
 
         //TODO check asserts were actually invoked
         let ctx_for_data = mock_run_ctx::default(1);
-        with_data!(ctx_for_data, wrap_a, [wrap_vec], wrap_b, [wrap_vec_second];
-            |_ctx, a: &MockDataWithId, first: &[&MockDataWithId], b: &MockDataWithId, second: &[&MockDataWithId]|{
-                assert_eq!(a.device(), &1);
-                assert_eq!(b.device(), &1);
+        let a = wrap_a.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        let first = futures_util::future::try_join_all(wrap_vec.iter().map(|item| item.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
+        let b = wrap_b.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        let second = futures_util::future::try_join_all(wrap_vec_second.iter().map(|item| item.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>))).await?;
+        {
+                assert_eq!(a.as_ref().device(), &1);
+                assert_eq!(b.as_ref().device(), &1);
                 assert_eq!(first.len(), 2);
-                assert!(first.iter().all(|item| *item.device() == 1));
+                assert!(first.iter().all(|item| *item.as_ref().device() == 1));
                 assert_eq!(second.len(), 2);
-                assert!(second.iter().all(|item| *item.device() == 1));
+                assert!(second.iter().all(|item| *item.as_ref().device() == 1));
                 Ok::<(), ThoError>(())
-        })?;
+        }?;
         Ok(())
     }
 
@@ -1328,11 +1330,11 @@ mod tests {
         let wrap_a = Arc::new(DevicesWrap::wrap(MockDataWithId::for_device_and_id(0, "a")));
 
         let ctx_for_data = mock_run_ctx::default(1);
-        with_data!(ctx_for_data, wrap_a;
-            |_ctx, a: &MockDataWithId|{
-                assert_eq!(a.device(), &1);
+        let a = wrap_a.borrow_to(ctx_for_data.tho_device_idx(), None::<RangeSelector>).await?;
+        {
+                assert_eq!(a.as_ref().device(), &1);
                 Ok::<(), ThoError>(())
-        })?;
+        }?;
         Ok(())
     }
 }

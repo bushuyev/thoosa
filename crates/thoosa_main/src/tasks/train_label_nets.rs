@@ -6,7 +6,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use futures::Stream;
 use futures_util::{StreamExt, TryStreamExt};
-use futures_util::future::BoxFuture;
+use futures_util::future::{BoxFuture, try_join_all};
 use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
@@ -14,7 +14,7 @@ use parking_lot::{Mutex, RwLock};
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
 use cached_derive::Cached;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::{ThoTensor};
@@ -43,7 +43,6 @@ use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_store::Store;
-use thoosa_with_data::with_data;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use rand::rng;
@@ -53,6 +52,7 @@ use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use thoosa_common::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::comp_id::SynKey;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
@@ -421,7 +421,11 @@ where
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        let label = label.clone();
                                        async move {
-                                           let (x, lengths, y) = with_data!(ctx.branch(false),[x_1_wrapped], [x_0_wrapped];|_ctx, x_1:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>], x_0:&[&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>]|{
+                                           let x_1_refs = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                                           let x_0_refs = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                                           let x_1 = x_1_refs.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+                                           let x_0 = x_0_refs.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
+                                           let (x, lengths, y) = {
 
                                                if x_1.is_empty() || x_1.is_empty(){
                                                  error!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
@@ -448,7 +452,7 @@ where
                                                debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1.size={:?}, x_0.size={:?}, lengths_1={:?}, lengths_0={:?}", x_1_batch.size(), x_0_batch.size(), lengths_1, lengths_0);
 
                                                mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))
-                                           })?;
+                                           }?;
 
                                            debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?} lengths={lengths:?}", x.size(), y.size());
 
@@ -748,6 +752,7 @@ mod tests {
     use std::time::Duration;
     use futures_util::StreamExt;
     use futures::FutureExt;
+    use futures_util::future::try_join_all;
     use log::{debug, info, log_enabled, set_max_level, Level, LevelFilter};
     use log::LevelFilter::{Debug, Info, Trace};
     use mockall::predicate::always;
@@ -758,7 +763,7 @@ mod tests {
     use tch::Tensor;
     use tokio::io::Join;
     use tokio::task::JoinSet;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_common::runner::common::MaxParallelCtx;
@@ -786,7 +791,7 @@ mod tests {
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_store::{MockStoreBuilder, TrainedNet};
-    use thoosa_with_data::with_data;
+    use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::apply_motif_nets::{motif_test_net_, ApplyMotifNets};
     use thoosa_common::dims::ChannelsData;
     use crate::tasks::cross_loader::ResourcesConfigInput;
@@ -1093,8 +1098,9 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
-                    let ctx_for_data = ctx.branch(false);
-                    with_data!(ctx_for_data, [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<ChannelsData, SynKey>], x_0:&[&ThoTensor<ChannelsData, SynKey>]|{
+                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
@@ -1102,7 +1108,7 @@ mod tests {
                         let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
                          Ok((x.into(), None, y.into()))
-                    })
+                    }
                 }.boxed()
             }),
         );
@@ -1165,8 +1171,9 @@ mod tests {
             resources_0_valid,
             Arc::new(|x_1_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, x_0_wrapped:Vec<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>, mut ctx: MockRunCtx|{
                 async move {
-                    let ctx_for_data = ctx.branch(false);
-                    with_data!(ctx_for_data, [x_1_wrapped], [x_0_wrapped]; |_ctx, x_1:&[&ThoTensor<ChannelsData, SynKey>], x_0:&[&ThoTensor<ChannelsData, SynKey>]|{
+                    let x_1 = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    let x_0 = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+                    {
                         debug!("ResourcesBatch::train_batch_iter: x_1={x_1:?} x_0={x_0:?}");
                         let x_1 = Tensor::stack(&x_1.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
                         let x_0 = Tensor::stack(&x_0.into_iter().map(|v|v.t_ref().copy()).collect::<Vec<_>>(), 0);
@@ -1174,7 +1181,7 @@ mod tests {
                         let (x, _lengths, y) = mix_x_binary_with_labels(&x_1, None, &x_0, None)?;
 
                          Ok((x.into(), None, y.into()))
-                    })
+                    }
                 }.boxed()
             }),
         );

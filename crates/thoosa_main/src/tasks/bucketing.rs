@@ -36,7 +36,6 @@ use thoosa_shared::{collect_futures_with_progress, panic_to_err, CopyToDevice, F
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, ThoSelector, VoidSelector, WithId};
 use thoosa_store::{IdSlice, Store};
-use thoosa_with_data::with_data;
 use thoosa_named_derive::Named;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
 use thoosa_shared::tracked_await::track_await;
@@ -1372,7 +1371,7 @@ mod tests {
     use thoosa_common::dims::MotifSlices;
     use crate::tasks::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
     use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
@@ -1398,7 +1397,7 @@ mod tests {
     use thoosa_shared::test_utils::{gen_motif, MotifKind};
     use thoosa_store::{IdSlice, SqlStore, Store};
     use thoosa_store::rusqlite::Transaction;
-    use thoosa_with_data::with_data;
+    use crate::tasks::stft::SyncStftSelector;
     use crate::cli::{import_resources, plot_motif};
     use crate::RawTensorLoader;
     use crate::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsStage};
@@ -1676,7 +1675,9 @@ mod tests {
         for motif_id in &motifs {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
-            with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+            {
+                let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().as_ref().unsqueeze(0);
                     debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
@@ -1685,7 +1686,7 @@ mod tests {
                     debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
                 }
                 Ok::<_, ThoError>(())
-            })?;
+            }?;
 
 
 
@@ -1908,7 +1909,9 @@ mod tests {
         for motif_id in &motifs {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
-            with_data!(&ctx, motif; |ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+            {
+                let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().as_ref().unsqueeze(0);
                     debug!("heavy_run_mel_path: motif_t={motif_t:?} ref_motif={:?}", ref_motif.1);
@@ -1917,7 +1920,7 @@ mod tests {
                     debug!("heavy_run_mel_path: motif_id={motif_id:?} x {:?}:  distance=\n{distance}", ref_motif.0);
                 }
                 Ok::<_, ThoError>(())
-            })?;
+            }?;
 
 
             let metrics = Arc::clone(&motif_stats).run(Arc::new(MotifStatsInput::from_motif_input(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None), vec![
