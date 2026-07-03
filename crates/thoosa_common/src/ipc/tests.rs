@@ -32,7 +32,7 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
-use crate::torch_runner::tests::load_and_clc::{mul_check, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
+use crate::torch_runner::tests::load_and_clc::{mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
 use crate::torch_runner::tests::model_test::common::ModelTestId;
@@ -204,73 +204,6 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
     }
 }
 
-async fn run_load_and_clc_ipc_cuda_worker_oom_stage(
-    test_name: &str,
-    stage_id: &'static str,
-    size: [i64; 2],
-    fail_until: Vec<FailUntil>,
-    oom_config: OOMRunnerConfig,
-    resources: &[&'static str],
-    assert_all_on_cpu: bool,
-) -> Result<(), ThoError> {
-    let _ctx = init_ipc_test(test_name, pure_module_path!()).await?;
-
-    let tho_device_idx = 1;
-    let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-
-    let result = async {
-
-        const MUL_K: f64 = 2.;
-        let load_and_clc = Arc::new(LoadAndClcStage::new(
-            LoadAndClcStageId(stage_id),
-            MUL_K,
-            fail_until,
-            size.into(),
-            ClcOOMRunner::new(
-                oom_config,
-                Box::new(move |id| {
-                    SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
-                        id,
-                        1,
-                        &size,
-                        (Float, Device::Cpu),
-                        BuildAs::Append,
-                    ).expect("single dim output builder").copy_partial_outputs_to_device(0)
-                }),
-            ),
-            Float,
-            Device::Cuda(0).into(),
-            false,
-        ).await);
-
-        run_mul_task_invocations(
-            Arc::clone(&load_and_clc),
-            resources,
-            tho_device_idx,
-            0,
-            |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
-            move |res, out| {
-                mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
-            },
-            false,
-        ).await?;
-
-        if assert_all_on_cpu {
-            assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
-        }
-
-        Ok::<(), ThoError>(())
-    }.await;
-
-    let shutdown_result = cuda_actor.shutdown().await;
-
-    match (result, shutdown_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-    }
-}
-
 async fn run_model_test_ipc_cuda_worker<F, Fut>(test_name: &str, run: F) -> Result<(), ThoError>
 where
     F: FnOnce() -> Fut,
@@ -320,15 +253,42 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor() ->
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
-        run_load_and_clc_ipc_cuda_worker_oom_stage(
-            "test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor",
-            "ipc_load_and_clc_oom_till_min_max_parallel_id",
-            [3, 10],
-            vec![NaxParallel(20)],
-            OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
-            &["resource_1", "resource_2", "resource_3"],
-            false,
-        ).await
+        let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor", pure_module_path!()).await?;
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let result = async {
+            const MUL_K: f64 = 2.;
+            let size = [3, 10];
+            let load_and_clc = Arc::new(LoadAndClcStage::new(
+                LoadAndClcStageId("ipc_load_and_clc_oom_till_min_max_parallel_id"),
+                MUL_K,
+                vec![NaxParallel(20)],
+                size.into(),
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::MaxParallel { max: 20, step: 10 },
+                    Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                ),
+                Float,
+                Device::Cuda(0).into(),
+                false,
+            ).await);
+            run_mul_task_invocations(
+                Arc::clone(&load_and_clc),
+                &["resource_1", "resource_2", "resource_3"],
+                tho_device_idx,
+                0,
+                |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
+                false,
+            ).await?;
+            Ok::<(), ThoError>(())
+        }.await;
+        let shutdown_result = cuda_actor.shutdown().await;
+        match (result, shutdown_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
     }
 }
 
@@ -339,18 +299,42 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor()
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
-        run_load_and_clc_ipc_cuda_worker_oom_stage(
-            "test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor",
-            "ipc_load_and_clc_oom_compete_for_max_parallel_id",
-            [3, 10],
-            vec![NaxParallel(MAX_PARALLEL)],
-            OOMRunnerConfig::MaxParallel {
-                max: MAX_PARALLEL,
-                step: *MaxParallelStep::TEN,
-            },
-            &["resource_1", "resource_2", "resource_3"],
-            false,
-        ).await
+        let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor", pure_module_path!()).await?;
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let result = async {
+            const MUL_K: f64 = 2.;
+            let size = [3, 10];
+            let load_and_clc = Arc::new(LoadAndClcStage::new(
+                LoadAndClcStageId("ipc_load_and_clc_oom_compete_for_max_parallel_id"),
+                MUL_K,
+                vec![NaxParallel(MAX_PARALLEL)],
+                size.into(),
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::MaxParallel { max: MAX_PARALLEL, step: *MaxParallelStep::TEN },
+                    Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                ),
+                Float,
+                Device::Cuda(0).into(),
+                false,
+            ).await);
+            run_mul_task_invocations(
+                Arc::clone(&load_and_clc),
+                &["resource_1", "resource_2", "resource_3"],
+                tho_device_idx,
+                0,
+                |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
+                false,
+            ).await?;
+            Ok::<(), ThoError>(())
+        }.await;
+        let shutdown_result = cuda_actor.shutdown().await;
+        match (result, shutdown_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
     }
 }
 
@@ -385,21 +369,57 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), Tho
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
-        run_load_and_clc_ipc_cuda_worker_oom_stage(
-            "test_load_and_clc_ipc_cuda_worker_oom_splits_tensor",
-            "ipc_load_and_clc_oom_splits_id",
-            [3, 40],
-            vec![FailUntil::MemLimit(12)],
-            OOMRunnerConfig::Splits {},
-            &[
-                "resource_1",
-                // "resource_2",
-                // "resource_3",
-                // "resource_4",
-                // "resource_5",
-            ],
-            false,
-        ).await
+        let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor", pure_module_path!()).await?;
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let result = async {
+            const MUL_K: f64 = 2.;
+            let size = [3, 40];
+            let load_and_clc = Arc::new(LoadAndClcStage::new(
+                LoadAndClcStageId("ipc_load_and_clc_oom_splits_id"),
+                MUL_K,
+                vec![FailUntil::MemLimit(40)],
+                size.into(),
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::Splits {},
+                    Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
+                        id,
+                        1,
+                        &size,
+                        (Float, Device::Cpu),
+                        BuildAs::Sum
+                    ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                ),
+                Float,
+                Device::Cuda(0).into(),
+                true,
+            ).await);
+
+            run_mul_task_invocations(
+                Arc::clone(&load_and_clc),
+                &["resource_1"],
+                tho_device_idx,
+                0,
+                |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                move |res, out| {
+
+                    crate::torch_runner::tests::load_and_clc::mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
+                        lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                            .sum_dim_intlist(1, false, t.kind())
+                            .view((-1, 1))
+                    })
+
+                },
+                false,
+            ).await?;
+            Ok::<(), ThoError>(())
+        }.await;
+        let shutdown_result = cuda_actor.shutdown().await;
+        match (result, shutdown_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
     }
 }
 
@@ -414,18 +434,54 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor() 
             .map(|i| &*format!("resource_{i}").leak())
             .collect::<Vec<_>>();
 
-        run_load_and_clc_ipc_cuda_worker_oom_stage(
-            "test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor",
-            "ipc_load_and_clc_oom_max_parallel_and_splits_id",
-            [3, 100],
-            vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
-            OOMRunnerConfig::MaxParallelAndSplits {
-                max: MAX_PARALLEL,
-                step: *MaxParallelStep::TEN,
-            },
-            resources.as_slice(),
-            false,
-        ).await
+        let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor", pure_module_path!()).await?;
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let result = async {
+            const MUL_K: f64 = 2.;
+            let size = [3, 100];
+            let load_and_clc = Arc::new(LoadAndClcStage::new(
+                LoadAndClcStageId("ipc_load_and_clc_oom_max_parallel_and_splits_id"),
+                MUL_K,
+                vec![NaxParallel(MAX_PARALLEL), FailUntil::MemLimit(12)],
+                size.into(),
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::MaxParallelAndSplits { max: MAX_PARALLEL, step: *MaxParallelStep::TEN },
+                    Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
+                        id,
+                        0,
+                        &size,
+                        (Float, Device::Cpu),
+                        BuildAs::Sum
+                    ).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                ),
+                Float,
+                Device::Cuda(0).into(),
+                true,
+            ).await);
+            run_mul_task_invocations(
+                Arc::clone(&load_and_clc),
+                resources.as_slice(),
+                tho_device_idx,
+                0,
+                |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                move |res, out| {
+                    mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
+                        lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                            .sum_dim_intlist(1, false, t.kind())
+                            .view((-1, 1))
+                    });
+                },
+                false,
+            ).await?;
+            Ok::<(), ThoError>(())
+        }.await;
+        let shutdown_result = cuda_actor.shutdown().await;
+        match (result, shutdown_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
     }
 }
 
@@ -436,21 +492,43 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu() -> Result<(), ThoEr
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
-        run_load_and_clc_ipc_cuda_worker_oom_stage(
-            "test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu",
-            "ipc_load_and_clc_dump_to_cpu_id",
-            [3, 100],
-            vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
-            OOMRunnerConfig::DumpedToCpu {},
-            &[
-                "resource_1",
-                "resource_2",
-                "resource_3",
-                "resource_4",
-                "resource_5",
-            ],
-            true,
-        ).await
+        let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu", pure_module_path!()).await?;
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+        let result = async {
+            const MUL_K: f64 = 2.;
+            let size = [3, 100];
+            let load_and_clc = Arc::new(LoadAndClcStage::new(
+                LoadAndClcStageId("ipc_load_and_clc_dump_to_cpu_id"),
+                MUL_K,
+                vec![NaxParallel(MAX_PARALLEL), FailUntil::DumpedToCpu],
+                size.into(),
+                ClcOOMRunner::new(
+                    OOMRunnerConfig::DumpedToCpu {},
+                    Box::new(move |id| SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(id, 1, &size, (Float, Device::Cpu), BuildAs::Append).expect("single dim output builder").copy_partial_outputs_to_device(0)),
+                ),
+                Float,
+                Device::Cuda(0).into(),
+                false,
+            ).await);
+            run_mul_task_invocations(
+                Arc::clone(&load_and_clc),
+                &["resource_1", "resource_2", "resource_3", "resource_4", "resource_5"],
+                tho_device_idx,
+                0,
+                |_device_idx, _cache_area, name| RunCtxImpl::new(1, name),
+                move |res, out| mul_check(MUL_K, size.into(), res, out, 0.1, 0.1),
+                false,
+            ).await?;
+            assert!(GlobalCtx::global().is_all_on_cpu(tho_device_idx, false), "DumpToCpu OOM recovery should mark the IPC test device as all-on-CPU");
+            Ok::<(), ThoError>(())
+        }.await;
+        let shutdown_result = cuda_actor.shutdown().await;
+        match (result, shutdown_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
     }
 }
 
