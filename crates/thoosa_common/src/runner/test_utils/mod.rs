@@ -99,7 +99,7 @@ impl Select<RangeSelector> for MockDataWithId {
 
     fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
         let mut data = MockData::new();
-        let len = selector.end[0].saturating_sub(selector.start[0]);
+        let len = selector.end[0].saturating_sub(selector.start[0]) as usize;
         data.expect_size().return_const([len]);
 
         let mut with_id = MockWithId::new();
