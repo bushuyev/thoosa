@@ -41,6 +41,9 @@ use thoosa_store::{LimitBy, SqlStore, Store};
 use thoosa_with_data::with_data;
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
 use std::cell::Cell;
+use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
+use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
 
 mod data;
@@ -57,6 +60,15 @@ thread_local! {
 }
 
 fn main() -> Result<(), ThoError>{
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        let rt = tokio::runtime::Builder::new_multi_thread().build()?;
+        rt.block_on(async {
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Device::Cuda(0))).await
+        })?;
+
+        return Ok(());
+    }
+
     tch::set_num_threads(1);
     tch::set_num_interop_threads(1);
 
