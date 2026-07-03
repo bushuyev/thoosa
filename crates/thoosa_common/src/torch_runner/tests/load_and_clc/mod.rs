@@ -541,27 +541,27 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
     let device_idx = 1;
 
     const MUL_K: f64 = 2.;
-    let size = [3, 10];
+    let size = [3, 40];
     let load_and_mut = Arc::new(LoadAndClcStage::new(
         LoadAndClcStageId("load_and_clc_id"),
         MUL_K,
-        vec![FailUntil::MemLimit(12)],
+        vec![FailUntil::MemLimit(12)], //fails until input tensor size (40) is bigger then 12
         size.into(),
         ClcOOMRunner::new(
             OOMRunnerConfig::Splits {},
             Box::new(move |id| {
                 SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
-                    1,
+                    0,
                     &size,
                     (Float, Device::Cuda(0)),
-                    BuildAs::Append,
+                    BuildAs::Sum,
                 ).expect("single dim output builder")
             }),
         ),
         Float,
         Device::Cuda(0).into(),
-        false,
+        true,
     ).await);
 
     run_mul_task_invocations(
@@ -577,7 +577,13 @@ async fn test_load_and_clc_oom_splits_tensor() -> Result<(), ThoError> {
         device_idx,
         |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
         move |res, out| {
-            mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
+            // mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
+
+            mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
+                lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                    .sum_dim_intlist(1, false, t.kind())
+                    .view((-1, 1))
+            })
         },
         true,
     ).await?;
@@ -611,16 +617,16 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
             Box::new(move |id| {
                 SingleDimTensorOutputBuilder::<SynKey, ClcStageOutput>::new(
                     id,
-                    1,
+                    0,
                     &size,
                     (Float, Device::Cuda(0)),
-                    BuildAs::Append,
+                    BuildAs::Sum,
                 ).expect("single dim output builder")
             }),
         ),
         Float,
         Device::Cuda(0).into(),
-        false,
+        true,
     ).await);
 
     run_mul_task_invocations(
@@ -633,7 +639,12 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
         device_idx,
         |_device_idx, _cache_area, _name| RunCtxImpl::new(1, "noname"),
         move |res, out| {
-            mul_check(MUL_K, size.into(), res, out, 0.1, 0.1);
+            mul_check_with_exp_f(MUL_K, res, out.as_ref(), 0.01, 0.01, |k, t| {
+                lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
+                    .sum_dim_intlist(1, false, t.kind())
+                    .view((-1, 1))
+            })
+            ;
         },
         true,
     )

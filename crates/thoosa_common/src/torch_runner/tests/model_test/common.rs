@@ -150,6 +150,10 @@ impl ThoSelector for ABRange {
     fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(vec![self.range.start.dim_0..self.range.end.dim_0])
+    }
 }
 
 impl LocalSelect<ModelTestId, ABRange> for ThoTensor<ABData, ModelTestId> {

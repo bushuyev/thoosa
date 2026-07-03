@@ -55,6 +55,10 @@ impl ThoSelector for WelchChannelsSelector {
     fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(MonoMetrics::<0, 2>::map_to_ranges(&self.0.start, &self.0.end)?.into())
+    }
 }
 
 impl Default for WelchChannelsSelector {

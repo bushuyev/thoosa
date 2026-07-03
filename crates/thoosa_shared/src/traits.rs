@@ -645,6 +645,10 @@ impl Data for (){
 #[typetag::serde(tag = "type")]
 pub trait ThoSelector:Debug + Send + Sync {
     fn clone_box(&self)->Box<dyn ThoSelector>;
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Err(ThoError::new(format!("selector {self:?} cannot be applied directly to a tensor")))
+    }
 }
 
 
@@ -686,6 +690,9 @@ impl ThoSelector for RangeSelector {
         Box::new(RangeSelector(self.0.clone()))
     }
 
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(vec![self.0.start[0] as i64..self.0.end[0] as i64])
+    }
 }
 
 #[typetag::serde(name = "UnitSelector")]
@@ -699,6 +706,10 @@ impl ThoSelector for () {
 impl ThoSelector for Range<i64> {
     fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
+    }
+
+    fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
+        Ok(vec![self.clone()])
     }
 }
 
