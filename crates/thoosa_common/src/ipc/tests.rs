@@ -219,12 +219,6 @@ async fn run_load_and_clc_ipc_cuda_worker_oom_stage(
     let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
 
     let result = async {
-        let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
-        let expected_smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
-        let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
-        assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
-        let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
-        assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
 
         const MUL_K: f64 = 2.;
         let load_and_clc = Arc::new(LoadAndClcStage::new(
@@ -359,6 +353,30 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor()
         ).await
     }
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 16)]
+async fn test_simp_copy() -> Result<(), ThoError> {
+    debug!("test_copy, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+    if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    } else {
+        let _ctx = init_ipc_test("test_simp_copy", pure_module_path!()).await?;
+        let tho_device_idx = 1;
+        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+
+        let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
+        let expected_smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
+        let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
+        assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
+        let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
+        assert!(expected_smoke.allclose(cpu_copy.t_ref(), 0.1, 0.1, false), "IPC worker smoke copy changed tensor values");
+
+        Ok(())
+    }
+}
+
+
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 16)]
 async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), ThoError> {
