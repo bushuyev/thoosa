@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use log::debug;
+use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::VoidSelector;
 use thoosa_with_data::with_data;
@@ -9,10 +10,10 @@ use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx_2::RunCtxImpl;
-use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
+use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStage, ABClcSyncStageInput, ABClcSyncStageInputWrapperSelector};
 // use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
-use crate::torch_runner::tests::composite_input::loader_a::AStageInput;
-use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
+use crate::torch_runner::tests::composite_input::loader_a::{AStageInput, AStageOutput};
+use crate::torch_runner::tests::composite_input::loader_b::{BStageInput, BStageOutput};
 // use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
 // use crate::torch_runner::tests::load_and_clc::LoadAndClcStage;
 
@@ -98,5 +99,39 @@ where
     assert_eq!(value, 200.3);
     assert_eq!(num_calls(), 1);
 
+    Ok(())
+}
+
+
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_ab_clc_sync_with_selector() -> Result<(), ThoError> {
+    GlobalCtx::init_devices(2);
+    let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+    let ab_stage = Arc::new(ABClcStage::new());
+
+    ab_clc_sync_with_selector(ab_stage).await?;
+
+    Ok(())
+}
+
+pub async fn ab_clc_sync_with_selector<S>(ab_stage: Arc<ABClcStage<S>>) -> Result<(), ThoError>
+where
+    S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
+    for<'f> S: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+{
+    let mut run_ctx = RunCtxImpl::new(1, "root");
+    let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+    let ab_clc_sync = Arc::clone(&ab_stage.ab_clc_sync); //Arc::new(ABClcSyncStage::new());
+    let a_out = AStageOutput::new("01".into(), Tensor::from_slice(&[0., 1., 2.]))?;
+    let b_out = BStageOutput::new("02".into(), Tensor::from_slice(&[3., 4., 5.]))?;
+    let input = Arc::new(ab_clc::ABClcSyncStageInputWrapper::new(a_out, b_out));
+
+    let r = cuda_actor.run_stage(Arc::clone(&ab_clc_sync), Arc::clone(&input), None, 1, &run_ctx).await?; // ((0+3) + (1+4) + (2+5))/3
+    assert_eq!(5.0, r.value);
+
+    let r = cuda_actor.run_stage(ab_clc_sync, input, Some(ABClcSyncStageInputWrapperSelector::new(2, 2)), 1, &run_ctx).await?; // ((0+3) + (1+4)) / 2
+    assert_eq!(4.0, r.value);
     Ok(())
 }
