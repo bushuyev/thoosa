@@ -614,7 +614,7 @@ mod tests {
     use thoosa_common::dims::ChannelsData;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::runnable::{AsyncStage, SyncStage};
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
@@ -630,7 +630,7 @@ mod tests {
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_with_data::with_data;
+    use crate::tasks::stft::SyncStftSelector;
 
     #[tokio::test]
     async fn test_band_pass() ->Result<(), ThoError> {
@@ -729,12 +729,13 @@ mod tests {
         let adjuster = find_motifs_run_config.input_len_adjuster();
 
 
-        with_data!(ctx.branch(false), r; |ctx, r:&ThoTensor<ChannelsData, SynKey>|{
+        {
+            let r = r.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             debug!("filter r={r:?}");
             assert_eq!(r.t_ref().size()[0], size[0]);
             assert_eq!(r.t_ref().size()[1] as u32, adjuster(size[1] as u32));
             Ok::<_, ThoError>(())
-        })?;
+        }?;
 
         Ok(())
     }

@@ -198,7 +198,7 @@ mod tests {
     use tch::{Device, IndexOp, TchError, Tensor};
     use tempfile::NamedTempFile;
     use thoosa_common::dims::Spectorgram;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
@@ -211,7 +211,7 @@ mod tests {
     use thoosa_common::ws::Workspace;
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{import_resources, Cli};
-    use thoosa_main::tasks::stft::Stft;
+    use thoosa_main::tasks::stft::{Stft, SyncStftSelector};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::clc_d2_similarity_and_mask;
     use thoosa_motifs::find::{plot_resource, SelectMotifsParams};
@@ -220,7 +220,6 @@ mod tests {
     use thoosa_shared::{cdt_for_dir, recurse_files, sin_v_f, ResourceType, ThoError};
     use thoosa_shared::comp_id::SynKey;
     use thoosa_store::SqlStore;
-    use thoosa_with_data::with_data;
 
     #[ctor::ctor]
     fn init() {
@@ -467,8 +466,9 @@ mod tests {
         let mut ctx = RunCtxImpl::new(1, "plot_spec");
         let spec = stft.run(Arc::new(DevicesWrap::wrap(ThoTensor::new("".into(), t)?)), ctx.branch(false)).await?;
 
-        with_data!(ctx.branch(false), spec; |_, spec:&ThoTensor<Spectorgram, SynKey>|{
-            let spec = spec.as_ref();
+        {
+            let spec = spec.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let spec = spec.as_ref().as_ref();
             debug!("spec = {spec:?}");
             plot_spectrogram(
                 &spec.squeeze_dim(0),
@@ -477,8 +477,8 @@ mod tests {
                 600,
             )?;
 
-            Ok(())
-        })?;
+            Ok::<(), ThoError>(())
+        }?;
         Ok(())
     }
 }

@@ -958,7 +958,7 @@ async fn test_with_tho_tensor() -> Result<(), ThoError> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 async fn test_with_data() -> Result<(), ThoError> {
-    async fn load_/*from_any_device_*/(i: i32) -> i32 { // load_steps invoked from with_data! crates/thoosa_macros/thoosa_with_data/src/lib.rs:143
+    async fn load_/*from_any_device_*/(i: i32) -> i32 { // load steps invoked while borrowing cached data
         i * 10
     }
 
@@ -983,7 +983,7 @@ async fn test_with_data() -> Result<(), ThoError> {
             let resume = Arc::clone(&resume_for_batch);
 
             async move {
-                let guard = full_access_to_gpu_for_batch.read().await;//1 permit saved into ctx if there are no max_parallel yet at crates/thoosa_macros/thoosa_with_data/src/lib.rs:127
+                let guard = full_access_to_gpu_for_batch.read().await;//1 permit saved into ctx if there are no max_parallel yet
                 started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let data = load_(i).await;
 

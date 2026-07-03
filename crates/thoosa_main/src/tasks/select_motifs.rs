@@ -46,7 +46,6 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{hump, Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_store::{IdSlice, Store};
-use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};

@@ -22,7 +22,6 @@ use thoosa_named_derive::Named;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_with_data::with_data;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
 

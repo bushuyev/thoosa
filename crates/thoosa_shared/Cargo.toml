@@ -18,7 +18,6 @@ ogg-error = ["dep:ogg"]
 hound-error = ["dep:hound"]
 
 [dependencies]
-thoosa_with_data = {path  = "../thoosa_macros/thoosa_with_data"}
 cached_derive = {path  = "../thoosa_macros/cached_derive"}
 ctor = "0.2.6"
 bytemuck.workspace = true

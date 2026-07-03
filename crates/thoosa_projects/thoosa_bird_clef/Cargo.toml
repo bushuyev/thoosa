@@ -6,7 +6,6 @@ edition.workspace = true
 
 [dependencies]
 thoosa_common = {path = "../../thoosa_common" }
-thoosa_with_data = {path = "../../thoosa_macros/thoosa_with_data" }
 thoosa_motifs = {path = "../../thoosa_motifs" }
 thoosa_store = {path = "../../thoosa_store" }
 thoosa_shared = {path = "../../thoosa_shared", features = ["tch-error", "serde-json-error", "serde-json5-error", "polars-error", "lewton-error", "ogg-error", "hound-error"] }

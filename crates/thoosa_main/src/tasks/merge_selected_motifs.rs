@@ -21,7 +21,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_store::{IdSlice, Store};
-use thoosa_with_data::with_data;
 
 use crate::tasks::motif_loader::MotifLoaderInput;
 use crate::tasks::motif_stats::{MotifStatsInput, MotifStatsOutput};

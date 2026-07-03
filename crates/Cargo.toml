@@ -15,14 +15,13 @@ members = [
     "thoosa_macros/thoosa_dummy_data_derive",
     "thoosa_macros/thoosa_properties_map",
     "thoosa_macros/thoosa_properties_map_derive",
-    "thoosa_macros/thoosa_with_data",
     "thoosa_macros/macros_tests",
     "thoosa_macros/cached_derive",
     "thoosa_macros/thoosa_named_derive",
     "thoosa_projects/thoosa_hbac",
     "thoosa_projects/thoosa_bird_clef",
     "thoosa_macros/macros_tests",
-    "thoosa_shims", "thoosa_macros/thoosa_with_data",
+    "thoosa_shims",
 ]
 
 [workspace.package]

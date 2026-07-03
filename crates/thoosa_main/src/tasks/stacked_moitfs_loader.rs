@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
+use futures_util::future::try_join_all;
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use tch::Kind::Float;
@@ -10,7 +11,7 @@ use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use thoosa_common::dims::MotifSlices;
 use thoosa_named_derive::Named;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_device::ThoDevice;
@@ -23,12 +24,12 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::{collect_futures_with_progress, mono_key, sample_n_owned, CopyToDevice, FuturesOrdering, ThoError};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, MonoMetrics, Select, WithId};
 use thoosa_store::Store;
-use thoosa_with_data::with_data;
 use thoosa_common::tho_tensor::ThoTensor;
 use crate::tasks::cross_dims::ChannelsMotifsSlices;
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::tracked_await::track_await;
 
@@ -125,6 +126,14 @@ impl WithId for StackedMotifsOutput {
 }
 
 impl Output for StackedMotifsOutput {}
+
+impl Select<SyncStftSelector> for StackedMotifsOutput {
+    type Output = Self;
+
+    fn subview(&self, selector: SyncStftSelector) -> Result<Self::Output, ThoError> {
+        Ok(Self { id: self.id.clone(), motifs: self.motifs.subview(selector)? })
+    }
+}
 
 ///loads motif slices found during initial find motifs stage. Used from SelectMotifs - slices added there are not loaded
 #[derive(Debug, Cached, Named)]
@@ -247,7 +256,9 @@ where
         .flatten()
         .collect::<Vec<_>>();
 
-        with_data!(ctx.branch(false), [loaded_motifs];|_ctx, data:&[&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>]|{
+        let data_refs = try_join_all(loaded_motifs.iter().map(|motif| motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
+        let data = data_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
+        {
 
             let channels_motifs = data.iter().fold(
 
@@ -340,7 +351,7 @@ where
                 ),
             ))))
 
-        })
+        }
 
     }
 
