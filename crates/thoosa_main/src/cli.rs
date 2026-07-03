@@ -486,13 +486,13 @@ where
     let tensors_path_for_loader = tensors_path.clone();
 
     // Creates CPU plus GPU device wrappers for the async runner. Big tensors crossing awaits should remain in run_cached/TmpCached so OOM handling can dump them to CPU.
-    if tch::Cuda::is_available() {
-        kick_register_cuda_hooks();
-        // thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![]).await?;
-    } else {
-        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(1);
-    }
+    // if tch::Cuda::is_available() {
+    //     kick_register_cuda_hooks();
+    //     // thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+    //     thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![]).await?;
+    // } else {
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+    // }
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
     let metrics = Handle::current().metrics();
