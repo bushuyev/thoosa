@@ -143,6 +143,10 @@ impl ThoSelector for SyncStftSelector {
     fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
+
+    fn tensor_ranges(&self) -> Result<Vec<std::ops::Range<i64>>, ThoError> {
+        Ok(vec![])
+    }
 }
 
 impl Adjustable for SyncStftSelector {}
