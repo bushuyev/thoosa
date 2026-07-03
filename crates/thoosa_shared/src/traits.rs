@@ -672,13 +672,13 @@ impl Deref for VoidSelector {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct RangeSelector(Range<[usize; 1]>);
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct RangeSelector(pub Range<[i64; 1]>);
 
 impl Adjustable for RangeSelector {}
 
 impl Deref for RangeSelector {
-    type Target = Range<[usize; 1]>;
+    type Target = Range<[i64; 1]>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -691,7 +691,7 @@ impl ThoSelector for RangeSelector {
     }
 
     fn tensor_ranges(&self) -> Result<Vec<Range<i64>>, ThoError> {
-        Ok(vec![self.0.start[0] as i64..self.0.end[0] as i64])
+        Ok(vec![self.0.start[0]..self.0.end[0]])
     }
 }
 

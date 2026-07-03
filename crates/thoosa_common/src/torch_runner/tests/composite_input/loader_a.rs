@@ -1,8 +1,9 @@
 use std::sync::Arc;
 use async_trait::async_trait;
 use tch::kind::FLOAT_CPU;
-use tch::Tensor;
+use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
+use thoosa_common::dims::LocalSelect;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -10,7 +11,7 @@ use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::traits::{Data, RangeSelector, Select, WithId};
 use thoosa_with_data::with_data;
 use crate::dims::MotifSlices;
 use crate::runner::common::cachable::DevicesWrap;
@@ -20,6 +21,8 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::composite_input::dims::AStageOutputDims;
 use crate as thoosa_common;
+use crate::runner::oom_handler::test_types::TestInput;
+use crate::runner::test_utils::DummyTensor;
 use crate::torch_runner::tests::composite_input::A_STAGE_ID;
 
 #[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
@@ -64,6 +67,42 @@ pub(super) struct AStageOutput {
     id: SynKey,
     pub(super) value:ThoTensor<AStageOutputDims, ()>,
 }
+
+impl AStageOutput {
+    pub(super) fn new(id: SynKey, tensor: Tensor) -> Result<Arc<DevicesWrap<Self>>, ThoError> {
+        Ok(Arc::new(DevicesWrap::wrap(
+            AStageOutput{
+                id,
+                value: ThoTensor::new((), tensor)?,
+            }
+        )))
+    }
+}
+
+impl Select<RangeSelector> for AStageOutput {
+    type Output = AStageOutput;
+
+    fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
+        Ok(AStageOutput {
+            id: self.id.clone(),
+            // value: ThoTensor::new((), self.value.as_ref().i(selector.start[0] as i64..selector.end[0] as i64).copy().into())?
+            value: self.value.subview(selector)?,
+        })
+    }
+}
+
+impl LocalSelect<(), RangeSelector> for ThoTensor<AStageOutputDims, ()> {
+    type Output = ThoTensor<AStageOutputDims, ()>;
+
+    fn local_subview(id: &(), t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
+        ThoTensor::new(
+            (),
+            t.i(selector.start[0]..selector.end[0]).copy().into()
+        )
+    }
+}
+
+
 
 impl WithId for AStageOutput {
     type ID = SynKey;
@@ -139,12 +178,8 @@ impl AsyncStage for AStage  {
 
         let id = self.out_id(input.id());
 
-        Ok(Arc::new(DevicesWrap::wrap(
-            AStageOutput{
-                id,
-                value: ThoTensor::new((), tensor)?,
-            }
-        )))
+
+        AStageOutput::new(id, tensor)
 
     }
 }

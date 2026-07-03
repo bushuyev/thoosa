@@ -639,7 +639,7 @@ mod composite_input {
     use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::torch_runner::tests::composite_input::AB_SYNC_CLC_STAGE_ID;
+    use crate::torch_runner::tests::composite_input::{ab_clc_sync_with_selector, AB_SYNC_CLC_STAGE_ID};
     use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageOutput, ABClcSyncStage, ABClcSyncStageInput};
     use crate::torch_runner::tests::composite_input::dims::{AStageOutputDims, BStageOutputDims};
     use crate::torch_runner::tests::composite_input::run_ab_clc_with_stage;
@@ -773,6 +773,30 @@ mod composite_input {
             let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
 
             let result = run_ab_clc_with_stage(ab_stage, move || sync_stage_calls.num_calls()).await;
+            let shutdown_result = cuda_actor.shutdown().await;
+
+            match (result, shutdown_result) {
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), _) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn test_ipc_ab_clc_sync_with_selector() -> Result<(), ThoError> {
+        debug!("test_ipc_ab_clc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+        if std::env::var_os(IPC_SOCK_ENV).is_some() {
+            CudaWorker::run_worker(sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+        } else {
+            let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
+            let sync_stage = Arc::new(ProxyABClcSyncStage::new().await?);
+            let sync_stage_calls = Arc::clone(&sync_stage);
+            let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
+
+            let result = ab_clc_sync_with_selector(ab_stage).await;
             let shutdown_result = cuda_actor.shutdown().await;
 
             match (result, shutdown_result) {

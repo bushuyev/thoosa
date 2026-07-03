@@ -14,7 +14,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, Select, ThoSelector, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, RangeSelector, Select, ThoSelector, VoidSelector, WithId};
 use thoosa_with_data::with_data;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -33,7 +33,7 @@ use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_S
 use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput, BStageOutput};
 
 #[derive(Debug, Named, Clone)]
-pub(crate) struct ABClcStageInput {
+pub struct ABClcStageInput {
     id:SynKey,
     from_a:Arc<AStageInput>,
     from_b:Arc<BStageInput>,
@@ -62,7 +62,7 @@ impl WithId for ABClcStageInput {
 impl Input for ABClcStageInput {}
 
 #[derive(Debug, Named, Clone, DummyData, Serialize, Deserialize)]
-pub(crate) struct ABClcStageOutput {
+pub struct ABClcStageOutput {
     id:SynKey,
     pub(super) value:f32
 }
@@ -98,7 +98,7 @@ impl thoosa_shared::CopyToDevice for ABClcStageOutput {
 
 
 #[derive(Debug, Named, Cached)]
-pub(crate) struct ABClcStage<S = ABClcSyncStage>
+pub struct ABClcStage<S = ABClcSyncStage>
 where
     S: SyncStage + Adjustable + OutId + Send + Sync + 'static,
     S::Ctx: Adjustable + Send + Sync + 'static,
@@ -107,7 +107,7 @@ where
     id:MonoKey,
     a_stage:Arc<AStage>,
     b_stage:Arc<BStage>,
-    ab_clc_sync:Arc<S>
+    pub ab_clc_sync:Arc<S>
 }
 
 
@@ -149,7 +149,7 @@ where
 }
 
 #[derive(Debug)]
-struct ABClcSyncStageInputWrapper {
+pub struct ABClcSyncStageInputWrapper {
     id:SynKey,
     a_out:Arc<DevicesWrap<AStageOutput>>,
     b_out:Arc<DevicesWrap<BStageOutput>>
@@ -169,15 +169,24 @@ impl ABClcSyncStageInputWrapper {
 impl BorrowRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
     type Out<'a> = ABClcSyncStageInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         ABClcSyncStageInputWrapperSelector: 'a,
         Self: 'a,
     {
         async move {
-            let from_a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
-            let from_b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
-            Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
+            match selector{
+                None => {
+                    let from_a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
+                    let from_b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
+                    Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
+                }
+                Some(selector) => {
+                    let from_a = self.a_out.borrow_to(to_device_idx, Some(selector.a_select)).await?;
+                    let from_b =  self.b_out.borrow_to(to_device_idx, Some(selector.b_select)).await?;
+                    Ok(ABClcSyncStageInput::from_data_refs(from_a, from_b))
+                }
+            }
         }
     }
 }
@@ -191,7 +200,19 @@ impl WithId for ABClcSyncStageInputWrapper {
     }
 }
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct ABClcSyncStageInputWrapperSelector {}
+pub struct ABClcSyncStageInputWrapperSelector {
+    a_select:RangeSelector,
+    b_select:RangeSelector
+}
+
+impl ABClcSyncStageInputWrapperSelector {
+    pub fn new(a_end:i64, b_end:i64) -> Self {
+        Self {
+            a_select: RangeSelector([0i64]..[a_end]),
+            b_select: RangeSelector([0i64]..[b_end])
+        }
+    }
+}
 
 #[typetag::serde]
 impl ThoSelector for ABClcSyncStageInputWrapperSelector {fn clone_box(&self) -> Box<dyn ThoSelector> {
@@ -300,7 +321,7 @@ impl WithId for ABClcSyncStageInput<'_> {
 }
 
 #[derive(Debug)]
-pub(crate) struct ABClcSyncStageInput<'a> {
+pub struct ABClcSyncStageInput<'a> {
     id:SynKey,
     from_a:ThoDataRef<'a, AStageOutput>,
     from_b:ThoDataRef<'a, BStageOutput>,

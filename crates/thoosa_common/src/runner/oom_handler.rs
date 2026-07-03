@@ -901,7 +901,7 @@ pub mod test_types {
         fn subview(&self, selector: RangeSelector) -> Result<Self::Output, ThoError> {
             Ok(TestInput {
                 id: self.id.clone(),
-                data: DummyTensor(self.data.0[selector.start[0]..selector.end[0]].to_vec())//.0[selector.start..selector.end])
+                data: DummyTensor(self.data.0[selector.start[0] as usize..selector.end[0] as usize].to_vec())//.0[selector.start..selector.end])
             })
         }
     }
