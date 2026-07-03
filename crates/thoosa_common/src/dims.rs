@@ -28,7 +28,7 @@ where
             ThoTensorInner::Val { t } => {
                 Self::local_subview(self.id(), t, selector)
             }
-            ThoTensorInner::Ref { key, size, kind, .. } => {//TOO compose with 'parent' selector ?
+            ThoTensorInner::Ref { key, size, kind, .. } => {//TODO compose with 'parent' selector ?
                 Ok(ThoTensor::new_ref(self.id().clone(), *key, size.clone(), *kind, Some(Box::new(selector) as Box<dyn ThoSelector>)))
             }
         }

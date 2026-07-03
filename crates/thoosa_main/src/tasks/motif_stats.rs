@@ -691,7 +691,7 @@ impl WithId for MotifStatsOutput {
 }
 
 impl Output for MotifStatsOutput {}
-
+//TODO add generic PlainWrapper implementing CachedPurgeOutput
 impl CachedPurgeOutput for MotifStatsOutput {
     fn dump_to_cpu<'a>(&'a self, _device_idx: usize) -> futures_util::future::BoxFuture<'a, Result<(), ThoError>> {
         Box::pin(async { Ok(()) })
