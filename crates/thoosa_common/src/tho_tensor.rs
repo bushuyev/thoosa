@@ -415,6 +415,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
 
+    //selector is used to fetch a chunk of data in a data-specific way when handling OOM. Here it's only to
     pub fn selector(&self)->Option<Box<dyn ThoSelector>> {
         match &self.inner {
             ThoTensorInner::Val { .. } => {
