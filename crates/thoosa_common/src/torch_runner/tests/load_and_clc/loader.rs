@@ -117,6 +117,10 @@ impl ThoSelector for LoadedRange {
     fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
+
+    fn tensor_ranges(&self) -> Result<Vec<std::ops::Range<i64>>, ThoError> {
+        Ok(MonoMetrics::<1, 2>::map_to_ranges(&self.range.start, &self.range.end)?.into())
+    }
 }
 
 impl From<std::ops::Range<MonoMetrics<1, 2>>> for LoadedRange {
@@ -138,6 +142,7 @@ impl LoadedTensor {
         k: &ThoTensor<MulK, SimpleId>,
     ) -> Result<ThoTensor<ClcStageOutput, SynKey>, ThoError> {
 
+        debug!("LoadedTensor::clc_hadamard: loaded={loaded:?} k={k:?}");
         ThoTensor::new( id,loaded.t_ref().multiply(&k.as_ref()))
 
     }

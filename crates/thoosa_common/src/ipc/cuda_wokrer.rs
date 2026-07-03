@@ -14,11 +14,11 @@ use tch::Tensor;
 use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
-use thoosa_shared::traits::{Named, Select, ThoSelector};
+use thoosa_shared::traits::Named;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
-use crate::dims::{Dims, LocalSelect};
+use crate::dims::Dims;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -369,23 +369,34 @@ where
         let input_tensor = tokio::task::block_in_place(|| {
             let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
 
-            let tensor = tensors
+            let source = tensors
                 .get(&input_key)
-                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?
-                .shallow_clone();
+                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
+            let mut tensor = source.f_alias()?;
 
-            let tensor:ThoTensor= match input_ref.selector() {
-                None => {tensor.into()}
-                Some(selector) => {
-                    Into::<ThoTensor>::into(tensor).subview(*selector)?
+            if let Some(selector) = input_ref.selector() {
+                let ranges = selector.tensor_ranges()?;
+                if ranges.len() > tensor.dim() {
+                    return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
                 }
-            };
+                for (dim, range) in ranges.into_iter().enumerate() {
+                    let dim_size = tensor.size()[dim];
+                    if range.start < 0 || range.end < range.start {
+                        return Err(ThoError::new(format!("selector {selector:?} has invalid range {range:?} for dimension {dim}")));
+                    }
+                    let end = range.end.min(dim_size);
+                    if range.start > end {
+                        return Err(ThoError::new(format!("selector {selector:?} starts outside dimension {dim} with size {dim_size}")));
+                    }
+                    tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
+                }
+            }
 
 
             Ok::<_, ThoError>(tensor)
 
         })?;
-        Ok(input_tensor)
+        ThoTensor::new(input_ref.id().clone(), input_tensor)
     }
 }
 
