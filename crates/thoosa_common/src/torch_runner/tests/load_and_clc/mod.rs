@@ -400,7 +400,7 @@ pub(crate) fn mul_check(
     })
 }
 
-fn mul_check_with_exp_f<F>(
+pub fn mul_check_with_exp_f<F>(
     mul_k: f64,
     res: &str,
     result: &ThoTensor<ClcStageOutput, SynKey>,
@@ -643,8 +643,7 @@ async fn test_load_and_clc_oom_max_parallel_and_splits_tensor() -> Result<(), Th
                 lin_for_size(k, size, t.kind(), &t.device()) //same as in SyncTestTensorLoader::do_run
                     .sum_dim_intlist(1, false, t.kind())
                     .view((-1, 1))
-            })
-            ;
+            });
         },
         true,
     )
