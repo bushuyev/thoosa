@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
+use futures_util::future::try_join_all;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use log::{debug, trace, warn};
@@ -17,7 +18,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{LabelNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunConfigId;
@@ -319,10 +320,11 @@ where
         if label_outputs.is_empty() {
             Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.tho_device_idx()).into())) )?)))
         } else {
-            let tensor = with_data!(ctx, [label_outputs]; |_ctx, outs:&[&ThoTensor<LabelProbability, SynKey>]|{
+            let outs = try_join_all(label_outputs.iter().map(|o|o.borrow_to(ctx.tho_device_idx(), None))).await?;
+
 
                 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run/stack"))]
-                fn _stack(outs:&[&ThoTensor<LabelProbability, SynKey>]) -> Result<Tensor, ThoError> {
+                fn _stack(outs:&[ThoDataRef<ThoTensor<LabelProbability, SynKey>>]) -> Result<Tensor, ThoError> {
                         Ok(Tensor::f_stack(
                             outs.iter()
                                 .map(|o| {
@@ -335,9 +337,8 @@ where
                         )?)
                 }
 
-                ThoTensor::new(out_id, _stack(outs)?)
+            let tensor =  ThoTensor::new(out_id, _stack(&outs)?)?;
 
-            })?;
 
             #[cfg(debug_assertions)]
             debug!("ApplyLabelNets::run: done, input={input_debug:?}");

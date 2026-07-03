@@ -4,6 +4,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Duration;
 use async_trait::async_trait;
+use futures_util::future::{join_all, try_join_all};
 use log::{error, warn};
 use mockall_double::double;
 use parking_lot::{Mutex, RwLock};
@@ -44,7 +45,7 @@ use crate::tasks::apply_motif_nets::{BatchAppliedMotifNets, BatchAppliedMotifNet
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
-use crate::tasks::stft::SyncStft;
+use crate::tasks::stft::{SyncStft, SyncStftSelector};
 
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
@@ -286,7 +287,13 @@ where
 
             let ctx_for_data = ctx.branch(false);
             let res = track_await(cuda_actor.exec_sync_stage(move |stream| async move {
-                let res = with_data!(ctx_for_data, input, [kernels], [alphas], [betas]; |_ctx, input:&ThoTensor<ChannelsData, SynKey>, kernels: &[&ThoTensor<AnyDims, SynKey>], alphas: &[&ThoTensor<AnyDims, SynKey>], betas: &[&ThoTensor<AnyDims, SynKey>]|{
+                let tho_device_idx = ctx_for_data.tho_device_idx();
+
+                let input = input.borrow_to(tho_device_idx, None::<VoidSelector>).await?;
+                let kernels = try_join_all(kernels.iter().map(|kernel| kernel.borrow_to(tho_device_idx, None::<SyncStftSelector>))).await?;
+                let alphas = try_join_all(betas.iter().map(|alpha| alpha.borrow_to(tho_device_idx, None::<SyncStftSelector>))).await?;
+                let betas = try_join_all(betas.iter().map(|beta| beta.borrow_to(tho_device_idx, None::<SyncStftSelector>))).await?;
+
                     debug!("ApplyCosine2DMotifNets::run: input={input:?}");
                     let stream_ref = stream.as_ref().ok_or_else(|| ThoError::new("ApplyCosine2DMotifNets::run requires a local CUDA stream"))?;
                     let _guard = ThoStreamGuard::new(stream_ref)?;
@@ -344,9 +351,9 @@ where
 
                          apply_cosine_kernel_bank_to_batched_spectrogram(
                            &stft_t.unsqueeze(1),
-                           kernels[tensors_idx].as_ref(),
-                           alphas[tensors_idx].as_ref(),
-                           betas[tensors_idx].as_ref(),
+                           kernels[tensors_idx].as_ref().as_ref(),
+                           alphas[tensors_idx].as_ref().as_ref(),
+                           betas[tensors_idx].as_ref().as_ref(),
                            CosineConv2dBankConfig::default()
                         ).and_then(|v|{
                             let unbound = v.f_squeeze_dim(2)?.f_unbind(1)?;
@@ -360,8 +367,7 @@ where
 
                     debug!("ApplyCosine2DMotifNets::run: motifs_applied={motifs_applied:?}");
 
-                    Ok(motifs_applied)
-                })?;
+                    let res = motifs_applied;
 
                 Ok(ExecSyncStageActionResult::Sync { stream, out: res })
             })).await?;

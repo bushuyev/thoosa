@@ -38,7 +38,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_common::runner::common::cachable::{Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -912,7 +912,7 @@ where
         let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        let resource_slices = with_data!(ctx.branch(false), raw_tensor; |_ctx, raw_tt:&ThoTensor<ChannelsData, SynKey>| {
+        let raw_tt = raw_tensor.borrow_to(ctx.tho_device_idx(), None::<VoidSelector>).await?;
             let resource_id = resource_id;
             let resource_slice_count = slices.len() as i64;
             let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
@@ -937,15 +937,14 @@ where
 
             debug!("load_random_slices: resource_id={resource_id} with_data_done");
 
-            if slice_i == 0 {
+            let resource_slices = if slice_i == 0 {
                 Ok::<_, ThoError>(None)
             } else {
                 Ok::<_, ThoError>(Some(ThoTensor::new(
                     mono_key!(resource_id, format!("random_slices_resource_id={resource_id}")).into(),
                     motif_t.t_ref().f_i((.., 0..slice_i, ..))?,
                 )?))
-            }
-        })?;
+            }?;
 
         if let Some(resource_slices) = resource_slices {
             tmp_cache.insert(resource_slices);
