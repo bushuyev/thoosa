@@ -25,7 +25,6 @@ use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, ThoSelector, VoidSe
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::Store;
-use thoosa_with_data::with_data;
 
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;

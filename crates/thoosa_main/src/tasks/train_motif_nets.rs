@@ -18,7 +18,7 @@ use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use tch::Kind::Float;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -49,7 +49,6 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read
 use thoosa_shared::traits::{Adjustable, Data, DataId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_store::Store;
-use thoosa_with_data::{with_data, with_data_on_str};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
@@ -57,7 +56,7 @@ use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, Rando
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::stage_ids::TRAIN_MOTIF_NETS;
 use thoosa_common::stages_seq::ABStage;
-use crate::tasks::stft::Stft;
+use crate::tasks::stft::{Stft, SyncStftSelector};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 use thoosa_shared::tracked_await::track_await;
@@ -439,9 +438,11 @@ where
                                 ))));
                                 let motif_meta = motif_meta.clone();
                                 async move {
-                                    let stft_input = with_data!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                    let stft_input = {
+                                        let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                                        let motif = motif_ref.as_ref();
                                         copy_motif(motif.data())
-                                    })?;
+                                    }?;
 
                                     let motif_specs = track_await(run_stft_as_motif_slices(
                                         &stft,
@@ -501,13 +502,15 @@ where
                                     let params = MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone());
 
 
-                                    let cosine_motif = Some(with_data!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                    let cosine_motif = Some({
+                                        let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                                        let motif = motif_ref.as_ref();
 
                                         let src = motif.data().as_ref();
                                         let mut dst = src.f_zeros_like()?;
                                         dst.f_copy_(&src)?;
                                         Ok::<_, ThoError>(Arc::new(ThoTensor::<MotifSlices, SynKey>::new(motif.id().clone(), dst)?))
-                                    })?);
+                                    }?);
 
 
                                     Ok((params.motif_net(cosine_motif)?.build_tch_module(&vs.lock().root())?, params))
@@ -517,9 +520,11 @@ where
                                     debug!("TrainMotifNets::run: motif_id={} motif_width={motif_width}", motif_id_rate.0);
 
 
-                                    let stft_input = with_data!(ctx.branch(false), Arc::clone(&motif); |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+                                    let stft_input = {
+                                        let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                                        let motif = motif_ref.as_ref();
                                         copy_motif(motif.data())
-                                    })?;
+                                    }?;
 
                                     let motif_specs = track_await(run_stft_as_motif_slices(
                                         &stft,
@@ -636,8 +641,9 @@ where
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
 
-        let ctx_for_split = ctx.branch(false);
-        with_data!(ctx_for_split, motif; |_ctx, motif:&DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>|{
+        {
+            let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let motif = motif_ref.as_ref();
             let motif_meta = motif.extra().clone();
 
             let num_motif_slices = motif.data().t_ref().size()[0];
@@ -678,7 +684,7 @@ where
                 batch_size: batch_size as u32,
                 epoch_size,
             })
-        })
+        }
     }
 
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
@@ -687,7 +693,9 @@ where
 
         debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
 
-        with_data!(ctx.branch(false), motifs, random_slices; |_ctx, motifs:&ThoTensor<MotifSlices, SynKey>, random_slices:&ThoTensor<MotifSlices, SynKey>|{
+        {
+            let motifs = motifs.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let random_slices = random_slices.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
 
             // TODO(perf): make_batch_with is called twice for every train batch and does heavy random/mixup tensor setup; prebuild reusable mixed batches per epoch when memory allows.
@@ -721,7 +729,7 @@ where
             debug!("MotifsBatch::train_batch: x={x:?} y={y:?}");
 
             Ok::<_, ThoError>((x.into(), y))
-        })
+        }
     }
 
     async fn current_random_slices(&self, mut ctx: C) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, ThoError> {
@@ -850,7 +858,6 @@ mod tests {
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
-    use thoosa_with_data::with_data;
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_common::dims::MotifSlices;

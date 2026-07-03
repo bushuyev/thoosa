@@ -40,7 +40,6 @@ thoosa_shims = {path = "../thoosa_shims" }
 thoosa_run_config_args = {path = "../thoosa_macros/thoosa_run_config_args" }
 thoosa_run_config_args_derive = {path = "../thoosa_macros/thoosa_run_config_args_derive" }
 cached_derive = {path = "../thoosa_macros/cached_derive" }
-thoosa_with_data = {path = "../thoosa_macros/thoosa_with_data" }
 thoosa_named_derive = {path = "../thoosa_macros/thoosa_named_derive" }
 
 

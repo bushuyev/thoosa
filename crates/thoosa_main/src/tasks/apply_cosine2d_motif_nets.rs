@@ -39,7 +39,6 @@ use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, FuturesOrdering, ThoError};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, VoidSelector, WithId};
 use thoosa_store::{Store, TrainedNet};
-use thoosa_with_data::with_data;
 use crate::ApplyMotifNets;
 use crate::tasks::apply_motif_nets::{BatchAppliedMotifNets, BatchAppliedMotifNetsInput};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;

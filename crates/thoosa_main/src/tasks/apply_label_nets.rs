@@ -26,9 +26,9 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
 use thoosa_store::{Store, TrainedNet};
-use thoosa_with_data::with_data;
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_shared::tracked_await::track_await;
@@ -271,10 +271,11 @@ where
                 async move {
 
                     #[cfg(test)]{
-                        with_data!(ctx.branch(false), input; |ctx, input:&ThoTensor<ChannelsData, SynKey>|{
-                            trace!("ApplyLabelNets::run: input=\n{}", input.as_ref());
-                            Ok(())
-                        })?;
+                        {
+                            let input = input.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            trace!("ApplyLabelNets::run: input=\n{}", input.as_ref().as_ref());
+                            Ok::<(), ThoError>(())
+                        }?;
                     }
 
                     //gpt First apply motif nets to the raw input to produce motif probabilities used by label nets.
@@ -284,20 +285,22 @@ where
 
 
                     #[cfg(test)]{
-                        with_data!(ctx.branch(false), motif_probs; |ctx, probs:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
-                            trace!("ApplyLabelNets::run: probs=\n{}", probs.data().as_ref());
-                            Ok(())
-                        })?;
+                        {
+                            let probs = motif_probs.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            trace!("ApplyLabelNets::run: probs=\n{}", probs.as_ref().data().as_ref());
+                            Ok::<(), ThoError>(())
+                        }?;
                     }
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
                     let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = apply_label_net.run(motif_probs, ctx.branch(false)).await?;
 
                     #[cfg(test)]{
-                        with_data!(ctx.branch(false), result; |ctx, result:&ThoTensor<LabelProbability, SynKey>|{
-                            trace!("ApplyLabelNets::run: result=\n{}", result.as_ref());
-                            Ok(())
-                        })?;
+                        {
+                            let result = result.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            trace!("ApplyLabelNets::run: result=\n{}", result.as_ref().as_ref());
+                            Ok::<(), ThoError>(())
+                        }?;
                     }
 
                     Ok::<_, ThoError>(result)
@@ -434,7 +437,12 @@ where
 
             debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
 
-            with_data!(ctx, net_wrapper, input; |mut ctx:Self::Ctx, net:&ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>, input:&DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>|{
+            let tho_device_idx = ctx.tho_device_idx();
+            let net = net_wrapper.borrow_to(tho_device_idx, None::<thoosa_shared::traits::VoidSelector>).await?;
+            let input = input.borrow_to(tho_device_idx, None::<SyncStftSelector>).await?;
+            let net = net.as_ref();
+            let input = input.as_ref();
+            {
 
                 debug!("ApplyLabelNet::run: input={input:?}");//[motif_nets x probabilities = input/
 
@@ -470,7 +478,7 @@ where
                 trace!("ApplyLabelNets::run: out=\n{}", out.as_ref());
 
                 Ok(Arc::new(DevicesWrap::wrap(out)))
-            })
+            }
         }
     }
 }
@@ -517,7 +525,7 @@ mod tests {
     use thoosa_common::train_nets::{CommonTrainingRunConfig, LinLenNetParams, LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
@@ -526,7 +534,7 @@ mod tests {
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
-    use thoosa_with_data::with_data;
+    use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::apply_label_nets::{logit, sigmoid, ApplyLabelNets};
     use crate::tasks::apply_motif_nets::ApplyMotifNets;
     use thoosa_common::dims::ChannelsData;
@@ -890,11 +898,12 @@ mod tests {
         let out = apply_label_nets.run(Arc::new(DevicesWrap::wrap(input)), run_ctx.branch(false)).await?;
 
 
-        with_data!(run_ctx.branch(false), out; |_ctx, out:&ThoTensor<LabelProbability, SynKey>|{
+        {
+            let out = out.borrow_to(run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             debug!("t=\n{}", out.t_ref());
-            let out = out.as_ref().f_squeeze_dim(-1)?;
+            let out = out.as_ref().as_ref().f_squeeze_dim(-1)?;
             Ok::<_, ThoError>((out.size(), to_vec_f32(&out.totype(Float))))
-        })
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

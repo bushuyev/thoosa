@@ -12,7 +12,6 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Data, RangeSelector, Select, WithId};
-use thoosa_with_data::with_data;
 use crate::dims::MotifSlices;
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::{OutId, RunCtx};

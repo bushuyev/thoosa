@@ -54,7 +54,6 @@ use crate::tasks::transforms::freq_filter::FreqFilter;
 use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_with_data::with_data;
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use thoosa_shared::tracked_await::track_await;
 
@@ -607,7 +606,6 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::ResourceType::Group;
     use thoosa_shared::test_utils::MotifKind;
-    use thoosa_with_data::with_data;
     use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta};
     use thoosa_common::dims::MotifSlices;
     use crate::tasks::motif_stats::RANDOM_STATS_GROUP;

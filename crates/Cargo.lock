@@ -5099,7 +5099,6 @@ dependencies = [
  "thoosa_shared",
  "thoosa_shims",
  "thoosa_store",
- "thoosa_with_data",
  "tokio",
  "torch-sys",
  "tracing",
@@ -5156,7 +5155,6 @@ dependencies = [
  "thoosa_shared",
  "thoosa_shims",
  "thoosa_store",
- "thoosa_with_data",
  "tokio",
  "tokio-util",
  "tokio-utils",
@@ -5268,7 +5266,6 @@ dependencies = [
  "thoosa_shared",
  "thoosa_shims",
  "thoosa_store",
- "thoosa_with_data",
  "tokio",
  "torch-sys",
  "tracing",
@@ -5413,7 +5410,6 @@ dependencies = [
  "tch",
  "thoosa_dummy_data_derive",
  "thoosa_named_derive",
- "thoosa_with_data",
  "time",
  "time_series_generator",
  "tokio",
@@ -5475,15 +5471,6 @@ dependencies = [
  "thoosa_store",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "thoosa_with_data"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
 ]
 
 [[package]]

@@ -35,7 +35,6 @@ use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::{Adjustable, Data, Select, ThoSelector, WithId};
 use thoosa_store::{IdSlice, Store};
-use thoosa_with_data::with_data;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_dims::{ChannelsData2Selector, ChannelsMotifsDists};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
@@ -43,6 +42,7 @@ use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::find_motifs::config_to_stage;
 use crate::tasks::find_motifs_run_config::{Aggr, ExtendMotifsRunConfig, FindMotifsRunConfig, MaxSlices, MaxSlicesAbs, MaxSlicesByResources, Metrics};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
+use crate::tasks::stft::SyncStftSelector;
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
 use crate::tasks::resources_motifs_clc_dist::{ClcResourcesMotifsDist, ClcResourcesMotifsDistInput, ClcResourcesMotifsDistOutput};
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
@@ -267,13 +267,14 @@ where
         mut ctx: C,
     ) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsMotifsDists, SynKey>>>, ThoError> {
         // TODO: move this into a dedicated stage and cache the resulting motifs stats separately from stacked motifs.
-        let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = with_data!(ctx.branch(false), motif_data;
-            |_ctx, motif_data:&StackedMotifsOutput|{
+        let (channels_motif_ids, find_motifs_run_config, max_motif_slices) = {
+                let motif_data = motif_data.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif_data = motif_data.as_ref();
                 let channels_motif_ids = motif_data.motifs.extra().0.clone();
                 let find_motifs_run_config = Arc::clone(&motif_data.motifs.extra().1);
                 let max_motif_slices = motif_data.motifs.data().t_ref().size()[1] as usize;
                 Ok::<_, ThoError>((channels_motif_ids, find_motifs_run_config, max_motif_slices))
-        })?;
+        }?;
 
         let device_idx = ctx.tho_device_idx();
         let motif_ids = channels_motif_ids

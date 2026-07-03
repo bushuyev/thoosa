@@ -5,6 +5,7 @@ use thoosa_common::stages_seq::ABStage;
 use crate::tasks::train_net::{TrainNet, TrainNetInput};
 use async_trait::async_trait;
 use futures::FutureExt;
+use futures_util::future::try_join_all;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
 use log::{debug, trace};
@@ -32,14 +33,14 @@ use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, FuturesOrdering, ThoError};
 use thoosa_store::Store;
-use thoosa_with_data::with_data;
+use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug)]
@@ -339,9 +340,8 @@ where
                 });
 
                 let device_idx = ctx_for_batch.tho_device_idx();
-                let ctx_for_build = ctx_for_batch.branch(false);
-
-                with_data!(ctx_for_build, [outputs]; |_ctx, xs:&[&ThoTensor<LabelProbability, SynKey>]|{
+                let xs = try_join_all(outputs.iter().map(|output| output.borrow_to(device_idx, None::<SyncStftSelector>))).await?;
+                {
                     let x = Tensor::f_stack(
                         xs.iter()
                             .map(|x| x.t_ref().f_flatten(0, 1))
@@ -367,7 +367,7 @@ where
                     debug!("LogitsResourcesBatch::build_batch_stream: x={x} y={y}");
 
                     Ok::<_, ThoError>((x.into(), None, y.into()))
-                })
+                }
             }
         });
 
@@ -429,7 +429,6 @@ mod tests {
     use thoosa_shared::val::Val;
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_store::{MockStoreBuilder, RunConfigRow, TrainedNet};
-    use thoosa_with_data::with_data;
 
     fn const_label_net(motif_nets: u32, slices_len: u32, k: f64, device: Device) -> (Box<dyn Fn() -> LabelNetParams + Sync + Send + 'static>, Box<dyn Fn() -> ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>> + Sync + Send + 'static>) {
         (

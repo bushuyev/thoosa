@@ -12,7 +12,6 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{mono_key, ThoError};
-use thoosa_with_data::with_data;
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::ipc::json_ser::SyncStageJsonWrapper;

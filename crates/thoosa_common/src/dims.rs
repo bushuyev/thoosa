@@ -6,7 +6,7 @@ use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, Select, SimpleId, ThoSelector, VoidSelector};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, SimpleId, ThoSelector, VoidSelector};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
@@ -39,6 +39,16 @@ pub trait LocalSelect<Id, S> {
     type Output;
 
     fn local_subview(id:&Id, t:&Tensor, selector: S) -> Result<Self::Output, ThoError>;
+}
+
+impl LocalSelect<u32, RangeSelector> for ThoTensor<AnyDims, u32> {
+    type Output = ThoTensor<AnyDims, u32>;
+
+    fn local_subview(id: &u32, t: &Tensor, selector: RangeSelector) -> Result<Self::Output, ThoError> {
+        let start = i64::try_from(selector.start[0]).map_err(|_| ThoError::new("range selector start does not fit i64"))?;
+        let end = i64::try_from(selector.end[0]).map_err(|_| ThoError::new("range selector end does not fit i64"))?;
+        ThoTensor::new(*id, t.f_i(start..end)?)
+    }
 }
 
 impl LocalSelect<SynKey, VoidSelector> for ThoTensor<ChannelsData, SynKey> {

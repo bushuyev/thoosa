@@ -760,14 +760,14 @@ mod tests {
     use tracing::Instrument;
     use thoosa_shared::ThoError;
     use thoosa_shims::context::ThoCudaContext;
-    use thoosa_with_data::with_data;
-    use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
     use crate::runner::common::RunCtx;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::run_ctx_2::RunCtxImpl;
     use crate::runner::global_ctx::CopyCtx;
     use crate as thoosa_common;
     use crate::dims::AnyDims;
+    use thoosa_shared::traits::RangeSelector;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::tmp_cache::TmpCached;
     use crate::tho_tensor::ThoTensor;
@@ -869,9 +869,10 @@ mod tests {
         let t_0 = tmp_cache.get(&777u32).unwrap();
         let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
 
-        let sum_0 = with_data!(root_ctx.branch(false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
-            Ok::<_, ThoError>(t_0.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
-        })?;
+        let sum_0 = {
+            let t_0 = t_0.borrow_to(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
+            Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+        }?;
         debug!("sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
@@ -888,9 +889,10 @@ mod tests {
         debug!("t_cuda={t_cuda:?}");
 
         let t_0 = tmp_cache.get(&777u32).unwrap();
-        let sum_1 = with_data!(root_ctx.branch(false), t_0; |ctx, t_0:&ThoTensor<AnyDims, u32>|{
-            Ok::<_, ThoError>(t_0.as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
-        })?;
+        let sum_1 = {
+            let t_0 = t_0.borrow_to(root_ctx.tho_device_idx(), None::<RangeSelector>).await?;
+            Ok::<_, ThoError>(t_0.as_ref().as_ref().sum_dim_intlist(0, false, None).double_value(&[]))
+        }?;
 
         debug!("sum_1={sum_1}");
 
