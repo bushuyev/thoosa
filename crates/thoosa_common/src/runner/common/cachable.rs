@@ -948,6 +948,33 @@ where
     }
 }
 
+pub trait BorrowRef
+{
+    type Out<'a> where Self: 'a;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self:'o;
+
+}
+
+
+impl <BR> BorrowRef for Arc<BR>
+where
+    BR:BorrowRef + Sync + Send,
+{
+    type Out<'a> = BR::Out<'a> where Self: 'a,  BR:'a;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o
+    {
+        async move {
+            self.as_ref().borrow_to(to_tho_device_idx).await
+        }
+
+    }
+}
 
 pub trait SelectRef<S>
 where
@@ -955,7 +982,7 @@ where
 {
     type Out<'a> where Self: 'a, S:'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>/*TODO remove Option*/) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
         S:'o, Self:'o;
 
@@ -968,7 +995,7 @@ where
 {
     type Out<'a> = BR::Out<'a> where Self: 'a, S: 'a, BR:'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
     where
         S: 'o,
         Self: 'o
