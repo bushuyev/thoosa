@@ -307,6 +307,26 @@ impl<D> ThoDataRef<'_, D> {
     }
 }
 
+impl <O> BorrowRef for DevicesWrap<O>
+where
+    O: for<'o> BorrowRef + WithId + Data + CopyToDevice + Send + Sync,
+{
+    type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a;
+
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o
+    {
+        async move {
+            let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
+            Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
+                read_guard,
+                |val: &O| val,
+            )))
+        }
+    }
+}
+
 impl <S, O> SelectRef<S> for DevicesWrap<O>
 where
     S:ThoSelector + Clone + Debug + Send,
