@@ -295,7 +295,7 @@ where
                     )
                     .await?;
 
-                let guard = SelectRef::borrow_to(&multed, check_device_idx, None).await?;
+                let guard = BorrowRef::borrow_to(&multed, check_device_idx).await?;
 
 
                check_arc(res, &guard);

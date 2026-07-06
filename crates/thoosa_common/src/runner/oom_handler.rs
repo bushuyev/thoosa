@@ -163,7 +163,6 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    // <R as Stage>::In<'a>: Select<S>,
     S: Adjustable + Debug + Default + Clone
 {
     Input(Box<dyn Adjuster<IC, A=S> + 'a>),//it adjusts Selector used to fetch chunk of input
@@ -289,7 +288,7 @@ where
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: ThoSelector + Adjustable + Debug + Clone + Default + Send + 'static,//S - for Select<Selector>, 'static is for Any in WithSelectDataRef for ClcResourcesMotifsDistInputDeviceWrapper::with_selected_data_ref
+    S: ThoSelector + Adjustable + Debug + Clone + Default + Send + 'static,
 
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
@@ -305,7 +304,6 @@ where
         }
     }
 
-    ///input should either implement WithSelectDataRef or be wrapped in DevicesWrap and implement Select<Selector>  - WithSelectDataRef makes it possible to use input structs with with more than one DevicesWraps inside.
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::run"))]
     pub async fn run<W>(
         &self,
@@ -325,7 +323,6 @@ where
         }
 
         let tho_device_idx = run_context.tho_device_idx();
-
 
         track_await(run_with_runner(
             &self.adjusters,
