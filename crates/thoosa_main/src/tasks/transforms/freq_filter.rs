@@ -614,7 +614,7 @@ mod tests {
     use thoosa_common::dims::ChannelsData;
     use tch::kind::FLOAT_CPU;
     use tch::Tensor;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::common::runnable::{AsyncStage, SyncStage};
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};

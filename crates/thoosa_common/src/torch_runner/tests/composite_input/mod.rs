@@ -4,7 +4,7 @@ use log::debug;
 use tch::Tensor;
 use thoosa_shared::ThoError;
 use thoosa_shared::traits::VoidSelector;
-use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

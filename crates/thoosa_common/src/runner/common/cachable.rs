@@ -307,7 +307,7 @@ impl<D> ThoDataRef<'_, D> {
     }
 }
 
-impl <S, O> BorrowRef<S> for DevicesWrap<O>
+impl <S, O> SelectRef<S> for DevicesWrap<O>
 where
     S:ThoSelector + Clone + Debug + Send,
     O: Select<S, Output = O> + WithId + Data + CopyToDevice + Send + Sync,
@@ -949,7 +949,7 @@ where
 }
 
 
-pub trait BorrowRef<S>
+pub trait SelectRef<S>
 where
     S: ThoSelector + Clone + Debug + Send
 {
@@ -961,9 +961,9 @@ where
 
 }
 
-impl <S, BR> BorrowRef<S> for Arc<BR>
+impl <S, BR> SelectRef<S> for Arc<BR>
 where
-    BR:BorrowRef<S> + Sync + Send,
+    BR: SelectRef<S> + Sync + Send,
     S:ThoSelector + Clone + Debug + Send
 {
     type Out<'a> = BR::Out<'a> where Self: 'a, S: 'a, BR:'a;
@@ -1041,7 +1041,7 @@ mod tests {
     use crate::runner::cache_areas::CacheArea;
     use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx;
-    use crate::runner::common::cachable::{DevicesWrap, InflightRole, join_or_start_inflight, BorrowRef};
+    use crate::runner::common::cachable::{DevicesWrap, InflightRole, join_or_start_inflight, SelectRef};
     use crate::runner::common::mock_run_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;

@@ -25,7 +25,7 @@ use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
-use crate::runner::common::cachable::{BorrowRef};
+use crate::runner::common::cachable::{SelectRef};
 use crate::runner::common::RunCtx;
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
@@ -146,8 +146,8 @@ impl dyn CudaActorHandle + '_ {
         S: SyncStage,
         SL: ThoSelector + Clone + Debug + Send + 'static,
         W: Debug + Sync,
-        for<'a> W: BorrowRef<SL> + 'a,
-        for<'a> <W as BorrowRef<SL>>::Out<'a>: Borrow<S::In<'a>>,
+        for<'a> W: SelectRef<SL> + 'a,
+        for<'a> <W as SelectRef<SL>>::Out<'a>: Borrow<S::In<'a>>,
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 

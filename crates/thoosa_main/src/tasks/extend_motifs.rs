@@ -15,7 +15,7 @@ use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -771,7 +771,7 @@ impl WithId for SelectMotifsInputSelectorWrap {
 }
 
 
-impl BorrowRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
+impl SelectRef<SelectMotifsInputSelector> for SelectMotifsInputSelectorWrap {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<SelectMotifsInputSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -1227,7 +1227,7 @@ mod tests {
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Tensor;
     use thoosa_common::runner::adjusters::splits::OutputBuilder;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

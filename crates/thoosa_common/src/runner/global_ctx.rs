@@ -760,7 +760,7 @@ mod tests {
     use tracing::Instrument;
     use thoosa_shared::ThoError;
     use thoosa_shims::context::ThoCudaContext;
-    use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use crate::runner::common::cachable::{SelectRef, DevicesWrap};
     use crate::runner::common::RunCtx;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::run_ctx_2::RunCtxImpl;

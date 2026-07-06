@@ -3,7 +3,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
@@ -135,7 +135,7 @@ impl Adjustable for CrossInputBatch1Selector {}
 
 
 
-impl<'a, R> BorrowRef<CrossInputBatch1Selector> for CrossInput<'a, R>
+impl<'a, R> SelectRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Debug + Send + Sync + 'static,
 {

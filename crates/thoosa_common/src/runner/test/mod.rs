@@ -17,7 +17,7 @@ use thoosa_shared::comp_id::SynKey;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap};
+use crate::runner::common::cachable::{SelectRef, Cached, CachedPurgeOutput, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -99,8 +99,8 @@ where
         size: <R::In<'z> as Data>::Metrics,
     ) -> Result<<R as Stage>::Out, ThoError>
     where
-        W: BorrowRef<S> + Debug,
-        for<'f> <W as BorrowRef<S>>::Out<'f>: std::borrow::Borrow<<R as Stage>::In<'f>> + Send,
+        W: SelectRef<S> + Debug,
+        for<'f> <W as SelectRef<S>>::Out<'f>: std::borrow::Borrow<<R as Stage>::In<'f>> + Send,
 
         W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 
@@ -259,9 +259,9 @@ where
     R::Out: CachedPurgeOutput +  Clone + Send + Sync,
     <R as Stage>::In<'static>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
-    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef<VoidSelector>>::Out<'_>)  + Send + Sync + Clone + 'static,
-    for<'o> <R as Stage>::Out:WithId+BorrowRef<VoidSelector>+Debug,
-    for<'o> <<R as Stage>::Out as BorrowRef<VoidSelector>>::Out<'o>: Debug
+    CF: Fn(&'static str, &<<R as Stage>::Out as SelectRef<VoidSelector>>::Out<'_>)  + Send + Sync + Clone + 'static,
+    for<'o> <R as Stage>::Out:WithId+ SelectRef<VoidSelector>+Debug,
+    for<'o> <<R as Stage>::Out as SelectRef<VoidSelector>>::Out<'o>: Debug
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -595,7 +595,7 @@ mod tests {
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
-    use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+    use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;

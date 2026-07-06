@@ -22,7 +22,7 @@ use tch::kind::FLOAT_CPU;
 use tokio::task::JoinHandle;
 use thoosa_common::dims::{ChannelsData, LabelProbability};
 use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
 use thoosa_common::runner::common::runnable::AsyncStage;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
