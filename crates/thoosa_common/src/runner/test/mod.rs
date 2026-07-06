@@ -344,7 +344,7 @@ pub mod fixtures {
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Data, Select, ThoSelector, WithId};
+    use thoosa_shared::traits::{Data, Metrics, Select, ThoSelector, WithId};
     use thoosa_shared::ThoError;
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
     use crate::runner::common::OutId;
@@ -389,35 +389,47 @@ pub mod fixtures {
     }
 
     #[derive(Debug, Serialize, Deserialize, Clone, Default)]
-    pub(crate) struct MetricsRangeSelector(Range<<DLoadedTensor as Data>::Metrics>);
+    pub(crate) struct MetricsRangeSelector<M>(pub Range<M>)
+    where
+        M:Metrics + Send + Sync;//MetricsRangeSelector
 
-    impl Adjustable for MetricsRangeSelector {}
+    impl <M> Adjustable for MetricsRangeSelector<M>
+    where
+        M:Metrics + Send + Sync,
+    {}
 
-    impl From<Range<<DLoadedTensor as Data>::Metrics>> for MetricsRangeSelector {
-        fn from(value: Range<<DLoadedTensor as Data>::Metrics>) -> Self {
+    impl <M:Metrics> From<Range<M>> for MetricsRangeSelector<M>
+    where
+        M:Metrics + Send + Sync
+    {
+        fn from(value: Range<M>) -> Self {
             Self(value)
         }
     }
 
     #[typetag::serde]
-    impl ThoSelector for MetricsRangeSelector {
+    impl ThoSelector for MetricsRangeSelector<<DLoadedTensor as Data>::Metrics> {
         fn clone_box(&self) -> Box<dyn ThoSelector> {
             Box::new(MetricsRangeSelector(self.0.clone()))
         }
     }
 
-    impl Deref for MetricsRangeSelector {
-        type Target = Range<<DLoadedTensor as Data>::Metrics>;
+    impl <M> Deref for MetricsRangeSelector<M>
+    where
+        M:Metrics + Send + Sync
+    {
+        type Target = Range<M>;
 
         fn deref(&self) -> &Self::Target {
             &self.0
         }
     }
 
-    impl Select<MetricsRangeSelector> for DLoadedTensor {
+    impl Select<MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>> for DLoadedTensor
+    {
         type Output = DLoadedTensor;
 
-        fn subview(&self, selector: MetricsRangeSelector) -> Result<Self::Output, ThoError> {
+        fn subview(&self, selector: MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>) -> Result<Self::Output, ThoError> {
             Ok(DLoadedTensor {
                 id: self.id.clone(),
                 data: DummyTensor(self.data.0[selector.start as usize..min(self.data.0.len(), selector.end as usize)].to_vec()),
@@ -902,7 +914,7 @@ mod tests {
 
         loader: Arc<DummyLoader>,
         mul: Arc<DMulTask>,
-        mul_oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector, DMulTaskOutputBuilder>,
+        mul_oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>, DMulTaskOutputBuilder>,
     }
 
     impl OutId for DLoadAndClcStage {
@@ -920,7 +932,7 @@ mod tests {
             k: f32,
             fail_until: FailUntil,
             len: usize,
-            oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector, DMulTaskOutputBuilder>,
+            oom_runner: ClcOOMRunner<DMulTask, MetricsRangeSelector<<DLoadedTensor as Data>::Metrics>, DMulTaskOutputBuilder>,
         ) -> Self {
             Self {
                 id,
