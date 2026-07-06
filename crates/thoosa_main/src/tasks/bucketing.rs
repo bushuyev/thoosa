@@ -20,7 +20,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -460,14 +460,30 @@ impl Adjustable for SelectBucketsInputSelector {}
 
 
 
-impl<D, Id> SelectRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
+impl<D, Id> BorrowRef for BucketingTensorInput<D, Id>
 where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
     type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let tensor = track_await(self.tensor.load_from_any_device_(to_device_idx)).await?;
+            Ok(BucketingSyncInput::from_data_ref(self.resource_id, ThoDataRef::ReadLocked(tensor), 0))
+        }
+    }
+}
+
+impl<D, Id> SelectRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
+where
+    D: Dims + Send + Sync + 'static,
+    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
+{
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<SelectBucketsInputSelector>) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         SelectBucketsInputSelector: 'o,
         Self: 'o
@@ -475,8 +491,7 @@ where
         async move {
             let (tensor, sample_offset) = match selector {
                 None => {
-                    let tensor = track_await(self.tensor.load_from_any_device_(to_tho_device_idx)).await?;
-                    (ThoDataRef::ReadLocked(tensor), 0)
+                    return BorrowRef::borrow_to(self, to_tho_device_idx).await;
                 }
                 Some(selector) => {
                     let tensor = track_await(self.tensor.load_from_any_device_(0)).await?;
@@ -504,16 +519,11 @@ where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
 {
-    type Out<'a> = BucketingSyncInput<'a, D, Id> where Self: 'a;
-
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
-        async move {
-            let tensor = track_await(self.tensor.load_from_any_device_(to_device_idx)).await?;
-            Ok(BucketingSyncInput::from_data_ref(self.resource_id, ThoDataRef::ReadLocked(tensor), 0))
-        }
+        async move { BorrowRef::borrow_to(self, to_device_idx).await }
     }
 }
 
@@ -1676,7 +1686,7 @@ mod tests {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             {
-                let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif_ref = SelectRef::borrow_to(motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().as_ref().unsqueeze(0);
@@ -1910,7 +1920,7 @@ mod tests {
             let motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>> = Arc::clone(&motif_loader_impl).run(Arc::new(MotifLoaderInput::new(mono_key!(*motif_id, "").into(), None)), ctx.branch(false)).await?;
             debug!("heavy_run_mel_path: motif={motif:?}");
             {
-                let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                let motif_ref = SelectRef::borrow_to(&motif, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                 let motif = motif_ref.as_ref();
                 for (ref_idx, ref_motif) in all_motifs.iter().enumerate() {
                     let motif_t = motif.data().as_ref().unsqueeze(0);

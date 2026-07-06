@@ -17,7 +17,7 @@ use thoosa_shared::comp_id::SynKey;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{SelectRef, Cached, CachedPurgeOutput, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, SelectRef, Cached, CachedPurgeOutput, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
@@ -100,7 +100,7 @@ where
     ) -> Result<<R as Stage>::Out, ThoError>
     where
         W: SelectRef<S> + Debug,
-        for<'f> <W as SelectRef<S>>::Out<'f>: std::borrow::Borrow<<R as Stage>::In<'f>> + Send,
+        for<'f> <W as BorrowRef>::Out<'f>: std::borrow::Borrow<<R as Stage>::In<'f>> + Send,
 
         W: WithId<ID = <R::In<'z> as WithId>::ID> + Send + Sync + 'static,
 
@@ -259,9 +259,9 @@ where
     R::Out: CachedPurgeOutput +  Clone + Send + Sync,
     <R as Stage>::In<'static>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
-    CF: Fn(&'static str, &<<R as Stage>::Out as SelectRef<VoidSelector>>::Out<'_>)  + Send + Sync + Clone + 'static,
+    CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef>::Out<'_>)  + Send + Sync + Clone + 'static,
     for<'o> <R as Stage>::Out:WithId+ SelectRef<VoidSelector>+Debug,
-    for<'o> <<R as Stage>::Out as SelectRef<VoidSelector>>::Out<'o>: Debug
+    for<'o> <<R as Stage>::Out as BorrowRef>::Out<'o>: Debug
 {
     let check_arc = Arc::new(check);
     let ctx_fac_arc = Arc::new(ctx_fac);
@@ -295,7 +295,7 @@ where
                     )
                     .await?;
 
-                let guard = multed.borrow_to(check_device_idx, None).await?;
+                let guard = SelectRef::borrow_to(&multed, check_device_idx, None).await?;
 
 
                check_arc(res, &guard);
@@ -1041,7 +1041,7 @@ mod tests {
             .await?;
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
-        let data = loaded_tensor_1_0.borrow_to(1, None).await?;
+        let data = SelectRef::borrow_to(&loaded_tensor_1_0, 1, None).await?;
 
        assert_eq!(data.as_ref().data.0, [0.0, 1.0, 2.0]);
 
@@ -1141,7 +1141,7 @@ mod tests {
             )
             .await?;
 
-        let data = multed.borrow_to(1, None).await?;
+        let data = SelectRef::borrow_to(&multed, 1, None).await?;
            assert_eq!(
                data.as_ref().data.0,
                (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()

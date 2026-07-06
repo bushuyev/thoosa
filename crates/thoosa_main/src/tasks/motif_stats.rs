@@ -27,7 +27,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -297,12 +297,12 @@ impl MotifStatsCalcInputWrapper {
 
         match &self.data {
             MotifStatsCalcInputDataWrapper::Managed(motif) => {
-                let motif = motif.borrow_to(to_device_idx, None::<SyncStftSelector>).await?;
+                let motif = SelectRef::borrow_to(motif, to_device_idx, None::<SyncStftSelector>).await?;
                 let input = MotifStatsCalcInput::from_managed(id, motif.as_ref(), metrics, quantiles);
                 track_await(do_run(&input, &permits_ctx)).await
             }
             MotifStatsCalcInputDataWrapper::Motifs(motifs) => {
-                let motif_refs = try_join_all(motifs.iter().map(|motif| motif.borrow_to(to_device_idx, None::<SyncStftSelector>))).await?;
+                let motif_refs = try_join_all(motifs.iter().map(|motif| SelectRef::borrow_to(motif, to_device_idx, None::<SyncStftSelector>))).await?;
                 let motifs = motif_refs.iter().map(|motif| motif.as_ref()).collect::<Vec<_>>();
                 let input = MotifStatsCalcInput::from_motifs(id, motifs, metrics, quantiles);
                 track_await(do_run(&input, &permits_ctx)).await
@@ -321,10 +321,10 @@ impl WithId for MotifStatsCalcInputWrapper {
 }
 
 
-impl SelectRef<VoidSelector> for MotifStatsCalcInputWrapper {
+impl BorrowRef for MotifStatsCalcInputWrapper {
     type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
@@ -344,6 +344,15 @@ impl SelectRef<VoidSelector> for MotifStatsCalcInputWrapper {
             };
             Ok(MotifStatsCalcInput::from_data_refs(self.id.clone(), data, self.metrics.clone(), self.quantiles.clone()))
         }
+    }
+}
+
+impl SelectRef<VoidSelector> for MotifStatsCalcInputWrapper {
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move { BorrowRef::borrow_to(self, to_device_idx).await }
     }
 }
 
