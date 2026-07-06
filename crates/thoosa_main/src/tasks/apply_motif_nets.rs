@@ -27,7 +27,7 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -920,7 +920,7 @@ impl WithId for ApplyMotifNetInputWrapper {
 }
 
 
-impl BorrowRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
+impl SelectRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
     type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsData2Selector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
@@ -1221,7 +1221,7 @@ pub(crate) mod tests {
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};

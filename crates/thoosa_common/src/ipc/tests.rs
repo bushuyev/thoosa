@@ -16,7 +16,7 @@ use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::ipc::json_ser::SyncStageJsonWrapper;
 use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
-use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
+use crate::runner::common::cachable::{SelectRef, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, SyncStage};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;

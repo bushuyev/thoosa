@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
@@ -541,7 +541,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 }
 
 
-impl<DI: Dims, DO: Dims> BorrowRef<VoidSelector> for TrainStepInput<DI, DO> {
+impl<DI: Dims, DO: Dims> SelectRef<VoidSelector> for TrainStepInput<DI, DO> {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

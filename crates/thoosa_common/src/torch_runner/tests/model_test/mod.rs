@@ -5,7 +5,7 @@ use tch::Kind;
 use thoosa_shared::ThoError;
 
 use crate::ipc::json_ser::SyncStageJsonWrapper;
-use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use crate::runner::common::runnable::AsyncStage;
 use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;

@@ -12,7 +12,7 @@ use tch::kind::Kind;
 use tch::Device::Cpu;
 use tch::Tensor;
 use thoosa_common::transforms::filters::InputFilter;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};

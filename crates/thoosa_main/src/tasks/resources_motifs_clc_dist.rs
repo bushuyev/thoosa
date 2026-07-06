@@ -16,7 +16,7 @@ use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, MaxParallelCtx, OutId, RunCtx};
-use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap, ThoDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -279,7 +279,7 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-impl BorrowRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
+impl SelectRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ClcResourcesMotifsDistInputDeviceWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

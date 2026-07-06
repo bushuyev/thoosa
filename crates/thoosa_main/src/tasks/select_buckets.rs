@@ -15,7 +15,7 @@ use std::sync::Arc;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -395,7 +395,7 @@ impl WithId for SelectBucketsSyncInputWrapper {
 }
 
 
-impl BorrowRef<VoidSelector> for SelectBucketsSyncInputWrapper {
+impl SelectRef<VoidSelector> for SelectBucketsSyncInputWrapper {
     type Out<'a> = SelectBucketsSyncInput<'a> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, _to_device_idx: usize, _selector: Option<VoidSelector>) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send

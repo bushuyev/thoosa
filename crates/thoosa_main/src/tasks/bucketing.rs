@@ -20,7 +20,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContext};
 use thoosa_common::audio::{assign_lsh_buckets_per_channel, build_mel_filterbank, fft_band_amplitudes_sliced, lsh_bucket_one_hot_3d_exact_buckets, BandAggregation, LshPlanes, LOG_EPS};
 use thoosa_common::dims::Dims;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
@@ -460,7 +460,7 @@ impl Adjustable for SelectBucketsInputSelector {}
 
 
 
-impl<D, Id> BorrowRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
+impl<D, Id> SelectRef<SelectBucketsInputSelector> for BucketingTensorInput<D, Id>
 where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
@@ -499,7 +499,7 @@ where
     }
 }
 
-impl<D, Id> BorrowRef<VoidSelector> for BucketingTensorInput<D, Id>
+impl<D, Id> SelectRef<VoidSelector> for BucketingTensorInput<D, Id>
 where
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
@@ -1371,7 +1371,7 @@ mod tests {
     use thoosa_common::dims::MotifSlices;
     use crate::tasks::find_motifs_run_config::{AccumulateStats, Aggr, FindMotifsRunConfig, MaxAggr, Metrics, NormThicknessRunConfig, SlicesFilter};
     use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
