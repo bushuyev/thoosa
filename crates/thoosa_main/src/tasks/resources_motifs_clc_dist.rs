@@ -16,7 +16,7 @@ use thoosa_common::runner::adjusters::max_parallel::MaxParallel;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, MaxParallelCtx, OutId, RunCtx};
-use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, DevicesWrap, ThoDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_motifs::distance::MaskMaker::{Le, LocalMin};
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -279,16 +279,36 @@ impl WithId for ClcResourcesMotifsDistInputDeviceWrapper {
 }
 
 
-impl SelectRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
+impl BorrowRef for ClcResourcesMotifsDistInputDeviceWrapper {
     type Out<'a> = ClcResourcesMotifsDistInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ClcResourcesMotifsDistInputDeviceWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let mut batch = Vec::with_capacity(self.batch.len());
+            for tensor in &self.batch {
+                batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));
+            }
+            let stacked_motifs = track_await(self.stacked_motifs.load_from_any_device_(to_device_idx)).await?;
+            let motifs_stats = track_await(self.motifs_stats.load_from_any_device_(to_device_idx)).await?;
+            Ok(ClcResourcesMotifsDistInput::from_data_refs(batch, self.resource_ids.clone(), vec![0; self.batch.len()], ThoDataRef::ReadLocked(stacked_motifs), ThoDataRef::ReadLocked(motifs_stats)))
+        }
+    }
+}
+
+impl SelectRef<ClcResourcesMotifsDistInputDeviceWrapperSelector> for ClcResourcesMotifsDistInputDeviceWrapper {
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ClcResourcesMotifsDistInputDeviceWrapperSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         ClcResourcesMotifsDistInputDeviceWrapperSelector: 'a,
         Self: 'a,
     {
         async move {
-            let range = selector.map(|selector| selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize).unwrap_or(0..self.batch.len());
+            let Some(selector) = selector else {
+                return BorrowRef::borrow_to(self, to_device_idx).await;
+            };
+            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
             let mut batch = Vec::with_capacity(range.len());
             for tensor in &self.batch[range.clone()] {
                 batch.push(ThoDataRef::ReadLocked(track_await(tensor.load_from_any_device_(to_device_idx)).await?));

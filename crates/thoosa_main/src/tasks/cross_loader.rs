@@ -6,7 +6,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use futures_util::future::BoxFuture;
@@ -914,7 +914,7 @@ impl RangeOrSlice {
             Self::Slice((i, range)) => {
                 let channels = batch[*i].size().dim_0();
                 let selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
-                Ok(vec![track_await(batch[*i].borrow_to(to_device_idx, Some(selector))).await?])
+                Ok(vec![track_await(SelectRef::borrow_to(&batch[*i], to_device_idx, Some(selector))).await?])
             }
         }
     }
@@ -947,16 +947,37 @@ impl ThoSelector for CrossInputSelector {
 impl Adjustable for CrossInputSelector {}
 
 
-impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
+impl BorrowRef for CrossInputSelectorWrap {
     type Out<'a> = CrossInput<'a, Arc<Resource>>;
 
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<CrossInputSelector>) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o
+    {
+        async move {
+            let selector = CrossInputSelector::default();
+            let mut tensors = track_await(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?;
+            tensors.extend(track_await(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
+            Ok(CrossInput::from_data_refs(
+                tensors,
+                selector.batch_0_selector.select_resources(&self.resources_0),
+                selector.batch_1_selector.select_resources(&self.resources_1),
+                self.id.clone(),
+            ))
+        }
+    }
+}
+
+impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<CrossInputSelector>) -> impl Future<Output=Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputSelector: 'o,
         Self: 'o
     {
         async move {
-            let selector = selector.unwrap_or_default();
+            let Some(selector) = selector else {
+                return BorrowRef::borrow_to(self, to_tho_device_idx).await;
+            };
             let mut tensors = track_await(selector.batch_0_selector.borrow_to(&self.batch_0, to_tho_device_idx)).await?;
             tensors.extend(track_await(selector.batch_1_selector.borrow_to(&self.batch_1, to_tho_device_idx)).await?);
             Ok(CrossInput::from_data_refs(
@@ -1397,7 +1418,7 @@ mod tests {
         let mut selector = CrossInputSelector::default();
 
         let mut run_ctx = RunCtxImpl::new(1, "test");
-        let data = input.borrow_to(1, None).await?;
+        let data = SelectRef::borrow_to(&input, 1, None).await?;
 
         assert_eq!(data.tensors().len(), 4);
 
@@ -1457,7 +1478,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 4));
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice");
-        let data = input.borrow_to(1, Some(selector.clone())).await?;
+        let data = SelectRef::borrow_to(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
 
@@ -1471,7 +1492,7 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 4 && range.end == 8));
 
-        let data = input.borrow_to(1, Some(selector.clone())).await?;
+        let data = SelectRef::borrow_to(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.tensors()[1].t_ref().size()[1], 4);
 
@@ -1531,7 +1552,7 @@ mod tests {
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 0 && range.end == 3));
 
         let mut run_ctx = RunCtxImpl::new(1, "test_adjuster_slice_resources");
-        let data = input.borrow_to(1, Some(selector.clone())).await?;
+        let data = SelectRef::borrow_to(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
         assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
@@ -1545,7 +1566,7 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((0, range)) if range.start == 3 && range.end == 6));
 
-        let data = input.borrow_to(1, Some(selector.clone())).await?;
+        let data = SelectRef::borrow_to(&input, 1, Some(selector.clone())).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[0].id());
         assert_eq!(data.tensors()[1].t_ref().size()[1], 3);
@@ -1560,7 +1581,7 @@ mod tests {
             .map_err(|e| ThoError::new(format!("adjust failed: {e:?}")))?;
         assert!(matches!(&selector.batch_1_selector, RangeOrSlice::Slice((1, range)) if range.start == 0 && range.end == 3));
 
-        let data = input.borrow_to(1, Some(selector)).await?;
+        let data = SelectRef::borrow_to(&input, 1, Some(selector)).await?;
 
         assert_eq!(data.batch_1()[0].id(), resources_1[1].id());
         assert_eq!(data.tensors()[1].t_ref().size()[1], 3);

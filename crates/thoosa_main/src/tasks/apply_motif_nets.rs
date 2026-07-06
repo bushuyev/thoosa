@@ -27,7 +27,7 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -920,16 +920,32 @@ impl WithId for ApplyMotifNetInputWrapper {
 }
 
 
-impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
+impl BorrowRef for ApplyMotifNetInputWrapper {
     type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsDataSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let batch = track_await(BorrowRef::borrow_to(&self.batch, to_device_idx)).await?;
+            let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
+            Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
+        }
+    }
+}
+
+impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsDataSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         ChannelsDataSelector: 'a,
         Self: 'a,
     {
         async move {
-            let batch = track_await(self.batch.borrow_to(to_device_idx, selector)).await?;
+            let Some(selector) = selector else {
+                return BorrowRef::borrow_to(self, to_device_idx).await;
+            };
+            let batch = track_await(SelectRef::borrow_to(&self.batch, to_device_idx, Some(selector))).await?;
             let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
             Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
         }
@@ -1411,7 +1427,7 @@ pub(crate) mod tests {
         let slices = ((input_n_0 as i64 - motif_width) / apply_motif_net_step as i64) + 1;
         let ctx_for_data = mock_run_ctx::default(1);
         {
-            let r = out.borrow_to(ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let r = SelectRef::borrow_to(&out, ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
             let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices, slices, slices]);
@@ -1557,7 +1573,7 @@ pub(crate) mod tests {
         let max_len = *expected_lengths.iter().max().expect("no max len");
 
         {
-            let out = out.borrow_to(1, None::<SyncStftSelector>).await?;
+            let out = SelectRef::borrow_to(&out, 1, None::<SyncStftSelector>).await?;
             let out = out.as_ref();
             assert_eq!(out.extra().as_slice(), expected_lengths.as_slice());
             assert_eq!(out.data().t_ref().size(), vec![2, max_len]);
@@ -1674,7 +1690,7 @@ pub(crate) mod tests {
         let ctx_for_data = thoosa_shared::perf_log!(thoosa_shared::sync_write_lock!(run_ctx)).branch(false);
 
         {
-            let r = out.borrow_to(ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let r = SelectRef::borrow_to(&out, ctx_for_data.tho_device_idx(), None::<SyncStftSelector>).await?;
             let r = r.as_ref();
             debug!("test_apply_motif_nets_3_channels_1_motif:  matches={:?}", r);
             assert_eq!(r.extra().as_slice(), &[slices]);
