@@ -1100,7 +1100,7 @@ pub mod mock_input_adjuster {
     use mockall::mock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use crate::runner::test::fixtures::MetricsRangeSelector;
+    use thoosa_shared::traits::RangeSelector;
     // use crate::common::mock_input_output::MockInput;
 
     mock! {
@@ -1108,7 +1108,7 @@ pub mod mock_input_adjuster {
         pub InputAdjuster {}
         #[async_trait]
         impl Adjuster<super::mock_input_context::MockInputContext> for InputAdjuster {
-            type A = MetricsRangeSelector<<TestInput as Data>::Metrics>; //std::ops::Range<<TestInput as Data>::Metrics>;
+            type A = RangeSelector; //std::ops::Range<<TestInput as Data>::Metrics>;
             async fn adjust(&self, adjustable: <Self as Adjuster<super::mock_input_context::MockInputContext>>::A, adjust_context: &mut super::mock_input_context::MockInputContext) -> Result<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A, AdjusterError<<Self as Adjuster<super::mock_input_context::MockInputContext>>::A>>;
             fn degrade(&self, adjust_context: &mut super::mock_input_context::MockInputContext) -> bool;
         }
@@ -1116,7 +1116,7 @@ pub mod mock_input_adjuster {
 
     pub fn build<I>(inputs: I) -> (MockInputAdjuster, Arc<AtomicUsize>)
     where
-        I: IntoIterator<Item = MetricsRangeSelector<<TestInput as Data>::Metrics>>,
+        I: IntoIterator<Item = RangeSelector>,
     {
         let mut adj = MockInputAdjuster::new();
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1224,10 +1224,10 @@ mod tests {
     use async_trait::async_trait;
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_shared::traits::{Adjustable, Data, Metrics, ThoSelector, WithId};
+    use thoosa_shared::traits::{Adjustable, Data, Metrics, RangeSelector, ThoSelector, WithId};
     use crate::runner::test::fixtures::{DLoadedTensor, MetricsRangeSelector};
     use super::{Adjuster, InputContext};
-    type Selector = Range<[usize; 1]>;
+    // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
     struct AsyncTestTask {
@@ -1305,12 +1305,6 @@ mod tests {
         }
     }
 
-    #[typetag::serde]
-    impl ThoSelector for MetricsRangeSelector<<TestInput as Data>::Metrics> {
-        fn clone_box(&self) -> Box<dyn ThoSelector> {
-            Box::new(MetricsRangeSelector(self.0.clone()))
-        }
-    }
 
     #[tokio::test]
     async fn test_input_task_context_once() {
@@ -1393,7 +1387,7 @@ mod tests {
         let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
-        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
+        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, RangeSelector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
 
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
@@ -1433,7 +1427,7 @@ mod tests {
             Err(ThoError::oom()),
             Ok(TestOutput::new(10.)),
         ]);
-        let (input_adj, input_calls) = mock_input_adjuster([[0]..[1]]);
+        let (input_adj, input_calls) = mock_input_adjuster([RangeSelector([0]..[1])]);
         let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
@@ -1474,7 +1468,7 @@ mod tests {
         ]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
-        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, Selector> = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
+        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, RangeSelector> = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
 
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
