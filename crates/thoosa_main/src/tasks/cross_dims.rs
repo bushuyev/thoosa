@@ -46,10 +46,10 @@ impl LocalSelect<SynKey, ChannelsDataVec> for ThoTensor<ChannelsData, SynKey> {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
-pub struct ChannelsData2Selector(pub Range<MonoMetrics<1, 2>>);
+pub struct ChannelsDataSelector(pub Range<MonoMetrics<1, 2>>);
 
 #[typetag::serde]
-impl ThoSelector for ChannelsData2Selector {
+impl ThoSelector for ChannelsDataSelector {
     fn clone_box(&self) -> Box<dyn ThoSelector> {
         Box::new(self.clone())
     }
@@ -59,10 +59,10 @@ impl ThoSelector for ChannelsData2Selector {
     }
 }
 
-impl LocalSelect<SynKey, ChannelsData2Selector> for ThoTensor<ChannelsData, SynKey> {
+impl LocalSelect<SynKey, ChannelsDataSelector> for ThoTensor<ChannelsData, SynKey> {
     type Output = ThoTensor<ChannelsData, SynKey>;
 
-    fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsData2Selector) -> Result<Self::Output, ThoError> {
+    fn local_subview(id:&SynKey, t:&Tensor, selector: ChannelsDataSelector) -> Result<Self::Output, ThoError> {
         let size: MonoMetrics<1, 2> = t.size().try_into()?;
 
         let mut ranges = MonoMetrics::<1, 2>::map_to_ranges(&selector.0.start, &selector.0.end)?;
@@ -82,10 +82,10 @@ impl LocalSelect<SynKey, ChannelsData2Selector> for ThoTensor<ChannelsData, SynK
     }
 }
 
-impl Adjustable for ChannelsData2Selector {}
-impl From<Range<MonoMetrics<1, 2>>> for ChannelsData2Selector {
+impl Adjustable for ChannelsDataSelector {}
+impl From<Range<MonoMetrics<1, 2>>> for ChannelsDataSelector {
     fn from(value: Range<MonoMetrics<1, 2>>) -> Self {
-        ChannelsData2Selector(value)
+        ChannelsDataSelector(value)
     }
 }
 

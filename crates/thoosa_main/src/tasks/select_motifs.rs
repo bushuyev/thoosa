@@ -54,7 +54,7 @@ use crate::cli::Commands::SelectMotifs;
 use crate::tasks::slices_stats::Aggr;
 use crate::tasks::stacked_moitfs_loader::{StackedMotifsInput, StackedMotifsLoader, StackedMotifsOutput, StackedMotifsOutputId};
 use crate::tasks::cross_batch_clc::{unfold_and_cat, CrossInput, UnfoldParams};
-use crate::tasks::cross_dims::{ChannelsData2Selector, ChannelsMotifsDists, ChannelsMotifsSlices};
+use crate::tasks::cross_dims::{ChannelsDataSelector, ChannelsMotifsDists, ChannelsMotifsSlices};
 use crate::tasks::cross_loader::{RangeOrSlice, ResourcesConfigInput};
 use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};

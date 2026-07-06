@@ -31,7 +31,7 @@ use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::math::sg_smoothing_coeffs;
-use crate::tasks::cross_dims::ChannelsData2Selector;
+use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 use thoosa_shared::tracked_await::track_await;
@@ -481,7 +481,7 @@ impl<AC> Adjuster<AC> for FreqFilterSplitsAdjuster
 where
     AC: SplitsAdjusterContext<Metrics = MonoMetrics<1, 2>> + Send + Sync,
 {
-    type A = ChannelsData2Selector;
+    type A = ChannelsDataSelector;
 
     async fn adjust(
         &self,
