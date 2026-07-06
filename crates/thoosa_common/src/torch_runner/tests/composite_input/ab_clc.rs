@@ -15,7 +15,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, RangeSelector, Select, ThoSelector, VoidSelector, WithId};
-use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
+use crate::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
@@ -165,10 +165,23 @@ impl ABClcSyncStageInputWrapper {
 }
 
 
-impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
+impl BorrowRef for ABClcSyncStageInputWrapper {
     type Out<'a> = ABClcSyncStageInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let from_a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
+            let from_b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
+            Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
+        }
+    }
+}
+
+impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
     where
         ABClcSyncStageInputWrapperSelector: 'a,
         Self: 'a,
@@ -176,13 +189,11 @@ impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrappe
         async move {
             match selector{
                 None => {
-                    let from_a = track_await(self.a_out.load_from_any_device_(to_device_idx)).await?;
-                    let from_b = track_await(self.b_out.load_from_any_device_(to_device_idx)).await?;
-                    Ok(ABClcSyncStageInput::from_data_refs(ThoDataRef::ReadLocked(from_a), ThoDataRef::ReadLocked(from_b)))
+                    BorrowRef::borrow_to(self, to_device_idx).await
                 }
                 Some(selector) => {
-                    let from_a = self.a_out.borrow_to(to_device_idx, Some(selector.a_select)).await?;
-                    let from_b =  self.b_out.borrow_to(to_device_idx, Some(selector.b_select)).await?;
+                    let from_a = SelectRef::borrow_to(&self.a_out, to_device_idx, Some(selector.a_select)).await?;
+                    let from_b =  SelectRef::borrow_to(&self.b_out, to_device_idx, Some(selector.b_select)).await?;
                     Ok(ABClcSyncStageInput::from_data_refs(from_a, from_b))
                 }
             }

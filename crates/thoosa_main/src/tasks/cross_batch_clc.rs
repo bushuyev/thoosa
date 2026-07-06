@@ -3,7 +3,7 @@ use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
@@ -135,20 +135,38 @@ impl Adjustable for CrossInputBatch1Selector {}
 
 
 
+impl<'a, R> BorrowRef for CrossInput<'a, R>
+where
+    R: AsRef<Resource> + Debug + Send + Sync + 'static,
+{
+    type Out<'o> = CrossInput<'o, R> where Self: 'o;
+
+    fn borrow_to<'o>(&'o self, _to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    where
+        Self: 'o,
+    {
+        async move {
+            let tensors = self.tensors.iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())).collect();
+            Ok(CrossInput::from_data_refs(tensors, self.resources_0, self.resources_1, self.id.clone()))
+        }
+    }
+}
+
 impl<'a, R> SelectRef<CrossInputBatch1Selector> for CrossInput<'a, R>
 where
     R: AsRef<Resource> + Debug + Send + Sync + 'static,
 {
-    type Out<'o> = CrossInput<'o, R> where Self: 'o, CrossInputBatch1Selector: 'o;
-
-    fn borrow_to<'o>(&'o self, _to_device_idx: usize, selector: Option<CrossInputBatch1Selector>) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_to<'o>(&'o self, to_device_idx: usize, selector: Option<CrossInputBatch1Selector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         CrossInputBatch1Selector: 'o,
         Self: 'o,
     {
         async move {
+            let Some(selector) = selector else {
+                return BorrowRef::borrow_to(self, to_device_idx).await;
+            };
             let batch_0_len = self.resources_0.len();
-            let range = selector.map(|selector| selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize).unwrap_or(0..self.resources_1.len());
+            let range = selector.resources_batch_range.start as usize..selector.resources_batch_range.end as usize;
             let mut tensors = Vec::with_capacity(batch_0_len + range.len());
             tensors.extend(self.tensors[..batch_0_len].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));
             tensors.extend(self.tensors[batch_0_len + range.start..batch_0_len + range.end].iter().map(|tensor| ThoDataRef::Borrowed(tensor.as_ref())));

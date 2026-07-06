@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
 use crate::runner::common::{MaxParallelCtx, RunCtx};
-use crate::runner::common::cachable::{SelectRef, ConsumeData};
+use crate::runner::common::cachable::{BorrowRef, SelectRef, ConsumeData};
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
 use crate::copy_ctx::ExecSyncStageActionResult;
@@ -317,10 +317,10 @@ where
     where
         W: SelectRef<S> + Debug + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
-        for<'f> <W as SelectRef<S>>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+        for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
     {
         if run_context.tho_device_idx() == 0 {
-            let borrowed = track_await(input.borrow_to(0, None)).await?;
+            let borrowed = track_await(SelectRef::borrow_to(&input, 0, None)).await?;
             return Arc::clone(task).do_run(borrowed.borrow(), &run_context);
         }
 

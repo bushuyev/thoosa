@@ -309,7 +309,7 @@ impl<D> ThoDataRef<'_, D> {
 
 impl <O> BorrowRef for DevicesWrap<O>
 where
-    O: for<'o> BorrowRef + WithId + Data + CopyToDevice + Send + Sync,
+    O: WithId + Data + CopyToDevice + Send + Sync,
 {
     type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a;
 
@@ -332,9 +332,7 @@ where
     S:ThoSelector + Clone + Debug + Send,
     O: Select<S, Output = O> + WithId + Data + CopyToDevice + Send + Sync,
 {
-    type Out<'a> = ThoDataRef<'a, O> where Self: 'a, O:'a, S:'a;
-
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<Self::Out<'o>, ThoError>> + std::marker::Send
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + std::marker::Send
     where
         O:'o,
         S:'o,
@@ -343,11 +341,7 @@ where
         async move {
             match selector {
                 None => {
-                    let read_guard = self.load_from_any_device_(to_tho_device_idx).await?;
-                    Ok(ThoDataRef::ReadLocked(RwLockReadGuard::map(
-                        read_guard,
-                        |val: &O| val,
-                    )))
+                    BorrowRef::borrow_to(self, to_tho_device_idx).await
                 }
                 Some(selector) => {
                     if self.is_resident_on_device(to_tho_device_idx) {
@@ -996,13 +990,11 @@ where
     }
 }
 
-pub trait SelectRef<S>
+pub trait SelectRef<S>: BorrowRef
 where
     S: ThoSelector + Clone + Debug + Send
 {
-    type Out<'a> where Self: 'a, S:'a;
-
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>/*TODO remove Option*/) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>/*TODO remove Option*/) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S:'o, Self:'o;
 
@@ -1013,15 +1005,13 @@ where
     BR: SelectRef<S> + Sync + Send,
     S:ThoSelector + Clone + Debug + Send
 {
-    type Out<'a> = BR::Out<'a> where Self: 'a, S: 'a, BR:'a;
-
-    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+    fn borrow_to<'o>(&'o self, to_tho_device_idx: usize, selector: Option<S>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'o>, ThoError>> + Send
     where
         S: 'o,
         Self: 'o
     {
         async move {
-            self.as_ref().borrow_to(to_tho_device_idx, selector).await
+            <BR as SelectRef<S>>::borrow_to(self.as_ref(), to_tho_device_idx, selector).await
         }
     }
 }
