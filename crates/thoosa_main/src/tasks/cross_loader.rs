@@ -1,7 +1,7 @@
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
-use crate::tasks::cross_dims::ChannelsData2Selector;
+use crate::tasks::cross_dims::ChannelsDataSelector;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
@@ -913,7 +913,7 @@ impl RangeOrSlice {
             }
             Self::Slice((i, range)) => {
                 let channels = batch[*i].size().dim_0();
-                let selector = ChannelsData2Selector([0, range.start].into()..[channels, range.end].into());
+                let selector = ChannelsDataSelector([0, range.start].into()..[channels, range.end].into());
                 Ok(vec![track_await(batch[*i].borrow_to(to_device_idx, Some(selector))).await?])
             }
         }

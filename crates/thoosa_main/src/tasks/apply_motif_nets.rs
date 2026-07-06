@@ -53,7 +53,7 @@ use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
-use crate::tasks::cross_dims::ChannelsData2Selector;
+use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::resources_motifs_clc_dist::ClcResourcesMotifsDistOutput;
 use crate::tasks::stage_ids::{APPLY_MOTIF_NET, APPLY_MOTIF_NETS};
@@ -229,7 +229,7 @@ impl<AC> Adjuster<AC> for StepAlignedSplitsAdjuster
 where
     AC: SplitsAdjusterContext<Metrics = MonoMetrics<1, 2>> + Send + Sync,
 {
-    type A = ChannelsData2Selector;
+    type A = ChannelsDataSelector;
 
     async fn adjust(
         &self,
@@ -920,12 +920,12 @@ impl WithId for ApplyMotifNetInputWrapper {
 }
 
 
-impl SelectRef<ChannelsData2Selector> for ApplyMotifNetInputWrapper {
+impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
     type Out<'a> = ApplyMotifNetInput<'a> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsData2Selector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ChannelsDataSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
-        ChannelsData2Selector: 'a,
+        ChannelsDataSelector: 'a,
         Self: 'a,
     {
         async move {
