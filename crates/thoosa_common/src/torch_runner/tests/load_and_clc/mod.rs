@@ -20,7 +20,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, EnvFilter};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
-use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
 use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
 use crate::runner::run_ctx_2::RunCtxImpl;

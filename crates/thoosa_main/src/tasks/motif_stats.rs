@@ -27,7 +27,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
@@ -321,7 +321,7 @@ impl WithId for MotifStatsCalcInputWrapper {
 }
 
 
-impl BorrowRef<VoidSelector> for MotifStatsCalcInputWrapper {
+impl SelectRef<VoidSelector> for MotifStatsCalcInputWrapper {
     type Out<'a> = MotifStatsCalcInput<'a> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

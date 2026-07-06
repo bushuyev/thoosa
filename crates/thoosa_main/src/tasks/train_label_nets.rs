@@ -14,7 +14,7 @@ use parking_lot::{Mutex, RwLock};
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
 use cached_derive::Cached;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_tensor::{ThoTensor};
@@ -763,7 +763,7 @@ mod tests {
     use tch::Tensor;
     use tokio::io::Join;
     use tokio::task::JoinSet;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx, RunCtx};
     use thoosa_common::runner::common::MaxParallelCtx;

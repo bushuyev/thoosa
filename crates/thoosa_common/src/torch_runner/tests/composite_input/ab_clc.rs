@@ -15,7 +15,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, RangeSelector, Select, ThoSelector, VoidSelector, WithId};
-use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
+use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
@@ -165,7 +165,7 @@ impl ABClcSyncStageInputWrapper {
 }
 
 
-impl BorrowRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
+impl SelectRef<ABClcSyncStageInputWrapperSelector> for ABClcSyncStageInputWrapper {
     type Out<'a> = ABClcSyncStageInput<'a> where Self: 'a;
 
     fn borrow_to<'a>(&'a self, to_device_idx: usize, selector: Option<ABClcSyncStageInputWrapperSelector>) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send

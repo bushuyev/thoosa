@@ -11,7 +11,7 @@ use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use thoosa_common::dims::MotifSlices;
 use thoosa_named_derive::Named;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::tho_device::ThoDevice;

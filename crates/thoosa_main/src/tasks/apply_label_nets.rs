@@ -18,7 +18,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{LabelNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunConfigId;
@@ -525,7 +525,7 @@ mod tests {
     use thoosa_common::train_nets::{CommonTrainingRunConfig, LinLenNetParams, LabelNetParams, LabelNetTypeParams, MotifCosine2DNetArgs, MotifNetParams, MotifNetTypeArgs, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::utils::{assert_close, to_vec_f32};
     use thoosa_common::ws::WsMockBuilder;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};

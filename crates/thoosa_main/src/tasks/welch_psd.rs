@@ -17,7 +17,7 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};

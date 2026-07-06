@@ -81,7 +81,7 @@ use torch_sys::at_grad_set_enabled;
 use thoosa_common::copy_ctx::CudaActorHandle;
 
 use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParamsRangeOrValue, InputFilter, MedianFilterParamsRangeOrValue, NotchBandFilterParamsRangeOrValue, Padding, PaddingRangeOrValue, SavGolFilterParams, SavGolFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::AsyncStage;
@@ -2163,7 +2163,7 @@ mod cli_tests {
     use thoosa_shared::perf_logging::{format_perf_map, set_panic_hook, PERF};
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::{mock_run_ctx, MaxParallelCtx, MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
     use thoosa_common::runner::common::mock_run_ctx::MockRunCtxBuilder;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};

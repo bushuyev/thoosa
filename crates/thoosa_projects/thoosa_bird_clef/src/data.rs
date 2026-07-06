@@ -198,7 +198,7 @@ mod tests {
     use tch::{Device, IndexOp, TchError, Tensor};
     use tempfile::NamedTempFile;
     use thoosa_common::dims::Spectorgram;
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;

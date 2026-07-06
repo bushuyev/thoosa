@@ -37,7 +37,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -1062,7 +1062,7 @@ mod tests {
     use parking_lot::RwLock;
     use tch::Tensor;
     use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
-    use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap};
     use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex};
