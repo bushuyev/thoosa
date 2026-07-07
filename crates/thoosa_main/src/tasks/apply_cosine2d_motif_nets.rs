@@ -2,26 +2,23 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use std::time::Duration;
 use async_trait::async_trait;
-use futures_util::future::{join_all, try_join_all};
+use futures_util::future::try_join_all;
 use log::{error, warn};
 use mockall_double::double;
 use parking_lot::{Mutex, RwLock};
 use tch::{IndexOp, Kind, Tensor};
 use tokio::io::AsyncWriteExt;
-use tokio::task::spawn_blocking;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
-use thoosa_common::copy_ctx::{exec_sync_stage, ExecSyncStageActionResult};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -48,7 +45,6 @@ use crate::tasks::stft::{SyncStft, SyncStftSelector};
 
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_shims::stream::ThoStreamGuard;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, cached_derive::Cached, Named)]
@@ -166,7 +162,7 @@ where
                     match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
 
-                            let module_with_store = net.borrow_to(0, None::<VoidSelector>).await?;
+                            let module_with_store = SelectRef::borrow_to(&net, 0, None::<VoidSelector>).await?;
                             let module_with_store = module_with_store.as_ref();
 
                                 let (hash_value, config) = (|| {
@@ -277,97 +273,15 @@ where
 
         let self_clone = Arc::clone(&self);
         async move {
-            let kernels = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.kernels)).collect::<Vec<_>>();
-            let alphas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>();
-            let betas = self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>();
-            let cuda_actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx());
-
-            let ctx_for_data = ctx.branch(false);
-            let res = track_await(exec_sync_stage(cuda_actor.as_ref(), move |stream| async move {
-                let tho_device_idx = ctx_for_data.tho_device_idx();
-
-                let input = input.borrow_to(tho_device_idx, None::<VoidSelector>).await?;
-                let kernels = try_join_all(kernels.iter().map(|kernel| kernel.borrow_to(tho_device_idx, None::<SyncStftSelector>))).await?;
-                let alphas = try_join_all(betas.iter().map(|alpha| alpha.borrow_to(tho_device_idx, None::<SyncStftSelector>))).await?;
-                let betas = try_join_all(betas.iter().map(|beta| beta.borrow_to(tho_device_idx, None::<SyncStftSelector>))).await?;
-
-                    debug!("ApplyCosine2DMotifNets::run: input={input:?}");
-                    let stream_ref = stream.as_ref().ok_or_else(|| ThoError::new("ApplyCosine2DMotifNets::run requires a local CUDA stream"))?;
-                    let _guard = ThoStreamGuard::new(stream_ref)?;
-                    let motifs_applied = self_clone.conv2d_tensors.iter().enumerate().map(|(tensors_idx, tensors)|{
-                        let stft_config = self_clone.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
-                        debug!("ApplyCosine2DMotifNets::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self_clone.slice_step);
-
-
-                        let stft = SyncStft::<C>::new("".into(), stft_config.clone())?;
-
-                        let t = input.t_ref().f_i((tensors.channel as i64, ..))?;
-                        let size = t.size();
-                        let pad_to_width = tensors.motif_width.max(stft_config.n_fft as u32);
-                         let stft_t = if self_clone.run_stft {
-                            let t = if size.len() == 1 {
-                                if size[0] >= pad_to_width as i64 {
-                                    t
-                                } else {
-                                    debug!("ApplyCosine2DMotifNets::run: padding t={t:?} to pad_to={}", pad_to_width);
-
-                                    pad_to(&t, &[pad_to_width as i64], 0.0)?
-                                }
-                            } else if size.len()== 2 {//batch of motif slices
-                                if size[1] >= pad_to_width as i64 {
-                                    t
-                                } else {
-                                    debug!("ApplyCosine2DMotifNets::run: padding t={t:?} to pad_to={}", pad_to_width);
-
-                                    pad_to(&t, &[size[0], pad_to_width as i64], 0.0)?
-                                }
-                            } else {
-                                panic!("ApplyCosine2DMotifNets::run: unexpected input={input:?} shape: {:?}", size);
-                            };
-
-
-                            stft.build_spectrogram(
-                                &t
-                            )?
-                        } else {
-                            t
-                        };
-
-                        debug!("ApplyCosine2DMotifNets::run: stft_t={stft_t:?}");
-                        let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);
-                        let step = self_clone.slice_step as i64 /stft_config.hop_length.as_ref().map(|v|*v).unwrap_or(1);
-
-                        debug!("ApplyCosine2DMotifNets::run: step={step} window={window}");
-                        //unfold time frames
-                        let stft_t = stft_t.unfold(1,window,step);
-
-                        debug!("ApplyCosine2DMotifNets::run: unfolded stft_t={stft_t:?}");
-                        let stft_t = stft_t.permute([1, 0, 2]);
-
-                        debug!("ApplyCosine2DMotifNets::run: permuted stft_t={stft_t:?}");
-
-                         apply_cosine_kernel_bank_to_batched_spectrogram(
-                           &stft_t.unsqueeze(1),
-                           kernels[tensors_idx].as_ref().as_ref(),
-                           alphas[tensors_idx].as_ref().as_ref(),
-                           betas[tensors_idx].as_ref().as_ref(),
-                           CosineConv2dBankConfig::default()
-                        ).and_then(|v|{
-                            let unbound = v.f_squeeze_dim(2)?.f_unbind(1)?;
-                            debug!("ApplyCosine2DMotifNets::run: unbound={unbound:?}");
-                            unbound.into_iter().map(|v| ThoTensor::<MotifProbability, SynKey>::new("".into(), v)).collect::<Result<Vec<_>, ThoError>>()
-                        })
-                    }).collect::<Result<Vec<_>, ThoError>>()?
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<ThoTensor<MotifProbability, SynKey>>>();
-
-                    debug!("ApplyCosine2DMotifNets::run: motifs_applied={motifs_applied:?}");
-
-                    let res = motifs_applied;
-
-                Ok(ExecSyncStageActionResult::Sync { stream, out: res })
-            })).await?;
+            let apply_sync = Arc::new(ApplyCosine2DMotifNetsSync::<C>::new(self_clone.out_id(&input_id), Arc::clone(&self_clone)));
+            let apply_sync_input = Arc::new(ApplyCosine2DMotifNetsSyncInputWrapper::new(
+                input,
+                self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.kernels)).collect::<Vec<_>>(),
+                self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.a)).collect::<Vec<_>>(),
+                self_clone.conv2d_tensors.iter().map(|tensors| Arc::clone(&tensors.b)).collect::<Vec<_>>(),
+            ));
+            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+            let res = track_await(oom_handler.run(&apply_sync, apply_sync_input, ctx.branch(false), NoContexts)).await?.motifs_applied;
 
             //TODO stretch motifs in BatchAppliedMotifNets
             let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));
@@ -387,7 +301,211 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct ApplyCosine2DMotifNetsSync<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    apply_cosine2d_motif_nets: Arc<ApplyCosine2DMotifNets<C>>,
+}
 
+impl<C> ApplyCosine2DMotifNetsSync<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new(id: SynKey, apply_cosine2d_motif_nets: Arc<ApplyCosine2DMotifNets<C>>) -> Self {
+        Self { id, apply_cosine2d_motif_nets }
+    }
+}
+
+impl<C> OutId for ApplyCosine2DMotifNetsSync<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, _input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.id.clone()
+    }
+}
+
+impl<C> Stage for ApplyCosine2DMotifNetsSync<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = ApplyCosine2DMotifNetsSyncInput<'a>;
+    type Out = ApplyCosine2DMotifNetsSyncOutput;
+}
+
+impl<C> SyncStage for ApplyCosine2DMotifNetsSync<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyCosine2DMotifNetsSync::run"))]
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("ApplyCosine2DMotifNets::run: input={:?}", input.input);
+        let motifs_applied = self.apply_cosine2d_motif_nets.conv2d_tensors.iter().enumerate().map(|(tensors_idx, tensors)|{
+            let stft_config = self.apply_cosine2d_motif_nets.stft_run_configs.get(&tensors.stft_hash_value).unwrap();
+            debug!("ApplyCosine2DMotifNets::run: tensors={tensors:?} slice_step={} stft_config={stft_config:?}", self.apply_cosine2d_motif_nets.slice_step);
+
+            let stft = SyncStft::<C>::new("".into(), stft_config.clone())?;
+
+            let t = input.input.t_ref().f_i((tensors.channel as i64, ..))?;
+            let size = t.size();
+            let pad_to_width = tensors.motif_width.max(stft_config.n_fft as u32);
+            let stft_t = if self.apply_cosine2d_motif_nets.run_stft {
+                let t = if size.len() == 1 {
+                    if size[0] >= pad_to_width as i64 {
+                        t
+                    } else {
+                        debug!("ApplyCosine2DMotifNets::run: padding t={t:?} to pad_to={}", pad_to_width);
+
+                        pad_to(&t, &[pad_to_width as i64], 0.0)?
+                    }
+                } else if size.len()== 2 {//batch of motif slices
+                    if size[1] >= pad_to_width as i64 {
+                        t
+                    } else {
+                        debug!("ApplyCosine2DMotifNets::run: padding t={t:?} to pad_to={}", pad_to_width);
+
+                        pad_to(&t, &[size[0], pad_to_width as i64], 0.0)?
+                    }
+                } else {
+                    panic!("ApplyCosine2DMotifNets::run: unexpected input={:?} shape: {:?}", input.input, size);
+                };
+
+                stft.build_spectrogram(
+                    &t
+                )?
+            } else {
+                t
+            };
+
+            debug!("ApplyCosine2DMotifNets::run: stft_t={stft_t:?}");
+            let window = tensors.motif_width as i64/stft_config.win_length.as_ref().map(|v|*v).unwrap_or(1);
+            let step = self.apply_cosine2d_motif_nets.slice_step as i64 /stft_config.hop_length.as_ref().map(|v|*v).unwrap_or(1);
+
+            debug!("ApplyCosine2DMotifNets::run: step={step} window={window}");
+            //unfold time frames
+            let stft_t = stft_t.unfold(1,window,step);
+
+            debug!("ApplyCosine2DMotifNets::run: unfolded stft_t={stft_t:?}");
+            let stft_t = stft_t.permute([1, 0, 2]);
+
+            debug!("ApplyCosine2DMotifNets::run: permuted stft_t={stft_t:?}");
+
+            apply_cosine_kernel_bank_to_batched_spectrogram(
+                &stft_t.unsqueeze(1),
+                input.kernels[tensors_idx].as_ref().as_ref(),
+                input.alphas[tensors_idx].as_ref().as_ref(),
+                input.betas[tensors_idx].as_ref().as_ref(),
+                CosineConv2dBankConfig::default()
+            ).and_then(|v|{
+                let unbound = v.f_squeeze_dim(2)?.f_unbind(1)?;
+                debug!("ApplyCosine2DMotifNets::run: unbound={unbound:?}");
+                unbound.into_iter().map(|v| ThoTensor::<MotifProbability, SynKey>::new("".into(), v)).collect::<Result<Vec<_>, ThoError>>()
+            })
+        }).collect::<Result<Vec<_>, ThoError>>()?
+            .into_iter()
+            .flatten()
+            .collect::<Vec<ThoTensor<MotifProbability, SynKey>>>();
+
+        debug!("ApplyCosine2DMotifNets::run: motifs_applied={motifs_applied:?}");
+
+        Ok(ApplyCosine2DMotifNetsSyncOutput { id: self.id.clone(), motifs_applied })
+    }
+}
+
+#[derive(Debug)]
+pub struct ApplyCosine2DMotifNetsSyncInput<'a> {
+    input: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
+    kernels: Vec<ThoDataRef<'a, CosineConv2dTensor>>,
+    alphas: Vec<ThoDataRef<'a, CosineConv2dTensor>>,
+    betas: Vec<ThoDataRef<'a, CosineConv2dTensor>>,
+}
+
+impl Input for ApplyCosine2DMotifNetsSyncInput<'_> {}
+
+impl WithId for ApplyCosine2DMotifNetsSyncInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        self.input.id()
+    }
+}
+
+impl Data for ApplyCosine2DMotifNetsSyncInput<'_> {
+    type Metrics = MonoMetrics<1, 2>;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        MonoMetrics::<1, 2>::try_from(self.input.size()).unwrap_or_default()
+    }
+
+    fn device(&self) -> usize {
+        self.input.device_idx()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.input.mem_size() + self.kernels.iter().map(|tensor| tensor.mem_size()).sum::<u64>() + self.alphas.iter().map(|tensor| tensor.mem_size()).sum::<u64>() + self.betas.iter().map(|tensor| tensor.mem_size()).sum::<u64>()
+    }
+}
+
+#[derive(Debug)]
+pub struct ApplyCosine2DMotifNetsSyncInputWrapper {
+    input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
+    kernels: Vec<Arc<DevicesWrap<CosineConv2dTensor>>>,
+    alphas: Vec<Arc<DevicesWrap<CosineConv2dTensor>>>,
+    betas: Vec<Arc<DevicesWrap<CosineConv2dTensor>>>,
+}
+
+impl ApplyCosine2DMotifNetsSyncInputWrapper {
+    fn new(input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, kernels: Vec<Arc<DevicesWrap<CosineConv2dTensor>>>, alphas: Vec<Arc<DevicesWrap<CosineConv2dTensor>>>, betas: Vec<Arc<DevicesWrap<CosineConv2dTensor>>>) -> Self {
+        Self { input, kernels, alphas, betas }
+    }
+}
+
+impl WithId for ApplyCosine2DMotifNetsSyncInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        self.input.id()
+    }
+}
+
+impl BorrowRef for ApplyCosine2DMotifNetsSyncInputWrapper {
+    type Out<'a> = ApplyCosine2DMotifNetsSyncInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let input = track_await(SelectRef::borrow_to(&self.input, to_device_idx, None::<VoidSelector>)).await?;
+            let kernels = track_await(try_join_all(self.kernels.iter().map(|kernel| SelectRef::borrow_to(kernel, to_device_idx, None::<SyncStftSelector>)))).await?;
+            let alphas = track_await(try_join_all(self.alphas.iter().map(|alpha| SelectRef::borrow_to(alpha, to_device_idx, None::<SyncStftSelector>)))).await?;
+            let betas = track_await(try_join_all(self.betas.iter().map(|beta| SelectRef::borrow_to(beta, to_device_idx, None::<SyncStftSelector>)))).await?;
+
+            Ok(ApplyCosine2DMotifNetsSyncInput { input, kernels, alphas, betas })
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ApplyCosine2DMotifNetsSyncOutput {
+    id: SynKey,
+    motifs_applied: Vec<ThoTensor<MotifProbability, SynKey>>,
+}
+
+impl WithId for ApplyCosine2DMotifNetsSyncOutput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Output for ApplyCosine2DMotifNetsSyncOutput {}
 
 pub fn apply_cosine_kernel_bank_to_batched_spectrogram(
     spec: &Tensor,     // [B,C,KH,W]
