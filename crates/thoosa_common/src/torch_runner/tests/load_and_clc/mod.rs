@@ -20,7 +20,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{fmt, EnvFilter};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOnly;
-use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
 use crate::runner::global_ctx::{mock_global_ctx, GlobalCtx};
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -301,7 +301,7 @@ async fn do_test_loaded(
 
     debug!("loaded_tensor_0_0={loaded_tensor_0_0:?}");
 
-    let tensor_data_0_0=loaded_tensor_0_0.borrow_to(load_to_device, None).await?;
+    let tensor_data_0_0=BorrowRef::borrow_to(&loaded_tensor_0_0, load_to_device).await?;
 
     debug!("tensor_data={}", (*tensor_data_0_0).t_ref());
 
@@ -325,7 +325,7 @@ async fn do_test_loaded(
         )
         .await?;
 
-    let tensor_data_0_1 = loaded_tensor_0_0.borrow_to(load_to_device, None).await?;
+    let tensor_data_0_1 = BorrowRef::borrow_to(&loaded_tensor_0_0, load_to_device).await?;
 
     // let tensor_data_0_1 = loaded_tensor_0_1.load_from_any_device(load_to_device, None).await?;
 
@@ -899,7 +899,7 @@ async fn heavy_test_real_oom_dump_and_split() -> Result<(), ThoError> {
 
     debug!("multed={multed:?}");
 
-    let r = multed.borrow_to(1, None).await?;
+    let r = BorrowRef::borrow_to(&multed, 1).await?;
     mul_check_with_exp_f(MUL_K as f64, "resource_1", r.as_ref(), 0.01, 0.01, |k, t| {
         lin_for_size(k, size, t.kind(), &t.device())
             .sum_dim_intlist(1, false, t.kind())

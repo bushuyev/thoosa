@@ -10,7 +10,7 @@ use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 use serde::{Deserialize, Serialize};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, ThoSelector, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, ThoSelector, WithId};
 use tokio::task::JoinSet;
 
 use thoosa_shared::comp_id::SynKey;
@@ -254,7 +254,7 @@ where
     <R as Stage>::In<'static>: From<&'static str>,
     F: Fn(usize/*device*/, u64/*cache_area*/, &'static str/*name*/) -> <R as Stage>::Ctx + Send + Sync + 'static,
     CF: Fn(&'static str, &<<R as Stage>::Out as BorrowRef>::Out<'_>)  + Send + Sync + Clone + 'static,
-    for<'o> <R as Stage>::Out:WithId+ SelectRef<VoidSelector>+Debug,
+    for<'o> <R as Stage>::Out:WithId+ BorrowRef+Debug,
     for<'o> <<R as Stage>::Out as BorrowRef>::Out<'o>: Debug
 {
     let check_arc = Arc::new(check);
@@ -597,11 +597,11 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, Select, VoidSelector, WithId};
+    use thoosa_shared::traits::{Data, WithId};
     use thoosa_shared::{Cause, ThoError};
     use crate::runner::adjusters::splits::OutputBuilder;
     use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
-    use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+    use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
     use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;
@@ -813,14 +813,6 @@ mod tests {
     struct DMulTaskOutput {
         id: DMulTaskOutputId,
         data: DummyTensor,
-    }
-
-    impl Select<VoidSelector> for DMulTaskOutput{
-        type Output = DMulTaskOutput;
-
-        fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
-            unimplemented!()
-        }
     }
 
     #[async_trait]
@@ -1035,7 +1027,7 @@ mod tests {
             .await?;
 
         debug!("loaded_tensor_1_0={loaded_tensor_1_0:?}");
-        let data = SelectRef::borrow_to(&loaded_tensor_1_0, 1, None).await?;
+        let data = BorrowRef::borrow_to(&loaded_tensor_1_0, 1).await?;
 
        assert_eq!(data.as_ref().data.0, [0.0, 1.0, 2.0]);
 
@@ -1135,7 +1127,7 @@ mod tests {
             )
             .await?;
 
-        let data = SelectRef::borrow_to(&multed, 1, None).await?;
+        let data = BorrowRef::borrow_to(&multed, 1).await?;
            assert_eq!(
                data.as_ref().data.0,
                (0..100).map(|v| v as f32 * 2.).collect::<Vec<_>>()

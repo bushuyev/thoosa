@@ -16,7 +16,7 @@ use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::ipc::json_ser::SyncStageJsonWrapper;
 use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
-use crate::runner::common::cachable::{SelectRef, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, SyncStage};
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -159,7 +159,7 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
             let clc_task = Arc::new(ClcStage::new(SynKey::new([mono_key!(0, "sync_task_0")]), MUL_K, vec![], clc_dim, Float, Device::Cuda(0).into(), use_matmul).await);
             let mut ctx = RunCtxImpl::new(tho_device_idx, "ipc_load_and_clc");
             let output_ref = Arc::clone(&clc_task).run(Arc::clone(&loaded), ctx.branch(false)).await?;
-            let output_ref = output_ref.borrow_to(ctx.tho_device_idx(), None).await?;
+            let output_ref = BorrowRef::borrow_to(&output_ref, ctx.tho_device_idx()).await?;
             let out_key = output_ref.ref_key().ok_or_else(|| ThoError::new(format!("ProxySyncClcTask expected output ref from worker, got {output_ref:?}")))?;
            
 

@@ -18,7 +18,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{LabelNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
 use thoosa_shared::run_configs::RunConfigId;
@@ -272,7 +272,7 @@ where
 
                     #[cfg(test)]{
                         {
-                            let input = input.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            let input = SelectRef::borrow_to(&input, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                             trace!("ApplyLabelNets::run: input=\n{}", input.as_ref().as_ref());
                             Ok::<(), ThoError>(())
                         }?;
@@ -286,7 +286,7 @@ where
 
                     #[cfg(test)]{
                         {
-                            let probs = motif_probs.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            let probs = SelectRef::borrow_to(&motif_probs, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                             trace!("ApplyLabelNets::run: probs=\n{}", probs.as_ref().data().as_ref());
                             Ok::<(), ThoError>(())
                         }?;
@@ -297,7 +297,7 @@ where
 
                     #[cfg(test)]{
                         {
-                            let result = result.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+                            let result = SelectRef::borrow_to(&result, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
                             trace!("ApplyLabelNets::run: result=\n{}", result.as_ref().as_ref());
                             Ok::<(), ThoError>(())
                         }?;
@@ -323,7 +323,7 @@ where
         if label_outputs.is_empty() {
             Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.tho_device_idx()).into())) )?)))
         } else {
-            let outs = try_join_all(label_outputs.iter().map(|o|o.borrow_to(ctx.tho_device_idx(), None))).await?;
+            let outs = try_join_all(label_outputs.iter().map(|o| BorrowRef::borrow_to(o, ctx.tho_device_idx()))).await?;
 
 
                 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run/stack"))]
@@ -438,8 +438,8 @@ where
             debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
 
             let tho_device_idx = ctx.tho_device_idx();
-            let net = net_wrapper.borrow_to(tho_device_idx, None::<thoosa_shared::traits::VoidSelector>).await?;
-            let input = input.borrow_to(tho_device_idx, None::<SyncStftSelector>).await?;
+            let net = BorrowRef::borrow_to(&net_wrapper, tho_device_idx).await?;
+            let input = SelectRef::borrow_to(&input, tho_device_idx, None::<SyncStftSelector>).await?;
             let net = net.as_ref();
             let input = input.as_ref();
             {
@@ -899,7 +899,7 @@ mod tests {
 
 
         {
-            let out = out.borrow_to(run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let out = SelectRef::borrow_to(&out, run_ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             debug!("t=\n{}", out.t_ref());
             let out = out.as_ref().as_ref().f_squeeze_dim(-1)?;
             Ok::<_, ThoError>((out.size(), to_vec_f32(&out.totype(Float))))

@@ -34,7 +34,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, FuturesOrdering, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, WithId};
 use thoosa_store::{Store, TrainedNet};
 use crate::ApplyMotifNets;
 use crate::tasks::apply_motif_nets::{BatchAppliedMotifNets, BatchAppliedMotifNetsInput};
@@ -162,7 +162,7 @@ where
                     match track_await(load_motif_net.run_cached(LoadMotifNetInput::new(path, false), load_ctx)).await {
                         Ok(net) => {
 
-                            let module_with_store = SelectRef::borrow_to(&net, 0, None::<VoidSelector>).await?;
+                            let module_with_store = BorrowRef::borrow_to(&net, 0).await?;
                             let module_with_store = module_with_store.as_ref();
 
                                 let (hash_value, config) = (|| {
@@ -481,7 +481,7 @@ impl BorrowRef for ApplyCosine2DMotifNetsSyncInputWrapper {
         Self: 'a,
     {
         async move {
-            let input = track_await(SelectRef::borrow_to(&self.input, to_device_idx, None::<VoidSelector>)).await?;
+            let input = track_await(BorrowRef::borrow_to(&self.input, to_device_idx)).await?;
             let kernels = track_await(try_join_all(self.kernels.iter().map(|kernel| SelectRef::borrow_to(kernel, to_device_idx, None::<SyncStftSelector>)))).await?;
             let alphas = track_await(try_join_all(self.alphas.iter().map(|alpha| SelectRef::borrow_to(alpha, to_device_idx, None::<SyncStftSelector>)))).await?;
             let betas = track_await(try_join_all(self.betas.iter().map(|beta| SelectRef::borrow_to(beta, to_device_idx, None::<SyncStftSelector>)))).await?;

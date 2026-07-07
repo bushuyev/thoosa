@@ -6,7 +6,7 @@ use std::ops::Range;
 use tch::{IndexOp, Tensor};
 use log::{debug, trace};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, SimpleId, ThoSelector, VoidSelector};
+use thoosa_shared::traits::{Metrics, MonoMetrics, Named, RangeSelector, Select, SimpleId, ThoSelector};
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
 
@@ -50,15 +50,6 @@ impl LocalSelect<u32, RangeSelector> for ThoTensor<AnyDims, u32> {
         ThoTensor::new(*id, t.f_i(start..end)?)
     }
 }
-
-impl LocalSelect<SynKey, VoidSelector> for ThoTensor<ChannelsData, SynKey> {
-    type Output = ThoTensor<ChannelsData, SynKey>;
-
-    fn local_subview(id:&SynKey, t:&Tensor, selector: VoidSelector) -> Result<Self::Output, ThoError> {
-        unimplemented!()
-    }
-}
-
 
 #[derive(Clone, Debug)]
 pub struct ChannelsData;

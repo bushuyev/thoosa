@@ -5,7 +5,7 @@ use tch::Kind;
 use thoosa_shared::ThoError;
 
 use crate::ipc::json_ser::SyncStageJsonWrapper;
-use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::runnable::AsyncStage;
 use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
@@ -26,7 +26,6 @@ use classifier::{sync_classifier_endpoint_init, Classifier, SYNC_CLASSIFIER_ENDP
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyTask;
 use loader::ABLoader;
-use thoosa_shared::traits::{Select, VoidSelector};
 
 #[ctor::ctor]
 fn init() {
@@ -45,14 +44,6 @@ pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(Str
         SYNC_CLASSIFIER_ENDPOINT.to_string(),
         Box::new(sync_classifier_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
     )])
-}
-
-impl Select<VoidSelector> for ThoTensor<ClsOut, ModelTestId> {
-    type Output = ThoTensor<ClsOut, ModelTestId>;
-
-    fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
-        unimplemented!()
-    }
 }
 
 pub(crate) async fn run_model_test_pipeline(
@@ -87,7 +78,7 @@ pub(crate) async fn run_model_test_pipeline(
         .run_cached(input, ctx.branch(false))
         .await?;
 
-    let acc_t = acc.borrow_to(check_device_idx, None).await?;
+    let acc_t = BorrowRef::borrow_to(&acc, check_device_idx).await?;
 
     let v = ClsOut::accuracy(acc_t.as_ref());
     assert!(v >= min_accuracy, "training accuracy too low: {v}");

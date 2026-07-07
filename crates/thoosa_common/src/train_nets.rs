@@ -49,7 +49,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::run_configs::RunConfig;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
-use thoosa_shared::traits::{Data, Select, SimpleId, VoidSelector, WithId};
+use thoosa_shared::traits::{Data, SimpleId, WithId};
 use thoosa_shims::inference_mode::InferenceModeGuard;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::my_tch::MotifInitModeRangeOrValue;
@@ -285,17 +285,6 @@ pub struct ThoModuleWithStore<DI: Dims + Send + 'static + ?Sized, DO: Dims + Sen
     module_factory: Option<Arc<ModuleFactory<DI, DO>>>,
 }
 
-impl <DI, DO> Select<VoidSelector> for ThoModuleWithStore<DI, DO>
-where
-    DI: Dims + Send + 'static + ?Sized,
-    DO: Dims + Send
-{
-    type Output = ThoModuleWithStore<DI, DO>;
-
-    fn subview(&self, selector: VoidSelector ) -> Result<Self::Output, ThoError> {
-        unimplemented!()
-    }
-}
 impl <DI, DO> WithId for ThoModuleWithStore<DI, DO>
 where
     DI: Dims + Send + 'static + ?Sized,

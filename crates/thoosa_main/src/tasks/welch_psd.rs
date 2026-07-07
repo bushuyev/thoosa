@@ -17,11 +17,11 @@ use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, ThoSelector, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, ThoSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_store::Store;
@@ -342,7 +342,7 @@ where
                     ctx.branch(false),
                 )).await?;
 
-            let loaded = loaded.borrow_to(0, None::<VoidSelector>).await?;
+            let loaded = BorrowRef::borrow_to(&loaded, 0).await?;
             let welch_input = ThoTensor::<WelchInputChannels, SynKey>::new(loaded.id().clone(), loaded.t_ref().shallow_clone())?;
 
             let welch_input = Arc::new(DevicesWrap::wrap(welch_input));
