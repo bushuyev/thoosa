@@ -24,7 +24,7 @@ use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
-use thoosa_shared::traits::{CachableIdTr, Data, DataId, VoidSelector, WithId};
+use thoosa_shared::traits::{CachableIdTr, Data, DataId, WithId};
 use thoosa_store::Store;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::traits::MonoMetrics;
@@ -37,7 +37,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -564,7 +564,7 @@ where
         );
         let required_loaded_resource_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(loaded_resources_name, &required_loaded_resource_ids)]);
-        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, VoidSelector> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("motif_loader"))),
@@ -777,7 +777,7 @@ where
         let raw_tensor = track_await(Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(false))).await?;
         let channel_tensor = {
-            let raw_tt = raw_tensor.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
+            let raw_tt = SelectRef::borrow_to(&raw_tensor, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             let size = raw_tt.size();
             let mut valid_slices = Vec::with_capacity(slices.len());
 
@@ -905,7 +905,7 @@ where
         let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        let raw_tt = raw_tensor.borrow_to(ctx.tho_device_idx(), None::<VoidSelector>).await?;
+        let raw_tt = BorrowRef::borrow_to(&raw_tensor, ctx.tho_device_idx()).await?;
             let resource_id = resource_id;
             let resource_slice_count = slices.len() as i64;
             let motif_t = ThoTensor::<AnyDims, DataId>::zeros(

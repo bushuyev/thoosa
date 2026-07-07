@@ -15,7 +15,7 @@ use std::sync::Arc;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
@@ -31,7 +31,7 @@ use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
 use thoosa_store::Store;
 use crate::tasks::stage_ids::SELECT_BUCKETS;
@@ -406,16 +406,6 @@ impl BorrowRef for SelectBucketsSyncInputWrapper {
     }
 }
 
-impl SelectRef<VoidSelector> for SelectBucketsSyncInputWrapper {
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl std::future::Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
-    where
-        Self: 'a,
-    {
-        async move { BorrowRef::borrow_to(self, to_device_idx).await }
-    }
-}
-
-
 #[derive(Debug)]
 struct SyncSelectBucketsStage<C>
 where
@@ -555,7 +545,7 @@ where
             let select_config = select_config.clone();
             async move {
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, VoidSelector> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                         Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("select_buckets"))),

@@ -3,8 +3,7 @@ use std::sync::Arc;
 use log::debug;
 use tch::Tensor;
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::VoidSelector;
-use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -68,7 +67,7 @@ where
     ).await?;
 
 
-    let val = out.borrow_to(0, None::<VoidSelector>).await?;
+    let val = BorrowRef::borrow_to(&out, 0).await?;
 
     let value = val.as_ref().value;
 
@@ -88,7 +87,7 @@ where
         ctx.branch(false)
     ).await?;
 
-    let val = out.borrow_to(0, None::<VoidSelector>).await?;
+    let val = BorrowRef::borrow_to(&out, 0).await?;
 
     let value = val.as_ref().value;
 

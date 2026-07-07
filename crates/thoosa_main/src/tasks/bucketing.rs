@@ -34,7 +34,7 @@ use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, panic_to_err, CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError};
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, ThoSelector, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, ThoSelector, WithId};
 use thoosa_store::{IdSlice, Store};
 use thoosa_named_derive::Named;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
@@ -511,19 +511,6 @@ where
             };
             Ok(BucketingSyncInput::from_data_ref(self.resource_id, tensor, sample_offset))
         }
-    }
-}
-
-impl<D, Id> SelectRef<VoidSelector> for BucketingTensorInput<D, Id>
-where
-    D: Dims + Send + Sync + 'static,
-    Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-{
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
-    where
-        Self: 'a,
-    {
-        async move { BorrowRef::borrow_to(self, to_device_idx).await }
     }
 }
 

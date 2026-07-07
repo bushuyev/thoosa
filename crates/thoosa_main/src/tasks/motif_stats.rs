@@ -32,7 +32,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, 
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::tmp_cache::TmpCached;
-use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, Select, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
 use thoosa_common::copy_ctx;
 use thoosa_store::Store;
@@ -346,16 +346,6 @@ impl BorrowRef for MotifStatsCalcInputWrapper {
         }
     }
 }
-
-impl SelectRef<VoidSelector> for MotifStatsCalcInputWrapper {
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
-    where
-        Self: 'a,
-    {
-        async move { BorrowRef::borrow_to(self, to_device_idx).await }
-    }
-}
-
 
 #[derive(Debug)]
 struct MotifStatsLoadedChannelsInput {
@@ -971,7 +961,7 @@ where
                 debug!("MotifStats::run: motif={motif:?}");
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), motif, metrics.clone(), quantiles.clone()));
                 let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, VoidSelector> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                         Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
@@ -1029,7 +1019,7 @@ where
 
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs, metrics.clone(), quantiles.clone()));
                 let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, VoidSelector> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                         Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
@@ -1083,7 +1073,7 @@ where
                 let clc_input = MotifStatsTmpCachedChannelsInput::new(input_id.clone(), channels_slices, metrics.clone(), quantiles.clone());
                 let required_tmp_cache_ids = HashSet::<&dyn thoosa_shared::traits::CachableIdTr>::new();
                 let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, VoidSelector> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
                     vec![
                         Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
                         Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_stats"))),
