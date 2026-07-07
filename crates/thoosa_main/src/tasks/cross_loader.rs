@@ -35,7 +35,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, ThoSelector, WithId};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::mono_key;
@@ -264,14 +264,14 @@ where
             CacheArea::default()
         );
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        match track_await(OOMHandler::new(
+        match track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, CrossInputSelector>::new(
             vec![
-                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                     MAX_PARALLEL,
                     *MaxParallelStep::FIFTY,
                 ))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new("cross_unfold_clc"))),
-                Adjusters::Input(Box::new(CrossLoaderAdjuster::new())),
+                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("cross_unfold_clc"))),
+                Adjusters::Input(input_adjuster(CrossLoaderAdjuster::new())),
             ],
             None,
         ).run(

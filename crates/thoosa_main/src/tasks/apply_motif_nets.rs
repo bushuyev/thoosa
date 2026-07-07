@@ -30,7 +30,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore, TrainMotifsNetsResult};
@@ -510,11 +510,11 @@ where
                         (tmp_cache_name, &set)
                     ]);
 
-                    let r = track_await(OOMHandler::new(
+                    let r = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
                         vec![
-                            Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
-                            Adjusters::RunContext(Box::new(DumpToCpu::new("apply_moitf_net"))),
-                            Adjusters::Input(Box::new(StepAlignedSplitsAdjuster::new_with_overlap(
+                            Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
+                            Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_moitf_net"))),
+                            Adjusters::Input(input_adjuster(StepAlignedSplitsAdjuster::new_with_overlap(
                                 [-1, min_split_len].into(),
                                 [-1, overlap_len].into(),
                                 slice_step as i64,
@@ -524,7 +524,7 @@ where
                             &apply_motif_net,
                             Arc::clone(&apply_motif_net_input),
                             apply_motif_net_ctx,
-                            Contexts::new(
+                            Contexts::<ApplyMotifNet<C>, _, _, _>::new(
                                 ApplyMotifNetSplitsContext::new(
                                     input.size().clone(),
                                     out_id.clone(),
@@ -565,10 +565,10 @@ where
         let batch_input = BatchAppliedMotifNetsInputWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
-        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new("batch_apply_motif_nets"))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("batch_apply_motif_nets"))),
             ],
             None,
         );
@@ -577,9 +577,7 @@ where
             &self.batch_applied_motif_nets,
             batch_input,
             ctx.branch(true),
-            Contexts::new(
-                NoopInputContext::<BatchAppliedMotifNets<C>>(None),
-                NoopRunnableContext {},
+            WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(
                     MaxParallelAdjustContextImpl::new(),
                     DumpToCpuContextImpl::new(&required_ids),

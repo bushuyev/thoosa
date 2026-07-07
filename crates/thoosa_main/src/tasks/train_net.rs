@@ -7,7 +7,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, Devi
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
 use futures_util::{future::BoxFuture, StreamExt};
 use log::{debug, info, trace, warn};
@@ -245,13 +245,13 @@ where
 
             debug!("TrainNet::run_inner: descr={descr} device={:?} epochs={}", train_step.as_ref().device(), epochs);
 
-            let oom_handler = OOMHandler::new(
+            let oom_handler = OOMHandler::<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()>::new(
                 vec![
-                    Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
                         MAX_PARALLEL,
                         *MaxParallelStep::FIFTY,
                     ))),
-                    Adjusters::RunContext(Box::new(DumpToCpu::new("train_step"))),
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("train_step"))),
                 ],
                 None,
             );
@@ -287,9 +287,7 @@ where
                         &train_step,
                         Arc::clone(&input),
                         ctx.branch(false),
-                        Contexts::new(
-                            NoopInputContext(None),
-                            NoopRunnableContext {},
+                        WithRunCtxContext::new(
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
                                 DumpToCpuContextImpl::new(&dump_to_cpu_exclude),

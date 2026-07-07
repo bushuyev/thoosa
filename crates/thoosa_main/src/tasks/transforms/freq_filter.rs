@@ -17,7 +17,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::OutId;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::InputFilter;
@@ -580,11 +580,11 @@ where
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self)));
 
-        let filtered = track_await(OOMHandler::new(
+        let filtered = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
             vec![
-                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new("freq_filter"))),
-                Adjusters::Input(Box::new(FreqFilterSplitsAdjuster::new(min_split_len, self.effective_output_stride()?))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
+                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("freq_filter"))),
+                Adjusters::Input(input_adjuster(FreqFilterSplitsAdjuster::new(min_split_len, self.effective_output_stride()?))),
             ],
             None,
         )

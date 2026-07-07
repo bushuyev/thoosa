@@ -117,20 +117,7 @@ impl dyn CudaActorHandle + '_ {
         F: FnOnce(Option<Guard<ThoCudaStream>>) -> Fut + Send + 'a,
         Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
     {
-        Box::pin(async move {
-            let out = self.exec_sync_stage_boxed(Box::new(move |stream| {
-                Box::pin(async move {
-                    match action(stream).await? {
-                        ExecSyncStageActionResult::Sync { stream, out } => Ok(ExecSyncStageActionResult::Sync { stream, out: Box::new(out) as Box<dyn Any + Send> }),
-                        ExecSyncStageActionResult::NoSync(out) => Ok(ExecSyncStageActionResult::NoSync(Box::new(out) as Box<dyn Any + Send>)),
-                    }
-                })
-            })).await?;
-
-            out.downcast::<R>()
-                .map(|out| *out)
-                .map_err(|_| ThoError::new("CudaActorHandle::exec_sync_stage result type mismatch"))
-        })
+        exec_sync_stage(self, action)
     }
 
 
@@ -192,6 +179,28 @@ impl dyn CudaActorHandle + '_ {
         out
     }
 
+}
+
+pub fn exec_sync_stage<'a, R, F, Fut>(handle: &'a dyn CudaActorHandle, action: F) -> BoxFuture<'a, Result<R, ThoError>>
+where
+    R: Send + 'static,
+    F: FnOnce(Option<Guard<ThoCudaStream>>) -> Fut + Send + 'a,
+    Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
+{
+    Box::pin(async move {
+        let out = handle.exec_sync_stage_boxed(Box::new(move |stream| {
+            Box::pin(async move {
+                match action(stream).await? {
+                    ExecSyncStageActionResult::Sync { stream, out } => Ok(ExecSyncStageActionResult::Sync { stream, out: Box::new(out) as Box<dyn Any + Send> }),
+                    ExecSyncStageActionResult::NoSync(out) => Ok(ExecSyncStageActionResult::NoSync(Box::new(out) as Box<dyn Any + Send>)),
+                }
+            })
+        })).await?;
+
+        out.downcast::<R>()
+            .map(|out| *out)
+            .map_err(|_| ThoError::new("copy_ctx::exec_sync_stage result type mismatch"))
+    })
 }
 
 

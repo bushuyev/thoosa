@@ -883,7 +883,6 @@ where
     where
         R: SyncStage + Send + Sync + 'static + 'a,
         R::Ctx: Send + Sync + 'static,
-        IA: InputRun<R, W, S>,
         IA: InputAdjustment<'a, R, C, S>,
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
