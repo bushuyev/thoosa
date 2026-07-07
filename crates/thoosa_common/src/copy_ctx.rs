@@ -49,16 +49,6 @@ pub enum CudaActorMessage {
 
 }
 
-pub enum ExecSyncStageActionResult<T> {
-    Sync { stream: Option<Guard<ThoCudaStream>>, out: T },
-    NoSync(T),
-}
-
-    pub enum GuardOrNot {
-    Local(Guard<ThoCudaStream>),
-    IPC
-}
-
 pub trait SyncCtx {}
 
 impl SyncCtx for (){}
@@ -87,12 +77,6 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
-
-    fn exec_sync_stage_boxed<'a>(
-        &'a self,
-        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
-    ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>>;
-
     async fn install_endpoint(&self, init_msg:String)-> Result<(), ThoError> {
         Ok(())
     }
@@ -105,20 +89,11 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
-    async fn guard(&self) -> Result<GuardOrNot, ThoError>;
 
     async fn init_handle_ctx(&self) ->Result<Box<dyn HandleCtx>, ThoError>;
 }
 
 impl dyn CudaActorHandle + '_ {
-    pub fn exec_sync_stage<'a, R, F, Fut>(&'a self, action: F) -> BoxFuture<'a, Result<R, ThoError>>
-    where
-        R: Send + 'static,
-        F: FnOnce(Option<Guard<ThoCudaStream>>) -> Fut + Send + 'a,
-        Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
-    {
-        exec_sync_stage(self, action)
-    }
 
 
     pub async fn run_stage<S, W>(
@@ -180,29 +155,6 @@ impl dyn CudaActorHandle + '_ {
     }
 
 }
-
-pub fn exec_sync_stage<'a, R, F, Fut>(handle: &'a dyn CudaActorHandle, action: F) -> BoxFuture<'a, Result<R, ThoError>>
-where
-    R: Send + 'static,
-    F: FnOnce(Option<Guard<ThoCudaStream>>) -> Fut + Send + 'a,
-    Fut: Future<Output = Result<ExecSyncStageActionResult<R>, ThoError>> + Send + 'a,
-{
-    Box::pin(async move {
-        let out = handle.exec_sync_stage_boxed(Box::new(move |stream| {
-            Box::pin(async move {
-                match action(stream).await? {
-                    ExecSyncStageActionResult::Sync { stream, out } => Ok(ExecSyncStageActionResult::Sync { stream, out: Box::new(out) as Box<dyn Any + Send> }),
-                    ExecSyncStageActionResult::NoSync(out) => Ok(ExecSyncStageActionResult::NoSync(Box::new(out) as Box<dyn Any + Send>)),
-                }
-            })
-        })).await?;
-
-        out.downcast::<R>()
-            .map(|out| *out)
-            .map_err(|_| ThoError::new("copy_ctx::exec_sync_stage result type mismatch"))
-    })
-}
-
 
 struct CudaActor {
     tho_device_idx:usize,
@@ -463,28 +415,6 @@ impl CudaActorHandle for CudaLocalActorHandle {
         self.reset_inner().await
     }
 
-    fn exec_sync_stage_boxed<'a>(
-        &'a self,
-        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
-    ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
-        Box::pin(async move {
-            let stream = self.acquire_exec_stream().await?;
-            match action(Some(stream)).await? {
-                ExecSyncStageActionResult::Sync { stream, out } => {
-                    let stream = stream.ok_or_else(|| ThoError::new("CudaLocalActorHandle::exec_sync_stage_boxed requested sync without stream"))?;
-                    self.sync_stream(stream).await?;
-                    Ok(out)
-                }
-                ExecSyncStageActionResult::NoSync(out) => Ok(out),
-            }
-        })
-    }
-
-    async fn guard(&self) -> Result<GuardOrNot, ThoError> {
-        let stream = self.acquire_exec_stream().await?;
-
-        Ok(GuardOrNot::Local(stream))
-    }
 
     async fn init_handle_ctx(&self) -> Result<Box<dyn HandleCtx>, ThoError> {
 

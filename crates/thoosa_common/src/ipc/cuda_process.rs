@@ -36,7 +36,7 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::copy_ctx::{CopyCtx, CudaActorHandle, ExecSyncStageActionResult, GuardOrNot, HandleCtx};
+use crate::copy_ctx::{CopyCtx, CudaActorHandle, HandleCtx};
 use crate::cuda_utils::{copy_chunks, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
@@ -1608,18 +1608,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    fn exec_sync_stage_boxed<'a>(
-        &'a self,
-        action: Box<dyn FnOnce(Option<Guard<ThoCudaStream>>) -> BoxFuture<'a, Result<ExecSyncStageActionResult<Box<dyn Any + Send>>, ThoError>> + Send + 'a>,
-    ) -> BoxFuture<'a, Result<Box<dyn Any + Send>, ThoError>> {
-        Box::pin(async move {
-            match action(None).await? {
-                ExecSyncStageActionResult::Sync { out, .. } => Ok(out),
-                ExecSyncStageActionResult::NoSync(out) => Ok(out),
-            }
-        })
-    }
-
     async fn install_endpoint(&self, init_msg: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -1657,9 +1645,6 @@ impl CudaActorHandle for CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    async fn guard(&self) -> Result<GuardOrNot, ThoError> {
-        Ok(GuardOrNot::IPC)
-    }
 
     async fn init_handle_ctx(&self) -> Result<Box<dyn crate::copy_ctx::HandleCtx>, ThoError> {
         Ok(Box::new(IPCHanldeCTx{}))

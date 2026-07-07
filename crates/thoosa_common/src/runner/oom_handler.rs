@@ -4,7 +4,6 @@ use crate::runner::common::{MaxParallelCtx, RunCtx};
 use crate::runner::common::cachable::{BorrowRef, SelectRef, ConsumeData};
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::common::OutId;
-use crate::copy_ctx::ExecSyncStageActionResult;
 use crate as thoosa_common;
 use mockall_double::double;
 #[double]

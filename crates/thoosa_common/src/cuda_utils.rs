@@ -19,7 +19,6 @@ use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard, CUDA_SUCCESS};
 use thoosa_shared::os_thread_id;
 use crate as thoosa_common;
-use crate::copy_ctx::ExecSyncStageActionResult;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
