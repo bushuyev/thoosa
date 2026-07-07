@@ -675,17 +675,130 @@ where
     }
 }
 
-#[cfg(test)]
-fn oom_executor(_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
-    #[cfg(not(test))]
-    error!("OOMHandler::oom_executor: for mock");
-    static EXECUTOR: std::sync::OnceLock<crate::runner::dyn_mpsc::DynamicTaskExecutor> = std::sync::OnceLock::new();
-    EXECUTOR.get_or_init(|| crate::runner::dyn_mpsc::DynamicTaskExecutor::new(16))
-}
-
-#[cfg(not(test))]
 fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::DynamicTaskExecutor {
     GlobalCtx::global().get_executor(tho_device_idx)
+}
+
+async fn run_stage_borrowed<R, W>(
+    task: Arc<R>,
+    input: Arc<W>,
+    tho_device_idx: usize,
+    run_ctx: R::Ctx,
+    job_id_to_rerun: Option<u64>,
+) -> Result<R::Out, ThoError>
+where
+    R: SyncStage + Send + Sync + 'static,
+    R::Ctx: Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
+    W: BorrowRef + Debug + Send + Sync + 'static,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+{
+    if tho_device_idx == 0 {
+        let borrowed = track_await(BorrowRef::borrow_to(&input, 0)).await?;
+        return Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx);
+    }
+
+    track_await(oom_executor(tho_device_idx).submit(
+        run_ctx.max_other_parallel().into(),
+        async move {
+            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+            cuda_actor.run_stage(task, input, tho_device_idx, &run_ctx).await
+        },
+        job_id_to_rerun
+    )).await
+}
+
+async fn run_stage_selected<R, W, S>(
+    task: Arc<R>,
+    input: Arc<W>,
+    selector: Option<S>,
+    tho_device_idx: usize,
+    run_ctx: R::Ctx,
+    job_id_to_rerun: Option<u64>,
+) -> Result<R::Out, ThoError>
+where
+    R: SyncStage + Send + Sync + 'static,
+    R::Ctx: Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
+    S: ThoSelector + Debug + Clone + Default + Send + 'static,
+    W: SelectRef<S> + Debug + Send + Sync + 'static,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+{
+    if tho_device_idx == 0 {
+        let borrowed = track_await(SelectRef::borrow_to(&input, 0, selector)).await?;
+        return Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx);
+    }
+
+    track_await(oom_executor(tho_device_idx).submit(
+        run_ctx.max_other_parallel().into(),
+        async move {
+            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+            cuda_actor.run_stage_with_select(task, input, selector, tho_device_idx, &run_ctx).await
+        },
+        job_id_to_rerun
+    )).await
+}
+
+#[doc(hidden)]
+#[allow(async_fn_in_trait)]
+pub trait InputRun<R, W, S>: Debug
+where
+    R: SyncStage,
+{
+    async fn run_stage(
+        task: Arc<R>,
+        input: Arc<W>,
+        selector: Option<S>,
+        tho_device_idx: usize,
+        run_ctx: R::Ctx,
+        job_id_to_rerun: Option<u64>,
+    ) -> Result<R::Out, ThoError>;
+}
+
+impl<R, W, S> InputRun<R, W, S> for NoInputAdjuster
+where
+    R: SyncStage + Send + Sync + 'static,
+    R::Ctx: Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
+    W: BorrowRef + Debug + Send + Sync + 'static,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+{
+    async fn run_stage(
+        task: Arc<R>,
+        input: Arc<W>,
+        selector: Option<S>,
+        tho_device_idx: usize,
+        run_ctx: R::Ctx,
+        job_id_to_rerun: Option<u64>,
+    ) -> Result<R::Out, ThoError> {
+        let _ = selector;
+        track_await(run_stage_borrowed(task, input, tho_device_idx, run_ctx, job_id_to_rerun)).await
+    }
+}
+
+impl<'adjuster, R, W, S, IC> InputRun<R, W, S> for Box<dyn Adjuster<IC, A = S> + 'adjuster>
+where
+    R: SyncStage + Send + Sync + 'static,
+    R::Ctx: Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
+    S: ThoSelector + Debug + Clone + Default + Send + 'static,
+    W: SelectRef<S> + Debug + Send + Sync + 'static,
+    for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
+{
+    async fn run_stage(
+        task: Arc<R>,
+        input: Arc<W>,
+        selector: Option<S>,
+        tho_device_idx: usize,
+        run_ctx: R::Ctx,
+        job_id_to_rerun: Option<u64>,
+    ) -> Result<R::Out, ThoError> {
+        track_await(run_stage_selected(task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun)).await
+    }
 }
 
 impl<'a, 'z, IA, TA, CA, S> OOMHandler<'a, 'z, IA, TA, CA, S>
@@ -693,7 +806,6 @@ where
     IA: Debug,
     TA: Debug,
     CA: Debug,
-    S: ThoSelector + Debug + Clone + Default + Send + 'static,
 {
     pub fn new(
         adjusters: Vec<Adjusters<IA, TA, CA>>,
@@ -718,18 +830,19 @@ where
         R: SyncStage + Send + Sync + 'static + 'a,
         R::Ctx: Send + Sync + 'static,
         IA: InputAdjustment<'a, R, C, S>,
+        IA: InputRun<R, W, S>,
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
         C: Debug,
         for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
         R::Out: WithId + Send + Sync + 'static,
-        W: SelectRef<S> + Debug + Send + Sync + 'static,
+        S: Debug + Clone + Default + Send + 'static,
+        W: BorrowRef + Debug + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
     {
         if run_context.tho_device_idx() == 0 {
-            let borrowed = track_await(SelectRef::borrow_to(&input, 0, None)).await?;
-            return Arc::clone(task).do_run(borrowed.borrow(), &run_context);
+            return track_await(<IA as InputRun<R, W, S>>::run_stage(Arc::clone(task), input, None, 0, run_context, None)).await;
         }
 
         let tho_device_idx = run_context.tho_device_idx();
@@ -754,24 +867,7 @@ where
                             ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
 
                  */
-                #[cfg(test)]
-                {
-                    let _ = (tho_device_idx, job_id_to_rerun);
-                    let borrowed = track_await(SelectRef::borrow_to(&input, 0, selector)).await?;
-                    return Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx);
-                }
-
-                #[cfg(not(test))]
-                track_await(oom_executor(tho_device_idx).submit(
-                    run_ctx.max_other_parallel().into(),
-                    async move {
-                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-                        cuda_actor.run_stage(task, input, selector, tho_device_idx, &run_ctx).await
-
-                    },
-                    job_id_to_rerun
-                )).await
-
+                track_await(<IA as InputRun<R, W, S>>::run_stage(task, input, selector, tho_device_idx, run_ctx, job_id_to_rerun)).await
             },
         )).await
     }
@@ -793,6 +889,7 @@ where
         C: Debug,
         for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
         R::Out: WithId + Send + Sync + 'static,
+        S: Debug + Clone + Default + Send + 'static,
         W:ConsumeData<O = <R as Stage>::In<'z>>,
         W:WithId<ID = <R::In<'z> as WithId>::ID> + Debug + Send + Sync + 'static,
         <R as Stage>::In<'z>: 'static,
@@ -808,14 +905,6 @@ where
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                #[cfg(test)]
-                {
-                    let _ = (tho_device_idx, job_id_to_rerun);
-                    let consume_result = track_await(input.consume(0, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await;
-                    return Ok(consume_result);
-                }
-
-                #[cfg(not(test))]
                 track_await(oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     let consume_result = if tho_device_idx == 0 {
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
@@ -1556,9 +1645,9 @@ mod tests {
     use super::mock_input_adjuster::{build as mock_input_adjuster, MockInputAdjuster};
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
-    use super::test_types::{TestInput, TestOutput};
+    use super::test_types::{TestId, TestInput, TestOutput};
     use super::{AdjusterError, Adjusters, Contexts, OOMHandler};
-    use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
     // use crate::common::runnable::Runnable;
     use crate::runner::common::{DropIf, MockRunCtx, OutId};
     use crate::runner::common::runnable::{AsyncStage, Stage};
@@ -1571,7 +1660,7 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::traits::{Adjustable, Data, Metrics, RangeSelector, ThoSelector, WithId};
     use crate::runner::test::fixtures::{DLoadedTensor, MetricsRangeSelector};
-    use super::{input_adjuster, run_ctx_adjuster, task_adjuster, Adjuster, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext};
+    use super::{input_adjuster, run_ctx_adjuster, task_adjuster, Adjuster, InputContext, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext};
     // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
@@ -1648,6 +1737,58 @@ mod tests {
                 ThoError::new("no output in AsyncInputCtx")
             })
         }
+    }
+
+    #[derive(Debug)]
+    struct BorrowOnlyInput {
+        inner: TestInput,
+    }
+
+    impl BorrowOnlyInput {
+        fn new(inner: TestInput) -> Self {
+            Self { inner }
+        }
+    }
+
+    impl BorrowRef for BorrowOnlyInput {
+        type Out<'a> = &'a TestInput where Self: 'a;
+
+        fn borrow_to<'o>(&'o self, _to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'o>, ThoError>> + Send
+        where
+            Self: 'o,
+        {
+            async move { Ok(&self.inner) }
+        }
+    }
+
+    impl WithId for BorrowOnlyInput {
+        type ID = TestId;
+
+        fn id(&self) -> &Self::ID {
+            self.inner.id()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_input_adjuster_accepts_borrow_ref_only_input() {
+        let (task, task_calls) = mock_runnable([Ok(TestOutput::new(12.))]);
+        let oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
+        let ctx_mock = crate::runner::common::mock_run_ctx::build()
+            .with_device_idx(0)
+            .finish();
+
+        let out: TestOutput = oom_handler
+            .run(
+                &Arc::new(task),
+                Arc::new(BorrowOnlyInput::new(TestInput::new(1))),
+                ctx_mock,
+                NoContexts,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(12., out.v.0);
+        assert_eq!(1, task_calls.load(Ordering::SeqCst));
     }
 
 

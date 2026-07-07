@@ -134,7 +134,35 @@ impl dyn CudaActorHandle + '_ {
     }
 
 
-    pub async fn run_stage<S, W, SL>(
+    pub async fn run_stage<S, W>(
+        &self,
+        stage: Arc<S>,
+        input: W,
+        to_device_idx: usize,
+        ctx:&S::Ctx
+    ) -> Result<S::Out, ThoError>
+    where
+        S: SyncStage,
+        W: Debug + Sync,
+        for<'a> W: BorrowRef + 'a,
+        for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>>,
+    {
+        debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
+
+        let borrowed = BorrowRef::borrow_to(&input, to_device_idx).await?;
+
+        let mut handle_ctx = self.init_handle_ctx().await?;
+
+        let sync_ctx = handle_ctx.sync_ctx()?;
+
+        let out = stage.do_run(borrowed.borrow(), ctx);
+
+        handle_ctx.on_after_run()?;
+
+        out
+    }
+
+    pub async fn run_stage_with_select<S, W, SL>(
         &self,
         stage: Arc<S>,
         input: W,
@@ -149,7 +177,7 @@ impl dyn CudaActorHandle + '_ {
         for<'a> W: SelectRef<SL> + 'a,
         for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>>,
     {
-        debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
+        debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
         let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
 

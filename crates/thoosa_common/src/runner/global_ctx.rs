@@ -453,6 +453,7 @@ pub mod mock_global_ctx {
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
     use log::debug;
     use tokio::task::block_in_place;
+    use crate::runner::dyn_mpsc::DynamicTaskExecutor;
     use crate::runner::global_ctx::MockGlobalCtx;
 
     #[derive(Clone, Copy, Debug)]
@@ -572,6 +573,11 @@ pub mod mock_global_ctx {
             self
         }
 
+        pub fn with_get_executor(mut self) -> Self {
+            self.mock.expect_get_executor().times(0..).return_const(DynamicTaskExecutor::new(16));
+            self
+        }
+
         pub fn with_dump_all_to_cpu(mut self) -> Self {
             if let Some(real) = self.real {
                 let _ = self.mock.expect_dump_all_to_cpu().returning({
@@ -680,6 +686,7 @@ pub mod mock_global_ctx {
             .with_device_count(params.device_count)
             .with_register_cache()
             .with_remove_cache()
+            .with_get_executor()
             .with_run_purge_gpu()
             .with_is_ipc(is_ipc)
             .with_is_all_on_cpu(true)
