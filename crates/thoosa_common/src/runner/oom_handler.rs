@@ -883,6 +883,7 @@ where
     where
         R: SyncStage + Send + Sync + 'static + 'a,
         R::Ctx: Send + Sync + 'static,
+        IA: InputRun<R, W, S>,
         IA: InputAdjustment<'a, R, C, S>,
         TA: TaskAdjustment<'a, R, C>,
         CA: RunContextAdjustment<R::Ctx, C>,
@@ -905,34 +906,9 @@ where
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
-                track_await(oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
-                    let consume_result = if tho_device_idx == 0 {
-                        track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
-                    } else {
-                        let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
-
-                        track_await(cuda_actor.exec_sync_stage(move |stream| async move {
-                            let consume_result = track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| {
-                                match stream.as_ref().map(|stream| ThoStreamGuard::new(stream)).transpose() {
-                                    Ok(_guard) => Arc::clone(&task).consume(input, run_ctx),
-                                    Err(error) => ConsumeResult::Failed { input, error },
-                                }
-                            })).await;
-
-                            Ok(ExecSyncStageActionResult::Sync { stream, out: consume_result })
-                        })).await?
-
-                    };
-
-                    if matches!(&consume_result, ConsumeResult::Failed { error, .. } if error.needs_cuda_ctx_reset()) {
-                        warn!("OOMHandler::consume: needs_cuda_ctx_reset device_idx={tho_device_idx}");
-                        oom_executor(tho_device_idx).request_cuda_reset();
-                    }
-
-                    Ok(consume_result)
+                Ok(track_await(input.consume(run_ctx.tho_device_idx(), run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await)
 
 
-                }, job_id_to_rerun)).await
             },
         )).await
     }
@@ -1121,7 +1097,7 @@ where
                 for adjuster in adjusters {
                     debug!("OOMHandler::run, error: 2. ctx_id={ctx_id:?} task={:?} adjuster={adjuster:?} os_thread_id={}  starting adjuster",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
-                    loop {
+                    loop {//TODO while adjuster.can_degrade
                         i += 1;
                         if i > 100 {//TODO Config
                             return Err(ThoError::new(format!("OOMHandler: ctx_id={ctx_id:?}  i={i}")));
