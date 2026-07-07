@@ -651,27 +651,6 @@ pub trait ThoSelector:Debug + Send + Sync {
     }
 }
 
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-pub struct VoidSelector;
-
-#[typetag::serde]
-impl ThoSelector for VoidSelector {
-    fn clone_box(&self) -> Box<dyn ThoSelector> {
-        Box::new(VoidSelector)
-    }
-
-}
-
-impl Adjustable for VoidSelector {}
-
-impl Deref for VoidSelector {
-    type Target = ();
-    fn deref(&self) -> &Self::Target {
-        &()
-    }
-}
-
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct RangeSelector(pub Range<[i64; 1]>);
 

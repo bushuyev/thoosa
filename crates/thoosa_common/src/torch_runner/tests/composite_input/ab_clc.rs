@@ -14,7 +14,7 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, RangeSelector, Select, ThoSelector, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, Data, MonoMetrics, RangeSelector, ThoSelector, WithId};
 use crate::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -64,14 +64,6 @@ impl Input for ABClcStageInput {}
 pub struct ABClcStageOutput {
     id:SynKey,
     pub(super) value:f32
-}
-
-impl Select<VoidSelector> for ABClcStageOutput{
-    type Output = ABClcStageOutput;
-
-    fn subview(&self, selector: VoidSelector) -> Result<Self::Output, ThoError> {
-        unimplemented!()
-    }
 }
 
 impl WithId for ABClcStageOutput {

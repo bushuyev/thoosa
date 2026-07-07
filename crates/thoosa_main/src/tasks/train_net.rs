@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
@@ -43,7 +43,7 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, VoidSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{panic_to_err, ThoError};
 use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
@@ -555,16 +555,6 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
         }
     }
 }
-
-impl<DI: Dims, DO: Dims> SelectRef<VoidSelector> for TrainStepInput<DI, DO> {
-    fn borrow_to<'a>(&'a self, to_device_idx: usize, _selector: Option<VoidSelector>) -> impl Future<Output = Result<<Self as BorrowRef>::Out<'a>, ThoError>> + Send
-    where
-        Self: 'a,
-    {
-        async move { BorrowRef::borrow_to(self, to_device_idx).await }
-    }
-}
-
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: Device,
