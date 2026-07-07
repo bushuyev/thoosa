@@ -19,12 +19,12 @@ use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::oom_handler::{Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_tensor::ThoTensor;
 use crate::torch_runner::tests::load_and_clc::{ClcDynSyncStage, SYNC_CLC_ENDPOINT};
-use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+use crate::torch_runner::tests::load_and_clc::loader::{LoadedRange, LoadedTensor};
 use crate as thoosa_common;
 use crate::tho_device::ThoDevice;
 
@@ -355,15 +355,11 @@ impl AsyncStage for ClcStage {
 
         debug!("AsyncStage for ClcTask::run: device_idx={device_idx} input={input:?}");
 
-        let output = OOMHandler::new(vec![], None).run(
+        let output = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, LoadedRange>::new(vec![], None).run(
             &self.sync_clc,
             input,
             ctx,
-            Contexts::new(
-                NoopInputContext(None),
-                NoopRunnableContext {},
-                NoopRunCtxContext {},
-            )
+            NoContexts
         ).await?;
 
 

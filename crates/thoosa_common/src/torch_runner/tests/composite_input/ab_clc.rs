@@ -25,7 +25,7 @@ use crate as thoosa_common;
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::{SplitsAdjuster, SplitsAdjusterContextImpl};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use crate::tho_device::ThoDevice;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_STAGE_ID};
@@ -261,7 +261,7 @@ where
 
 
         let input = Arc::new(ABClcSyncStageInputWrapper::new(a_out, b_out));
-        let result = OOMHandler::new(
+        let result = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ABClcSyncStageInputWrapperSelector>::new(
             vec![],
             None,
         )
@@ -269,11 +269,7 @@ where
                 &self.ab_clc_sync,
                 input,
                 ctx,
-                Contexts::new(
-                    NoopInputContext(None),
-                    NoopRunnableContext {},
-                    NoopRunCtxContext {}
-                ),
+                NoContexts,
             )
             .await?;
 
