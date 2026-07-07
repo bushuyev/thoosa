@@ -124,6 +124,76 @@ pub trait RunnableContext: Debug {}
 #[automock]
 pub trait RunCtxContext: Debug {}
 
+pub trait HasInputContext<IC> {
+    fn input_context(&mut self) -> &mut IC;
+    fn into_input_context(self) -> IC;
+}
+
+pub trait HasRunnableContext<RC> {
+    fn runnable_context(&mut self) -> &mut RC;
+}
+
+pub trait HasRunCtxContext<RCC> {
+    fn run_ctx_context(&mut self) -> &mut RCC;
+}
+
+#[derive(Debug)]
+pub struct NoContexts;
+
+#[derive(Debug)]
+pub struct WithInputContext<IC, Rest = NoContexts> {
+    input: IC,
+    rest: Rest,
+}
+
+impl<IC> WithInputContext<IC> {
+    pub fn new(input: IC) -> Self {
+        Self { input, rest: NoContexts }
+    }
+}
+
+impl<IC, Rest> WithInputContext<IC, Rest> {
+    pub fn with_rest(input: IC, rest: Rest) -> Self {
+        Self { input, rest }
+    }
+}
+
+#[derive(Debug)]
+pub struct WithRunnableContext<RC, Rest = NoContexts> {
+    runnable: RC,
+    rest: Rest,
+}
+
+impl<RC> WithRunnableContext<RC> {
+    pub fn new(runnable: RC) -> Self {
+        Self { runnable, rest: NoContexts }
+    }
+}
+
+impl<RC, Rest> WithRunnableContext<RC, Rest> {
+    pub fn with_rest(runnable: RC, rest: Rest) -> Self {
+        Self { runnable, rest }
+    }
+}
+
+#[derive(Debug)]
+pub struct WithRunCtxContext<RCC, Rest = NoContexts> {
+    run_ctx: RCC,
+    rest: Rest,
+}
+
+impl<RCC> WithRunCtxContext<RCC> {
+    pub fn new(run_ctx: RCC) -> Self {
+        Self { run_ctx, rest: NoContexts }
+    }
+}
+
+impl<RCC, Rest> WithRunCtxContext<RCC, Rest> {
+    pub fn with_rest(run_ctx: RCC, rest: Rest) -> Self {
+        Self { run_ctx, rest }
+    }
+}
+
 #[derive(Debug)]
 pub struct Contexts<'a, R, IC, RC, RCC>
 where
@@ -151,41 +221,6 @@ where
             runnable,
             run_ctx,
             pd: PhantomData,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum Adjusters<'a, R, IC, RC, RCC, S>
-where
-    R: Stage + 'a,
-    <R as Stage>::In<'a>: Debug,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Default + Clone
-{
-    Input(Box<dyn Adjuster<IC, A=S> + 'a>),//it adjusts Selector used to fetch chunk of input
-    Task(Box<dyn Adjuster<RC, A = Arc<R>> + 'a>),
-    RunContext(Box<dyn Adjuster<RCC, A = R::Ctx> + 'a>),
-}
-
-impl<'a, R, IC, RC, RCC, S> Adjusters<'a, R, IC, RC, RCC, S>
-where
-    R: Stage + 'a,
-    IC: InputContext<'a, R>,
-    R: Adjustable,
-    <R as Stage>::In<'a>: Debug,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    <R as Stage>::Ctx: Adjustable,
-    S: Adjustable + Debug + Default + Clone
-{
-    fn degrade(&self, adjust_context: &mut Contexts<'a, R, IC, RC, RCC>) -> bool {
-        match self {
-            Adjusters::Input(v) => v.degrade(&mut adjust_context.input),
-            Adjusters::Task(v) => v.degrade(&mut adjust_context.runnable),
-            Adjusters::RunContext(v) => v.degrade(&mut adjust_context.run_ctx),
         }
     }
 }
@@ -222,22 +257,394 @@ pub struct NoopRunCtxContext {}
 impl RunCtxContext for NoopRunCtxContext {}
 
 #[derive(Debug)]
-pub struct OOMHandler<'a, 'z, R, IC, RC, RCC, S>
+pub enum NoInputAdjuster {}
+
+#[derive(Debug)]
+pub enum NoTaskAdjuster {}
+
+#[derive(Debug)]
+pub enum NoRunCtxAdjuster {}
+
+#[derive(Debug)]
+pub enum Adjusters<IA = NoInputAdjuster, TA = NoTaskAdjuster, CA = NoRunCtxAdjuster> {
+    Input(IA),//it adjusts Selector used to fetch chunk of input
+    Task(TA),
+    RunContext(CA),
+}
+
+pub fn input_adjuster<'a, IC, S, A>(adjuster: A) -> Box<dyn Adjuster<IC, A = S> + 'a>
 where
-    R: SyncStage + Adjustable,
-    R::Ctx: Adjustable,
+    S: Adjustable,
+    A: Adjuster<IC, A = S> + 'a,
+{
+    Box::new(adjuster)
+}
+
+pub fn task_adjuster<'a, R, RC, A>(adjuster: A) -> Box<dyn Adjuster<RC, A = Arc<R>> + 'a>
+where
+    R: Adjustable,
+    A: Adjuster<RC, A = Arc<R>> + 'a,
+{
+    Box::new(adjuster)
+}
+
+pub fn run_ctx_adjuster<'a, Ctx, RCC, A>(adjuster: A) -> Box<dyn Adjuster<RCC, A = Ctx> + 'a>
+where
+    Ctx: Adjustable,
+    A: Adjuster<RCC, A = Ctx> + 'a,
+{
+    Box::new(adjuster)
+}
+
+#[doc(hidden)]
+pub enum InputAdjustedRun<C, O> {
+    Done(O),
+    Continue(C),
+}
+
+#[doc(hidden)]
+#[allow(async_fn_in_trait)]
+pub trait InputAdjustment<'a, R, C, S>: Debug
+where
+    R: Stage + 'a,
+{
+    async fn adjust_input(&self, input_select_adjusted: &mut Option<S>, contexts: &mut C) -> Result<(), ThoError>;
+    fn degrade_input(&self, contexts: &mut C) -> bool;
+    async fn handle_success(out: R::Out, contexts: C) -> Result<InputAdjustedRun<C, R::Out>, ThoError>;
+}
+
+impl<'a, R, C, S> InputAdjustment<'a, R, C, S> for NoInputAdjuster
+where
+    R: Stage + 'a,
+{
+    async fn adjust_input(&self, _input_select_adjusted: &mut Option<S>, _contexts: &mut C) -> Result<(), ThoError> {
+        match *self {}
+    }
+
+    fn degrade_input(&self, _contexts: &mut C) -> bool {
+        match *self {}
+    }
+
+    async fn handle_success(out: R::Out, contexts: C) -> Result<InputAdjustedRun<C, R::Out>, ThoError> {
+        let _ = contexts;
+        Ok(InputAdjustedRun::Done(out))
+    }
+}
+
+impl<'stage, 'adjuster, R, C, IC, S> InputAdjustment<'stage, R, C, S> for Box<dyn Adjuster<IC, A = S> + 'adjuster>
+where
+    R: Stage + 'stage,
+    IC: InputContext<'stage, R>,
+    C: HasInputContext<IC>,
+    S: Adjustable + Debug + Clone + Default + 'static,
+{
+    async fn adjust_input(&self, input_select_adjusted: &mut Option<S>, contexts: &mut C) -> Result<(), ThoError> {
+        let base_selector = input_select_adjusted.clone().unwrap_or_default();
+
+        match track_await(self.adjust(base_selector, contexts.input_context())).await {
+            Ok(v) => {
+                debug!("OOMHandler::run, error, input adjuster ok: {v:?}");
+                *input_select_adjusted = Some(v);
+                Ok(())
+            }
+            Err(adjuster_err) => {
+                let msg = format!("adjuster failed: {adjuster_err:?}");
+                debug!("OOMHandler::run, error, input adjuster failed: {msg:?}");
+
+                match adjuster_err {
+                    AdjusterError::AdjustFailed(v) => {
+                        *input_select_adjusted = Some(v);
+                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
+                    }
+                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
+                }
+            }
+        }
+    }
+
+    fn degrade_input(&self, contexts: &mut C) -> bool {
+        self.degrade(contexts.input_context())
+    }
+
+    async fn handle_success(out: R::Out, mut contexts: C) -> Result<InputAdjustedRun<C, R::Out>, ThoError> {
+        track_await(contexts.input_context().add_partial_output(out)).await;
+
+        let all_done = contexts.input_context().all_done();
+
+        if all_done {
+            Ok(InputAdjustedRun::Done(track_await(contexts.into_input_context().build_final_output()).await?))
+        } else {
+            Ok(InputAdjustedRun::Continue(contexts))
+        }
+    }
+}
+
+#[doc(hidden)]
+#[allow(async_fn_in_trait)]
+pub trait TaskAdjustment<'a, R, C>: Debug
+where
+    R: Stage + 'a,
+{
+    async fn adjust_task(&self, task: &mut Option<Arc<R>>, contexts: &mut C) -> Result<(), ThoError>;
+    fn degrade_task(&self, contexts: &mut C) -> bool;
+}
+
+impl<'a, R, C> TaskAdjustment<'a, R, C> for NoTaskAdjuster
+where
+    R: Stage + 'a,
+{
+    async fn adjust_task(&self, _task: &mut Option<Arc<R>>, _contexts: &mut C) -> Result<(), ThoError> {
+        match *self {}
+    }
+
+    fn degrade_task(&self, _contexts: &mut C) -> bool {
+        match *self {}
+    }
+}
+
+impl<'stage, 'adjuster, R, C, RC> TaskAdjustment<'stage, R, C> for Box<dyn Adjuster<RC, A = Arc<R>> + 'adjuster>
+where
+    R: Stage + Adjustable + 'stage,
+    RC: RunnableContext,
+    C: HasRunnableContext<RC>,
+{
+    async fn adjust_task(&self, task: &mut Option<Arc<R>>, contexts: &mut C) -> Result<(), ThoError> {
+        match track_await(self.adjust(task.take().expect("adjust_task: missing task"), contexts.runnable_context())).await {
+            Ok(v) => {
+                debug!("OOMHandler::run, error, task adjuster ok: {v:?}");
+                *task = Some(v);
+                Ok(())
+            }
+            Err(adjuster_err) => {
+                let msg = format!("adjuster failed: {adjuster_err:?}");
+                debug!("OOMHandler::run, error, task adjuster failed: {msg:?}");
+
+                match adjuster_err {
+                    AdjusterError::AdjustFailed(v) => {
+                        *task = Some(v);
+                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
+                    }
+                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
+                }
+            }
+        }
+    }
+
+    fn degrade_task(&self, contexts: &mut C) -> bool {
+        self.degrade(contexts.runnable_context())
+    }
+}
+
+#[doc(hidden)]
+#[allow(async_fn_in_trait)]
+pub trait RunContextAdjustment<Ctx, C>: Debug {
+    async fn adjust_run_ctx(&self, run_context: &mut Option<Ctx>, contexts: &mut C) -> Result<(), ThoError>;
+    fn degrade_run_ctx(&self, contexts: &mut C) -> bool;
+}
+
+impl<Ctx, C> RunContextAdjustment<Ctx, C> for NoRunCtxAdjuster {
+    async fn adjust_run_ctx(&self, _run_context: &mut Option<Ctx>, _contexts: &mut C) -> Result<(), ThoError> {
+        match *self {}
+    }
+
+    fn degrade_run_ctx(&self, _contexts: &mut C) -> bool {
+        match *self {}
+    }
+}
+
+impl<'adjuster, Ctx, C, RCC> RunContextAdjustment<Ctx, C> for Box<dyn Adjuster<RCC, A = Ctx> + 'adjuster>
+where
+    Ctx: Adjustable + Debug,
+    RCC: RunCtxContext,
+    C: HasRunCtxContext<RCC>,
+{
+    async fn adjust_run_ctx(&self, run_context: &mut Option<Ctx>, contexts: &mut C) -> Result<(), ThoError> {
+        match track_await(self.adjust(run_context.take().expect("adjust_run_ctx: missing run context"), contexts.run_ctx_context())).await {
+            Ok(v) => {
+                debug!("OOMHandler::run, error, run context adjuster ok: {v:?}");
+                *run_context = Some(v);
+                Ok(())
+            }
+            Err(adjuster_err) => {
+                let msg = format!("adjuster failed: {adjuster_err:?}");
+                debug!("OOMHandler::run, error, run context adjuster failed: {msg:?}");
+
+                match adjuster_err {
+                    AdjusterError::AdjustFailed(v) => {
+                        *run_context = Some(v);
+                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
+                    }
+                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
+                }
+            }
+        }
+    }
+
+    fn degrade_run_ctx(&self, contexts: &mut C) -> bool {
+        self.degrade(contexts.run_ctx_context())
+    }
+}
+
+impl<IA, TA, CA> Adjusters<IA, TA, CA> {
+    async fn apply<'a, R, C, S>(&self, task: &mut Option<Arc<R>>, run_context: &mut Option<R::Ctx>, input_select_adjusted: &mut Option<S>, contexts: &mut C) -> Result<(), ThoError>
+    where
+        R: Stage + 'a,
+        IA: InputAdjustment<'a, R, C, S>,
+        TA: TaskAdjustment<'a, R, C>,
+        CA: RunContextAdjustment<R::Ctx, C>,
+    {
+        match self {
+            Adjusters::Input(v) => track_await(v.adjust_input(input_select_adjusted, contexts)).await,
+            Adjusters::Task(v) => track_await(v.adjust_task(task, contexts)).await,
+            Adjusters::RunContext(v) => track_await(v.adjust_run_ctx(run_context, contexts)).await,
+        }
+    }
+
+    fn degrade<'a, R, C, S>(&self, contexts: &mut C) -> bool
+    where
+        R: Stage + 'a,
+        IA: InputAdjustment<'a, R, C, S>,
+        TA: TaskAdjustment<'a, R, C>,
+        CA: RunContextAdjustment<R::Ctx, C>,
+    {
+        match self {
+            Adjusters::Input(v) => v.degrade_input(contexts),
+            Adjusters::Task(v) => v.degrade_task(contexts),
+            Adjusters::RunContext(v) => v.degrade_run_ctx(contexts),
+        }
+    }
+}
+
+impl<'a, R, IC, RC, RCC> HasInputContext<IC> for Contexts<'a, R, IC, RC, RCC>
+where
+    R: Stage + 'a,
     IC: InputContext<'a, R>,
     RC: RunnableContext,
     RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + 'static,
-
-
-    for<'i> <R as Stage>::In<'i>: WithId//used only for debug
 {
-    adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
+    fn input_context(&mut self) -> &mut IC {
+        &mut self.input
+    }
+
+    fn into_input_context(self) -> IC {
+        self.input
+    }
+}
+
+impl<'a, R, IC, RC, RCC> HasRunnableContext<RC> for Contexts<'a, R, IC, RC, RCC>
+where
+    R: Stage + 'a,
+    IC: InputContext<'a, R>,
+    RC: RunnableContext,
+    RCC: RunCtxContext,
+{
+    fn runnable_context(&mut self) -> &mut RC {
+        &mut self.runnable
+    }
+}
+
+impl<'a, R, IC, RC, RCC> HasRunCtxContext<RCC> for Contexts<'a, R, IC, RC, RCC>
+where
+    R: Stage + 'a,
+    IC: InputContext<'a, R>,
+    RC: RunnableContext,
+    RCC: RunCtxContext,
+{
+    fn run_ctx_context(&mut self) -> &mut RCC {
+        &mut self.run_ctx
+    }
+}
+
+impl<IC, Rest> HasInputContext<IC> for WithInputContext<IC, Rest> {
+    fn input_context(&mut self) -> &mut IC {
+        &mut self.input
+    }
+
+    fn into_input_context(self) -> IC {
+        self.input
+    }
+}
+
+impl<IC, RC, Rest> HasInputContext<IC> for WithRunnableContext<RC, Rest>
+where
+    Rest: HasInputContext<IC>,
+{
+    fn input_context(&mut self) -> &mut IC {
+        self.rest.input_context()
+    }
+
+    fn into_input_context(self) -> IC {
+        self.rest.into_input_context()
+    }
+}
+
+impl<IC, RCC, Rest> HasInputContext<IC> for WithRunCtxContext<RCC, Rest>
+where
+    Rest: HasInputContext<IC>,
+{
+    fn input_context(&mut self) -> &mut IC {
+        self.rest.input_context()
+    }
+
+    fn into_input_context(self) -> IC {
+        self.rest.into_input_context()
+    }
+}
+
+impl<RC, Rest> HasRunnableContext<RC> for WithRunnableContext<RC, Rest> {
+    fn runnable_context(&mut self) -> &mut RC {
+        &mut self.runnable
+    }
+}
+
+impl<RC, IC, Rest> HasRunnableContext<RC> for WithInputContext<IC, Rest>
+where
+    Rest: HasRunnableContext<RC>,
+{
+    fn runnable_context(&mut self) -> &mut RC {
+        self.rest.runnable_context()
+    }
+}
+
+impl<RC, RCC, Rest> HasRunnableContext<RC> for WithRunCtxContext<RCC, Rest>
+where
+    Rest: HasRunnableContext<RC>,
+{
+    fn runnable_context(&mut self) -> &mut RC {
+        self.rest.runnable_context()
+    }
+}
+
+impl<RCC, Rest> HasRunCtxContext<RCC> for WithRunCtxContext<RCC, Rest> {
+    fn run_ctx_context(&mut self) -> &mut RCC {
+        &mut self.run_ctx
+    }
+}
+
+impl<RCC, IC, Rest> HasRunCtxContext<RCC> for WithInputContext<IC, Rest>
+where
+    Rest: HasRunCtxContext<RCC>,
+{
+    fn run_ctx_context(&mut self) -> &mut RCC {
+        self.rest.run_ctx_context()
+    }
+}
+
+impl<RCC, RC, Rest> HasRunCtxContext<RCC> for WithRunnableContext<RC, Rest>
+where
+    Rest: HasRunCtxContext<RCC>,
+{
+    fn run_ctx_context(&mut self) -> &mut RCC {
+        self.rest.run_ctx_context()
+    }
+}
+
+#[derive(Debug)]
+pub struct OOMHandler<'a, 'z, IA = NoInputAdjuster, TA = NoTaskAdjuster, CA = NoRunCtxAdjuster, S = ()> {
+    adjusters: Vec<Adjusters<IA, TA, CA>>,
     #[allow(dead_code)]
     statistics: Option<&'a Arc<Statistics>>,
-    pd_rc: PhantomData<(RC, &'z RCC)>,
+    pd_rc: PhantomData<(&'z (), S)>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -281,20 +688,15 @@ fn oom_executor(tho_device_idx: usize) -> &'static crate::runner::dyn_mpsc::Dyna
     GlobalCtx::global().get_executor(tho_device_idx)
 }
 
-impl<'a, 'z, R, IC, RC, RCC, S> OOMHandler<'a, 'z, R, IC, RC, RCC, S>
+impl<'a, 'z, IA, TA, CA, S> OOMHandler<'a, 'z, IA, TA, CA, S>
 where
-    R: SyncStage + Adjustable + Send + Sync + 'static + 'a,
-    R::Ctx: Adjustable + Send + Sync + 'static,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: ThoSelector + Adjustable + Debug + Clone + Default + Send + 'static,
-
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
+    IA: Debug,
+    TA: Debug,
+    CA: Debug,
+    S: ThoSelector + Debug + Clone + Default + Send + 'static,
 {
     pub fn new(
-        adjusters: Vec<Adjusters<'a, R, IC, RC, RCC, S>>,
+        adjusters: Vec<Adjusters<IA, TA, CA>>,
         statistics: Option<&'a Arc<Statistics>>,
     ) -> Self {
         Self {
@@ -305,14 +707,22 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::run"))]
-    pub async fn run<W>(
+    pub async fn run<R, W, C>(
         &self,
         task: &Arc<R>,
         input: Arc<W>,
         run_context: R::Ctx,
-        contexts: Contexts<'a, R, IC, RC, RCC>,
+        contexts: C,
     ) -> Result<R::Out, ThoError>
     where
+        R: SyncStage + Send + Sync + 'static + 'a,
+        R::Ctx: Send + Sync + 'static,
+        IA: InputAdjustment<'a, R, C, S>,
+        TA: TaskAdjustment<'a, R, C>,
+        CA: RunContextAdjustment<R::Ctx, C>,
+        C: Debug,
+        for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+        R::Out: WithId + Send + Sync + 'static,
         W: SelectRef<S> + Debug + Send + Sync + 'static,
         W: WithId<ID = <R::In<'z> as WithId>::ID>,
         for<'f> <W as BorrowRef>::Out<'f>: Borrow<<R as Stage>::In<'f>> + Send,
@@ -344,6 +754,14 @@ where
                             ThoTensor::copy_to_device-> GlobalCtx::global().cuda_actor(ctx_device)/copy→copy_h2d_from_ptr or ipc_copy_h2d_from_ptr
 
                  */
+                #[cfg(test)]
+                {
+                    let _ = (tho_device_idx, job_id_to_rerun);
+                    let borrowed = track_await(SelectRef::borrow_to(&input, 0, selector)).await?;
+                    return Arc::clone(&task).do_run(borrowed.borrow(), &run_ctx);
+                }
+
+                #[cfg(not(test))]
                 track_await(oom_executor(tho_device_idx).submit(
                     run_ctx.max_other_parallel().into(),
                     async move {
@@ -359,14 +777,22 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="OOMHandler::consume"))]
-    pub async fn consume<W>(
+    pub async fn consume<R, W, C>(
         &self,
         task: &Arc<R>,
         input: W,
         run_context: R::Ctx,
-        contexts: Contexts<'a, R, IC, RC, RCC>,
+        contexts: C,
     ) -> Result<R::Out, ThoError>
     where
+        R: SyncStage + Send + Sync + 'static + 'a,
+        R::Ctx: Send + Sync + 'static,
+        IA: InputAdjustment<'a, R, C, S>,
+        TA: TaskAdjustment<'a, R, C>,
+        CA: RunContextAdjustment<R::Ctx, C>,
+        C: Debug,
+        for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+        R::Out: WithId + Send + Sync + 'static,
         W:ConsumeData<O = <R as Stage>::In<'z>>,
         W:WithId<ID = <R::In<'z> as WithId>::ID> + Debug + Send + Sync + 'static,
         <R as Stage>::In<'z>: 'static,
@@ -382,6 +808,14 @@ where
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
                 debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
+                #[cfg(test)]
+                {
+                    let _ = (tho_device_idx, job_id_to_rerun);
+                    let consume_result = track_await(input.consume(0, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await;
+                    return Ok(consume_result);
+                }
+
+                #[cfg(not(test))]
                 track_await(oom_executor(tho_device_idx).submit(run_ctx.max_other_parallel().into(), async move {
                     let consume_result = if tho_device_idx == 0 {
                         track_await(input.consume(tho_device_idx, run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await
@@ -545,108 +979,22 @@ where
 
 }
 
-async fn apply_adjuster<'a, R, IC, RC, RCC, S>(
-    adjuster: &Adjusters<'a, R, IC, RC, RCC, S>,
-    task: &mut Option<Arc<R>>,
-    run_context: &mut Option<R::Ctx>,
-    input_select_adjusted: &mut Option<S>,
-    contexts: &mut Contexts<'a, R, IC, RC, RCC>,
-) -> Result<(), ThoError>
-where
-    R: Adjustable + Stage + 'a,
-    R::Ctx: Adjustable,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + 'static,
-    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
-    R::Out: WithId + Send + Sync + 'static,
-{
-    match adjuster {
-        Adjusters::Input(input_ad) => {
-            let base_selector = input_select_adjusted.clone().unwrap_or_default();
-
-            match track_await(input_ad.adjust(base_selector, &mut contexts.input)).await {
-                Ok(v) => {
-                    debug!("OOMHandler::run, error, input adjuster ok: {v:?}");
-                    *input_select_adjusted = Some(v);
-                    Ok(())
-                }
-                Err(adjuster_err) => {
-                    let msg = format!("adjuster failed: {adjuster_err:?}");
-                    debug!("OOMHandler::run, error, input adjuster failed: {msg:?}");
-
-                    match adjuster_err {
-                        AdjusterError::AdjustFailed(v) => {
-                            *input_select_adjusted = Some(v);
-                            Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
-                        }
-                        AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
-                    }
-                }
-            }
-        }
-        Adjusters::Task(task_ad) => match track_await(task_ad.adjust(task.take().expect("apply_adjuster: missing task"), &mut contexts.runnable)).await {
-            Ok(v) => {
-                debug!("OOMHandler::run, error, task adjuster ok: {v:?}");
-                *task = Some(v);
-                Ok(())
-            }
-            Err(adjuster_err) => {
-                let msg = format!("adjuster failed: {adjuster_err:?}");
-                debug!("OOMHandler::run, error, task adjuster failed: {msg:?}");
-
-                match adjuster_err {
-                    AdjusterError::AdjustFailed(v) => {
-                        *task = Some(v);
-                        Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
-                    }
-                    AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
-                }
-            }
-        },
-        Adjusters::RunContext(context_ad) => {
-            match track_await(context_ad
-                .adjust(run_context.take().expect("apply_adjuster: missing run context"), &mut contexts.run_ctx)).await
-            {
-                Ok(v) => {
-                    debug!("OOMHandler::run, error, run context adjuster ok: {v:?}");
-                    *run_context = Some(v);
-                    Ok(())
-                }
-                Err(adjuster_err) => {
-                    let msg = format!("adjuster failed: {adjuster_err:?}");
-                    debug!("OOMHandler::run, error, run context adjuster failed: {msg:?}");
-
-                    match adjuster_err {
-                        AdjusterError::AdjustFailed(v) => {
-                            *run_context = Some(v);
-                            Err(ThoError::new_with_cause(msg, Cause::AdjusterFailed))
-                        }
-                        AdjusterError::SomethingElse => Err(ThoError::new_with_cause(msg, Cause::SomethingElse("todo".to_string()))),
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn run_with_runner_impl<'a, 'z, R, IC, RC, RCC, S, A>(
-    adjusters: &[Adjusters<'a, R, IC, RC, RCC, S>],
+async fn run_with_runner_impl<'a, 'z, R, S, A, C, IA, TA, CA>(
+    adjusters: &[Adjusters<IA, TA, CA>],
     task: Arc<R>,
     input_id_dbg: String,
     out_key: <R::In<'_> as WithId>::ID,
     run_context: R::Ctx,
-    mut contexts: Contexts<'a, R, IC, RC, RCC>,
+    mut contexts: C,
     mut runner: A,
 ) -> Result<R::Out, ThoError>
 where
-    R: Adjustable + Stage + 'a,
-    R::Ctx: Adjustable,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + 'static,
+    R: Stage + 'a,
+    S: Debug + Clone + Default + 'static,
+    C: Debug,
+    IA: InputAdjustment<'a, R, C, S>,
+    TA: TaskAdjustment<'a, R, C>,
+    CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     A: RunnerRetryAdapter<'z, R, S>,
@@ -692,8 +1040,7 @@ where
 
                         debug!("OOMHandler::run, error: 3. ctx_id={ctx_id:?} task={:?} os_thread_id={} oom i={i} in loop",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
-                        let adjust_result = track_await(apply_adjuster(
-                            adjuster,
+                        let adjust_result = track_await(adjuster.apply(
                             &mut task,
                             &mut run_context,
                             &mut input_select_adjusted,
@@ -737,17 +1084,18 @@ where
 
                         match run_result {
                             Ok(v) => {
-                                track_await(contexts.input.add_partial_output(v)).await;
+                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
 
-                                let all_done = contexts.input.all_done();
+                                match track_await(<IA as InputAdjustment<'a, R, C, S>>::handle_success(v, contexts)).await? {
+                                    InputAdjustedRun::Done(out) => {
+                                        collect_eta_record_oom_success();
 
-                                debug!("OOMHandler::run, error: ctx_id={ctx_id:?} task={:?} os_thread_id={}  ok adjust_context={contexts:?} all_done={all_done}",task.as_ref().expect("run_with_runner_impl: missing task"),os_thread_id(),);
-
-                                if all_done {
-                                    collect_eta_record_oom_success();
-
-                                    debug!("done in {i} steps");
-                                    return track_await(contexts.input.build_final_output()).await;
+                                        debug!("done in {i} steps");
+                                        return Ok(out);
+                                    }
+                                    InputAdjustedRun::Continue(next_contexts) => {
+                                        contexts = next_contexts;
+                                    }
                                 }
                             }
                             Err(te) => {
@@ -792,21 +1140,21 @@ where
     }
 }
 
-async fn run_with_runner<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
-    adjusters: &[Adjusters<'a, R, IC, RC, RCC, S>],
+async fn run_with_runner<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
+    adjusters: &[Adjusters<IA, TA, CA>],
     task: Arc<R>,
     input: Arc<W>,
     run_context: R::Ctx,
-    contexts: Contexts<'a, R, IC, RC, RCC>,
+    contexts: C,
     runner: Run,
 ) -> Result<R::Out, ThoError>
 where
-    R: Adjustable + Stage + 'a,
-    R::Ctx: Adjustable,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + 'static,
+    R: Stage + 'a,
+    S: Debug + Clone + Default + 'static,
+    C: Debug,
+    IA: InputAdjustment<'a, R, C, S>,
+    TA: TaskAdjustment<'a, R, C>,
+    CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: thoosa_shared::traits::WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     W: WithId<ID = <R::In<'z> as WithId>::ID>,
@@ -827,21 +1175,21 @@ where
 }
 
 
-async fn run_with_runner_consume<'a, 'z, R, IC, RC, RCC, S, W, Run, Fut>(
-    adjusters: &[Adjusters<'a, R, IC, RC, RCC, S>],
+async fn run_with_runner_consume<'a, 'z, R, S, W, Run, Fut, C, IA, TA, CA>(
+    adjusters: &[Adjusters<IA, TA, CA>],
     task: Arc<R>,
     input: W,
     run_context: R::Ctx,
-    contexts: Contexts<'a, R, IC, RC, RCC>,
+    contexts: C,
     runner: Run,
 ) -> Result<R::Out, ThoError>
 where
-    R: Adjustable + Stage + 'a,
-    R::Ctx: Adjustable,
-    IC: InputContext<'a, R>,
-    RC: RunnableContext,
-    RCC: RunCtxContext,
-    S: Adjustable + Debug + Clone + Default + 'static,
+    R: Stage + 'a,
+    S: Debug + Clone + Default + 'static,
+    C: Debug,
+    IA: InputAdjustment<'a, R, C, S>,
+    TA: TaskAdjustment<'a, R, C>,
+    CA: RunContextAdjustment<R::Ctx, C>,
     for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
     R::Out: WithId + Send + Sync + 'static,
     W: ConsumeData<O = <R as Stage>::In<'z>> + WithId<ID = <R::In<'z> as WithId>::ID>,
@@ -1223,7 +1571,7 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_shared::traits::{Adjustable, Data, Metrics, RangeSelector, ThoSelector, WithId};
     use crate::runner::test::fixtures::{DLoadedTensor, MetricsRangeSelector};
-    use super::{Adjuster, InputContext};
+    use super::{input_adjuster, run_ctx_adjuster, task_adjuster, Adjuster, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext};
     // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]
@@ -1342,9 +1690,9 @@ mod tests {
 
         let oom_handler = OOMHandler::new(
             vec![
-                Adjusters::Input(Box::new(input_adj)),
-                Adjusters::Task(Box::new(task_adj)),
-                Adjusters::RunContext(Box::new(ctx_adj)),
+                Adjusters::Input(input_adjuster(input_adj)),
+                Adjusters::Task(task_adjuster(task_adj)),
+                Adjusters::RunContext(run_ctx_adjuster(ctx_adj)),
             ],
             None,
         );
@@ -1384,7 +1732,8 @@ mod tests {
         let (init_task, init_calls) = mock_runnable([Err(ThoError::oom())]);
         let (final_task, final_calls) = mock_runnable([Ok(TestOutput::new(10.))]);
         let (task_adj, task_adj_calls) = mock_task_adjuster([final_task]);
-        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, RangeSelector> = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj))], None);
+        let adjusters: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Task(task_adjuster(task_adj))];
+        let oom_handler: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters, None);
 
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
@@ -1398,15 +1747,7 @@ mod tests {
                 &Arc::new(init_task),
                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
                 ctx_mock,
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
+                WithRunnableContext::new(super::MockRunnableContext::new()),
             )
             .await
             .unwrap();
@@ -1425,7 +1766,8 @@ mod tests {
             Ok(TestOutput::new(10.)),
         ]);
         let (input_adj, input_calls) = mock_input_adjuster([RangeSelector([0]..[1])]);
-        let oom_handler = OOMHandler::new(vec![Adjusters::Input(Box::new(input_adj))], None);
+        let adjusters: Vec<Adjusters<_, NoTaskAdjuster, NoRunCtxAdjuster>> = vec![Adjusters::Input(input_adjuster(input_adj))];
+        let oom_handler = OOMHandler::new(adjusters, None);
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
             .with_device_idx(1)
@@ -1438,14 +1780,12 @@ mod tests {
                 &Arc::new(task),
                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
                 ctx_mock,
-                Contexts::new(
+                WithInputContext::new(
                     super::mock_input_context::build()
                         .with_partial_output(TestOutput::new(10.))
                         .with_all_done(&[true])
                         .with_build_final_output(TestOutput::new(10.))
                         .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
                 ),
             )
             .await
@@ -1465,7 +1805,8 @@ mod tests {
         ]);
         let (ctx_adj, ctx_adj_calls) = mock_context_adjuster(1);
 
-        let oom_handler: OOMHandler<'_, 'static, _, _, _, _, RangeSelector> = OOMHandler::new(vec![Adjusters::RunContext(Box::new(ctx_adj))], None);
+        let adjusters: Vec<Adjusters<NoInputAdjuster, NoTaskAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(ctx_adj))];
+        let oom_handler: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters, None);
 
         let ctx_mock = crate::runner::common::mock_run_ctx::build()
             .with_id(0)
@@ -1479,15 +1820,7 @@ mod tests {
                 &Arc::new(task),
                 Arc::new(DevicesWrap::wrap_plain(TestInput::new(1))),
                 ctx_mock,
-                Contexts::new(
-                    super::mock_input_context::build()
-                        .with_partial_output(TestOutput::new(10.))
-                        .with_all_done(&[true]) //TODO should
-                        .with_build_final_output(TestOutput::new(10.))
-                        .finish(),
-                    super::MockRunnableContext::new(),
-                    super::MockRunCtxContext::new(),
-                ),
+                WithRunCtxContext::new(super::MockRunCtxContext::new()),
             )
             .await
             .unwrap();
@@ -1528,37 +1861,23 @@ mod tests {
             .with_branch(4)
             .finish();
 
-        let oom1 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj1))], None);
+        let adjusters1: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Task(task_adjuster(task_adj1))];
+        let oom1: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters1, None);
         let h1 = oom1.run(
             &init_task1_arc,
             Arc::clone(&input_arc),
             ctx_mock_1,
-            Contexts::new(
-                super::mock_input_context::build()
-                    .with_partial_output(TestOutput::new(5.))
-                    .with_all_done(&[true]) //TODO should
-                    .with_build_final_output(TestOutput::new(5.))
-                    .finish(),
-                super::MockRunnableContext::new(),
-                super::MockRunCtxContext::new(),
-            ),
+            WithRunnableContext::new(super::MockRunnableContext::new()),
         );
         let init_task2_arc = Arc::new(init_task2);
 
-        let oom2 = OOMHandler::new(vec![Adjusters::Task(Box::new(task_adj2))], None);
+        let adjusters2: Vec<Adjusters<NoInputAdjuster, _, NoRunCtxAdjuster>> = vec![Adjusters::Task(task_adjuster(task_adj2))];
+        let oom2: OOMHandler<'_, 'static, _, _, _, RangeSelector> = OOMHandler::new(adjusters2, None);
         let h2 = oom2.run(
             &init_task2_arc,
             Arc::clone(&input_arc),
             ctx_mock_2,
-            Contexts::new(
-                super::mock_input_context::build()
-                    .with_partial_output(TestOutput::new(7.))
-                    .with_all_done(&[true]) //TODO should
-                    .with_build_final_output(TestOutput::new(7.))
-                    .finish(),
-                super::MockRunnableContext::new(),
-                super::MockRunCtxContext::new(),
-            ),
+            WithRunnableContext::new(super::MockRunnableContext::new()),
         );
         let r1: Result<TestOutput, ThoError> = h1.await;
         let r2: Result<TestOutput, ThoError> = h2.await;
