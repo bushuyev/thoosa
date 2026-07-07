@@ -7,8 +7,6 @@ use thoosa_named_derive::Named;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 
-use crate::ipc::codec::{install_ipc_endpoint, invoke_ipc_sync_stage, IpcCodec, JsonIpcCodec};
-use crate::ipc::json_ser::{self, SyncStageIpcWrapper};
 use crate as thoosa_common;
 use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
@@ -18,6 +16,7 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use thoosa_named_derive::Proxy;
 
 use super::common::{ABData, ClsOut, ModelTestId};
 
@@ -48,14 +47,6 @@ impl SyncClassifierStageInit {
             fail_until,
         }
     }
-}
-
-pub(crate) fn sync_classifier_endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
-    let init = JsonIpcCodec::decode::<SyncClassifierStageInit>(&init_msg)?;
-    Ok(json_ser::make_json_sync_stage_wrapper::<SyncClassifierStage, ThoTensor<ABData, ModelTestId>, ThoTensor<ClsOut, ModelTestId>>(
-        SYNC_CLASSIFIER_ENDPOINT,
-        SyncClassifierStage::init(init),
-    ))
 }
 
 #[derive(Debug, Named)]
@@ -161,7 +152,21 @@ impl SyncStage for Classifier {
 //     }
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Proxy)]
+#[proxy(
+    name = "ProxySyncClassifierStage",
+    endpoint = "SYNC_CLASSIFIER_ENDPOINT",
+    new_args = "id: ModelTestId, in_dim: i64, epochs: i64, lr: f64, fail_until: Vec<FailUntil>, device: ThoDevice",
+    init = "SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until)",
+    device = "device",
+    fields = "id: ModelTestId = id",
+    out_id = "ModelTestId(format!(\"cls_{}_inp_{}\", self.id.0, input_id.0).leak())",
+    pre_run = "if input.ref_key().is_none() { return Err(ThoError::new(format!(\"ProxySyncClassifierStage expected worker tensor ref input, got {input:?}\"))); }",
+    endpoint_init = "sync_classifier_endpoint_init",
+    init_type = "SyncClassifierStageInit",
+    in_type = "ThoTensor<ABData, ModelTestId>",
+    init_stage = "SyncClassifierStage::init(init)"
+)]
 pub(crate) struct SyncClassifierStage {
     id: ModelTestId,
     in_dim: i64,
@@ -261,63 +266,5 @@ impl SyncStage for SyncClassifierStage {
             debug!("Classifier::do_run: correct=\n{correct}");
             Ok(correct.view([1, 1]))
         })?)?)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct ProxySyncClassifierStage {
-    id: ModelTestId,
-}
-
-impl ProxySyncClassifierStage {
-    async fn new(id: ModelTestId, in_dim: i64, epochs: i64, lr: f64, fail_until: Vec<FailUntil>, device: ThoDevice) -> Result<Self, ThoError> {
-        install_ipc_endpoint::<JsonIpcCodec, _>(
-            GlobalCtx::global().cuda_actor(device).as_ref(),
-            SYNC_CLASSIFIER_ENDPOINT,
-            &SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until),
-        ).await?;
-
-        Ok(Self { id })
-    }
-}
-
-impl Adjustable for ProxySyncClassifierStage {}
-
-impl OutId for ProxySyncClassifierStage {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
-        ModelTestId(format!("cls_{}_inp_{}", self.id.0, input_id.0).leak())
-    }
-}
-
-impl Stage for ProxySyncClassifierStage {
-    type In<'a> = ThoTensor<ABData, ModelTestId>;
-    type Out = ThoTensor<ClsOut, ModelTestId>;
-    type Ctx = RunCtxImpl;
-}
-
-impl SyncStage for ProxySyncClassifierStage {
-    fn do_run<'a>(
-        self: Arc<Self>,
-        input: &Self::In<'a>,
-        ctx: &Self::Ctx,
-    ) -> Result<Self::Out, ThoError>
-    where
-        Self: Sized,
-    {
-        if input.ref_key().is_none() {
-            return Err(ThoError::new(format!("ProxySyncClassifierStage expected worker tensor ref input, got {input:?}")));
-        }
-
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-            invoke_ipc_sync_stage::<JsonIpcCodec, _, ThoTensor<ClsOut, ModelTestId>>(
-                GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(),
-                SYNC_CLASSIFIER_ENDPOINT,
-                input,
-                ctx,
-            ).await
-        }))
     }
 }

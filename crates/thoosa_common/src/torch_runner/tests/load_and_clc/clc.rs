@@ -12,7 +12,6 @@ use thoosa_shared::traits::{Adjustable, MonoMetrics, SimpleId};
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use crate::dims::Dims;
-use crate::ipc::codec::{install_ipc_endpoint, invoke_ipc_sync_stage, JsonIpcCodec};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -25,6 +24,7 @@ use crate::torch_runner::tests::load_and_clc::{ClcDynSyncStage, SYNC_CLC_ENDPOIN
 use crate::torch_runner::tests::load_and_clc::loader::{LoadedRange, LoadedTensor};
 use crate as thoosa_common;
 use crate::tho_device::ThoDevice;
+use thoosa_named_derive::Proxy;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -40,7 +40,22 @@ pub(crate) struct ClcStage {
     pub(crate) sync_clc: Arc<ClcDynSyncStage>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Proxy)]
+#[proxy(
+    name = "ProxySyncClcStage",
+    endpoint = "SYNC_CLC_ENDPOINT",
+    new_args = "id: SynKey, k: f64, dim: i64, fail_until: Vec<FailUntil>, kind: Kind, tho_device: ThoDevice, use_matmul: bool",
+    prepare = "let (fail_until_dump_to_cpu, fail_until) = { let (dumped, rest): (Vec<_>, Vec<_>) = fail_until.into_iter().partition(|e| *e == FailUntil::DumpedToCpu); (!dumped.is_empty(), rest) };",
+    init = "SyncClcTaskInit::new(id.clone(), k, dim, fail_until, use_matmul)",
+    device = "tho_device",
+    fields = "id: SynKey = id, fail_until_dump_to_cpu: bool = fail_until_dump_to_cpu",
+    out_id = "&self.id + input_id",
+    pre_run = "if self.fail_until_dump_to_cpu { let device_idx = ctx.tho_device_idx(); let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false); debug!(\"ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}\"); if !is_all_on_cpu { return Err(ThoError::oom()); } }",
+    endpoint_init = "sync_clc_endpoint_init",
+    init_type = "SyncClcTaskInit",
+    in_type = "ThoTensor<LoadedTensor, SynKey>",
+    init_stage = "SyncClcStage::init(init)"
+)]
 pub(crate) struct SyncClcStage {
     id: SynKey,
     k: ThoTensor<MulK, SimpleId>,
@@ -250,78 +265,6 @@ impl SyncStage for SyncClcStage {
         } else {
             LoadedTensor::clc_hadamard(self.out_id(input.id()), input, &self.k)
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct ProxySyncClcStage {
-    id: SynKey,
-    fail_until_dump_to_cpu: bool,// DumpedToCpu check can't be done in worker because it needs GlobalCtx::global().is_all_on_cpu
-}
-
-impl Stage for ProxySyncClcStage {
-    type In<'a> = ThoTensor<LoadedTensor, SynKey>;
-    type Out = ThoTensor<ClcStageOutput, SynKey>;
-    type Ctx = RunCtxImpl;
-}
-
-impl Adjustable for ProxySyncClcStage {}
-
-impl OutId for ProxySyncClcStage {
-    fn out_id(&self, input_id: &SynKey) -> SynKey {
-        &self.id + input_id
-    }
-}
-
-impl ProxySyncClcStage {
-    pub async fn new(id: SynKey,k: f64, dim: i64, fail_until: Vec<FailUntil>,kind: Kind, tho_device: ThoDevice, use_matmul: bool) -> Result<Self, ThoError> {
-        debug!("ProxySyncClcTask::new: id={id:?} k={k:?}");
-        let (fail_until_dump_to_cpu, fail_until) = {
-            let (dumped, rest): (Vec<_>, Vec<_>) =
-                fail_until.into_iter().partition(|e| *e == FailUntil::DumpedToCpu);
-
-            (!dumped.is_empty(), rest)
-        };
-
-        install_ipc_endpoint::<JsonIpcCodec, _>(
-            GlobalCtx::global().cuda_actor(tho_device).as_ref(),
-            SYNC_CLC_ENDPOINT,
-            &SyncClcTaskInit::new(id.clone(), k, dim, fail_until, use_matmul),
-        ).await?;
-
-        Ok(Self {
-            id,
-            fail_until_dump_to_cpu,
-        })
-    }
-}
-
-impl SyncStage for ProxySyncClcStage {
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("ProxySyncClcTask::new: input={input:?}");
-
-        //this is on  main side because worker doesn't know if is_all_on_cpu
-        if self.fail_until_dump_to_cpu {
-            let device_idx = ctx.tho_device_idx();
-            let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false);
-            debug!("ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}");
-            if !is_all_on_cpu {
-                return Err(ThoError::oom());
-            }
-        }
-
-
-        tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async move {
-                invoke_ipc_sync_stage::<JsonIpcCodec, _, ThoTensor<ClcStageOutput, SynKey>>(
-                    GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(),
-                    SYNC_CLC_ENDPOINT,
-                    input,
-                    ctx,
-                ).await
-            })
-        })
-
     }
 }
 
