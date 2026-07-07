@@ -13,9 +13,8 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, CopyToDevice, ThoError};
-use crate::copy_ctx::CudaActorHandle;
 use crate::dims::{Dims, LocalSelect};
-use crate::ipc::cuda_process::encode_endpoint_payload;
+use crate::ipc::codec::{install_ipc_endpoint, invoke_ipc_endpoint, IpcCodec, JsonIpcCodec};
 use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, SyncStage};
@@ -130,8 +129,8 @@ impl From<std::ops::Range<MonoMetrics<1, 2>>> for LoadedRange {
 }
 
 impl WorkerStageInput for LoaderInput {
-    fn decode_for_worker(input: String, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        Ok(serde_json::from_str(&input)?)
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        C::decode(input)
     }
 }
 
@@ -283,10 +282,11 @@ struct ProxySyncTestTensorLoader {
 impl ProxySyncTestTensorLoader {
     async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> Result<Self, ThoError> {
         debug!("ProxySyncTestTensorLoader::new: size={size:?} kind={kind:?}");
-        GlobalCtx::global()
-            .cuda_actor(tho_device_idx)
-            .install_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(&SyncTestTensorLoaderInit::new(size.clone(), kind))?))
-            .await?;
+        install_ipc_endpoint::<JsonIpcCodec, _>(
+            GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
+            SYNC_TEST_TENSOR_LOADER_ENDPOINT,
+            &SyncTestTensorLoaderInit::new(size.clone(), kind),
+        ).await?;
 
         Ok(Self {
             size,
@@ -316,12 +316,11 @@ impl SyncStage for ProxySyncTestTensorLoader {
 
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
 
-            let response = GlobalCtx::global()
-                .cuda_actor(ctx.tho_device_idx())
-                .invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?))
-                .await?;
-
-            serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&response).map_err(ThoError::from)
+            invoke_ipc_endpoint::<JsonIpcCodec, _, ThoTensor<LoadedTensor, SynKey>>(
+                GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(),
+                SYNC_TEST_TENSOR_LOADER_ENDPOINT,
+                input,
+            ).await
         }))
     }
 }

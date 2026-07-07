@@ -19,10 +19,11 @@ use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
 use crate::dims::Dims;
+use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
-use crate::ipc::json_ser::SyncStageJsonWrapper;
+use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::common::runnable::SyncStage;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -36,12 +37,12 @@ pub struct CudaWorker {
 
 
 pub trait Init {
-    fn init() -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>;
+    fn init() -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>;
 }
 
 impl CudaWorker {
 
-    pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>  >>, tho_device: ThoDevice) -> Result<(), ThoError> {
+    pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>, tho_device: ThoDevice) -> Result<(), ThoError> {
 
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
@@ -70,7 +71,7 @@ impl CudaWorker {
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
-        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageJsonWrapper>>::new()));
+        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
 
         loop {
             let frame = match cuda_process::read_text_frame(&mut reader).await {
@@ -222,14 +223,14 @@ impl CudaWorker {
             }
 
             if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {
-                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload(init_msg)?;
-                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg={init_msg} endpoint_inits.contains_key={}", endpoint_inits.contains_key(endpoint_name));
+                let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload_bytes(init_msg)?;
+                debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg_len={} endpoint_inits.contains_key={}", init_msg.len(), endpoint_inits.contains_key(endpoint_name));
 
                 let payload = match endpoint_inits.get(endpoint_name) {
 
                     Some(init_endpoint) => {
 
-                        match init_endpoint(init_msg.to_string()) {
+                            match init_endpoint(init_msg) {
                             Ok(endpoint_wrapper) => {
                                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
                                 installed_endpoints.write().insert(endpoint_name.to_string(), endpoint_wrapper);
@@ -252,8 +253,8 @@ impl CudaWorker {
             }
 
             if let Some(input) = payload.strip_prefix(INVOKE_ENDPOINT_PREFIX) {
-                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
-                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} input={input:?}");
+                let (endpoint_name, input) = cuda_process::split_endpoint_payload_bytes(input)?;
+                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} input_len={}", input.len());
 
                 let response = {
                     let stream = exec_stream_pool.acquire().await;
@@ -263,7 +264,7 @@ impl CudaWorker {
                                 let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
 
-                                let response = endpoint.do_run(input.to_string(), &all_cuda_tensors);
+                                let response = endpoint.do_run(&input, &all_cuda_tensors);
                                 let sync_result = stream.synchronize();
                                 match (response, sync_result) {
                                     (Ok(response), Ok(())) => Ok(response),
@@ -289,7 +290,7 @@ impl CudaWorker {
                 debug!("run_worker: invoke endpoint  response={response:?}");
 
                 let payload = match response {
-                    Ok(response) => OutgoingRequestPayload::Msg(response),
+                    Ok(response) => OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response)),
                     Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
                 };
                 reply_tx
@@ -346,13 +347,13 @@ impl CudaWorker {
 }
 
 
-//TODO merge WorkerStageInput/Output, add 'encoder' GAT and move impl to json_er
+//TODO merge WorkerStageInput/Output and move impls to json_ser
 pub(crate) trait WorkerStageInput: Debug + Sized {
-    fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
 }
 
 pub(crate) trait WorkerStageOutput: Debug + Sized {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError>;
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError>;
 }
 
 impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
@@ -360,9 +361,9 @@ where
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
-    fn decode_for_worker(input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         debug!("ThoTensor::decode_for_worker: input={input:?}");
-        let input_ref = serde_json::from_str::<Self>(&input)?;
+        let input_ref = C::decode::<Self>(input)?;
         debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
 
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
@@ -405,14 +406,14 @@ where
     D: Dims,
     Id: Named + Debug + Clone + Serialize,
 {
-    fn encode_from_worker(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let size = out_tensor.size();
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
 
-        Ok(serde_json::to_string(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None))?)
+        C::encode(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None))
     }
 }
 

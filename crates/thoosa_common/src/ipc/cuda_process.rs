@@ -69,13 +69,71 @@ pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
 pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
 pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
 pub(crate) const DROP_THO_TENSOR: &str = "drop_tho_tensor:";
+const ENDPOINT_BYTES_PAYLOAD_PREFIX: &str = "endpoint-bytes:";
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
 }
 
+pub(crate) fn encode_endpoint_payload_bytes(endpoint_name: &str, payload: &[u8]) -> String {
+    format!("{endpoint_name}\t{ENDPOINT_BYTES_PAYLOAD_PREFIX}{}", bytes_to_hex(payload))
+}
+
+pub(crate) fn encode_endpoint_response_bytes(payload: &[u8]) -> String {
+    format!("{ENDPOINT_BYTES_PAYLOAD_PREFIX}{}", bytes_to_hex(payload))
+}
+
 pub(crate) fn split_endpoint_payload(payload: &str) -> Result<(&str, &str), ThoError> {
     payload.split_once('\t').map(|v|Ok(v)).unwrap_or_else(||Err(ThoError::new(format!("can't parse payload: {payload}"))))
+}
+
+pub(crate) fn split_endpoint_payload_bytes(payload: &str) -> Result<(&str, Vec<u8>), ThoError> {
+    let (endpoint_name, payload) = split_endpoint_payload(payload)?;
+    Ok((endpoint_name, decode_endpoint_bytes_payload(payload)?))
+}
+
+pub(crate) fn decode_endpoint_response_bytes(payload: &str) -> Result<Vec<u8>, ThoError> {
+    decode_endpoint_bytes_payload(payload)
+}
+
+fn decode_endpoint_bytes_payload(payload: &str) -> Result<Vec<u8>, ThoError> {
+    match payload.strip_prefix(ENDPOINT_BYTES_PAYLOAD_PREFIX) {
+        Some(hex) => hex_to_bytes(hex),
+        None => Ok(payload.as_bytes().to_vec()),
+    }
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, ThoError> {
+    if hex.len() % 2 != 0 {
+        return Err(ThoError::new(format!("endpoint byte payload has odd hex length: {}", hex.len())));
+    }
+    let bytes = hex.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.chunks_exact(2) {
+        let hi = hex_value(chunk[0])?;
+        let lo = hex_value(chunk[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn hex_value(byte: u8) -> Result<u8, ThoError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(ThoError::new(format!("endpoint byte payload contains non-hex byte: {byte}"))),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1560,6 +1618,29 @@ impl CudaIPCActorHandle {
         })
     }
 
+    async fn install_endpoint_raw(&self, init_msg: String) -> Result<(), ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::InstallEndpoint {
+                init_msg,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
+    async fn invoke_endpoint_raw(&self, input: String) -> Result<String, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::InvokeEndpoint {
+                input,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
 }
 
 struct IPCHanldeCTx {
@@ -1609,28 +1690,21 @@ impl CudaActorHandle for CudaIPCActorHandle {
     }
 
     async fn install_endpoint(&self, init_msg: String) -> Result<(), ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::InstallEndpoint {
-                init_msg,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
-
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+        self.install_endpoint_raw(init_msg).await
     }
 
     async fn invoke_endpoint(&self, input: String) -> Result<String, ThoError> {
-        let (respond_to, recv) = oneshot::channel();
-        self.sender.send(
-            CudaIPCActorMessage::InvokeEndpoint {
-                input,
-                respond_to,
-            }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;//TODO
+        let response = self.invoke_endpoint_raw(input).await?;
+        String::from_utf8(decode_endpoint_response_bytes(&response)?).map_err(|e| ThoError::new(format!("endpoint response is not utf8: {e}")))
+    }
 
-        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?//TODO
+    async fn install_endpoint_bytes(&self, init_msg: Vec<u8>) -> Result<(), ThoError> {
+        self.install_endpoint_raw(String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
+    }
 
+    async fn invoke_endpoint_bytes(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
+        let response = self.invoke_endpoint_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?;
+        decode_endpoint_response_bytes(&response)
     }
 
     async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
@@ -1762,7 +1836,7 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
-    use crate::ipc::json_ser::SyncStageJsonWrapper;
+    use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::init_ipc_test;
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
@@ -1929,16 +2003,16 @@ mod tests {
 
         }
 
-        impl SyncStageJsonWrapper for _SyncStageJsonWrapper {
-            fn do_run(&self, _input: String, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<String, ThoError> {
+        impl SyncStageIpcWrapper for _SyncStageJsonWrapper {
+            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
                 debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
-                if _input.eq("fail") {
+                if _input.eq(b"fail") {
                     fail_with_unrecoverable_error();
                 } else {
 
                 }
 
-                Ok("ok".to_string())
+                Ok(b"ok".to_vec())
             }
         }
 
@@ -1947,10 +2021,10 @@ mod tests {
                 HashMap::from([
                             (
                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                                Box::new(|s|{
+                                Box::new(|_s|{
                                     debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageJsonWrapper>)
-                                }) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper>)
+                                }) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
                             )
                 ]),
                ThoDevice::from(Cuda(0))

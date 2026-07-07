@@ -7,8 +7,8 @@ use thoosa_named_derive::Named;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 
-use crate::ipc::cuda_process::encode_endpoint_payload;
-use crate::ipc::json_ser::{self, encode_json_sync_stage_run_input, SyncStageJsonWrapper};
+use crate::ipc::codec::{install_ipc_endpoint, invoke_ipc_sync_stage, IpcCodec, JsonIpcCodec};
+use crate::ipc::json_ser::{self, SyncStageIpcWrapper};
 use crate as thoosa_common;
 use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
@@ -50,8 +50,8 @@ impl SyncClassifierStageInit {
     }
 }
 
-pub(crate) fn sync_classifier_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
-    let init = serde_json::from_str::<SyncClassifierStageInit>(&init_msg)?;
+pub(crate) fn sync_classifier_endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
+    let init = JsonIpcCodec::decode::<SyncClassifierStageInit>(&init_msg)?;
     Ok(json_ser::make_json_sync_stage_wrapper::<SyncClassifierStage, ThoTensor<ABData, ModelTestId>, ThoTensor<ClsOut, ModelTestId>>(
         SYNC_CLASSIFIER_ENDPOINT,
         SyncClassifierStage::init(init),
@@ -271,13 +271,11 @@ pub(crate) struct ProxySyncClassifierStage {
 
 impl ProxySyncClassifierStage {
     async fn new(id: ModelTestId, in_dim: i64, epochs: i64, lr: f64, fail_until: Vec<FailUntil>, device: ThoDevice) -> Result<Self, ThoError> {
-        GlobalCtx::global()
-            .cuda_actor(device)
-            .install_endpoint(encode_endpoint_payload(
-                SYNC_CLASSIFIER_ENDPOINT,
-                &serde_json::to_string(&SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until))?,
-            ))
-            .await?;
+        install_ipc_endpoint::<JsonIpcCodec, _>(
+            GlobalCtx::global().cuda_actor(device).as_ref(),
+            SYNC_CLASSIFIER_ENDPOINT,
+            &SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until),
+        ).await?;
 
         Ok(Self { id })
     }
@@ -314,15 +312,12 @@ impl SyncStage for ProxySyncClassifierStage {
         }
 
         tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-            let response = GlobalCtx::global()
-                .cuda_actor(ctx.tho_device_idx())
-                .invoke_endpoint(encode_endpoint_payload(
-                    SYNC_CLASSIFIER_ENDPOINT,
-                    &encode_json_sync_stage_run_input(serde_json::to_string(input)?, ctx)?,
-                ))
-                .await?;
-
-            serde_json::from_str::<ThoTensor<ClsOut, ModelTestId>>(&response).map_err(ThoError::from)
+            invoke_ipc_sync_stage::<JsonIpcCodec, _, ThoTensor<ClsOut, ModelTestId>>(
+                GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(),
+                SYNC_CLASSIFIER_ENDPOINT,
+                input,
+                ctx,
+            ).await
         }))
     }
 }

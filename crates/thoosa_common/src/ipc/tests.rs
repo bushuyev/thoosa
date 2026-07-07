@@ -14,7 +14,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{mono_key, ThoError};
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
-use crate::ipc::json_ser::SyncStageJsonWrapper;
+use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
 use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
@@ -93,15 +93,15 @@ fn check_sum_result(mul_k: f64, size: [i64; 2], resource: &str, out: &ThoTensor<
     assert!(ok);
 }
 
-fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
+fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
     HashMap::from([
         (
             SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+            Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
             SYNC_CLC_ENDPOINT.to_string(),
-            Box::new(sync_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+            Box::new(sync_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         )
     ])
 }
@@ -628,10 +628,10 @@ mod composite_input {
     use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::{MonoKey, SynKey};
     use thoosa_shared::traits::{Adjustable, WithId};
-    use crate::copy_ctx::CudaActorHandle;
-    use crate::ipc::cuda_process::{encode_endpoint_payload, IPC_SOCK_ENV};
+    use crate::ipc::codec::{install_empty_ipc_endpoint, invoke_ipc_endpoint, IpcCodec, JsonIpcCodec};
+    use crate::ipc::cuda_process::IPC_SOCK_ENV;
     use crate::ipc::cuda_wokrer::{CudaWorker, WorkerStageInput};
-    use crate::ipc::json_ser::SyncStageJsonWrapper;
+    use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::runner::common::{OutId, RunCtx};
     use crate::runner::common::runnable::{Stage, SyncStage};
     use crate::runner::global_ctx::GlobalCtx;
@@ -653,10 +653,10 @@ mod composite_input {
 
     impl ProxyABClcSyncStage {
         async fn new() -> Result<Self, ThoError> {
-            GlobalCtx::global()
-                .cuda_actor(1)
-                .install_endpoint(encode_endpoint_payload(SYNC_AB_CLC_ENDPOINT, ""))
-                .await?;
+            install_empty_ipc_endpoint(
+                GlobalCtx::global().cuda_actor(1).as_ref(),
+                SYNC_AB_CLC_ENDPOINT,
+            ).await?;
 
             Ok(Self {
                 id: mono_key!(AB_SYNC_CLC_STAGE_ID, "ABClcSyncStage"),
@@ -672,12 +672,11 @@ mod composite_input {
             self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
             tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-                let response = GlobalCtx::global()
-                    .cuda_actor(ctx.tho_device_idx())
-                    .invoke_endpoint(encode_endpoint_payload(SYNC_AB_CLC_ENDPOINT, &serde_json::to_string(&ABClcSyncStageIpcInputRef::new(input))?))
-                    .await?;
-
-                serde_json::from_str::<ABClcStageOutput>(&response).map_err(ThoError::from)
+                invoke_ipc_endpoint::<JsonIpcCodec, _, ABClcStageOutput>(
+                    GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).as_ref(),
+                    SYNC_AB_CLC_ENDPOINT,
+                    &ABClcSyncStageIpcInputRef::new(input),
+                ).await
             }))
         }
     }
@@ -731,28 +730,28 @@ mod composite_input {
         stage: ABClcSyncStage,
     }
 
-    impl SyncStageJsonWrapper for ABClcSyncStageJsonWrapper {
-        fn do_run(&self, input: String, all_cuda_tensors: &Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>) -> Result<String, ThoError> {
-            let input = serde_json::from_str::<ABClcSyncStageIpcInput>(&input)?;
-            let from_a = ThoTensor::<AStageOutputDims, ()>::decode_for_worker(serde_json::to_string(&input.from_a)?, all_cuda_tensors)?;
-            let from_b = ThoTensor::<BStageOutputDims, ()>::decode_for_worker(serde_json::to_string(&input.from_b)?, all_cuda_tensors)?;
+    impl SyncStageIpcWrapper for ABClcSyncStageJsonWrapper {
+        fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>) -> Result<Vec<u8>, ThoError> {
+            let input = JsonIpcCodec::decode::<ABClcSyncStageIpcInput>(input)?;
+            let from_a = ThoTensor::<AStageOutputDims, ()>::decode_for_worker::<JsonIpcCodec>(&JsonIpcCodec::encode(&input.from_a)?, all_cuda_tensors)?;
+            let from_b = ThoTensor::<BStageOutputDims, ()>::decode_for_worker::<JsonIpcCodec>(&JsonIpcCodec::encode(&input.from_b)?, all_cuda_tensors)?;
             let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?;
 
-            serde_json::to_string(&out).map_err(ThoError::from)
+            JsonIpcCodec::encode(&out)
         }
     }
 
-    fn sync_ab_clc_endpoint_init(_init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
+    fn sync_ab_clc_endpoint_init(_init_msg: Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError> {
         Ok(Box::new(ABClcSyncStageJsonWrapper {
             stage: ABClcSyncStage::new(),
         }))
     }
 
-    fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>> {
+    fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
         HashMap::from([
             (
                 SYNC_AB_CLC_ENDPOINT.to_string(),
-                Box::new(sync_ab_clc_endpoint_init) as Box<dyn Fn(String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError>>,
+                Box::new(sync_ab_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
             )
         ])
     }
