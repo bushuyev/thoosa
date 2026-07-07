@@ -13,7 +13,7 @@ use crate::runner::common::cachable::{Cached, DevicesWrap};
 use crate::runner::common::runnable::{AsyncStage, Stage};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::global_ctx::GlobalCtx;
-use crate::runner::oom_handler::{Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use crate::runner::oom_handler::{input_adjuster, run_ctx_adjuster, Adjusters, NoTaskAdjuster, OOMHandler, WithInputContext, WithRunCtxContext};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -97,26 +97,23 @@ impl AsyncStage for JoinAndClassifyTask {
             output_builder
         };
 
-        let result = OOMHandler::new(
-            vec![
-                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
-                    MAX_PARALLEL,
-                    *MaxParallelStep::TEN,
-                ))),
-                Adjusters::Input(Box::new(SplitsAdjuster::<ABRange, ABMetrics>::new(
-                    min_split_len,
-                ))),
-            ],
-            None,
-        )
+        let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+            Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
+                MAX_PARALLEL,
+                *MaxParallelStep::TEN,
+            ))),
+            Adjusters::Input(input_adjuster(SplitsAdjuster::<ABRange, ABMetrics>::new(
+                min_split_len,
+            ))),
+        ];
+        let result = OOMHandler::new(adjusters, None)
         .run(
             &self.clf,
             batched,
             ctx,
-            Contexts::new(
-                SplitsAdjusterContextImpl::new(size, output_builder),
-                NoopRunnableContext {},
+            WithRunCtxContext::with_rest(
                 MaxParallelAdjustContextImpl::new(),
+                WithInputContext::new(SplitsAdjusterContextImpl::new(size, output_builder)),
             ),
         )
         .await?;

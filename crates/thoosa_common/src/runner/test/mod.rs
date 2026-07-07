@@ -20,7 +20,7 @@ use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdju
 use crate::runner::common::cachable::{BorrowRef, SelectRef, Cached, CachedPurgeOutput, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use crate::runner::oom_handler::{input_adjuster, run_ctx_adjuster, Adjusters, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithInputContext, WithRunCtxContext};
 use crate::tho_tensor::ThoTensor;
 
 
@@ -128,45 +128,39 @@ where
         match self.config {
             OOMRunnerConfig::MaxParallel { max, step } => {
                 let run_ctx = ctx.branch(false);
+                let adjusters: Vec<Adjusters<NoInputAdjuster, NoTaskAdjuster, _>> = vec![Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
+                    max,
+                    step,
+                )))];
                 OOMHandler::new(
-                    vec![Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
-                        max,
-                        step,
-                    )))],
+                    adjusters,
                     None,
                 )
                 .run(
                     &runnable,
                     input,
                     run_ctx,
-                    Contexts::new(
-                        NoopInputContext(None),
-                        NoopRunnableContext {},
-                        MaxParallelAdjustContextImpl::new(),
-                    ),
+                    WithRunCtxContext::new(MaxParallelAdjustContextImpl::new()),
                 )
                 .await
                 // todo!()
             },
             OOMRunnerConfig::Splits => {
                 let run_ctx = ctx.branch(false);
+                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, NoRunCtxAdjuster>> = vec![
+                    Adjusters::Input(input_adjuster(
+                       SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(min_split_len),
+                    ))
+                ];
                 OOMHandler::new(
-                    vec![
-                        Adjusters::Input(Box::new(
-                           SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(min_split_len),
-                        ))
-                    ],
+                    adjusters,
                     None,
                 )
                 .run(
                     &runnable,
                     input,
                     run_ctx,
-                    Contexts::new(
-                        SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
-                        NoopRunnableContext {},
-                        NoopRunCtxContext {},
-                    ),
+                    WithInputContext::new(SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id))),
                 )
                 .await
             },
@@ -175,56 +169,56 @@ where
                 step: _step,
             } => {
                 let run_ctx = ctx.branch(false);
+                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
+                        MAX_PARALLEL,
+                        *MaxParallelStep::TWENTY,
+                    ))),
+                    Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
+                        min_split_len,
+                    ))),
+                ];
                 OOMHandler::new(
-                    vec![
-                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
-                            MAX_PARALLEL,
-                            *MaxParallelStep::TWENTY,
-                        ))),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
-                            min_split_len,
-                        ))),
-                    ],
+                    adjusters,
                     None,
                 )
                 .run(
                     &runnable,
                     input,
                     run_ctx,
-                    Contexts::new(
-                        SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
-                        NoopRunnableContext {},
+                    WithRunCtxContext::with_rest(
                         MaxParallelAdjustContextImpl::new(),
+                        WithInputContext::new(SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id))),
                     ),
                 )
                 .await
             }
             OOMRunnerConfig::DumpedToCpu => {
                 let run_ctx = ctx.branch(false);
+                let adjusters: Vec<Adjusters<_, NoTaskAdjuster, _>> = vec![
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("n/a"))),
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(
+                        MAX_PARALLEL,
+                        *MaxParallelStep::FIFTY,
+                    ))),
+                    Adjusters::Input(input_adjuster(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
+                        min_split_len,
+                    ))),
+                ];
                 OOMHandler::new(
-                    vec![
-                        Adjusters::RunContext(Box::new(DumpToCpu::new("n/a"))),
-                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(
-                            MAX_PARALLEL,
-                            *MaxParallelStep::FIFTY,
-                        ))),
-                        Adjusters::Input(Box::new(SplitsAdjuster::<S,  <<R as Stage>::In<'z> as Data>::Metrics>::new(
-                            min_split_len,
-                        ))),
-                    ],
+                    adjusters,
                     None,
                 )
                 .run(
                     &runnable,
                     input,
                     run_ctx,
-                    Contexts::new(
-                        SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id)),
-                        NoopRunnableContext {},
+                    WithRunCtxContext::with_rest(
                         MaxParallelAndDumpToCpuAdjustableContex::new(
                             MaxParallelAdjustContextImpl::new(),
                             DumpToCpuContextImpl::new(required_ids),
                         ),
+                        WithInputContext::new(SplitsAdjusterContextImpl::new(size, (self.output_builder)(out_id))),
                     ),
                 )
                 .await
