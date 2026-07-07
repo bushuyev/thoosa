@@ -18,7 +18,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
@@ -555,10 +555,10 @@ where
             let select_config = select_config.clone();
             async move {
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-                let oom_handler: OOMHandler<'_, '_, _, _, _, _, VoidSelector> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, VoidSelector> = OOMHandler::new(
                     vec![
-                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                        Adjusters::RunContext(Box::new(DumpToCpu::new("select_buckets"))),
+                        Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                        Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("select_buckets"))),
                     ],
                     None,
                 );
@@ -568,9 +568,7 @@ where
                         &sync_stage,
                         Arc::new(SelectBucketsSyncInputWrapper::new(select_config)),
                         ctx.branch(false),
-                        Contexts::new(
-                            NoopInputContext(None),
-                            NoopRunnableContext {},
+                        WithRunCtxContext::new(
                             MaxParallelAndDumpToCpuAdjustableContex::new(
                                 MaxParallelAdjustContextImpl::new(),
                                 DumpToCpuContextImpl::new(&required_ids),

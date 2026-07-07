@@ -13,7 +13,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::task::spawn_blocking;
 use tracing::debug;
 use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, ChannelsData, MotifProbability, Slice};
-use thoosa_common::copy_ctx::ExecSyncStageActionResult;
+use thoosa_common::copy_ctx::{exec_sync_stage, ExecSyncStageActionResult};
 use thoosa_common::my_tch::{MySequential, ThoModule, ThoModuleDowncast};
 use thoosa_common::nodes::cosine_2d::{cosine_conv2d_bank_logits, CosineConv2dBankConfig, MyCosineConv2d};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
@@ -21,7 +21,7 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::common::cachable::{SelectRef, Cached, ConsumeData, DevicesWrap};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -213,10 +213,10 @@ where
         let batch_input = BatchCosineConv2dTensorsInputWrapper::new(id.clone(), Arc::into_inner(tmp_cache).expect("Arc::into_inner(tmp_cache) failed").into_inner());
         let required_tmp_cache_ids = std::collections::HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
-        let oom_handler: OOMHandler<'_, '_, _, _, _, _, ()> = OOMHandler::new(
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
-                Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                Adjusters::RunContext(Box::new(DumpToCpu::new("batch_apply_cosine2d_motif_nets"))),
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("batch_apply_cosine2d_motif_nets"))),
             ],
             None,
         );
@@ -225,9 +225,7 @@ where
                 &batch_cosine_conv2d_tensors,
                 batch_input,
                 stage_ctx.branch(true),
-                Contexts::new(
-                    NoopInputContext::<BatchCosineConv2dTensors<R>>(None),
-                    NoopRunnableContext {},
+                WithRunCtxContext::new(
                     MaxParallelAndDumpToCpuAdjustableContex::new(
                         MaxParallelAdjustContextImpl::new(),
                         DumpToCpuContextImpl::new(&required_ids),
@@ -285,7 +283,7 @@ where
             let cuda_actor = GlobalCtx::global().cuda_actor(ctx.tho_device_idx());
 
             let ctx_for_data = ctx.branch(false);
-            let res = track_await(cuda_actor.exec_sync_stage(move |stream| async move {
+            let res = track_await(exec_sync_stage(cuda_actor.as_ref(), move |stream| async move {
                 let tho_device_idx = ctx_for_data.tho_device_idx();
 
                 let input = input.borrow_to(tho_device_idx, None::<VoidSelector>).await?;

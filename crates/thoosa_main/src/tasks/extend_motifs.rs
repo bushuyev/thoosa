@@ -18,7 +18,7 @@ use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, Sp
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::runs::{SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
@@ -514,11 +514,11 @@ where
                 channel_masks_dists_ids,
                 resources_iter,
                 ..
-            } = track_await(OOMHandler::new(
+            } = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, SelectMotifsInputSelector>::new(
                 vec![
-                    Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                    Adjusters::RunContext(Box::new(DumpToCpu::new("clc_resources_motifs_dist"))),
-                    Adjusters::Input(Box::new(SelectMotifsAdjuster::new(find_motifs_run_config.window as i64))),
+                    Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                    Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("clc_resources_motifs_dist"))),
+                    Adjusters::Input(input_adjuster(SelectMotifsAdjuster::new(find_motifs_run_config.window as i64))),
                 ],
                 None,
             )
