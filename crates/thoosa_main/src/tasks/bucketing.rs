@@ -23,7 +23,7 @@ use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunnableContext, OOMHandler};
 use thoosa_common::runs::SavableResult;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::ws::Workspace;
@@ -1004,11 +1004,11 @@ where
 
                 let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
                 let bucket_slice_count = bucket_slice_count(i64::from(resource.length()), bucket_window_samples, bucket_step_samples)?;
-                let oom_handler: OOMHandler<'_, '_, _, _, _, _, SelectBucketsInputSelector> = OOMHandler::new(
+                let oom_handler: OOMHandler<'_, '_, _, NoTaskAdjuster, _, SelectBucketsInputSelector> = OOMHandler::new(
                     vec![
-                        Adjusters::RunContext(Box::new(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                        Adjusters::RunContext(Box::new(DumpToCpu::new("bucketing"))),
-                        Adjusters::Input(Box::new(SelectBucketsAdjuster::new())),
+                        Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                        Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("bucketing"))),
+                        Adjusters::Input(input_adjuster(SelectBucketsAdjuster::new())),
                     ],
                     None,
                 );

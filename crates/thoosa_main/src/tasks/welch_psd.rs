@@ -20,7 +20,7 @@ use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, Adjusters, Contexts, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
 use thoosa_shared::traits::{Adjustable, MonoMetrics, Select, ThoSelector, VoidSelector, WithId};
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::resource::{Resource, ResourcesConfig};
@@ -353,8 +353,8 @@ where
 
             debug!("WelchPSD::run: resource_id={} welch_input_size={welch_input_size:?} nperseg={nperseg} noverlap={noverlap}", resource.id());
 
-            let resource_psd = track_await(OOMHandler::new(
-                vec![Adjusters::Input(Box::new(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))],
+            let resource_psd = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, NoRunCtxAdjuster, WelchChannelsSelector>::new(
+                vec![Adjusters::Input(input_adjuster(SplitsAdjuster::<WelchChannelsSelector, MonoMetrics<0, 2>>::new([1, 0].into())))],
                 None,
             )
             .run(
