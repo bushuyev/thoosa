@@ -33,7 +33,6 @@ use thoosa_shared::ThoError;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shims::stream::ThoStreamGuard;
-use crate::copy_ctx::ExecSyncStageActionResult;
 
 trait DeviceCopier<O>: Debug + Send + Sync {
     fn copy<'a>(&self, src: &'a O, dst_device: usize) -> BoxFuture<'a, Result<O, ThoError>>;
