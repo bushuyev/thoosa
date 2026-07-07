@@ -132,7 +132,7 @@ where
                     max,
                     step,
                 )))];
-                OOMHandler::new(
+                OOMHandler::<NoInputAdjuster, NoTaskAdjuster, _, S>::new(
                     adjusters,
                     None,
                 )
