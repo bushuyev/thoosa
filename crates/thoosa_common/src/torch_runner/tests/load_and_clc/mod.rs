@@ -41,13 +41,12 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::Device::Cuda;
 use tokio::sync::Mutex;
+pub(crate) use clc::sync_clc_endpoint_init;
 use clc::{ClcStage, ClcStageOutput, SyncClcStage, SyncClcTaskInit};
+pub(crate) use loader::sync_test_tensor_loader_endpoint_init;
 use loader::{LoadedRange, LoadedTensor, LoaderInput, SyncTestTensorLoader, SyncTestTensorLoaderInit, TestTensorLoader};
 use crate::runner::tmp_cache::TmpCached;
 use crate as thoosa_common;
-use crate::ipc::cuda_process::{encode_endpoint_payload, WorkerH2dStartPayload};
-use crate::ipc::json_ser;
-use crate::ipc::json_ser::{JsonSyncStageWrapper, SyncStageJsonWrapper};
 use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelStep, MAX_PARALLEL};
 use crate::runner::adjusters::splits::SplitsAdjusterContextImpl;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
@@ -100,23 +99,6 @@ type ClcDynSyncStage = DynSyncStageBox<
     ThoTensor<ClcStageOutput, SynKey>,
     RunCtxImpl,
 >;
-
-pub(crate) fn sync_clc_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
-    let init = serde_json::from_str::<SyncClcTaskInit>(&init_msg)?;
-    Ok(json_ser::make_json_sync_stage_wrapper::<SyncClcStage, ThoTensor<LoadedTensor, SynKey>, ThoTensor<ClcStageOutput, SynKey>>(
-        SYNC_CLC_ENDPOINT,
-        SyncClcStage::init(init),
-    ))
-}
-
-pub(crate) fn sync_test_tensor_loader_endpoint_init(init_msg: String) -> Result<Box<dyn SyncStageJsonWrapper>, ThoError> {
-    let init = serde_json::from_str::<SyncTestTensorLoaderInit>(&init_msg)?;
-    Ok(json_ser::make_json_sync_stage_wrapper::<SyncTestTensorLoader, LoaderInput, ThoTensor<LoadedTensor, SynKey>>(
-        SYNC_TEST_TENSOR_LOADER_ENDPOINT,
-        SyncTestTensorLoader::init(init)?,
-    ))
-}
-
 
 //////////////////////////////
 

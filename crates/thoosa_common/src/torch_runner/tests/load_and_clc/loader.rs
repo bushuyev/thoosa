@@ -13,9 +13,8 @@ use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, CopyToDevice, ThoError};
-use crate::copy_ctx::CudaActorHandle;
 use crate::dims::{Dims, LocalSelect};
-use crate::ipc::cuda_process::encode_endpoint_payload;
+use crate::ipc::codec::IpcCodec;
 use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, SyncStage};
@@ -30,6 +29,7 @@ use crate as thoosa_common;
 use crate::ipc::cuda_wokrer::WorkerStageInput;
 use crate::torch_runner::tests::load_and_clc::{kind_from_worker_name, kind_to_worker_name, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStageOutput, MulK};
+use thoosa_proxy_derive::Proxy;
 
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -130,8 +130,8 @@ impl From<std::ops::Range<MonoMetrics<1, 2>>> for LoadedRange {
 }
 
 impl WorkerStageInput for LoaderInput {
-    fn decode_for_worker(input: String, _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        Ok(serde_json::from_str(&input)?)
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        C::decode(input)
     }
 }
 
@@ -235,7 +235,19 @@ impl OutId for SyncTestTensorLoader {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Proxy)]
+#[proxy(
+    name = "ProxySyncTestTensorLoader",
+    endpoint = "SYNC_TEST_TENSOR_LOADER_ENDPOINT",
+    new_args = "size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize",
+    init = "SyncTestTensorLoaderInit::new(size.clone(), kind)",
+    fields = "size: MonoMetrics<1, 2> = size",
+    out_id = "SynKey::new([mono_key!(input_id.0, \"resource key\")])",
+    endpoint_init = "sync_test_tensor_loader_endpoint_init",
+    init_type = "SyncTestTensorLoaderInit",
+    in_type = "LoaderInput",
+    init_stage = "SyncTestTensorLoader::init(init)?"
+)]
 pub struct SyncTestTensorLoader {
     size: MonoMetrics<1, 2>,
     kind: Kind,
@@ -272,57 +284,6 @@ impl SyncTestTensorLoader {
 
     pub(crate) fn init(init: SyncTestTensorLoaderInit) -> Result<Self, ThoError> {
         Ok(Self::new_local(init.size.into(), kind_from_worker_name(&init.kind)?))
-    }
-}
-
-#[derive(Debug)]
-struct ProxySyncTestTensorLoader {
-    size: MonoMetrics<1, 2>,
-}
-
-impl ProxySyncTestTensorLoader {
-    async fn new(size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize) -> Result<Self, ThoError> {
-        debug!("ProxySyncTestTensorLoader::new: size={size:?} kind={kind:?}");
-        GlobalCtx::global()
-            .cuda_actor(tho_device_idx)
-            .install_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(&SyncTestTensorLoaderInit::new(size.clone(), kind))?))
-            .await?;
-
-        Ok(Self {
-            size,
-        })
-    }
-}
-
-impl Stage for ProxySyncTestTensorLoader {
-    type In<'a> = LoaderInput;
-    type Out = ThoTensor<LoadedTensor, SynKey>;
-    type Ctx = RunCtxImpl;
-}
-
-impl OutId for ProxySyncTestTensorLoader {
-    fn out_id(
-        &self,
-        input_id: &<Self::In<'static> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID {
-        debug!("ProxySyncTestTensorLoader::out_id: input_id={input_id:?}");
-        SynKey::new([mono_key!(input_id.0, "resource key")])
-    }
-}
-
-impl SyncStage for ProxySyncTestTensorLoader {
-    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        debug!("ProxySyncTestTensorLoader::do_run: input={input:?} size={:?}", self.size);
-
-        tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async move {
-
-            let response = GlobalCtx::global()
-                .cuda_actor(ctx.tho_device_idx())
-                .invoke_endpoint(encode_endpoint_payload(SYNC_TEST_TENSOR_LOADER_ENDPOINT, &serde_json::to_string(input)?))
-                .await?;
-
-            serde_json::from_str::<ThoTensor<LoadedTensor, SynKey>>(&response).map_err(ThoError::from)
-        }))
     }
 }
 

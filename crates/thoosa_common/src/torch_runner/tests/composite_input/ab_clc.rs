@@ -9,6 +9,7 @@ use tracing::debug;
 use cached_derive::Cached;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
+use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
@@ -30,6 +31,8 @@ use crate::tho_device::ThoDevice;
 use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
 use crate::torch_runner::tests::composite_input::{AB_CLC_STAGE_ID, AB_SYNC_CLC_STAGE_ID};
 use crate::torch_runner::tests::composite_input::loader_b::{BStage, BStageInput, BStageOutput};
+
+pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
 #[derive(Debug, Named, Clone)]
 pub struct ABClcStageInput {
@@ -271,7 +274,44 @@ where
 }
 
 
-#[derive(Debug, Named)]
+#[derive(Serialize)]
+struct ABClcSyncStageIpcInputRef<'a> {
+    id: &'a SynKey,
+    from_a: &'a ThoTensor<AStageOutputDims, ()>,
+    from_b: &'a ThoTensor<BStageOutputDims, ()>,
+}
+
+impl<'a> ABClcSyncStageIpcInputRef<'a> {
+    fn new(input: &'a ABClcSyncStageInput<'_>) -> Self {
+        Self {
+            id: input.id(),
+            from_a: input.from_a_value(),
+            from_b: input.from_b_value(),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ABClcSyncStageIpcInput {
+    id: SynKey,
+    from_a: ThoTensor<AStageOutputDims, ()>,
+    from_b: ThoTensor<BStageOutputDims, ()>,
+}
+
+#[derive(Debug, Named, Proxy)]
+#[proxy(
+    name = "ProxyABClcSyncStage",
+    endpoint = "SYNC_AB_CLC_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    fields = "id: MonoKey = mono_key!(AB_SYNC_CLC_STAGE_ID, \"ABClcSyncStage\"), num_calls: AtomicUsize = Default::default()",
+    out_id = "&self.id + input_id",
+    pre_run = "self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);",
+    run_input = "ABClcSyncStageIpcInputRef::new(input)",
+    counter = "num_calls",
+    endpoint_init = "sync_ab_clc_endpoint_init",
+    wrapper = "ABClcSyncStageIpcWrapper",
+    worker_body = "let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(input)?; let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, all_cuda_tensors)?; let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, all_cuda_tensors)?; let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?; <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&out)"
+)]
 pub(crate) struct ABClcSyncStage {
     id:MonoKey,
     num_calls:AtomicUsize,
