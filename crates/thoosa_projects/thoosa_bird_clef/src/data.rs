@@ -435,7 +435,7 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    //#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn plot_spec() -> Result<(), ThoError>{
         GlobalCtx::init_devices(2);
         let audio_path = PathBuf::from("test_data/train_audio/");

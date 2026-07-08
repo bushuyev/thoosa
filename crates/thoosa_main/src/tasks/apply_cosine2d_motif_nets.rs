@@ -37,7 +37,7 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, CopyToDevice, Futur
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, WithId};
 use thoosa_store::{Store, TrainedNet};
 use crate::ApplyMotifNets;
-use crate::tasks::apply_motif_nets::{BatchAppliedMotifNets, BatchAppliedMotifNetsInput};
+use crate::tasks::apply_motif_nets::{StackAppliedMotifNets, StackAppliedMotifNetsInput};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use crate::tasks::load_motif_net::{LoadMotifNet, LoadMotifNetInput, MotifNetMeta};
 use crate::tasks::stage_ids::APPLY_MOTIF_NETS;
@@ -283,20 +283,17 @@ where
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
             let res = track_await(oom_handler.run(&apply_sync, apply_sync_input, ctx.branch(false), NoContexts)).await?.motifs_applied;
 
-            //TODO stretch motifs in BatchAppliedMotifNets
-            let batch = Arc::new(BatchAppliedMotifNets::<C>::new(mono_key!(0, "BatchAppliedMotifNets").into()));
+            //TODO stretch motifs in StackAppliedMotifNets
+            let batch = Arc::new(StackAppliedMotifNets::<C>::new(mono_key!(0, "StackAppliedMotifNets").into()));
 
-            match batch.consume(BatchAppliedMotifNetsInput::new(self.out_id(&input_id), res, ctx.tho_device_idx()), ctx.branch(false)) {
+            match batch.consume(StackAppliedMotifNetsInput::new(self.out_id(&input_id), res, ctx.tho_device_idx()), ctx.branch(false)) {
                 ConsumeResult::Failed { input, error } => {
                     Err(ThoError::from(error))
                 }
                 ConsumeResult::Ok(v) => {
-                    Ok(Arc::new(DevicesWrap::wrap(v)))
+                    Ok(Arc::new(v))
                 }
             }
-
-            // Err(ThoError::new("zzz"))
-            // Ok(Arc::new(DevicesWrap::wrap(DataWithExtra::new(ThoTensor::new(self.out_id(&input_id), Tensor::concat(res.as_slice(), 1).squeeze_dim(2))?, vec![]))))
         }
     }
 }
