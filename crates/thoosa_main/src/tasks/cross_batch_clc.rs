@@ -274,7 +274,7 @@ where
     C: RunCtx + 'static,
 {
     batch_clc_fn: F,
-    cross_batch_ctx: CUC,
+    cross_batch_ctx: Box<dyn Fn(&C) -> Result<CUC, ThoError> + Send + Sync + 'static>,
     pub unfold_params: UnfoldParams,
     _pd: PhantomData<(C, fn() -> R)>,
 }
@@ -295,10 +295,13 @@ where
     F: CrossBatchFn<R, CUC, C>,
     C: RunCtx + 'static,
 {
-    pub fn new(batch_clc_fn: F, cross_batch_ctx: CUC, unfold_params: UnfoldParams) -> Self {
+    pub fn new<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> Self
+    where
+        CrossBatchCtxFn: Fn(&C) -> Result<CUC, ThoError> + Send + Sync + 'static,
+    {
         Self {
             batch_clc_fn,
-            cross_batch_ctx,
+            cross_batch_ctx: Box::new(cross_batch_ctx),
             unfold_params,
             _pd: PhantomData,
         }
@@ -468,7 +471,8 @@ where
 
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", input.id, tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
 
-        self.batch_clc_fn.call(batch_0_t, batch_1_t, &input/*TODO it's only used to check if we're on diagonal*/, &self.cross_batch_ctx, ctx).map(|v| {
+        let cross_batch_ctx = (self.cross_batch_ctx)(ctx)?;
+        self.batch_clc_fn.call(batch_0_t, batch_1_t, &input/*TODO it's only used to check if we're on diagonal*/, &cross_batch_ctx, ctx).map(|v| {
             CrossUnfoldClcOutput::new(
                 v,
                 SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_0),
@@ -594,7 +598,7 @@ mod tests {
         );
         let cross_batch_clc = Arc::new(CrossUnfoldClc::new(
             cross_batch_fn,
-            MasksCtx::AccumulatedMeanDist {k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))?},
+            |_| Ok(MasksCtx::AccumulatedMeanDist {k:1.0, ctx: MeanDistsCtx::new(3, Cuda(0))?}),
             UnfoldParams::new(1, 2, 1),
         ));
 
