@@ -74,7 +74,7 @@ where
     apply_motif_nets: Vec<(u32/*net_id*/, Arc<ApplyMotifNet<C>>)>,
     pub slice_step: u32,//should be in the input
     pub motif_width:u32,
-    batch_applied_motif_nets:Arc<BatchAppliedMotifNets<C>>
+    stack_applied_motif_nets:Arc<StackAppliedMotifNets<C>>
 
 }
 
@@ -387,7 +387,7 @@ where
 
         debug!("ApplyMotifNets::new: motif_width(max)={motif_width:?} motif_widths={motif_widths:?} slice_step={slice_step:?} loaded_motif_nets.len={}", loaded_motif_nets_with_filters.len());
 
-        let batch_applied_motif_nets = Arc::new(BatchAppliedMotifNets::<C>::new(id.clone()));
+        let stack_applied_motif_nets = Arc::new(StackAppliedMotifNets::<C>::new(id.clone()));
         Ok(Self {
             id,
             ws: Arc::clone(&ws),
@@ -406,7 +406,7 @@ where
                 )))).collect(),
             slice_step,
             motif_width,
-            batch_applied_motif_nets
+            stack_applied_motif_nets
         })
     }
 
@@ -554,7 +554,7 @@ where
         let motif_nets_applied = track_await(collect_futures_with_progress(
             futures,
             apply_motif_nets_len,
-            FuturesOrdering::Unordered, //it's sorted in BatchAppliedMotifNets
+            FuturesOrdering::Unordered, //it's sorted in StackAppliedMotifNets
             "ApplyMotifNets::run",
         )).await
         .into_iter()
@@ -562,20 +562,20 @@ where
 
 
 
-        let batch_input = BatchAppliedMotifNetsInputWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
+        let stack_input = StackAppliedMotifNetsInputWrapper::new(Arc::into_inner(tmp_cache).unwrap().into_inner());
         let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
         let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
-                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("batch_apply_motif_nets"))),
+                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_motif_nets"))),
             ],
             None,
         );
         let motif_nets_applied = track_await(oom_handler
         .consume(
-            &self.batch_applied_motif_nets,
-            batch_input,
+            &self.stack_applied_motif_nets,
+            stack_input,
             ctx.branch(true),
             WithRunCtxContext::new(
                 MaxParallelAndDumpToCpuAdjustableContex::new(
@@ -585,7 +585,7 @@ where
             ),
         )).await?;
 
-        Ok(Arc::new(DevicesWrap::wrap(motif_nets_applied)))
+        Ok(Arc::new(motif_nets_applied))
 
     }
 
@@ -602,14 +602,14 @@ where
 }
 
 #[derive(Debug)]
-pub struct BatchAppliedMotifNetsInput {
+pub struct StackAppliedMotifNetsInput {
     id: SynKey,
     device_idx: usize,
     motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>,
 
 }
 
-impl BatchAppliedMotifNetsInput {
+impl StackAppliedMotifNetsInput {
     pub fn new(id: SynKey, motif_nets_applied: Vec<ThoTensor<MotifProbability, SynKey>>, device_idx: usize) -> Self {
         Self {
             id,
@@ -619,7 +619,7 @@ impl BatchAppliedMotifNetsInput {
     }
 }
 
-impl WithId for BatchAppliedMotifNetsInput {
+impl WithId for StackAppliedMotifNetsInput {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -627,7 +627,7 @@ impl WithId for BatchAppliedMotifNetsInput {
     }
 }
 
-impl Data for BatchAppliedMotifNetsInput {
+impl Data for StackAppliedMotifNetsInput {
     type Metrics = MonoMetrics<0, 1>;
     type M = CpuOnly<Self>;
 
@@ -644,9 +644,9 @@ impl Data for BatchAppliedMotifNetsInput {
     }
 }
 
-impl Input for BatchAppliedMotifNetsInput {}
+impl Input for StackAppliedMotifNetsInput {}
 
-// impl Select<()> for BatchAppliedMotifNetsInput {
+// impl Select<()> for StackAppliedMotifNetsInput {
 //     type Output = Self;
 //
 //     fn subview(&self, _selector: ()) -> Result<Self::Output, ThoError> {
@@ -654,22 +654,22 @@ impl Input for BatchAppliedMotifNetsInput {}
 //     }
 // }
 
-impl Adjustable for BatchAppliedMotifNetsInput {}
+impl Adjustable for StackAppliedMotifNetsInput {}
 
 //to avoid Only traits defined in the current crate can be implemented for arbitrary types [E0117]
 #[derive(Debug)]
-struct BatchAppliedMotifNetsInputWrapper {
+struct StackAppliedMotifNetsInputWrapper {
     id:SynKey,
     tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>
 }
 
-impl BatchAppliedMotifNetsInputWrapper {
+impl StackAppliedMotifNetsInputWrapper {
     pub fn new(tmp_cache: TmpCached<ThoTensor<MotifProbability, SynKey>>) -> Self {
         Self { id: SynKey::new(vec![/*todo*/]), tmp_cache }
     }
 }
 
-impl WithId for BatchAppliedMotifNetsInputWrapper {
+impl WithId for StackAppliedMotifNetsInputWrapper {
     type ID = SynKey;
 
     fn id(&self) -> &Self::ID {
@@ -677,8 +677,8 @@ impl WithId for BatchAppliedMotifNetsInputWrapper {
     }
 }
 
-impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
-    type O = BatchAppliedMotifNetsInput;
+impl ConsumeData for StackAppliedMotifNetsInputWrapper {
+    type O = StackAppliedMotifNetsInput;
 
     fn consume<R: Send, F, P>(
         self,
@@ -692,17 +692,15 @@ impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
         P: RunCtx,
     {
         async move {
-            let BatchAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
+            let StackAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
             let device_idx = ctx.tho_device_idx();
 
             match track_await(tmp_cache.take_all_recovering(device_idx)).await {
                 Ok(motif_nets_applied) => {
-                    let len = motif_nets_applied.len();
-                    do_run(BatchAppliedMotifNetsInput::new(id, motif_nets_applied, device_idx), ctx)
+                    do_run(StackAppliedMotifNetsInput::new(id, motif_nets_applied, device_idx), ctx)
                 }
                 Err(err) => {
-                    let len = err.data.len();
-                    let input = BatchAppliedMotifNetsInput::new(id, err.data, device_idx);
+                    let input = StackAppliedMotifNetsInput::new(id, err.data, device_idx);
                     ConsumeResult::Failed {
                         input,
                         error: err.error,
@@ -720,14 +718,14 @@ impl ConsumeData for BatchAppliedMotifNetsInputWrapper {
             for x in o.motif_nets_applied {
                 cache.insert(x);
             }
-            BatchAppliedMotifNetsInputWrapper::new(cache)
+            StackAppliedMotifNetsInputWrapper::new(cache)
         }
     }
 }
 
 
 #[derive(Debug, Named)]
-pub struct BatchAppliedMotifNets<C>
+pub struct StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -735,7 +733,7 @@ where
     pd: PhantomData<C>,
 }
 
-impl<C> BatchAppliedMotifNets<C>
+impl<C> StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -747,13 +745,13 @@ where
     }
 }
 
-impl<C> Adjustable for BatchAppliedMotifNets<C>
+impl<C> Adjustable for StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
 }
 
-impl<C> OutId for BatchAppliedMotifNets<C>
+impl<C> OutId for StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -762,25 +760,25 @@ where
     }
 }
 
-impl<C> Stage for BatchAppliedMotifNets<C>
+impl<C> Stage for StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
     type Ctx = C;
-    type In<'a> = BatchAppliedMotifNetsInput;
-    type Out = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
+    type In<'a> = StackAppliedMotifNetsInput;
+    type Out = DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>;
 }
 
-impl<C> SyncStage for BatchAppliedMotifNets<C>
+impl<C> SyncStage for StackAppliedMotifNets<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="BatchAppliedMotifNets::consume"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedMotifNets::consume"))]
     fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
         let input_id = input.id().clone();
         let mut motif_nets_applied = std::mem::take(&mut input.motif_nets_applied);
 
-        debug!("BatchAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len(), input_id);
+        debug!("StackAppliedMotifNets::consume: motif_nets_applied.len={} input.id={:?} motif_nets_applied={motif_nets_applied:?}", motif_nets_applied.len(), input_id);
 
         motif_nets_applied.sort_by(|a,b|a.id().partial_cmp(&b.id()).unwrap_or(Ordering::Equal));
 
@@ -795,7 +793,7 @@ where
 
 
         if unique_motif_nets_applied_lens.len() > 1 {
-            debug!("BatchAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
+            debug!("StackAppliedMotifNets::consume: mixed motif widths/filters produced different output lengths; lengths={motif_nets_applied_lens:?}. Padding to max len={max_match_len} for concat.");
         }
 
         // TODO(perf): this pads and copies each motif-net output row by row; batch padding/stretching into a stack/cat operation would reduce tensor indexing overhead for large net counts.
@@ -836,7 +834,7 @@ where
             }
         }
 
-        debug!("BatchAppliedMotifNets::consume: res_t.size={:?}", res_t.size());
+        debug!("StackAppliedMotifNets::consume: res_t.size={:?}", res_t.size());
 
         let motif_nets_applied = match ThoTensor::new(self.out_id(&input_id), res_t) {
             Ok(motif_nets_applied) => motif_nets_applied,
@@ -846,7 +844,7 @@ where
             }
         };
 
-        ConsumeResult::Ok(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens))
+        ConsumeResult::Ok(DevicesWrap::wrap(DataWithExtra::new(motif_nets_applied, motif_nets_applied_lens)))
     }
 }
 
