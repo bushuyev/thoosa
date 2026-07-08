@@ -3,7 +3,7 @@
 use std::str::FromStr;
 use clap::{Args, Subcommand};
 use crate::utils::from;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tch::kind::FLOAT_CPU;
 use tch::{Device, IndexOp, Kind, Tensor};
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -15,7 +15,7 @@ pub trait InputFilterLengthAdjuster {
     fn adjust_length(&self) -> Box<dyn Fn(u32) -> u32 + Send + Sync>;
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct BandPassFilterParams {
     #[in_map]
     #[run_config]
@@ -61,7 +61,7 @@ impl InputFilterLengthAdjuster for BandPassFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct NotchBandFilterParams {
     #[in_map]
     #[run_config]
@@ -78,7 +78,7 @@ impl InputFilterLengthAdjuster for NotchBandFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct SavGolFilterParams {
     #[in_map]
     #[run_config]
@@ -121,7 +121,7 @@ impl InputFilterLengthAdjuster for SavGolFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct MedianFilterParams {
     #[in_map]
     #[run_config]
@@ -136,7 +136,7 @@ impl InputFilterLengthAdjuster for MedianFilterParams {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct AverageFilterParams {
     #[in_map]
     #[run_config]
@@ -265,7 +265,7 @@ pub fn notch_band_rfft(x: &Tensor, fs: f64, fr0: f64, fr1: f64) -> Result<Tensor
 }
 
 
-#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Padding {
     /// Pad with zeros (uses conv1d's built-in padding).
     Zero(ZeroPadding),
@@ -289,13 +289,13 @@ impl Padding {
     }
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct ZeroPadding {}
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct ReflectPadding {}
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct ReplicatePadding {}
 
 
@@ -399,7 +399,7 @@ pub fn savgol_smooth_1d_channels(
     Ok(y3.squeeze_dim(0))
 }
 
-#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Args, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub struct ZNormFilterParams {
 
 }
@@ -525,7 +525,7 @@ mod tests {
 
 }
 
-#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Subcommand, ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub enum InputFilter {
     NotchBandFilter(NotchBandFilterParams),
     BandPassFilter(BandPassFilterParams),

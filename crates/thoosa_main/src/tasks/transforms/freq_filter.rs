@@ -4,6 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use log::debug;
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use tch::{Device, Kind, Tensor};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
@@ -17,6 +18,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::OutId;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
@@ -29,12 +31,15 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::z_norm;
 use thoosa_common::ws::Workspace;
+use thoosa_proxy_derive::Proxy;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 use thoosa_shared::tracked_await::track_await;
+
+pub(crate) const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -43,8 +48,43 @@ impl Dims for BandPassDims {
     type Metrics = AnyMetrics;//TODO
 }
 
-#[derive(Debug)]
-struct SyncFreqFilter<C>
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct SyncFreqFilterIpcInit {
+    id: SynKey,
+    filter_configs: Vec<InputFilter>,
+    num_channels: i64,
+    sample_rate: f64,
+}
+
+impl<C> From<&FreqFilter<C>> for SyncFreqFilterIpcInit
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn from(freq_filter: &FreqFilter<C>) -> Self {
+        Self {
+            id: freq_filter.id.clone(),
+            filter_configs: freq_filter.filter_configs.clone(),
+            num_channels: freq_filter.num_channels,
+            sample_rate: freq_filter.sample_rate,
+        }
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    base = "SyncFreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>",
+    name = "ProxySyncFreqFilter",
+    endpoint = "SYNC_FREQ_FILTER_ENDPOINT",
+    new_args = "freq_filter: Arc<FreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>>, tho_device_idx: usize",
+    init = "SyncFreqFilterIpcInit::from(freq_filter.as_ref())",
+    fields = "id: SynKey = freq_filter.id.clone()",
+    out_id = "&self.id + input_id",
+    endpoint_init = "sync_freq_filter_endpoint_init",
+    init_type = "SyncFreqFilterIpcInit",
+    init_stage = "SyncFreqFilter::new_for_ipc(init)?"
+)]
+pub(crate) struct SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -58,6 +98,12 @@ where
     //TODO remove freq_filter: Arc<FreqFilter<C>> param: move apply_tho_tensor and out_id to SyncFreqFilter and keep AsyncStage->SyncStage
     fn new(freq_filter: Arc<FreqFilter<C>>) -> Self {
         Self { freq_filter }
+    }
+}
+
+impl SyncFreqFilter<RunCtxImpl> {
+    pub(crate) fn new_for_ipc(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
+        Ok(Self::new(Arc::new(FreqFilter::from_ipc_init(init)?)))
     }
 }
 
@@ -93,6 +139,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     id: SynKey,
+    filter_configs: Vec<InputFilter>,
     filters: Vec<PreparedFilter>,
     _ctx: PhantomData<C>,
     num_channels:i64,
@@ -109,6 +156,57 @@ where
             (guard.channels() as i64, guard.sample_rate() as f64)
         };
 
+        let filters = Self::prepare_filters(filter_configs, num_channels, sample_rate)?;
+
+        let filters_have_config = filters.iter().any(|f|{
+            match f {
+                PreparedFilter::ZNorm { .. } => false,
+                _=> true,
+            }
+        });
+        debug!("FreqFilter::new: filters_have_config={filters_have_config}");
+
+        Ok(Self {
+            //avoids caching each run_config separately when they have same filter
+            id: if filters_have_config {
+                SynKey::new([
+                    mono_key!(FREQ_FILTER, "FreqFilter"),
+                    //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
+                    mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
+                ])
+            } else {
+                SynKey::new([
+                    mono_key!(FREQ_FILTER, "FreqFilter"),
+                ])
+            },
+            filter_configs: filter_configs.to_vec(),
+            filters,
+            _ctx: PhantomData,
+            num_channels,
+            sample_rate
+        })
+    }
+
+    fn from_ipc_init(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
+        let SyncFreqFilterIpcInit {
+            id,
+            filter_configs,
+            num_channels,
+            sample_rate,
+        } = init;
+        let filters = Self::prepare_filters(&filter_configs, num_channels, sample_rate)?;
+
+        Ok(Self {
+            id,
+            filter_configs,
+            filters,
+            _ctx: PhantomData,
+            num_channels,
+            sample_rate,
+        })
+    }
+
+    fn prepare_filters(filter_configs: &[InputFilter], num_channels: i64, sample_rate: f64) -> Result<Vec<PreparedFilter>, ThoError> {
         let mut filters = Vec::with_capacity(filter_configs.len());
         for filter_config in filter_configs {
             match filter_config {
@@ -206,39 +304,13 @@ where
                         step: moving_average_config.step,
                     });
                 }
-                InputFilter::ZNorm(abs) => {
-                    filters.push(PreparedFilter::ZNorm {
-                    })
+                InputFilter::ZNorm(_) => {
+                    filters.push(PreparedFilter::ZNorm {})
                 }
             }
         }
 
-        let filters_have_config = filters.iter().any(|f|{
-            match f {
-                PreparedFilter::ZNorm { .. } => false,
-                _=> true,
-            }
-        });
-        debug!("FreqFilter::new: filters_have_config={filters_have_config}");
-
-        Ok(Self {
-            //avoids caching each run_config separately when they have same filter
-            id: if filters_have_config {
-                SynKey::new([
-                    mono_key!(FREQ_FILTER, "FreqFilter"),
-                    //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
-                    mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
-                ])
-            } else {
-                SynKey::new([
-                    mono_key!(FREQ_FILTER, "FreqFilter"),
-                ])
-            },
-            filters,
-            _ctx: PhantomData,
-            num_channels,
-            sample_rate
-        })
+        Ok(filters)
     }
 
     pub fn input_device(&self) -> Device {
