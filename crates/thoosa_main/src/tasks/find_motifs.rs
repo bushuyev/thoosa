@@ -229,7 +229,7 @@ where
         loader: Arc<L>,
         run_configs: Vec<FindMotifsRunConfig>,
         fixed_config: FixedFindMotifsConfig,
-        device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
+        _device: ThoDevice, //TODO remove, make MeanDistsCtx cachable in DataCacheWrapper
         mut init_ctx:C
     ) -> Result<Self, ThoError> {
         
@@ -288,13 +288,19 @@ where
 
                             let filter = cross_loader_run_config.slices_filter.clone();
 
-                            let masks_ctx = match &filter {
+                            let cross_batch_ctx: Box<dyn Fn(&C) -> Result<MasksCtx, ThoError> + Send + Sync + 'static> = match &filter {
                                 SlicesFilter::Accumulate(v) => {
                                     match v.aggr {
-                                        FilterAggr::Mean(aggr) => MasksCtx::AccumulatedMeanDist { k: aggr.k, ctx: MeanDistsCtx::new(channels, device.into())? },
+                                        FilterAggr::Mean(aggr) => {
+                                            let k = aggr.k;
+                                            Box::new(move |ctx: &C| Ok(MasksCtx::AccumulatedMeanDist { k, ctx: MeanDistsCtx::new(channels, ThoDevice::from(ctx.tho_device_idx()).into())? }))
+                                        }
                                         FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
                                         FilterAggr::Max(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Max is not supported for SlicesFilter::AccumulateStats")),
-                                        FilterAggr::Quantile(aggr) => MasksCtx::AccumulatedQuantileDist { q: aggr.q, ctx: QuantileDistsCtx::new(channels, device.into())? },
+                                        FilterAggr::Quantile(aggr) => {
+                                            let q = aggr.q;
+                                            Box::new(move |ctx: &C| Ok(MasksCtx::AccumulatedQuantileDist { q, ctx: QuantileDistsCtx::new(channels, ThoDevice::from(ctx.tho_device_idx()).into())? }))
+                                        }
                                     }
                                 }
                                 SlicesFilter::Precalculate(v) => {
@@ -302,32 +308,34 @@ where
 
                                     let comparison_metric = Metrics::from_similarity_metric(cross_loader_run_config.similarity_metric, to_stats_aggr(v.aggr));
                                     //TODO can be effectively cached because run configs recreated for each input in  run_all/run_cli
-                                    let motif_stats = track_await(motif_stats.run_cached(Arc::new(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()])), ctx.branch(true))).await?;
+                                    let motif_stats_output = track_await(motif_stats.run_cached(Arc::new(MotifStatsInput::from_random(v.slices, run_config_id, vec![comparison_metric.clone()])), ctx.branch(true))).await?;
 
-                                    debug!("FindMotifsStage::new: motif_stats={motif_stats:?} ctx.id={:?}", ctx_id);
+                                    debug!("FindMotifsStage::new: motif_stats={motif_stats_output:?} ctx.id={:?}", ctx_id);
 
-                                    let dists: ThoTensor<ChannelsMotifsDists, SynKey> = {
-                                        let metric_val = motif_stats.channels_motifs_dists(&comparison_metric)?;
+                                    Box::new(move |ctx: &C| {
+                                        let metric_val = motif_stats_output.channels_motifs_dists(&comparison_metric)?;
                                         let metric_val_id = metric_val.id().clone();
                                         debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
 
-                                        ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)
-                                    }?;
-                                    MasksCtx::PrecalculatedDist { dists }
+                                        Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)? })
+                                    })
                                 }
                                 SlicesFilter::ExactS(v) => {
-                                    let exact_stats_t = Tensor::f_from_slice(&[v.euc_dist])?
-                                        .f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?
-                                        .f_broadcast_to([channels as i64, 1])?;
-                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
-                                    MasksCtx::PrecalculatedDist { //rename to PreSet
-                                        dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
-                                    }
+                                    let euc_dist = v.euc_dist;
+                                    Box::new(move |ctx: &C| {
+                                        let exact_stats_t = Tensor::f_from_slice(&[euc_dist])?
+                                            .f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?
+                                            .f_broadcast_to([channels as i64, 1])?;
+                                        debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
+                                        Ok(MasksCtx::PrecalculatedDist { //rename to PreSet
+                                            dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
+                                        })
+                                    })
                                 }
                             };
                             let radius = run_config.step() as u64 * 2;
 
-                            debug!("FindMotifsStage::new: masks_ctx done  ctx.id={:?}", ctx_id);
+                            debug!("FindMotifsStage::new: cross_batch_ctx factory done  ctx.id={:?}", ctx_id);
 
                             let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
                                 Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
@@ -395,7 +403,7 @@ where
                                     };
                                     Ok(DistsMask::new(mask, dists, mask_type)?)
                                 }),
-                                masks_ctx,
+                                cross_batch_ctx,
                                 UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
                             ));
                             debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
