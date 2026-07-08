@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use crate::tasks::bucketing::{BucketingInput, BucketingStage};
-use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
+use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, CrossUnfoldClcDynSyncStage, CrossUnfoldClcOutput, UnfoldParams};
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
@@ -60,7 +60,7 @@ use thoosa_shared::tracked_await::track_await;
 pub type FilteredLoaderStage<L, C> = ABStage<L, FreqFilter<C>, C>;
 pub type LoaderStageChoice<L, C> = StageChainOption<L, FilteredLoaderStage<L, C>>;
 pub type CrossUnfoldMaskFn<C> = Box<dyn CrossBatchFn<DistsMask, MasksCtx, C> + 'static>;
-type CrossUnfoldMaskStage<C> = CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>;
+type CrossUnfoldMaskStage<C> = CrossUnfoldClcDynSyncStage<DistsMask, C>;
 type DistsTrackerStage<C> = DistsTracker<C>;
 
 
@@ -328,7 +328,7 @@ where
             DistsMask::new(mask, dists, mask_type)
         });
 
-        Ok(Self::new(batch_clc_fn, move |ctx: &C| masks_ctx.to_masks_ctx(ctx), unfold_params))
+        Ok(Self::new_local(batch_clc_fn, move |ctx: &C| masks_ctx.to_masks_ctx(ctx), unfold_params))
     }
 }
 
@@ -452,11 +452,12 @@ where
 
                             debug!("FindMotifsStage::new: cross_batch_ctx factory done  ctx.id={:?}", ctx_id);
 
-                            let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(cross_loader_run_config.similarity_metric, fixed_config.keep_slice_matches, radius, masks_ctx, UnfoldParams::new(1, run_config.window as i64, run_config.step as i64)))?);
+                            let unfold_params = UnfoldParams::new(1, run_config.window as i64, run_config.step as i64);
+                            let step = unfold_params.step();
+                            let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new_dyn_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(cross_loader_run_config.similarity_metric, fixed_config.keep_slice_matches, radius, masks_ctx, unfold_params), ctx.tho_device_idx()).await?);
                             debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
 
                             let run_config_clone = run_config.clone();
-                            let step = cross_unfold_clc.as_ref().unfold_params.step();
 
                             debug!("FindMotifsStage::new: ctx.id={:?} done", ctx_id);
 

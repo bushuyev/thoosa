@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use async_trait::async_trait;
@@ -18,6 +19,7 @@ use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::runner::common::OutId;
 use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
@@ -40,6 +42,15 @@ use crate::tasks::transforms::smoothing::{median, moving_average};
 use thoosa_shared::tracked_await::track_await;
 
 pub(crate) const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
+
+#[derive(Debug)]
+pub enum FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    Local(Arc<SyncFreqFilter<C>>),
+    Proxy(Arc<ProxySyncFreqFilter>),
+}
 
 #[derive(Debug, Clone)]
 struct BandPassDims;
@@ -76,9 +87,9 @@ where
     base = "SyncFreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>",
     name = "ProxySyncFreqFilter",
     endpoint = "SYNC_FREQ_FILTER_ENDPOINT",
-    new_args = "freq_filter: Arc<FreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>>, tho_device_idx: usize",
-    init = "SyncFreqFilterIpcInit::from(freq_filter.as_ref())",
-    fields = "id: SynKey = freq_filter.id.clone()",
+    new_args = "init: SyncFreqFilterIpcInit, tho_device_idx: usize",
+    init = "init.clone()",
+    fields = "id: SynKey = init.id.clone()",
     out_id = "&self.id + input_id",
     endpoint_init = "sync_freq_filter_endpoint_init",
     init_type = "SyncFreqFilterIpcInit",
@@ -95,15 +106,65 @@ impl<C> SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
+    pub async fn new(freq_filter: Arc<FreqFilter<C>>, tho_device_idx: usize) -> Result<FreqFilterDynSyncStage<C>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            Ok(FreqFilterDynSyncStage::Proxy(Arc::new(ProxySyncFreqFilter::new(SyncFreqFilterIpcInit::from(freq_filter.as_ref()), tho_device_idx).await?)))
+        } else {
+            Ok(FreqFilterDynSyncStage::Local(Arc::new(Self::new_local(freq_filter))))
+        }
+    }
+
     //TODO remove freq_filter: Arc<FreqFilter<C>> param: move apply_tho_tensor and out_id to SyncFreqFilter and keep AsyncStage->SyncStage
-    fn new(freq_filter: Arc<FreqFilter<C>>) -> Self {
+    fn new_local(freq_filter: Arc<FreqFilter<C>>) -> Self {
         Self { freq_filter }
     }
 }
 
 impl SyncFreqFilter<RunCtxImpl> {
     pub(crate) fn new_for_ipc(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
-        Ok(Self::new(Arc::new(FreqFilter::from_ipc_init(init)?)))
+        Ok(Self::new_local(Arc::new(FreqFilter::from_ipc_init(init)?)))
+    }
+}
+
+impl<C> Adjustable for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+}
+
+impl<C> OutId for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        match self {
+            FreqFilterDynSyncStage::Local(local) => local.out_id(input_id),
+            FreqFilterDynSyncStage::Proxy(proxy) => proxy.out_id(input_id),
+        }
+    }
+}
+
+impl<C> Stage for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = ThoTensor<ChannelsData, SynKey>;
+    type Out = ThoTensor<ChannelsData, SynKey>;
+}
+
+impl<C> SyncStage for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            FreqFilterDynSyncStage::Local(local) => Arc::clone(local).do_run(input, ctx),
+            FreqFilterDynSyncStage::Proxy(proxy) => {
+                let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxySyncFreqFilter requires RunCtxImpl"))?;
+                Arc::clone(proxy).do_run(input, ctx)
+            }
+        }
     }
 }
 
@@ -650,7 +711,7 @@ where
         let input_size = input.size().clone();
         let min_split_len = [input_size.dim::<0>(), self.min_input_split_len()?].into();
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self)));
+        let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self), ctx.tho_device_idx()).await?);
 
         let filtered = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
             vec![
@@ -754,7 +815,7 @@ mod tests {
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::new(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
+        let output = Arc::new(SyncFreqFilter::new_local(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
         let expected = median(input.as_ref(), 5)?;
         let output_flat = output.as_ref().f_view([-1])?;
         let expected_flat = expected.f_view([-1])?;
@@ -771,7 +832,7 @@ mod tests {
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::new(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
+        let output = Arc::new(SyncFreqFilter::new_local(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
         let expected = moving_average(input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));
