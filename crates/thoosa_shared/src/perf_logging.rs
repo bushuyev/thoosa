@@ -357,6 +357,7 @@ pub fn init_tracing(
     log_file: PathBuf,
     perf_filter: &str,
     perf_file: Option<PathBuf>,
+    set_global_default: bool,
 ) -> Result<(), ThoError> {
     if TRACING_INIT.get().is_some() {
         panic!("init_tracing() called more than once in the same process");
@@ -403,19 +404,21 @@ pub fn init_tracing(
         None
     };
 
-    let console_layer = console_subscriber::spawn();
+    if set_global_default {
+        let console_layer = console_subscriber::spawn();
 
-    let subscriber = registry()
-        .with(console_layer)
-        .with(stdout_layer)
-        .with(file_layer)
-        .with(perf_layer)
-        .with(PerfLayer::new());
+        let subscriber = registry()
+            .with(console_layer)
+            .with(stdout_layer)
+            .with(file_layer)
+            .with(perf_layer)
+            .with(PerfLayer::new());
 
-    tracing::subscriber::set_global_default(subscriber).map_err(|e| {
-        error!("Init tracing logging failed: {e:?}");
-        ThoError::from_error("set global tracing subscriber", e)
-    })?;
+        tracing::subscriber::set_global_default(subscriber).map_err(|e| {
+            error!("Init tracing logging failed: {e:?}");
+            ThoError::from_error("set global tracing subscriber", e)
+        })?;
+    }
 
     init_log_tracer(max_level);
 

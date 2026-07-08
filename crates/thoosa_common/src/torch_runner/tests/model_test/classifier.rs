@@ -166,7 +166,7 @@ impl SyncStage for Classifier {
     in_type = "ThoTensor<ABData, ModelTestId>",
     init_stage = "SyncClassifierStage::init(init)"
 )]
-pub(crate) struct SyncClassifierStage {
+pub struct SyncClassifierStage {
     id: ModelTestId,
     in_dim: i64,
     epochs: i64,

@@ -4,13 +4,14 @@ use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
+use clap::Parser;
 use dashmap::DashMap;
-use log::{debug, error};
+use log::{debug, error, LevelFilter};
 use parking_lot::RwLock;
 use thoosa_shared::{panic_to_err, ThoError};
 use tokio::net::UnixStream;
 use tokio::sync::{mpsc, Mutex};
-use tch::Tensor;
+use tch::{Device, Tensor};
 use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -18,6 +19,7 @@ use thoosa_shared::traits::Named;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
+use thoosa_shared::perf_logging::init_tracing;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
@@ -40,14 +42,69 @@ pub trait Init {
     fn init() -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>;
 }
 
+
+#[derive(Parser, Clone, Debug)]
+#[command(version, about, long_about = None)]
+pub struct WorkerCli {
+    #[arg(long, default_value = ".")]
+    pub ws_path: String,
+
+    #[arg(long, default_value = "INFO")]
+    pub term_logger_level: LevelFilter,
+
+    #[arg(long, default_value = "INFO")]
+    pub write_logger_level: LevelFilter,
+}
+
 impl CudaWorker {
+
+    pub fn run_if_sock(cdt:&str, init_map: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>>) -> Result<(), ThoError>{
+
+        let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
+        println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
+
+        if ipc_sock.is_some() {
+            // console_subscriber::ConsoleLayer::builder()
+            //     .server_addr(([127, 0, 0, 1], 6677))
+            //     .init();
+
+            let worker_cli = WorkerCli::parse();
+            let ws_root:PathBuf = worker_cli.ws_path.into();
+
+            let log_filename = ws_root.join("log")
+                .join(format!("thoosa_worker_{}.log", cdt).to_owned());
+
+            let _logging_guards = init_tracing(
+                worker_cli.term_logger_level,
+                false,
+                worker_cli.write_logger_level,
+                false,
+                log_filename,
+                "info",
+                None,
+                true,
+            )?;
+            debug!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
+
+            let rt = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+            rt.block_on(async {
+                CudaWorker::run_worker(init_map, ThoDevice::from(Device::Cuda(0))).await
+            })?;
+
+            std::process::exit(0);
+        }
+
+        Ok(())
+    }
 
     pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>, tho_device: ThoDevice) -> Result<(), ThoError> {
 
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
         let cuda_device = tho_device.gpu_ordinal();
-        let _exec_context = ThoCudaContext::new(cuda_device as i32)?;
+        // let _exec_context = ThoCudaContext::new(cuda_device as i32)?;
         let exec_stream_pool = Arc::new(Pool::from_iter(
             (0..WORKER_EXEC_STREAMS)
                 .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))

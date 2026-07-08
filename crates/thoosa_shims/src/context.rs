@@ -1,5 +1,6 @@
+use std::backtrace::Backtrace;
 use std::ffi::c_void;
-use log::{debug, error};
+use log::{debug, error, trace};
 use thoosa_shared::ThoError;
 
 use crate::cuda_result::{check_cuda_status, cuda_error_from_status, CuResult, CUDA_SUCCESS};
@@ -33,6 +34,9 @@ pub struct ThoCudaContext {
 impl ThoCudaContext {
     pub fn new(device: i32) -> Result<Self, ThoError> {
         debug!("ThoCudaContext::new: device={}", device);
+        let backtrace = Backtrace::capture();
+        trace!("ThoCudaContext::new:  backtrace={}", backtrace.to_string());
+
         unsafe {
             check_cuda_status(tho_cu_init(0), "cuInit")?;
 

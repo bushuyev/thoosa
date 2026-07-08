@@ -13,7 +13,7 @@ use crate::dims::{Dims, LocalSelect};
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
-pub(crate) struct FileInputId(pub(crate) &'static str);
+pub struct FileInputId(pub &'static str);
 
 impl Serialize for FileInputId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -35,7 +35,7 @@ impl<'de> Deserialize<'de> for FileInputId {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
-pub(crate) struct ModelTestId(pub(crate) &'static str);
+pub struct ModelTestId(pub &'static str);
 
 impl Serialize for ModelTestId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -57,8 +57,8 @@ impl<'de> Deserialize<'de> for ModelTestId {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct FileInput {
-    pub(crate) id: FileInputId,
+pub struct FileInput {
+    pub id: FileInputId,
 }
 
 impl Input for FileInput {}
@@ -94,13 +94,13 @@ impl Data for FileInput {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct FileListInput {
-    pub(crate) files: Vec<(&'static str, f64)>,
-    pub(crate) id: ModelTestId,
+pub struct FileListInput {
+    pub files: Vec<(&'static str, f64)>,
+    pub id: ModelTestId,
 }
 
 impl FileListInput {
-    pub(crate) fn new(files: Vec<(&'static str, f64)>, id: ModelTestId) -> Self {
+    pub fn new(files: Vec<(&'static str, f64)>, id: ModelTestId) -> Self {
         Self { files, id }
     }
 }
@@ -132,15 +132,15 @@ impl Data for FileListInput {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub(crate) struct ABData;
+pub struct ABData;
 
 impl Dims for ABData {
     type Metrics = ABMetrics;
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct ABRange {
-    pub(crate) range: Range<ABMetrics>,
+pub struct ABRange {
+    pub range: Range<ABMetrics>,
 }
 
 impl Adjustable for ABRange {}
@@ -175,9 +175,9 @@ impl From<Range<ABMetrics>> for ABRange {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ABMetrics {
-    pub(crate) dim_0: i64,
-    pub(crate) dim_1: i64,
+pub struct ABMetrics {
+    pub dim_0: i64,
+    pub dim_1: i64,
 }
 
 impl Metrics for ABMetrics {
@@ -231,14 +231,14 @@ impl std::ops::Add<&ABMetrics> for &ABMetrics {
 }
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub(crate) struct ClsOut;
+pub struct ClsOut;
 
 impl Dims for ClsOut {
     type Metrics = MonoMetrics<1, 2>;
 }
 
 impl ClsOut {
-    pub(crate) fn accuracy(t: &ThoTensor<ClsOut, ModelTestId>) -> f64 {
+    pub fn accuracy(t: &ThoTensor<ClsOut, ModelTestId>) -> f64 {
         t.double_value(&[0])
     }
 }

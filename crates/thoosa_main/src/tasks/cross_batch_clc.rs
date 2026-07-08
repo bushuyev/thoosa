@@ -332,6 +332,8 @@ impl<R, CUC, C> CrossBatchFn<R, CUC, C> for Box<dyn CrossBatchFn<R, CUC, C> + 's
     }
 }
 
+pub const CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
+
 #[derive(Proxy)]
 #[proxy(
     common = "thoosa_common",
