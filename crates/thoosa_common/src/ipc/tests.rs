@@ -58,7 +58,7 @@ pub fn init() {
     thoosa_shared::test_utils::init_test_logging();
 }
 
-fn test_worker_args(test_name: &str, module: &str) -> Vec<&'static str> {
+fn test_worker_args(test_name: &str, module: &str) -> Vec<String> {
     let module = module;
     let test_name = if module.is_empty() {
         test_name.to_string()
@@ -66,7 +66,7 @@ fn test_worker_args(test_name: &str, module: &str) -> Vec<&'static str> {
         format!("{module}::{test_name}")
     };
 
-    vec![test_name.leak(), "--exact", "--nocapture"]
+    vec![test_name, "--exact".to_string(), "--nocapture".to_string()]
 }
 
 pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, ThoError> {

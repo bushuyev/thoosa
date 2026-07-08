@@ -55,7 +55,7 @@ pub(crate) struct ClcStage {
     in_type = "ThoTensor<LoadedTensor, SynKey>",
     init_stage = "SyncClcStage::init(init)"
 )]
-pub(crate) struct SyncClcStage {
+pub struct SyncClcStage {
     id: SynKey,
     k: ThoTensor<MulK, SimpleId>,
     fail_until: Vec<FailUntil>,

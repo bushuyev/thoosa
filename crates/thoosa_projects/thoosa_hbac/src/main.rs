@@ -5,25 +5,49 @@
 mod data;
 mod run_all;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use log::{debug, error, info};
 use std::time::Instant;
+use clap::Parser;
 use parking_lot::RwLock;
-use tch::Device::Cpu;
+use tch::Device;
+use tch::Device::{Cpu, Cuda};
+use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
+use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{run_cli, RunAllArgs};
+use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
+use thoosa_main::tasks::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
 use thoosa_shims::context::ThoCudaContext;
-use thoosa_shared::ThoError;
+use thoosa_shared::{cdt_for_dir, ThoError};
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0};
 use thoosa_shared::tracked_await::track_await;
 
 fn main() -> Result<(), ThoError> {
+    let cdt = cdt_for_dir();
+
+    CudaWorker::run_if_sock(&cdt,
+        HashMap::from([
+            (
+                CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
+                Box::new(sync_cross_unfold_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            ),
+
+        ])
+
+
+    )?;
+
+    println!("CudaWorker::run_if_sock: running main");
+
     kick_register_cuda_hooks();
 
     let t1 = Instant::now();
@@ -38,6 +62,8 @@ fn main() -> Result<(), ThoError> {
     4208|other
     */
     let cpu_num = std::thread::available_parallelism().map(|nz| nz.get()).unwrap_or(2);
+
+    //Cli::parse();
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
@@ -57,6 +83,7 @@ fn main() -> Result<(), ThoError> {
 
 
     let run_result = rt.block_on(async move {
+        let cdt = cdt_for_dir();
         track_await(run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
@@ -99,6 +126,7 @@ fn main() -> Result<(), ThoError> {
                 debug!("bird_clef: infer");
                 todo!()
             }),
+            cdt
         )).await
     });
 

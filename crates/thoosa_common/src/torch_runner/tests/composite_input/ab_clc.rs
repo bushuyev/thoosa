@@ -317,7 +317,7 @@ struct ABClcSyncStageIpcInput {
      let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?; <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&out)\
      "
 )]
-pub(crate) struct ABClcSyncStage {
+pub struct ABClcSyncStage {
     id:MonoKey,
     num_calls:AtomicUsize,
 }
