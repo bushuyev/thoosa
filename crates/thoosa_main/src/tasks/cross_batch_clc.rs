@@ -1,3 +1,4 @@
+use std::any::Any;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -7,6 +8,7 @@ use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, DevicesWrap,
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::runnable::{Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
 use std::fmt::{Debug, Formatter};
@@ -334,6 +336,87 @@ impl<R, CUC, C> CrossBatchFn<R, CUC, C> for Box<dyn CrossBatchFn<R, CUC, C> + 's
 
 pub const CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
+pub trait DynCrossUnfoldClcStage<R, C>: Debug + Send + Sync + 'static
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run_dyn<'a>(self: Arc<Self>, input: &CrossInput<'a, Arc<Resource>>, ctx: &C) -> Result<CrossUnfoldClcOutput<R>, ThoError>;
+
+    fn out_id_dyn(&self, input_id: &SynKey) -> SynKey;
+}
+
+impl<T, R, C> DynCrossUnfoldClcStage<R, C> for T
+where
+    T: for<'a> SyncStage<In<'a> = CrossInput<'a, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx = C> + OutId + Send + Sync + 'static,
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run_dyn<'a>(self: Arc<Self>, input: &CrossInput<'a, Arc<Resource>>, ctx: &C) -> Result<CrossUnfoldClcOutput<R>, ThoError> {
+        self.do_run(input, ctx)
+    }
+
+    fn out_id_dyn(&self, input_id: &SynKey) -> SynKey {
+        self.out_id(input_id)
+    }
+}
+
+#[derive(Debug)]
+pub struct CrossUnfoldClcDynSyncStage<R, C>
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    inner: Arc<dyn DynCrossUnfoldClcStage<R, C>>,
+}
+
+impl<R, C> CrossUnfoldClcDynSyncStage<R, C>
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    pub fn new(inner: Arc<dyn DynCrossUnfoldClcStage<R, C>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<R, C> Stage for CrossUnfoldClcDynSyncStage<R, C>
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    type In<'a> = CrossInput<'a, Arc<Resource>>;
+    type Out = CrossUnfoldClcOutput<R>;
+    type Ctx = C;
+}
+
+impl<R, C> SyncStage for CrossUnfoldClcDynSyncStage<R, C>
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        Arc::clone(&self.inner).do_run_dyn(input, ctx)
+    }
+}
+
+impl<R, C> OutId for CrossUnfoldClcDynSyncStage<R, C>
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.inner.out_id_dyn(input_id)
+    }
+}
+
+impl<R, C> Adjustable for CrossUnfoldClcDynSyncStage<R, C>
+where
+    R: Debug + Output + Input + Send + 'static,
+    C: RunCtx + 'static,
+{
+}
+
 #[derive(Proxy)]
 #[proxy(
     common = "thoosa_common",
@@ -377,7 +460,17 @@ where
     F: CrossBatchFn<R, CUC, C>,
     C: RunCtx + 'static,
 {
-    pub fn new<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> Self
+    pub fn new<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> CrossUnfoldClcDynSyncStage<R, C>
+    where
+        CrossBatchCtxFn: Fn(&C) -> Result<CUC, ThoError> + Send + Sync + 'static,
+        F: Send + Sync + 'static,
+        CUC: Send + Sync + 'static,
+        R: Debug + Output + Input + Send + 'static,
+    {
+        CrossUnfoldClcDynSyncStage::new(Arc::new(Self::new_local(batch_clc_fn, cross_batch_ctx, unfold_params)))
+    }
+
+    pub(crate) fn new_local<CrossBatchCtxFn>(batch_clc_fn: F, cross_batch_ctx: CrossBatchCtxFn, unfold_params: UnfoldParams) -> Self
     where
         CrossBatchCtxFn: Fn(&C) -> Result<CUC, ThoError> + Send + Sync + 'static,
     {
@@ -386,6 +479,65 @@ where
             cross_batch_ctx: Box::new(cross_batch_ctx),
             unfold_params,
             _pd: PhantomData,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CrossUnfoldClcProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    proxy: Arc<ProxyCrossUnfoldClc>,
+    _pd: PhantomData<C>,
+}
+
+impl<C> Adjustable for CrossUnfoldClcProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+}
+
+impl<C> OutId for CrossUnfoldClcProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.proxy.out_id(input_id)
+    }
+}
+
+impl<C> Stage for CrossUnfoldClcProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    type In<'a> = CrossInput<'a, Arc<Resource>>;
+    type Out = CrossUnfoldClcOutput<DistsMask>;
+    type Ctx = C;
+}
+
+impl<C> SyncStage for CrossUnfoldClcProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxyCrossUnfoldClc requires RunCtxImpl"))?;
+        Arc::clone(&self.proxy).do_run(input, ctx)
+    }
+}
+
+impl<C> CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<C>, DistsMask, crate::tasks::find_motifs::MasksCtx, C>
+where
+    C: RunCtx + 'static,
+{
+    pub(crate) async fn new_dyn_for_find_motifs(init: crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize) -> Result<CrossUnfoldClcDynSyncStage<DistsMask, C>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(CrossUnfoldClcProxyCtx::<C> {
+                proxy: Arc::new(ProxyCrossUnfoldClc::new(init, tho_device_idx).await?),
+                _pd: PhantomData,
+            })))
+        } else {
+            Ok(CrossUnfoldClcDynSyncStage::new(Arc::new(Self::new_for_find_motifs(init)?)))
         }
     }
 }
