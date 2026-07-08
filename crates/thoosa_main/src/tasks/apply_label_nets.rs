@@ -1,12 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use futures_util::future::try_join_all;
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
 use log::{debug, trace, warn};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use tch::{IndexOp, Tensor};
 use tch::Kind::Float;
 use thoosa_common::batches::BatchLengths;
@@ -18,13 +17,19 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{LabelNetParams, ThoModuleWithStore};
 use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
+use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
+use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, FuturesOrdering, ThoError};
+use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::traits::{Adjustable, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, SimpleId, WithId};
 use thoosa_store::{Store, TrainedNet};
 
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
@@ -261,13 +266,21 @@ where
 
         debug!("ApplyLabelNets::run: self.apply_nets.len={} label_nets={:?}", self.apply_nets.len(), self.apply_nets);
 
+        let tmp_cache = track_await(TmpCached::new("tmp_stack_applied_label_nets")).await;
+        let tmp_cache_name = tmp_cache.registered_name();
+        let tmp_cache: Arc<Mutex<TmpCached<ThoTensor<LabelProbability, SynKey>>>> = Arc::new(Mutex::new(tmp_cache));
+        let label_output_order = Arc::new(Mutex::new(vec![None; self.apply_nets.len()]));
+
         let futures = self.apply_nets
             .iter()
-            .map(|apply_net| {
+            .enumerate()
+            .map(|(apply_net_idx, apply_net)| {
                 let input: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>> = Arc::clone(&input);
                 let apply_motif_nets = Arc::clone(&apply_net.apply_motif_nets);
                 let apply_label_net = Arc::clone(&apply_net.apply_label_net);
                 let mut ctx = ctx.branch(false);
+                let tmp_cache = Arc::clone(&tmp_cache);
+                let label_output_order = Arc::clone(&label_output_order);
                 async move {
 
                     #[cfg(test)]{
@@ -293,21 +306,23 @@ where
                     }
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
-                    let result: Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>> = apply_label_net.run(motif_probs, ctx.branch(false)).await?;
+                    let result: ThoTensor<LabelProbability, SynKey> = apply_label_net.run(motif_probs, ctx.branch(false)).await?;
 
                     #[cfg(test)]{
                         {
-                            let result = SelectRef::borrow_to(&result, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-                            trace!("ApplyLabelNets::run: result=\n{}", result.as_ref().as_ref());
+                            trace!("ApplyLabelNets::run: result=\n{}", result.as_ref());
                             Ok::<(), ThoError>(())
                         }?;
                     }
 
-                    Ok::<_, ThoError>(result)
+                    label_output_order.lock()[apply_net_idx] = Some(result.id().clone());
+                    tmp_cache.lock().insert(result);
+
+                    Ok::<_, ThoError>(())
                 }
             });
 
-        let label_outputs = collect_futures_with_progress(
+        let _label_outputs = collect_futures_with_progress(
             futures,
             self.apply_nets.len(),
             FuturesOrdering::Ordered,
@@ -317,37 +332,41 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        debug!("ApplyLabelNets::run: label_outputs={label_outputs:?}");
-        //TODO consuming SyncStage for gpu
-        let out_id = self.out_id(&input_id);
-        if label_outputs.is_empty() {
-            Ok(Arc::new(DevicesWrap::wrap(ThoTensor::new(out_id, Tensor::empty(0, (Float, ThoDevice::from(ctx.tho_device_idx()).into())) )?)))
-        } else {
-            let outs = try_join_all(label_outputs.iter().map(|o| BorrowRef::borrow_to(o, ctx.tho_device_idx()))).await?;
+        debug!("ApplyLabelNets::run: label_outputs stacked count={}", self.apply_nets.len());
 
+        let label_output_order = Arc::into_inner(label_output_order)
+            .expect("ApplyLabelNets::run: label_output_order still shared")
+            .into_inner()
+            .into_iter()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| ThoError::new("ApplyLabelNets::run: missing label output id"))?;
+        let stack_applied_label_nets = Arc::new(StackAppliedLabelNets::<C>::new(self.id.clone(), label_output_order));
+        let stack_input = StackAppliedLabelNetsInputWrapper::new(input_id.clone(), Arc::into_inner(tmp_cache).expect("ApplyLabelNets::run: tmp_cache still shared").into_inner());
+        let required_tmp_cache_ids = HashSet::<&dyn CachableIdTr>::new();
+        let required_ids = HashMap::from([(tmp_cache_name, &required_tmp_cache_ids)]);
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
+            vec![
+                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::FIFTY))),
+                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("stack_apply_label_nets"))),
+            ],
+            None,
+        );
+        let label_outputs = track_await(oom_handler.consume(
+            &stack_applied_label_nets,
+            stack_input,
+            ctx.branch(true),
+            WithRunCtxContext::new(
+                MaxParallelAndDumpToCpuAdjustableContex::new(
+                    MaxParallelAdjustContextImpl::new(),
+                    DumpToCpuContextImpl::new(&required_ids),
+                ),
+            ),
+        )).await?;
 
-                #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNets::run/stack"))]
-                fn _stack(outs:&[ThoDataRef<ThoTensor<LabelProbability, SynKey>>]) -> Result<Tensor, ThoError> {
-                        Ok(Tensor::f_stack(
-                            outs.iter()
-                                .map(|o| {
-                                    debug!("o.size={:?}", o.t_ref().size());
-                                    o.t_ref().sigmoid()
-                                })
-                                .collect::<Vec<_>>()
-                                .as_slice(),
-                            0,
-                        )?)
-                }
+        #[cfg(debug_assertions)]
+        debug!("ApplyLabelNets::run: done, input={input_debug:?}");
 
-            let tensor =  ThoTensor::new(out_id, _stack(&outs)?)?;
-
-
-            #[cfg(debug_assertions)]
-            debug!("ApplyLabelNets::run: done, input={input_debug:?}");
-
-            Ok(Arc::new(DevicesWrap::wrap(tensor)))
-        }
+        Ok(Arc::new(label_outputs))
     }
 }
 
@@ -359,6 +378,192 @@ where
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
+    }
+}
+
+#[derive(Debug)]
+pub struct StackAppliedLabelNetsInput {
+    id: SynKey,
+    device_idx: usize,
+    label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>,
+}
+
+impl StackAppliedLabelNetsInput {
+    fn new(id: SynKey, label_outputs: Vec<ThoTensor<LabelProbability, SynKey>>, device_idx: usize) -> Self {
+        Self { id, device_idx, label_outputs }
+    }
+}
+
+impl WithId for StackAppliedLabelNetsInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Data for StackAppliedLabelNetsInput {
+    type Metrics = MonoMetrics<0, 1>;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.label_outputs.len().into()
+    }
+
+    fn device(&self) -> usize {
+        self.device_idx
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.label_outputs.iter().map(|label_output| label_output.mem_size()).sum()
+    }
+}
+
+impl Input for StackAppliedLabelNetsInput {}
+impl Adjustable for StackAppliedLabelNetsInput {}
+
+#[derive(Debug)]
+struct StackAppliedLabelNetsInputWrapper {
+    id: SynKey,
+    tmp_cache: TmpCached<ThoTensor<LabelProbability, SynKey>>,
+}
+
+impl StackAppliedLabelNetsInputWrapper {
+    fn new(id: SynKey, tmp_cache: TmpCached<ThoTensor<LabelProbability, SynKey>>) -> Self {
+        Self { id, tmp_cache }
+    }
+}
+
+impl WithId for StackAppliedLabelNetsInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl ConsumeData for StackAppliedLabelNetsInputWrapper {
+    type O = StackAppliedLabelNetsInput;
+
+    fn consume<R: Send, F, P>(
+        self,
+        to_device_idx: usize,
+        ctx: P,
+        _trace_ctx: Option<&'static str>,
+        do_run: F,
+    ) -> impl Future<Output = ConsumeResult<Self::O, R>> + Send
+    where
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
+        P: RunCtx,
+    {
+        async move {
+            let StackAppliedLabelNetsInputWrapper { id, tmp_cache } = self;
+            match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
+                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, to_device_idx), ctx),
+                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, to_device_idx), error: err.error },
+            }
+        }
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedLabelNetsInputWrapper::burp"))]
+    fn burp(o: Self::O) -> impl Future<Output = Self> + Send {
+        async move {
+            let cache = track_await(TmpCached::new("tmp_stack_applied_label_nets_burp")).await;
+            for label_output in o.label_outputs {
+                cache.insert(label_output);
+            }
+            StackAppliedLabelNetsInputWrapper::new(o.id, cache)
+        }
+    }
+}
+
+#[derive(Debug, Named)]
+pub struct StackAppliedLabelNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    label_output_order: HashMap<SynKey, usize>,
+    pd: PhantomData<C>,
+}
+
+impl<C> StackAppliedLabelNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn new(id: SynKey, label_output_order: Vec<SynKey>) -> Self {
+        Self {
+            id,
+            label_output_order: label_output_order.into_iter().enumerate().map(|(idx, id)| (id, idx)).collect(),
+            pd: PhantomData,
+        }
+    }
+}
+
+impl<C> Adjustable for StackAppliedLabelNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+}
+
+impl<C> OutId for StackAppliedLabelNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl<C> Stage for StackAppliedLabelNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = StackAppliedLabelNetsInput;
+    type Out = DevicesWrap<ThoTensor<LabelProbability, SynKey>>;
+}
+
+impl<C> SyncStage for StackAppliedLabelNets<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="StackAppliedLabelNets::consume"))]
+    fn consume<'f>(self: Arc<Self>, mut input: Self::In<'f>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'f>, Self::Out> {
+        let input_id = input.id().clone();
+        let mut label_outputs = std::mem::take(&mut input.label_outputs);
+        label_outputs.sort_by_key(|label_output| self.label_output_order.get(label_output.id()).copied().unwrap_or(usize::MAX));
+
+        let out_id = self.out_id(&input_id);
+        let tensor = if label_outputs.is_empty() {
+            match Tensor::f_empty([0], (Float, ThoDevice::from(input.device_idx).into())) {
+                Ok(tensor) => tensor,
+                Err(error) => {
+                    input.label_outputs = label_outputs;
+                    return ConsumeResult::Failed { input, error: error.into() };
+                }
+            }
+        } else {
+            let stacked = label_outputs.iter().map(|label_output| {
+                debug!("StackAppliedLabelNets::consume: label_output.size={:?}", label_output.t_ref().size());
+                label_output.t_ref().f_sigmoid()
+            }).collect::<Result<Vec<_>, _>>();
+            match stacked.and_then(|stacked| Tensor::f_stack(stacked.as_slice(), 0)) {
+                Ok(tensor) => tensor,
+                Err(error) => {
+                    input.label_outputs = label_outputs;
+                    return ConsumeResult::Failed { input, error: error.into() };
+                }
+            }
+        };
+
+        match ThoTensor::new(out_id, tensor) {
+            Ok(tensor) => ConsumeResult::Ok(DevicesWrap::wrap(tensor)),
+            Err(error) => {
+                input.label_outputs = label_outputs;
+                ConsumeResult::Failed { input, error }
+            }
+        }
     }
 }
 
@@ -408,7 +613,7 @@ where
 {
     type Ctx = C;
     type In<'a> = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>;
-    type Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>;//TODO it's Batch<LabelProbability>
+    type Out = ThoTensor<LabelProbability, SynKey>;//TODO it's Batch<LabelProbability>
 }
 
 impl<C> AsyncStage for ApplyLabelNet<C>
@@ -477,7 +682,7 @@ where
 
                 trace!("ApplyLabelNets::run: out=\n{}", out.as_ref());
 
-                Ok(Arc::new(DevicesWrap::wrap(out)))
+                Ok(out)
             }
         }
     }
