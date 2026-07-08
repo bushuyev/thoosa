@@ -84,7 +84,7 @@ where
     init_type = "SyncFreqFilterIpcInit",
     init_stage = "SyncFreqFilter::new_for_ipc(init)?"
 )]
-pub(crate) struct SyncFreqFilter<C>
+pub struct SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {

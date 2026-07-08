@@ -798,8 +798,8 @@ impl SpawnedState {
 }
 
 impl CudaIPCActor {
-    pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<&str>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
-        let cuda_worker_args = Arc::new(cuda_worker_args.into_iter().map(|s| s.to_string()).collect());
+    pub async fn new(tho_device_idx:usize, cuda_worker_args: Vec<String>, receiver: mpsc::Receiver<CudaIPCActorMessage>) -> Result<Self, ThoError> {
+        let cuda_worker_args = Arc::new(cuda_worker_args);
 
         let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args).await?;
 
@@ -844,6 +844,7 @@ impl CudaIPCActor {
         })
     }
 
+    #[cfg(test)]
     async fn spawn_worker(args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
         Self::spawn_worker_for_cuda_device(0, args).await
     }
@@ -879,10 +880,9 @@ impl CudaIPCActor {
             .spawn()?;
 
         let accepted = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            Duration::from_secs(5),
             listener.accept(),
-        )
-            .await;
+        ).await;
 
         debug!("CudaIPCActor::spawn_worker: accepted={accepted:?}");
 
@@ -1606,7 +1606,7 @@ pub struct CudaIPCActorHandle {
 
 ///executes cuda actions in a separate process started from CudaWorker::run_worker
 impl CudaIPCActorHandle {
-    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<&str>) -> Result<Self, ThoError> {
+    pub async fn new(tho_device_id:usize, cuda_worker_args: Vec<String>) -> Result<Self, ThoError> {
         debug!("CudaIPCActorHandle::new: tho_device_id={tho_device_id}");
 
         let (sender, receiver) = mpsc::channel(8);

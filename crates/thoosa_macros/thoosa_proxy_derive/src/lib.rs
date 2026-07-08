@@ -111,7 +111,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                     }
                 }
 
-                pub(crate) fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                     #stage_init
                     Ok(Box::new(#wrapper_name {
                         stage: std::sync::Arc::new(stage),
@@ -124,7 +124,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
             let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `worker_body` requires `init_stage = \"...\"`"))?;
             let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
             quote! {
-                pub(crate) fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                     let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
                     Ok(#common::ipc::json_ser::make_ipc_sync_stage_wrapper::<
                         #codec,
@@ -144,7 +144,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     let counter_method = match counter_method {
         Some(method) => quote! {
-            pub(crate) fn #method(&self) -> usize {
+            pub fn #method(&self) -> usize {
                 self.#method.load(std::sync::atomic::Ordering::Acquire)
             }
         },
@@ -153,7 +153,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     Ok(quote! {
         #[derive(Debug)]
-        pub(crate) struct #proxy_ident {
+        pub struct #proxy_ident {
             #(#field_defs,)*
         }
 

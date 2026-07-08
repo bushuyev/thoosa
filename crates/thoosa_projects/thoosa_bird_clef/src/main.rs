@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use crate::data::{ogg_to_tensor, resource_to_tensor};
 use crate::labels::LABELS;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, trace, warn, LevelFilter};
 use std::time::{Duration, Instant};
 use futures::{StreamExt, TryStreamExt};
 use parking_lot::RwLock;
@@ -34,15 +34,16 @@ use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
 use thoosa_main::tasks::stft::SyncStftSelector;
-use thoosa_shared::{collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, FuturesOrdering, ThoError};
+use thoosa_shared::{cdt_for_dir, collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, FuturesOrdering, ThoError};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
 use std::cell::Cell;
+use clap::Parser;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
-use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_shared::tracked_await::track_await;
 
@@ -59,18 +60,14 @@ thread_local! {
     static POLL_START_TID: Cell<i64> = const { Cell::new(0) };
 }
 
+
+
 fn main() -> Result<(), ThoError>{
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        let rt = tokio::runtime::Builder::new_multi_thread().build()?;
-        rt.block_on(async {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Device::Cuda(0))).await
-        })?;
+    let cdt = cdt_for_dir();
 
-        return Ok(());
-    }
-
-    tch::set_num_threads(1);
-    tch::set_num_interop_threads(1);
+    CudaWorker::run_if_sock(&cdt, HashMap::new())?;
+    // tch::set_num_threads(1);
+    // tch::set_num_interop_threads(1);
 
     info!("bird_clef main");
     if let Ok(thoosa_num_interop_threads)= std::env::var("THOOSA_NUM_INTEROP_THREADS").map_err(|e|ThoError::from(e)).and_then(|v|v.parse::<u32>().map_err(|e|ThoError::from(e))){
@@ -92,12 +89,12 @@ fn main() -> Result<(), ThoError>{
     let mut task_ids_1 = Arc::clone(&task_ids);
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
-            // if tch::Cuda::is_available() {
-            //     //runs cuCtxSetCurrent
-            //     if let Err(err) = ThoCudaContext::new(0) {
-            //         panic!("Failed to create context: {err:?}"); //TODO device
-            //     }
-            // }
+            if tch::Cuda::is_available() {
+                //runs cuCtxSetCurrent
+                if let Err(err) = ThoCudaContext::new(0) {
+                    panic!("Failed to create context: {err:?}"); //TODO device
+                }
+            }
         })
         .worker_threads(worker_threads.unwrap_or(cpu_num))
         // .max_blocking_threads(blocking_threads.unwrap_or(cpu_num/2))
@@ -239,6 +236,7 @@ fn main() -> Result<(), ThoError>{
                 track_await(infer_labels(params, ws, store)).await
 
             }),
+            cdt
         )).await
     });
 

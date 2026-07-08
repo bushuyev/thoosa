@@ -111,7 +111,7 @@ impl GlobalCtx {
     }
 
     //TODO this should replace GlobalCtx::new when ipc refactoring is completed
-    async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<&'static str>) -> Result<Self, ThoError> {
+    async fn new_ipc(num_devices: usize, cuda_worker_args: Vec<String>) -> Result<Self, ThoError> {
         debug!("GlobalCtx::new: num_devices={num_devices}");
 
         assert!(num_devices > 0);//TODO test if it works without GPU
@@ -192,7 +192,7 @@ impl GlobalCtx {
     }
 
     ///num_devices: number of devices - CPU + GPU count
-    pub async fn init_devices_ipc(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<&'static str>/*TODO move to device init struct*/) -> Result<&'static GlobalCtx, ThoError> {
+    pub async fn init_devices_ipc(num_devices: usize/*TODO replace with DeviceInitStruct vec*/, cuda_worker_args: Vec<String>/*TODO move to device init struct*/) -> Result<&'static GlobalCtx, ThoError> {
         debug!("GlobalCtx::init_devices: num_devices={num_devices}");
 
         GLOBAL_CTX
