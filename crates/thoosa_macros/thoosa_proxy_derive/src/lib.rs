@@ -17,8 +17,10 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     let base_ident = input.ident;
     let attrs = ProxyAttrs::from_attrs(&input.attrs)?;
     let proxy_ident = attrs.proxy_name.ok_or_else(|| syn::Error::new_spanned(&base_ident, "missing `name = \"ProxyType\"` in `proxy` attribute"))?;
+    let common = attrs.common.unwrap_or_else(|| syn::parse_quote!(crate));
+    let base_ty = attrs.base_type.unwrap_or_else(|| syn::parse_quote!(#base_ident));
     let endpoint = attrs.endpoint.ok_or_else(|| syn::Error::new_spanned(&base_ident, "missing `endpoint = \"...\"` in `proxy` attribute"))?;
-    let codec = attrs.codec.unwrap_or_else(|| syn::parse_quote!(crate::ipc::codec::JsonIpcCodec));
+    let codec = attrs.codec.map(|codec| quote!(#codec)).unwrap_or_else(|| quote!(#common::ipc::codec::JsonIpcCodec));
     let new_args = attrs.new_args.unwrap_or_default();
     let device_param = proxy_device_param(&new_args).ok_or_else(|| syn::Error::new_spanned(&base_ident, "proxy constructor arguments must include one of `tho_device`, `tho_device_idx`, `device`, or `device_idx` for endpoint installation"))?;
     let fields = attrs.fields.unwrap_or_default();
@@ -48,15 +50,15 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     let install = match init {
         Some(init) => quote! {
-            crate::ipc::codec::install_ipc_endpoint::<#codec, _>(
-                crate::runner::global_ctx::GlobalCtx::global().cuda_actor(#device_param).as_ref(),
+            #common::ipc::codec::install_ipc_endpoint::<#codec, _>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#device_param).as_ref(),
                 #endpoint,
                 &#init,
             ).await?;
         },
         None => quote! {
-            crate::ipc::codec::install_empty_ipc_endpoint(
-                crate::runner::global_ctx::GlobalCtx::global().cuda_actor(#device_param).as_ref(),
+            #common::ipc::codec::install_empty_ipc_endpoint(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#device_param).as_ref(),
                 #endpoint,
             ).await?;
         },
@@ -64,15 +66,15 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     let run_call = match run_input {
         Some(run_input) => quote! {
-            crate::ipc::codec::invoke_ipc_endpoint::<#codec, _, <Self as crate::runner::common::runnable::Stage>::Out>(
-                crate::runner::global_ctx::GlobalCtx::global().cuda_actor(crate::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
+            #common::ipc::codec::invoke_ipc_endpoint::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
                 #endpoint,
                 &#run_input,
             ).await
         },
         None => quote! {
-            crate::ipc::codec::invoke_ipc_sync_stage::<#codec, _, <Self as crate::runner::common::runnable::Stage>::Out>(
-                crate::runner::global_ctx::GlobalCtx::global().cuda_actor(crate::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
+            #common::ipc::codec::invoke_ipc_sync_stage::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
                 #endpoint,
                 input,
                 ctx,
@@ -81,41 +83,54 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     };
 
     let endpoint_init_tokens = match (endpoint_init, worker_body) {
-        (Some(endpoint_init), Some(worker_body)) => quote! {
-            #[derive(Debug)]
-            struct #wrapper_name {
-                stage: #base_ident,
-            }
-
-            impl crate::ipc::json_ser::SyncStageIpcWrapper for #wrapper_name {
-                fn do_run(
-                    &self,
-                    input: &[u8],
-                    all_cuda_tensors: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>,
-                ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
-                    type __ProxyIpcCodec = #codec;
-                    #worker_body
+        (Some(endpoint_init), Some(worker_body)) => {
+            let stage_init = match (init_type.as_ref(), init_stage.as_ref()) {
+                (Some(init_type), Some(init_stage)) => quote! {
+                    let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
+                    let stage = #init_stage;
+                },
+                (None, None) => quote! {
+                    let stage = #base_ident::new();
+                },
+                _ => return Err(syn::Error::new_spanned(&base_ident, "`worker_body` endpoint init must provide both `init_type` and `init_stage`, or neither")),
+            };
+            quote! {
+                #[derive(Debug)]
+                struct #wrapper_name {
+                    stage: std::sync::Arc<#base_ty>,
                 }
-            }
 
-            pub(crate) fn #endpoint_init(_init_msg: Vec<u8>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
-                Ok(Box::new(#wrapper_name {
-                    stage: #base_ident::new(),
-                }))
+                impl #common::ipc::json_ser::SyncStageIpcWrapper for #wrapper_name {
+                    fn do_run(
+                        &self,
+                        input: &[u8],
+                        all_cuda_tensors: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>,
+                    ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
+                        type __ProxyIpcCodec = #codec;
+                        #worker_body
+                    }
+                }
+
+                pub(crate) fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                    #stage_init
+                    Ok(Box::new(#wrapper_name {
+                        stage: std::sync::Arc::new(stage),
+                    }))
+                }
             }
         },
         (Some(endpoint_init), None) => {
             let init_type = init_type.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `worker_body` requires `init_type = \"...\"`"))?;
             let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `worker_body` requires `init_stage = \"...\"`"))?;
-            let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ident as crate::runner::common::runnable::Stage>::In<'static>));
+            let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
             quote! {
-                pub(crate) fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
-                    let init = <#codec as crate::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
-                    Ok(crate::ipc::json_ser::make_ipc_sync_stage_wrapper::<
+                pub(crate) fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                    let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
+                    Ok(#common::ipc::json_ser::make_ipc_sync_stage_wrapper::<
                         #codec,
-                        #base_ident,
+                        #base_ty,
                         #in_type,
-                        <#base_ident as crate::runner::common::runnable::Stage>::Out,
+                        <#base_ty as #common::runner::common::runnable::Stage>::Out,
                     >(
                         #endpoint,
                         #init_stage,
@@ -157,22 +172,22 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
         impl thoosa_shared::traits::Adjustable for #proxy_ident {}
 
-        impl crate::runner::common::OutId for #proxy_ident {
+        impl #common::runner::common::OutId for #proxy_ident {
             fn out_id<'a>(
                 &self,
-                input_id: &<<Self as crate::runner::common::runnable::Stage>::In<'a> as thoosa_shared::traits::WithId>::ID,
-            ) -> <<Self as crate::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID {
+                input_id: &<<Self as #common::runner::common::runnable::Stage>::In<'a> as thoosa_shared::traits::WithId>::ID,
+            ) -> <<Self as #common::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID {
                 #out_id
             }
         }
 
-        impl crate::runner::common::runnable::Stage for #proxy_ident {
-            type Ctx = <#base_ident as crate::runner::common::runnable::Stage>::Ctx;
-            type In<'a> = <#base_ident as crate::runner::common::runnable::Stage>::In<'a>;
-            type Out = <#base_ident as crate::runner::common::runnable::Stage>::Out;
+        impl #common::runner::common::runnable::Stage for #proxy_ident {
+            type Ctx = <#base_ty as #common::runner::common::runnable::Stage>::Ctx;
+            type In<'a> = <#base_ty as #common::runner::common::runnable::Stage>::In<'a>;
+            type Out = <#base_ty as #common::runner::common::runnable::Stage>::Out;
         }
 
-        impl crate::runner::common::runnable::SyncStage for #proxy_ident {
+        impl #common::runner::common::runnable::SyncStage for #proxy_ident {
             fn do_run<'a>(
                 self: std::sync::Arc<Self>,
                 input: &Self::In<'a>,
@@ -197,6 +212,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 #[derive(Default)]
 struct ProxyAttrs {
     proxy_name: Option<Ident>,
+    common: Option<Path>,
+    base_type: Option<Type>,
     endpoint: Option<Expr>,
     codec: Option<Path>,
     new_args: Option<Punctuated<FnArg, Token![,]>>,
@@ -228,6 +245,8 @@ impl ProxyAttrs {
                 let lit = value.parse::<syn::LitStr>()?;
                 match key.as_str() {
                     "name" => out.proxy_name = Some(lit.parse()?),
+                    "common" => out.common = Some(lit.parse()?),
+                    "base" => out.base_type = Some(lit.parse()?),
                     "endpoint" => out.endpoint = Some(lit.parse()?),
                     "codec" => out.codec = Some(lit.parse()?),
                     "new_args" => out.new_args = Some(parse_fn_args(&lit)?),

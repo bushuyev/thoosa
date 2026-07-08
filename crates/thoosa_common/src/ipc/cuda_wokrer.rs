@@ -348,11 +348,11 @@ impl CudaWorker {
 
 
 //TODO merge WorkerStageInput/Output and move impls to json_ser
-pub(crate) trait WorkerStageInput: Debug + Sized {
+pub trait WorkerStageInput: Debug + Sized {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
 }
 
-pub(crate) trait WorkerStageOutput: Debug + Sized {
+pub trait WorkerStageOutput: Debug + Sized {
     fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError>;
 }
 

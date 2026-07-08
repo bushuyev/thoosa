@@ -40,32 +40,32 @@ impl IpcCodec for JsonIpcCodec {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub(crate) struct IpcSyncStageRunInput {
+pub struct IpcSyncStageRunInput {
     input: Vec<u8>,
     max_other_parallel: Option<MaxParallel>,
 }
 
 impl IpcSyncStageRunInput {
-    pub(crate) fn new(input: Vec<u8>, ctx: &RunCtxImpl) -> Self {
+    pub fn new(input: Vec<u8>, ctx: &RunCtxImpl) -> Self {
         Self {
             input,
             max_other_parallel: Some(ctx.max_other_parallel()),
         }
     }
 
-    pub(crate) fn into_parts(self) -> (Vec<u8>, Option<MaxParallel>) {
+    pub fn into_parts(self) -> (Vec<u8>, Option<MaxParallel>) {
         (self.input, self.max_other_parallel)
     }
 }
 
-pub(crate) fn encode_sync_stage_run_input<C>(input: &[u8], ctx: &RunCtxImpl) -> Result<Vec<u8>, ThoError>
+pub fn encode_sync_stage_run_input<C>(input: &[u8], ctx: &RunCtxImpl) -> Result<Vec<u8>, ThoError>
 where
     C: IpcCodec,
 {
     C::encode(&IpcSyncStageRunInput::new(input.to_vec(), ctx))
 }
 
-pub(crate) async fn install_ipc_endpoint<C, T>(
+pub async fn install_ipc_endpoint<C, T>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
     init_msg: &T,
@@ -80,7 +80,7 @@ where
         .await
 }
 
-pub(crate) async fn install_empty_ipc_endpoint(
+pub async fn install_empty_ipc_endpoint(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
 ) -> Result<(), ThoError> {
@@ -89,7 +89,7 @@ pub(crate) async fn install_empty_ipc_endpoint(
         .await
 }
 
-pub(crate) async fn invoke_ipc_endpoint<C, I, O>(
+pub async fn invoke_ipc_endpoint<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
     input: &I,
@@ -106,7 +106,7 @@ where
     C::decode(&response)
 }
 
-pub(crate) async fn invoke_ipc_sync_stage<C, I, O>(
+pub async fn invoke_ipc_sync_stage<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
     input: &I,
