@@ -13,8 +13,12 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Uint8};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
+use thoosa_common::dims::AnyDims;
+use thoosa_common::ipc::cuda_wokrer::{insert_worker_tensor, WorkerStageOutput};
+use thoosa_common::ipc::codec::IpcCodec;
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_common::tho_device::ThoDevice;
+use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Data, WithId};
@@ -33,9 +37,17 @@ use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
 use thoosa_shared::tracked_await::track_await;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+type DistsMaskTensor = ThoTensor<AnyDims, SynKey>;
+
 // DistsMask is meant for one-way GPU->CPU copies. Don't impl Clone!
 #[derive(Debug)]
 pub struct DistsMask {
+    mask: DistsMaskTensor,
+    dists: Option<DistsMaskTensor>,
+    mask_type: DistsMaskType,
+}
+
+struct DistsMaskLocalPart {
     mask: Tensor,
     dists: Option<Tensor>,
     mask_type: DistsMaskType,
@@ -464,24 +476,103 @@ impl Data for DistsMask {
     }
 
     fn device(&self) -> usize {
-        match self.mask.device() {
-            Cpu => 0,
-            Cuda(idx) => idx as usize,
-            _ => 0,
-        }
+        DistsMask::tensor_device(&self.mask)
     }
 
     fn mem_size(&self) -> u64 {
-        (self.mask.numel() * self.mask.kind().elt_size_in_bytes()) as u64
-            + self
-                .dists
-                .as_ref()
-                .map(|dists| tensor_mem_size(dists) as u64)
-                .unwrap_or(0)
+        DistsMask::tensor_mem_size(&self.mask) + self.dists.as_ref().map(DistsMask::tensor_mem_size).unwrap_or(0)
     }
 }
 
 impl DistsMask {
+    fn from_local_tensors(mask: Tensor, dists: Option<Tensor>, mask_type: DistsMaskType) -> Result<Self, ThoError> {
+        Ok(Self {
+            mask: ThoTensor::new("DistsMask.mask".into(), mask)?,
+            dists: dists.map(|dists| ThoTensor::new("DistsMask.dists".into(), dists)).transpose()?,
+            mask_type,
+        })
+    }
+
+    fn tensor_device(tensor: &DistsMaskTensor) -> usize {
+        match &tensor.inner {
+            ThoTensorInner::Val { t } => match t.device() {
+                Cpu => 0,
+                Cuda(idx) => idx as usize,
+                _ => 0,
+            },
+            ThoTensorInner::Ref { .. } => Data::device(tensor),
+        }
+    }
+
+    fn tensor_mem_size(tensor: &DistsMaskTensor) -> u64 {
+        match &tensor.inner {
+            ThoTensorInner::Val { t } => tensor_mem_size(t) as u64,
+            ThoTensorInner::Ref { .. } => Data::mem_size(tensor),
+        }
+    }
+
+    fn into_local_tensor(tensor: DistsMaskTensor, label: &str) -> Result<Tensor, ThoError> {
+        match tensor.inner {
+            ThoTensorInner::Val { t } => Ok(t),
+            ThoTensorInner::Ref { key, .. } => Err(ThoError::new(format!("DistsMask::{label}: expected local tensor, got IPC ref key={key}"))),
+        }
+    }
+
+    fn local_tensor_ref<'a>(tensor: &'a DistsMaskTensor, label: &str) -> Result<&'a Tensor, ThoError> {
+        match &tensor.inner {
+            ThoTensorInner::Val { t } => Ok(t),
+            ThoTensorInner::Ref { key, .. } => Err(ThoError::new(format!("DistsMask::{label}: expected local tensor, got IPC ref key={key}"))),
+        }
+    }
+
+    fn into_local_part(self) -> Result<DistsMaskLocalPart, ThoError> {
+        Ok(DistsMaskLocalPart {
+            mask: Self::into_local_tensor(self.mask, "into_local_part mask")?,
+            dists: self.dists.map(|dists| Self::into_local_tensor(dists, "into_local_part dists")).transpose()?,
+            mask_type: self.mask_type,
+        })
+    }
+
+    async fn copy_tensor_to_cpu(tensor: DistsMaskTensor, label: &'static str) -> Result<Tensor, ThoError> {
+        let device_idx = Data::device(&tensor);
+        match tensor.inner {
+            ThoTensorInner::Val { t } if t.device().eq(&Cpu) => Ok(t),
+            ThoTensorInner::Val { t } => {
+                let t = if t.is_contiguous() {
+                    t
+                } else {
+                    t.f_contiguous()?
+                };
+                let device = ThoDevice::from(t.device());
+                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying local tensor device={device:?}");
+                Ok(track_await(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
+            }
+            ThoTensorInner::Ref { key, size, kind, selector } => {
+                let device = ThoDevice::from(device_idx);
+                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} device={device:?}");
+                let actor = GlobalCtx::global().cuda_actor(device);
+                let copied = track_await(actor.copy(ThoTensor::new_ref((), key, size, kind, selector), 0.into())).await?.t();
+                track_await(actor.drop_tho_tensor(ThoTensor::new_ref((), key, vec![], tch::Kind::Float, None))).await?;
+                Ok(copied)
+            }
+        }
+    }
+
+    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<tokio::sync::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<tokio::sync::Mutex<HashMap<u64, Tensor>>>) -> Result<DistsMaskTensor, ThoError> {
+            let tensor = DistsMask::into_local_tensor(tensor, "into_worker_ipc_refs")?;
+            let size = tensor.size();
+            let kind = tensor.kind();
+            let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
+            Ok(ThoTensor::new_ref(id, key, size, kind, None))
+        }
+
+        Ok(Self {
+            mask: to_ref("DistsMask.mask".into(), self.mask, all_cuda_tensors)?,
+            dists: self.dists.map(|dists| to_ref("DistsMask.dists".into(), dists, all_cuda_tensors)).transpose()?,
+            mask_type: self.mask_type,
+        })
+    }
 
     pub fn new(
         mask: Tensor,
@@ -508,11 +599,7 @@ impl DistsMask {
                 if let Some(dists) = dists.as_ref() {
                     assert!(dists.device().eq(&Cpu), "DistsMask::new: AsIs expects CPU dists");
                 }
-                Ok(Self {
-                    mask,
-                    dists,
-                    mask_type: DistsMaskType::AsIs,
-                })
+                Self::from_local_tensors(mask, dists, DistsMaskType::AsIs)
             }
             DistsMaskType::MaskPacked(_, _) => {
                 assert!(mask.device().ne(&Cpu), "DistsMask::new: MaskPacked expects non-CPU mask");
@@ -521,14 +608,7 @@ impl DistsMask {
                 }
                 let dists_size = dists.as_ref().map(|t| t.size());
                 let packed = pack_bits_bool(&mask)?;
-                Ok(Self {
-                    mask: packed,
-                    dists,
-                    mask_type: DistsMaskType::MaskPacked(
-                        mask_size.clone(),
-                        dists_size,
-                    ),
-                })
+                Self::from_local_tensors(packed, dists, DistsMaskType::MaskPacked(mask_size.clone(), dists_size))
             }
             DistsMaskType::MaskIndexes(_) => {
                 assert!(mask.device().ne(&Cpu), "DistsMask::new: MaskIndexes expects non-CPU mask");
@@ -565,77 +645,44 @@ impl DistsMask {
                     }
                     None => None,
                 };
-                Ok(Self {
-                    mask: flat,
-                    dists,
-                    mask_type: DistsMaskType::MaskIndexes(mask_size),
-                })
+                Self::from_local_tensors(flat, dists, DistsMaskType::MaskIndexes(mask_size))
             }
         }
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsMask::to_cpu"))]
     pub async fn to_cpu(self) -> Result<Self, ThoError>  {
-        debug!("DistsMask::to_cpu: self.mask.device={:?}", self.mask.device());
+        debug!("DistsMask::to_cpu: self.mask.device={:?}", Self::tensor_device(&self.mask));
 
         match self.mask_type {
             DistsMaskType::AsIs => {
-                assert!(self.mask.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU mask");
+                let mask = Self::into_local_tensor(self.mask, "to_cpu AsIs mask")?;
+                assert!(mask.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU mask");
 
-                if let Some(dists) = self.dists.as_ref() {
+                let dists = self.dists.map(|dists| Self::into_local_tensor(dists, "to_cpu AsIs dists")).transpose()?;
+                if let Some(dists) = dists.as_ref() {
                     assert!(dists.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU dists");
                 }
-                Ok(Self {
-                    mask: self.mask,
-                    dists: self.dists,
-                    mask_type: DistsMaskType::AsIs,
-                })
+                Self::from_local_tensors(mask, dists, DistsMaskType::AsIs)
             }
             mask_type @ (DistsMaskType::MaskPacked(_, _) | DistsMaskType::MaskIndexes(_)) => {
-
-                let mask = if self.mask.device().eq(&Cpu) {
-                    self.mask
-                } else {
-                    let mask = if self.mask.is_contiguous() {
-                        self.mask
-                    } else {
-                        let mask = self.mask;
-                        mask.f_contiguous()?
-                    };
-                    let device = ThoDevice::from(mask.device());
-                    let kind = mask.kind();
-                    track_await(GlobalCtx::global().cuda_actor(device).copy(mask.into(), 0.into())).await?.t()
-                };
+                let mask = Self::copy_tensor_to_cpu(self.mask, "mask").await?;
                 let dists = match self.dists {
-                    Some(dists) if dists.device().eq(&Cpu) => Some(dists),
-                    Some(dists) => {
-                        let dists = if dists.is_contiguous() {
-                            dists
-                        } else {
-                            dists.f_contiguous()?
-                        };
-                        let kind = dists.kind();
-                        let dists_device = ThoDevice::from(dists.device());
-                        Some(track_await(GlobalCtx::global().cuda_actor(dists_device).copy(dists.into(), 0.into())).await?.t())
-
-                    }
+                    Some(dists) => Some(Self::copy_tensor_to_cpu(dists, "dists").await?),
                     None => None,
                 };
-                Ok(Self {
-                    mask,
-                    dists,
-                    mask_type,
-                })
+                Self::from_local_tensors(mask, dists, mask_type)
             }
         }
     }
 
 
     pub fn unpack(self) -> Result<(Tensor, Option<Tensor>), ThoError> {
-        match self.mask_type {
-            DistsMaskType::AsIs => Ok((self.mask, self.dists)),
+        let DistsMaskLocalPart { mask, dists, mask_type } = self.into_local_part()?;
+        match mask_type {
+            DistsMaskType::AsIs => Ok((mask, dists)),
             DistsMaskType::MaskPacked(mask_size, _) => {
-                Ok((unpack_packed_mask(&self.mask, &mask_size)?, self.dists))
+                Ok((unpack_packed_mask(&mask, &mask_size)?, dists))
             }
             DistsMaskType::MaskIndexes(_) => Err(ThoError::new(
                 "DistsMask::unpack: mask is stored as indices",
@@ -645,11 +692,11 @@ impl DistsMask {
 
     //this is expected to be called after mask is copied to CPU
     pub fn into_indices_iter(self) -> Result<DistsMaskMatchIter, ThoError> {
-        let DistsMask {
+        let DistsMaskLocalPart {
             mask,
             dists,
             mask_type,
-        } = self;
+        } = self.into_local_part()?;
 
 
 
@@ -753,22 +800,6 @@ impl DistsMask {
         }
     }
 
-    fn to_ipc_payload(&self) -> Result<DistsMaskIpcPayload, ThoError> {
-        Ok(DistsMaskIpcPayload {
-            mask_type: self.mask_type.clone(),
-            mask: tensor_to_ipc_bytes(&self.mask)?,
-            dists: self.dists.as_ref().map(tensor_to_ipc_bytes).transpose()?,
-        })
-    }
-
-    fn from_ipc_payload(payload: DistsMaskIpcPayload) -> Result<Self, ThoError> {
-        Ok(Self {
-            mask: tensor_from_ipc_bytes(payload.mask)?,
-            dists: payload.dists.map(tensor_from_ipc_bytes).transpose()?,
-            mask_type: payload.mask_type,
-        })
-    }
-
     fn unpack_mask_cpu(&self) -> Result<Tensor, ThoError> {
         let mask = self.unpack_mask_device(&Cpu)?;
         assert!(mask.device().eq(&Cpu), "DistsMask::unpack_mask_cpu: expected CPU");
@@ -781,7 +812,7 @@ impl DistsMask {
                 "DistsMask::unpack_mask_device: mask is indices",
             )),
             DistsMaskType::MaskPacked(mask_size, _) => {
-                let bits = unpack_packed_mask(&self.mask, mask_size)?;
+                let bits = unpack_packed_mask(Self::local_tensor_ref(&self.mask, "unpack_mask_device")?, mask_size)?;
                 if &bits.device() == device {
                     Ok(bits)
                 } else {
@@ -789,10 +820,11 @@ impl DistsMask {
                 }
             }
             DistsMaskType::AsIs => {
-                if &self.mask.device() == device {
-                    Ok(self.mask.shallow_clone())
+                let mask = Self::local_tensor_ref(&self.mask, "unpack_mask_device")?;
+                if &mask.device() == device {
+                    Ok(mask.f_alias()?)
                 } else {
-                    Ok(self.mask.f_to_device(*device)?)
+                    Ok(mask.f_to_device(*device)?)
                 }
             }
         }
@@ -800,11 +832,18 @@ impl DistsMask {
 
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize)]
+struct DistsMaskIpcPayloadRef<'a> {
+    mask_type: &'a DistsMaskType,
+    mask: &'a DistsMaskTensor,
+    dists: Option<&'a DistsMaskTensor>,
+}
+
+#[derive(Debug, Deserialize)]
 struct DistsMaskIpcPayload {
     mask_type: DistsMaskType,
-    mask: Vec<u8>,
-    dists: Option<Vec<u8>>,
+    mask: DistsMaskTensor,
+    dists: Option<DistsMaskTensor>,
 }
 
 impl Serialize for DistsMask {
@@ -812,9 +851,12 @@ impl Serialize for DistsMask {
     where
         S: Serializer,
     {
-        self.to_ipc_payload()
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
+        DistsMaskIpcPayloadRef {
+            mask_type: &self.mask_type,
+            mask: &self.mask,
+            dists: self.dists.as_ref(),
+        }
+        .serialize(serializer)
     }
 }
 
@@ -823,8 +865,18 @@ impl<'de> Deserialize<'de> for DistsMask {
     where
         D: Deserializer<'de>,
     {
-        DistsMask::from_ipc_payload(DistsMaskIpcPayload::deserialize(deserializer)?)
-            .map_err(serde::de::Error::custom)
+        let payload = DistsMaskIpcPayload::deserialize(deserializer)?;
+        Ok(Self {
+            mask: payload.mask,
+            dists: payload.dists,
+            mask_type: payload.mask_type,
+        })
+    }
+}
+
+impl WorkerStageOutput for DistsMask {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<tokio::sync::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+        C::encode(&self.into_worker_ipc_refs(all_cuda_tensors)?)
     }
 }
 
@@ -937,16 +989,16 @@ impl CrossClcResultMerge for DistsMask {
         let left = self;
         let right = other;
 
-        let DistsMask {
+        let DistsMaskLocalPart {
             mask: left_mask,
             dists: left_dists,
             mask_type: left_type,
-        } = left;
-        let DistsMask {
+        } = left.into_local_part()?;
+        let DistsMaskLocalPart {
             mask: right_mask,
             dists: right_dists,
             mask_type: right_type,
-        } = right;
+        } = right.into_local_part()?;
 
         match (left_type, right_type) {
             (DistsMaskType::AsIs, DistsMaskType::AsIs) => {
@@ -957,11 +1009,7 @@ impl CrossClcResultMerge for DistsMask {
                     _ => return Err(ThoError::new("DistsMask merge: dists mismatch")),
                 };
 
-                Ok(DistsMask {
-                    mask,
-                    dists,
-                    mask_type: DistsMaskType::AsIs,
-                })
+                DistsMask::from_local_tensors(mask, dists, DistsMaskType::AsIs)
             }
             (
                 DistsMaskType::MaskPacked(left_sizes, left_dists_size),
@@ -1024,11 +1072,7 @@ impl CrossClcResultMerge for DistsMask {
                 merged_sizes[last_dim] = left_last + right_last;
                 let merged_dists_sizes = dists.as_ref().map(|t| t.size());
 
-                Ok(DistsMask {
-                    mask: packed_mask,
-                    dists,
-                    mask_type: DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes),
-                })
+                DistsMask::from_local_tensors(packed_mask, dists, DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes))
             }
             (DistsMaskType::MaskIndexes(left_size), DistsMaskType::MaskIndexes(right_size)) => {
                 assert!(left_size.len() == right_size.len() && !left_size.is_empty(), "DistsMask merge: size mismatch");
@@ -1099,11 +1143,7 @@ impl CrossClcResultMerge for DistsMask {
                 let mut merged_size = left_size;
                 merged_size[last_dim] = new_last;
 
-                Ok(DistsMask {
-                    mask: indices,
-                    dists,
-                    mask_type: DistsMaskType::MaskIndexes(merged_size),
-                })
+                DistsMask::from_local_tensors(indices, dists, DistsMaskType::MaskIndexes(merged_size))
             }
             _ => Err(ThoError::new("DistsMask merge: type mismatch")),
         }
@@ -1119,6 +1159,7 @@ impl CrossClcResultMerge for DistsMask {
         let mut parts = Vec::with_capacity(others.len() + 1);
         parts.push(self);
         parts.extend(others);
+        let parts = parts.into_iter().map(DistsMask::into_local_part).collect::<Result<Vec<_>, _>>()?;
 
         let first_type = parts[0].mask_type.clone();
         match first_type {
@@ -1204,11 +1245,7 @@ impl CrossClcResultMerge for DistsMask {
                     None
                 };
 
-                Ok(DistsMask {
-                    mask: mask_out,
-                    dists,
-                    mask_type: DistsMaskType::AsIs,
-                })
+                DistsMask::from_local_tensors(mask_out, dists, DistsMaskType::AsIs)
             }
             DistsMaskType::MaskPacked(base_sizes, base_dists_size) => {
                 if parts.iter().any(|p| {
@@ -1346,11 +1383,7 @@ impl CrossClcResultMerge for DistsMask {
                 let mut merged_sizes = base_sizes;
                 merged_sizes[last_dim] = total_last;
 
-                Ok(DistsMask {
-                    mask: packed_mask,
-                    dists,
-                    mask_type: DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes),
-                })
+                DistsMask::from_local_tensors(packed_mask, dists, DistsMaskType::MaskPacked(merged_sizes, merged_dists_sizes))
             }
             DistsMaskType::MaskIndexes(_) => {
                 let base_size = match &parts[0].mask_type {
@@ -1376,7 +1409,7 @@ impl CrossClcResultMerge for DistsMask {
                 let first = parts_iter
                     .next()
                     .ok_or_else(|| ThoError::new("DistsMask merge: missing left part"))?;
-                let DistsMask {
+                let DistsMaskLocalPart {
                     mask: first_mask,
                     dists: first_dists,
                     mask_type: first_type,
@@ -1413,7 +1446,7 @@ impl CrossClcResultMerge for DistsMask {
                 }
 
                 for part in parts_iter {
-                    let DistsMask {
+                    let DistsMaskLocalPart {
                         mask,
                         dists,
                         mask_type,
@@ -1477,11 +1510,7 @@ impl CrossClcResultMerge for DistsMask {
                 let mut merged_size = base_size;
                 merged_size[last_dim] = total_last;
 
-                Ok(DistsMask {
-                    mask: indices,
-                    dists,
-                    mask_type: DistsMaskType::MaskIndexes(merged_size),
-                })
+                DistsMask::from_local_tensors(indices, dists, DistsMaskType::MaskIndexes(merged_size))
             }
         }
     }
