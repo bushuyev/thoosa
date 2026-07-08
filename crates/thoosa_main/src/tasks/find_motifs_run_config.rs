@@ -2,7 +2,7 @@
 
 use thoosa_common::transforms::filters::*;
 use log::debug;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::f64;
 use std::hash::Hash;
@@ -310,7 +310,7 @@ impl FindMotifsRunConfig {
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 pub enum Aggr {
     Mean(MeanAggr),
     Min(MinAggr),
@@ -318,28 +318,28 @@ pub enum Aggr {
     Quantile(QuantileAggr),
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 pub struct MeanAggr {
     #[in_map]
     #[run_config]
     pub k: f32,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 pub struct MinAggr {
     #[in_map]
     #[run_config]
     pub k: f32,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 pub struct MaxAggr {
     #[in_map]
     #[run_config]
     pub k: f32,
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone, Copy)]
 pub struct QuantileAggr {
     #[in_map]
     #[run_config]
@@ -366,14 +366,14 @@ pub enum MaxSlices{//discard motifs which slices counts bigger than
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)]
 pub enum SlicesFilter {
     Accumulate(AccumulateStats),
     Precalculate(PrecalculateStats),
     ExactS(ExactStats)//same for all motifs
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct AccumulateStats {
     #[in_map]
     #[run_config]
@@ -381,7 +381,7 @@ pub struct AccumulateStats {
 
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct PrecalculateStats {
     #[in_map]
     #[run_config]
@@ -392,7 +392,7 @@ pub struct PrecalculateStats {
     pub slices: u32, //number of random slices to load for statistics calculations
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Serialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct ExactStats {
 
 

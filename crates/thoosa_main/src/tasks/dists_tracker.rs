@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Cursor;
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
 use log::{debug, info, trace};
 use parking_lot::RwLock;
@@ -30,6 +31,7 @@ use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
 use thoosa_shared::tracked_await::track_await;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 // DistsMask is meant for one-way GPU->CPU copies. Don't impl Clone!
 #[derive(Debug)]
@@ -39,7 +41,7 @@ pub struct DistsMask {
     mask_type: DistsMaskType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DistsMaskType {
     AsIs,
     MaskPacked(Vec<i64>, Option<Vec<i64>>),
@@ -751,6 +753,22 @@ impl DistsMask {
         }
     }
 
+    fn to_ipc_payload(&self) -> Result<DistsMaskIpcPayload, ThoError> {
+        Ok(DistsMaskIpcPayload {
+            mask_type: self.mask_type.clone(),
+            mask: tensor_to_ipc_bytes(&self.mask)?,
+            dists: self.dists.as_ref().map(tensor_to_ipc_bytes).transpose()?,
+        })
+    }
+
+    fn from_ipc_payload(payload: DistsMaskIpcPayload) -> Result<Self, ThoError> {
+        Ok(Self {
+            mask: tensor_from_ipc_bytes(payload.mask)?,
+            dists: payload.dists.map(tensor_from_ipc_bytes).transpose()?,
+            mask_type: payload.mask_type,
+        })
+    }
+
     fn unpack_mask_cpu(&self) -> Result<Tensor, ThoError> {
         let mask = self.unpack_mask_device(&Cpu)?;
         assert!(mask.device().eq(&Cpu), "DistsMask::unpack_mask_cpu: expected CPU");
@@ -780,6 +798,54 @@ impl DistsMask {
         }
     }
 
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DistsMaskIpcPayload {
+    mask_type: DistsMaskType,
+    mask: Vec<u8>,
+    dists: Option<Vec<u8>>,
+}
+
+impl Serialize for DistsMask {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.to_ipc_payload()
+            .map_err(serde::ser::Error::custom)?
+            .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DistsMask {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        DistsMask::from_ipc_payload(DistsMaskIpcPayload::deserialize(deserializer)?)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+pub(crate) fn tensor_to_ipc_bytes(tensor: &Tensor) -> Result<Vec<u8>, ThoError> {
+    let tensor = if tensor.device().eq(&Cpu) {
+        tensor.f_alias()?
+    } else {
+        tensor.f_to_device(Cpu)?
+    };
+    let tensor = if tensor.is_contiguous() {
+        tensor
+    } else {
+        tensor.f_contiguous()?
+    };
+    let mut bytes = Vec::new();
+    tensor.save_to_stream(&mut bytes)?;
+    Ok(bytes)
+}
+
+pub(crate) fn tensor_from_ipc_bytes(bytes: Vec<u8>) -> Result<Tensor, ThoError> {
+    Tensor::load_from_stream(Cursor::new(bytes)).map_err(ThoError::from)
 }
 
 fn rebase_flat_indices_last_dim(

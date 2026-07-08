@@ -19,7 +19,7 @@ pub trait SyncStageIpcWrapper:Debug {
 }
 
 #[derive(Debug)]
-pub(crate) struct IpcSyncStageWrapper<C, S, I, O> {
+pub struct IpcSyncStageWrapper<C, S, I, O> {
     sync_stage: Arc<S>,
     endpoint_name: &'static str,
     pd: PhantomData<fn(C, I) -> O>,
@@ -35,9 +35,9 @@ impl<C, S, I, O> IpcSyncStageWrapper<C, S, I, O> {
     }
 }
 
-pub(crate) type JsonSyncStageWrapper<S, I, O> = IpcSyncStageWrapper<JsonIpcCodec, S, I, O>;
+pub type JsonSyncStageWrapper<S, I, O> = IpcSyncStageWrapper<JsonIpcCodec, S, I, O>;
 
-pub(crate) fn encode_json_sync_stage_run_input(input: String, ctx: &RunCtxImpl) -> Result<String, ThoError> {
+pub fn encode_json_sync_stage_run_input(input: String, ctx: &RunCtxImpl) -> Result<String, ThoError> {
     let input = encode_sync_stage_run_input::<JsonIpcCodec>(input.as_bytes(), ctx)?;
     String::from_utf8(input).map_err(|e| ThoError::new(format!("json sync stage run input is not utf8: {e}")))
 }
@@ -66,7 +66,7 @@ where
     }
 }
 
-pub(crate) fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
+pub fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
 where
     C: IpcCodec,
     S: SyncStage + Debug + 'static,
@@ -77,7 +77,7 @@ where
     Box::new(IpcSyncStageWrapper::<C, S, I, O>::new(endpoint_name, sync_stage))
 }
 
-pub(crate) fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
+pub fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
 where
     S: SyncStage + Debug + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,

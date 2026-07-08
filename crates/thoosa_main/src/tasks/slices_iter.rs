@@ -1,7 +1,7 @@
 use thoosa_shared::TensorIdSliceIdx;
 use thoosa_shared::resource::ResourceId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ResourceSlices {
     pub id: ResourceId,
     pub size: usize,
@@ -22,7 +22,7 @@ impl From<(ResourceId, usize)> for ResourceSlices {
     }
 }
 
-#[derive(Debug, Clone)] //TODO clone? reset idx
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)] //TODO clone? reset idx
 pub struct SlicesIter {
     pub step: usize,//TODO pub
     pub resource_ids_sizes: Vec<ResourceSlices>,
