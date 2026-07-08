@@ -16,6 +16,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use futures_util::future::BoxFuture;
 use futures_util::FutureExt;
+use serde::{Deserialize, Serialize};
 use tch::{TchError, Tensor};
 use tch::kind::FLOAT_CPU;
 use thoosa_common::utils::tensor_mem_size;
@@ -28,6 +29,9 @@ use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_proxy_derive::Proxy;
+
+pub(crate) const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
 #[derive(Debug)]
 pub struct CrossInput<'a, R: AsRef<Resource>> {
@@ -71,6 +75,10 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
         Self { id: &id + batch_id, tensors, resources_0: b_0, resources_1: b_1 }
     }
 
+    pub(crate) fn from_decoded_parts(tensors: Vec<ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>>, b_0: &'a [R], b_1: &'a [R], id: SynKey) -> Self {
+        Self { id, tensors, resources_0: b_0, resources_1: b_1 }
+    }
+
     pub fn tensors(&self) -> Vec<&ThoTensor<ChannelsData, SynKey>> {
         self.tensors.iter().map(ThoDataRef::as_ref).collect()
     }
@@ -84,6 +92,62 @@ impl<'a, R: AsRef<Resource>> CrossInput<'a, R> {
     }
 
 
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct CrossInputIpcResource {
+    id: u32,
+    import_id: u32,
+    file_stem: String,
+    length: u32,
+}
+
+impl CrossInputIpcResource {
+    fn from_resource(resource: &Resource) -> Self {
+        Self {
+            id: resource.id(),
+            import_id: resource.import_id(),
+            file_stem: resource.file_stem().to_string(),
+            length: resource.length(),
+        }
+    }
+
+    fn into_resource(self) -> Resource {
+        Resource::new(self.id, self.import_id, self.file_stem, self.length)
+    }
+}
+
+#[derive(Serialize)]
+pub(crate) struct CrossInputFindMotifsIpcInputRef<'a> {
+    id: &'a SynKey,
+    tensors: Vec<&'a ThoTensor<ChannelsData, SynKey>>,
+    resources_0: Vec<CrossInputIpcResource>,
+    resources_1: Vec<CrossInputIpcResource>,
+    max_other_parallel: Option<thoosa_common::runner::adjusters::max_parallel::MaxParallel>,
+}
+
+impl<'a> CrossInputFindMotifsIpcInputRef<'a> {
+    pub(crate) fn new<C>(input: &'a CrossInput<'_, Arc<Resource>>, ctx: &C) -> Self
+    where
+        C: MaxParallelCtx,
+    {
+        Self {
+            id: input.id(),
+            tensors: input.tensors(),
+            resources_0: input.resources_0.iter().map(|resource| CrossInputIpcResource::from_resource(resource.as_ref())).collect(),
+            resources_1: input.resources_1.iter().map(|resource| CrossInputIpcResource::from_resource(resource.as_ref())).collect(),
+            max_other_parallel: Some(ctx.max_other_parallel()),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub(crate) struct CrossInputFindMotifsIpcInput {
+    id: SynKey,
+    tensors: Vec<ThoTensor<ChannelsData, SynKey>>,
+    resources_0: Vec<CrossInputIpcResource>,
+    resources_1: Vec<CrossInputIpcResource>,
+    max_other_parallel: Option<thoosa_common::runner::adjusters::max_parallel::MaxParallel>,
 }
 
 impl<'a, R: AsRef<Resource> + Debug + Send + Sync> WithId for CrossInput<'a, R> {
@@ -199,8 +263,8 @@ pub trait CrossClcResultMerge: Debug + Send + Sync {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct UnfoldParams { //TODO use in FindMotifsRunConfig
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct UnfoldParams { //TODO use in FindMotifsRunConfig
     dimension: i64,
     size: i64,
     step: i64,
@@ -268,6 +332,22 @@ impl<R, CUC, C> CrossBatchFn<R, CUC, C> for Box<dyn CrossBatchFn<R, CUC, C> + 's
     }
 }
 
+#[derive(Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    base = "CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<thoosa_common::runner::run_ctx_2::RunCtxImpl>, crate::tasks::dists_tracker::DistsMask, crate::tasks::find_motifs::MasksCtx, thoosa_common::runner::run_ctx_2::RunCtxImpl>",
+    name = "ProxyCrossUnfoldClc",
+    endpoint = "SYNC_CROSS_UNFOLD_CLC_ENDPOINT",
+    new_args = "init: crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize",
+    init = "init.clone()",
+    out_id = "input_id.clone()",
+    run_input = "CrossInputFindMotifsIpcInputRef::new(input, ctx)",
+    endpoint_init = "sync_cross_unfold_clc_endpoint_init",
+    init_type = "crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit",
+    init_stage = "CrossUnfoldClc::new_for_find_motifs(init)?",
+    wrapper = "CrossUnfoldClcFindMotifsIpcWrapper",
+    worker_body = "let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(input)?; let tensors = input.tensors.into_iter().map(|tensor| <ThoTensor<ChannelsData, SynKey> as thoosa_common::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::encode(&tensor)?, all_cuda_tensors)).collect::<Result<Vec<_>, thoosa_shared::ThoError>>()?; let resources_0 = input.resources_0.into_iter().map(|resource| Arc::new(resource.into_resource())).collect::<Vec<_>>(); let resources_1 = input.resources_1.into_iter().map(|resource| Arc::new(resource.into_resource())).collect::<Vec<_>>(); let tensor_refs = tensors.iter().map(ThoDataRef::Borrowed).collect::<Vec<_>>(); let cross_input = CrossInput::from_decoded_parts(tensor_refs, resources_0.as_slice(), resources_1.as_slice(), input.id); let mut ctx = thoosa_common::runner::run_ctx_2::RunCtxImpl::new(1, SYNC_CROSS_UNFOLD_CLC_ENDPOINT); if let Some(max_other_parallel) = input.max_other_parallel { ctx.set_max_other_parallel(max_other_parallel); } let out = std::sync::Arc::clone(&self.stage).do_run(&cross_input, &ctx)?; <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::encode(&out)"
+)]
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where
     F: CrossBatchFn<R, CUC, C>,
@@ -328,7 +408,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct CrossUnfoldClcOutput<R: Debug> {
     id: SynKey,
     clc_result: R,

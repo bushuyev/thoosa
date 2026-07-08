@@ -4,8 +4,7 @@ use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, Cr
 use crate::tasks::cross_loader::{
     CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
 };
-use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use crate::tasks::dists_tracker::{tensor_from_ipc_bytes, tensor_to_ipc_bytes, DistsMask, DistsMaskType, DistsTracker};
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use thoosa_common::runner::common::{OutId, RunCtx};
@@ -17,6 +16,7 @@ use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use futures_util::FutureExt;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
@@ -205,6 +205,133 @@ fn to_stats_aggr(aggr: FilterAggr) -> StatsAggr {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FindMotifsCrossUnfoldClcInit {
+    similarity_metric: thoosa_motifs::distance::SimilarityMetric,
+    keep_slice_matches: bool,
+    radius: u64,
+    masks_ctx: FindMotifsMasksCtxInit,
+    unfold_params: UnfoldParams,
+}
+
+impl FindMotifsCrossUnfoldClcInit {
+    pub(crate) fn new(similarity_metric: thoosa_motifs::distance::SimilarityMetric, keep_slice_matches: bool, radius: u64, masks_ctx: FindMotifsMasksCtxInit, unfold_params: UnfoldParams) -> Self {
+        Self {
+            similarity_metric,
+            keep_slice_matches,
+            radius,
+            masks_ctx,
+            unfold_params,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) enum FindMotifsMasksCtxInit {
+    AccumulatedMean { k: f32, channels: u32 },
+    AccumulatedQuantile { q: f32, channels: u32 },
+    Precalculated { dists_id: SynKey, dists: Vec<u8> },
+    ExactS { euc_dist: f32, channels: u32 },
+}
+
+impl FindMotifsMasksCtxInit {
+    fn to_masks_ctx<C>(&self, ctx: &C) -> Result<MasksCtx, ThoError>
+    where
+        C: RunCtx,
+    {
+        match self {
+            FindMotifsMasksCtxInit::AccumulatedMean { k, channels } => Ok(MasksCtx::AccumulatedMeanDist { k: *k, ctx: MeanDistsCtx::new(*channels, ThoDevice::from(ctx.tho_device_idx()).into())? }),
+            FindMotifsMasksCtxInit::AccumulatedQuantile { q, channels } => Ok(MasksCtx::AccumulatedQuantileDist { q: *q, ctx: QuantileDistsCtx::new(*channels, ThoDevice::from(ctx.tho_device_idx()).into())? }),
+            FindMotifsMasksCtxInit::Precalculated { dists_id, dists } => Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new(dists_id.clone(), tensor_from_ipc_bytes(dists.clone())?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)? }),
+            FindMotifsMasksCtxInit::ExactS { euc_dist, channels } => {
+                let exact_stats_t = Tensor::f_from_slice(&[*euc_dist])?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?.f_broadcast_to([*channels as i64, 1])?;
+                debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
+                Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new("ExactStats".into(), exact_stats_t)? })
+            }
+        }
+    }
+}
+
+impl<C> CrossUnfoldClc<CrossUnfoldMaskFn<C>, DistsMask, MasksCtx, C>
+where
+    C: RunCtx + 'static,
+{
+    pub(crate) fn new_for_find_motifs(init: FindMotifsCrossUnfoldClcInit) -> Result<Self, ThoError> {
+        let FindMotifsCrossUnfoldClcInit {
+            similarity_metric,
+            keep_slice_matches,
+            radius,
+            masks_ctx,
+            unfold_params,
+        } = init;
+        let batch_clc_fn: CrossUnfoldMaskFn<C> = Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
+            let device_idx = ctx.tho_device_idx();
+            let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
+
+            let mut mask_makers = match masks_ctx {
+                MasksCtx::AccumulatedMeanDist { k, ctx } => {
+                    vec![
+                        LocalMin { dim: 1, radius },
+                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                        LeAccumulatedMean {
+                            k: *k,
+                            avg: &ctx.means_acc,
+                            total_samples: &ctx.total_samples,
+                        },
+                    ]
+                }
+                MasksCtx::AccumulatedQuantileDist { q, ctx } => {
+                    vec![
+                        LocalMin { dim: 1, radius },
+                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                        LeAccumulatedQuantile {
+                            q: *q,
+                            quantiles: &ctx.quantiles_acc,
+                            total_samples: &ctx.total_samples,
+                        },
+                    ]
+                }
+                MasksCtx::PrecalculatedDist { dists } => {
+                    vec![
+                        LocalMin { dim: 1, radius },
+                        // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
+                        Le {
+                            v: dists.t_ref(),
+                        }
+                    ]
+                }
+            };
+
+            if is_diag {
+                mask_makers.push(Tril);
+            }
+
+            //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
+            debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
+
+            //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
+            let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask(
+                 &t_0,
+                 &t_1,
+                 similarity_metric,
+                 keep_slice_matches, //if true dists are returned + slices are stored in sqlite
+                 &mut mask_makers,
+            )?;
+
+            trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
+            debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
+            let mask_type = if device_idx > 0 {
+                DistsMaskType::MaskIndexes(mask.size())
+            } else {
+                DistsMaskType::AsIs
+            };
+            DistsMask::new(mask, dists, mask_type)
+        });
+
+        Ok(Self::new(batch_clc_fn, move |ctx: &C| masks_ctx.to_masks_ctx(ctx), unfold_params))
+    }
+}
+
 /// Searches for repeating patterns (motifs) in the resources by cross-comparing slices within and across resources, computing a metric (currently only Euclidean distance), building a mask of minima, and then saving it (see DistsTracker).
 #[derive(Debug, Named)]
 pub struct FindMotifsStage<RC, L, C>
@@ -288,18 +415,18 @@ where
 
                             let filter = cross_loader_run_config.slices_filter.clone();
 
-                            let cross_batch_ctx: Box<dyn Fn(&C) -> Result<MasksCtx, ThoError> + Send + Sync + 'static> = match &filter {
+                            let masks_ctx = match &filter {
                                 SlicesFilter::Accumulate(v) => {
                                     match v.aggr {
                                         FilterAggr::Mean(aggr) => {
                                             let k = aggr.k;
-                                            Box::new(move |ctx: &C| Ok(MasksCtx::AccumulatedMeanDist { k, ctx: MeanDistsCtx::new(channels, ThoDevice::from(ctx.tho_device_idx()).into())? }))
+                                            FindMotifsMasksCtxInit::AccumulatedMean { k, channels }
                                         }
                                         FilterAggr::Min(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Min is not supported for SlicesFilter::AccumulateStats")),
                                         FilterAggr::Max(_) => return Err(ThoError::new("FindMotifsStage::new: Aggr::Max is not supported for SlicesFilter::AccumulateStats")),
                                         FilterAggr::Quantile(aggr) => {
                                             let q = aggr.q;
-                                            Box::new(move |ctx: &C| Ok(MasksCtx::AccumulatedQuantileDist { q, ctx: QuantileDistsCtx::new(channels, ThoDevice::from(ctx.tho_device_idx()).into())? }))
+                                            FindMotifsMasksCtxInit::AccumulatedQuantile { q, channels }
                                         }
                                     }
                                 }
@@ -312,100 +439,20 @@ where
 
                                     debug!("FindMotifsStage::new: motif_stats={motif_stats_output:?} ctx.id={:?}", ctx_id);
 
-                                    Box::new(move |ctx: &C| {
-                                        let metric_val = motif_stats_output.channels_motifs_dists(&comparison_metric)?;
-                                        let metric_val_id = metric_val.id().clone();
-                                        debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
-
-                                        Ok(MasksCtx::PrecalculatedDist { dists: ThoTensor::new(metric_val_id, metric_val.t().f_view((-1, 1, 1))?.f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?)? })
-                                    })
+                                    let metric_val = motif_stats_output.channels_motifs_dists(&comparison_metric)?;
+                                    let metric_val_id = metric_val.id().clone();
+                                    debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: metric_val=\n{}", metric_val.t_ref());
+                                    FindMotifsMasksCtxInit::Precalculated { dists_id: metric_val_id, dists: tensor_to_ipc_bytes(&metric_val.t().f_view((-1, 1, 1))?)? }
                                 }
                                 SlicesFilter::ExactS(v) => {
-                                    let euc_dist = v.euc_dist;
-                                    Box::new(move |ctx: &C| {
-                                        let exact_stats_t = Tensor::f_from_slice(&[euc_dist])?
-                                            .f_to_device(ThoDevice::from(ctx.tho_device_idx()).into())?
-                                            .f_broadcast_to([channels as i64, 1])?;
-                                        debug!("FindMotifsStage::new, SlicesFilter::PrecalculateStats: exact_stats_t=\n{}", exact_stats_t);
-                                        Ok(MasksCtx::PrecalculatedDist { //rename to PreSet
-                                            dists: ThoTensor::new("ExactStats".into(), exact_stats_t)?
-                                        })
-                                    })
+                                    FindMotifsMasksCtxInit::ExactS { euc_dist: v.euc_dist, channels }
                                 }
                             };
                             let radius = run_config.step() as u64 * 2;
 
                             debug!("FindMotifsStage::new: cross_batch_ctx factory done  ctx.id={:?}", ctx_id);
 
-                            let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new(
-                                Box::new(move |t_0: Tensor, t_1: Tensor, input: &CrossInput<Arc<Resource>>, masks_ctx: &MasksCtx, ctx: &C| {
-                                    let device_idx = ctx.tho_device_idx();
-                                    let is_diag = input.batch_0()[0].id().eq(&input.batch_1()[0].id()); //TODO asserts, non-square crosses
-
-                                    let mut mask_makers = match &masks_ctx {
-                                        MasksCtx::AccumulatedMeanDist { k, ctx } => {
-
-                                            vec![
-                                                LocalMin { dim: 1, radius },
-                                                // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
-                                                LeAccumulatedMean {
-                                                    k: *k,
-                                                    avg: &ctx.means_acc,
-                                                    total_samples: &ctx.total_samples,
-                                                },
-                                            ]
-                                        }
-                                        MasksCtx::AccumulatedQuantileDist { q, ctx } => {
-                                            vec![
-                                                LocalMin { dim: 1, radius },
-                                                // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
-                                                LeAccumulatedQuantile {
-                                                    q: *q,
-                                                    quantiles: &ctx.quantiles_acc,
-                                                    total_samples: &ctx.total_samples,
-                                                },
-                                            ]
-                                        }
-                                        MasksCtx::PrecalculatedDist { dists } => {
-                                            vec![
-                                                LocalMin { dim: 1, radius },
-                                                // LocalMin { dim: 2, radius: run_config.window as u64 / 2 },
-                                                Le {
-                                                    v: dists.t_ref(),
-                                                }
-                                            ]
-                                        }
-                                    };
-
-                                    if is_diag {
-                                        mask_makers.push(Tril);
-                                    }
-
-                                    //copy to device is done on streams created in CopyCtx and used in DistsMask::new_async. Should wait for calculation stream to finish.
-                                    debug!("FindMotifsStage::new, batch_clc: t_0.size={:?}, t_1.size={:?}", t_0.size(), t_1.size());
-
-                                    //it's invoked from CrossLoader::run/OOMHandler/CrossInputSelectorWrap//with_[selected_]data_ref where stream is synchronized
-                                    let (mask, dists) = thoosa_motifs::distance::clc_d2_similarity_and_mask(
-                                         &t_0,
-                                         &t_1,
-                                         cross_loader_run_config.similarity_metric,
-                                         fixed_config.keep_slice_matches, //if true dists are returned + slices are stored in sqlite
-                                         &mut mask_makers,
-                                    )?;
-
-
-                                    trace!("FindMotifsStage::new, batch_clc: mask=\n{mask}");
-                                    debug!("FindMotifsStage::new, batch_clc: mask={mask:?} dists={dists:?}");
-                                    let mask_type = if device_idx > 0 {
-                                        DistsMaskType::MaskIndexes(mask.size())
-                                    } else {
-                                        DistsMaskType::AsIs
-                                    };
-                                    Ok(DistsMask::new(mask, dists, mask_type)?)
-                                }),
-                                cross_batch_ctx,
-                                UnfoldParams::new(1, run_config.window as i64, run_config.step as i64),
-                            ));
+                            let cross_unfold_clc: Arc<CrossUnfoldMaskStage<C>> = Arc::new(CrossUnfoldClc::new_for_find_motifs(FindMotifsCrossUnfoldClcInit::new(cross_loader_run_config.similarity_metric, fixed_config.keep_slice_matches, radius, masks_ctx, UnfoldParams::new(1, run_config.window as i64, run_config.step as i64)))?);
                             debug!("FindMotifsStage::new: cross_unfold_clc={cross_unfold_clc:?} ctx.id={:?}", ctx_id);
 
                             let run_config_clone = run_config.clone();
