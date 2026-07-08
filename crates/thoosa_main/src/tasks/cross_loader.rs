@@ -1703,7 +1703,7 @@ mod tests {
         );
         let batch_clc = Arc::new(CrossUnfoldClc::new(
             batch_clc_fn,
-            (),
+            |_| Ok(()),
             UnfoldParams::new(1, unfold_size, unfold_step),
         ));
 
