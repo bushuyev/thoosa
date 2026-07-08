@@ -415,7 +415,7 @@ where
     }
 }
 
-fn insert_worker_tensor(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
+pub fn insert_worker_tensor(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
     tokio::task::block_in_place(|| {
         let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
         let mut key = tensors
