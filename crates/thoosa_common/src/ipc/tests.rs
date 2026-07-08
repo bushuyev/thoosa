@@ -651,7 +651,7 @@ mod composite_input {
         } else {
             let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
-            let sync_stage = Arc::new(ProxyABClcSyncStage::new().await?);
+            let sync_stage = Arc::new(ProxyABClcSyncStage::new(1).await?);
             let sync_stage_calls = Arc::clone(&sync_stage);
             let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
 
@@ -675,7 +675,7 @@ mod composite_input {
         } else {
             let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
-            let sync_stage = Arc::new(ProxyABClcSyncStage::new().await?);
+            let sync_stage = Arc::new(ProxyABClcSyncStage::new(1).await?);
             let sync_stage_calls = Arc::clone(&sync_stage);
             let ab_stage = Arc::new(ABClcStage::new_with_sync(sync_stage));
 

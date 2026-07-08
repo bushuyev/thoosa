@@ -5150,6 +5150,7 @@ dependencies = [
  "thoosa_named_derive",
  "thoosa_properties_map",
  "thoosa_properties_map_derive",
+ "thoosa_proxy_derive",
  "thoosa_run_config_args",
  "thoosa_run_config_args_derive",
  "thoosa_shared",
@@ -5340,6 +5341,15 @@ dependencies = [
  "thoosa_macros_utils",
  "thoosa_properties_map",
  "thoosa_shared",
+]
+
+[[package]]
+name = "thoosa_proxy_derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]

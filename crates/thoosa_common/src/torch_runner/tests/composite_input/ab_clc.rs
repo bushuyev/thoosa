@@ -8,7 +8,8 @@ use tch::Kind;
 use tracing::debug;
 use cached_derive::Cached;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_named_derive::{Named, Proxy};
+use thoosa_named_derive::Named;
+use thoosa_proxy_derive::Proxy;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
@@ -301,8 +302,7 @@ struct ABClcSyncStageIpcInput {
 #[proxy(
     name = "ProxyABClcSyncStage",
     endpoint = "SYNC_AB_CLC_ENDPOINT",
-    new_args = "",
-    device = "1",
+    new_args = "tho_device_idx: usize",
     fields = "id: MonoKey = mono_key!(AB_SYNC_CLC_STAGE_ID, \"ABClcSyncStage\"), num_calls: AtomicUsize = Default::default()",
     out_id = "&self.id + input_id",
     pre_run = "self.num_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);",

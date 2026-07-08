@@ -24,7 +24,7 @@ use crate::torch_runner::tests::load_and_clc::{ClcDynSyncStage, SYNC_CLC_ENDPOIN
 use crate::torch_runner::tests::load_and_clc::loader::{LoadedRange, LoadedTensor};
 use crate as thoosa_common;
 use crate::tho_device::ThoDevice;
-use thoosa_named_derive::Proxy;
+use thoosa_proxy_derive::Proxy;
 
 // //////////////////////////////
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -47,7 +47,6 @@ pub(crate) struct ClcStage {
     new_args = "id: SynKey, k: f64, dim: i64, fail_until: Vec<FailUntil>, kind: Kind, tho_device: ThoDevice, use_matmul: bool",
     prepare = "let (fail_until_dump_to_cpu, fail_until) = { let (dumped, rest): (Vec<_>, Vec<_>) = fail_until.into_iter().partition(|e| *e == FailUntil::DumpedToCpu); (!dumped.is_empty(), rest) };",
     init = "SyncClcTaskInit::new(id.clone(), k, dim, fail_until, use_matmul)",
-    device = "tho_device",
     fields = "id: SynKey = id, fail_until_dump_to_cpu: bool = fail_until_dump_to_cpu",
     out_id = "&self.id + input_id",
     pre_run = "if self.fail_until_dump_to_cpu { let device_idx = ctx.tho_device_idx(); let is_all_on_cpu = GlobalCtx::global().is_all_on_cpu(device_idx, false); debug!(\"ProxySyncClcTask::do_run: device_idx={device_idx} is_all_on_cpu={is_all_on_cpu}\"); if !is_all_on_cpu { return Err(ThoError::oom()); } }",

@@ -29,7 +29,7 @@ use crate as thoosa_common;
 use crate::ipc::cuda_wokrer::WorkerStageInput;
 use crate::torch_runner::tests::load_and_clc::{kind_from_worker_name, kind_to_worker_name, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
 use crate::torch_runner::tests::load_and_clc::clc::{ClcStageOutput, MulK};
-use thoosa_named_derive::Proxy;
+use thoosa_proxy_derive::Proxy;
 
 //////////////////LOADER
 #[derive(Debug, Clone, Eq, PartialEq, Hash, Named)]
@@ -241,7 +241,6 @@ impl OutId for SyncTestTensorLoader {
     endpoint = "SYNC_TEST_TENSOR_LOADER_ENDPOINT",
     new_args = "size: MonoMetrics<1, 2>, kind: Kind, tho_device_idx: usize",
     init = "SyncTestTensorLoaderInit::new(size.clone(), kind)",
-    device = "tho_device_idx",
     fields = "size: MonoMetrics<1, 2> = size",
     out_id = "SynKey::new([mono_key!(input_id.0, \"resource key\")])",
     endpoint_init = "sync_test_tensor_loader_endpoint_init",

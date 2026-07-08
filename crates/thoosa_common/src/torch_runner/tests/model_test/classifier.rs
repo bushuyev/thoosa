@@ -16,7 +16,7 @@ use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use thoosa_named_derive::Proxy;
+use thoosa_proxy_derive::Proxy;
 
 use super::common::{ABData, ClsOut, ModelTestId};
 
@@ -158,7 +158,6 @@ impl SyncStage for Classifier {
     endpoint = "SYNC_CLASSIFIER_ENDPOINT",
     new_args = "id: ModelTestId, in_dim: i64, epochs: i64, lr: f64, fail_until: Vec<FailUntil>, device: ThoDevice",
     init = "SyncClassifierStageInit::new(id.clone(), in_dim, epochs, lr, fail_until)",
-    device = "device",
     fields = "id: ModelTestId = id",
     out_id = "ModelTestId(format!(\"cls_{}_inp_{}\", self.id.0, input_id.0).leak())",
     pre_run = "if input.ref_key().is_none() { return Err(ThoError::new(format!(\"ProxySyncClassifierStage expected worker tensor ref input, got {input:?}\"))); }",
