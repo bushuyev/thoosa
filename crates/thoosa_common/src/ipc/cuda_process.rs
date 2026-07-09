@@ -971,19 +971,19 @@ impl CudaIPCActor {
 
                     let mut held_chunks = Vec::with_capacity(chunk_count);
                     for chunk in chunks {
-                        let buf_stream = pool.acquire().await;
-                        if chunk.len > buf_stream.0.len() {
-                            return Err(ThoError::new(format!("D2H chunk len={} exceeds shared buffer len={}", chunk.len, buf_stream.0.len())));
+                        let buf = pool.acquire().await;
+                        if chunk.len > buf.len() {
+                            return Err(ThoError::new(format!("D2H chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
                         }
                         let metadata = IpcTensorTransferMetadata {
                             transfer_id,
-                            buffer_id: buf_stream.0.buffer_id(),
+                            buffer_id: buf.buffer_id(),
                             byte_len: chunk.len,
                             tensor_byte_len: info.tensor_byte_len,
                             tensor_offset: chunk.offset,
                             chunk_index: chunk.index,
                             chunk_count,
-                            mapped_len: buf_stream.0.len(),
+                            mapped_len: buf.len(),
                             offset: 0,
                             kind: info.kind,
                             shape: info.shape.clone(),
@@ -991,14 +991,14 @@ impl CudaIPCActor {
                             producer: IpcProcessRole::Worker { worker_id },
                             consumer: IpcProcessRole::Parent,
                         };
-                        metadata.validate_for_buffer(&buf_stream.0)?;
-                        debug!("CudaIPCActor::Copy D2H: sending shared memfd chunk to worker: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf_stream.0.as_ptr());
+                        metadata.validate_for_buffer(&buf)?;
+                        debug!("CudaIPCActor::Copy D2H: sending shared memfd chunk to worker: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
-                        let fd = buf_stream.0.try_clone_fd()?;
+                        let fd = buf.try_clone_fd()?;
                         if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata.clone(), fd } }).await.is_err() {
                             return Err(ThoError::new("worker IPC writer task is closed"));
                         }
-                        held_chunks.push(ParentD2hChunk { metadata, buffer: buf_stream });
+                        held_chunks.push(ParentD2hChunk { metadata, buffer: buf });
                     }
 
                     let reply = reply_rx
@@ -1097,24 +1097,24 @@ impl CudaIPCActor {
                             let mut held_buffers = Vec::new();
                             for chunk_group in chunk_groups {
                                 for chunk in chunk_group {
-                                    let mut buf_stream = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
+                                    let mut buf = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
                                     let src_off_ptr = src_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("source tensor pointer offset overflow"))?;
-                                    if chunk.len > buf_stream.0.len() {
-                                        return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf_stream.0.len())));
+                                    if chunk.len > buf.len() {
+                                        return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
                                     }
                                     unsafe {
                                         // SAFETY: src_ptr is the data pointer of _src_keepalive, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
-                                        std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf_stream.0.as_mut_ptr(), chunk.len);
+                                        std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf.as_mut_ptr(), chunk.len);
                                     }
                                     let metadata = IpcTensorTransferMetadata {
                                         transfer_id,
-                                        buffer_id: buf_stream.0.buffer_id(),
+                                        buffer_id: buf.buffer_id(),
                                         byte_len: chunk.len,
                                         tensor_byte_len: tensor_mem_size,
                                         tensor_offset: chunk.offset,
                                         chunk_index: chunk.index,
                                         chunk_count,
-                                        mapped_len: buf_stream.0.len(),
+                                        mapped_len: buf.len(),
                                         offset: 0,
                                         kind: src_kind.into(),
                                         shape: src_shape.clone(),
@@ -1122,13 +1122,13 @@ impl CudaIPCActor {
                                         producer: IpcProcessRole::Parent,
                                         consumer: IpcProcessRole::Worker { worker_id: dst_worker_id },
                                     };
-                                    debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf_stream.0.as_ptr());
+                                    debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
-                                    let fd = buf_stream.0.try_clone_fd()?;
+                                    let fd = buf.try_clone_fd()?;
                                     if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await.is_err() {
                                         return Err(ThoError::new("worker IPC writer task is closed"));
                                     }
-                                    held_buffers.push(buf_stream);
+                                    held_buffers.push(buf);
                                 }
                             }
 
@@ -1481,7 +1481,7 @@ fn parse_worker_copy_error_payload(payload: &str) -> ThoError {
 
 struct ParentD2hChunk {
     metadata: IpcTensorTransferMetadata,
-    buffer: Guard<(SharedMemfdBuffer, Arc<ThoCudaStream>)>,
+    buffer: Guard<SharedMemfdBuffer>,
 }
 
 fn assemble_parent_d2h_chunks(
@@ -1491,7 +1491,7 @@ fn assemble_parent_d2h_chunks(
     chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
     let mut expected_offset = 0usize;
     for chunk in &chunks {
-        chunk.metadata.validate_for_buffer(&chunk.buffer.0)?;
+        chunk.metadata.validate_for_buffer(&chunk.buffer)?;
         if chunk.metadata.kind != info.kind || chunk.metadata.shape != info.shape || chunk.metadata.tensor_byte_len != info.tensor_byte_len {
             return Err(ThoError::new(format!("parent D2H chunk metadata does not match worker tensor info for transfer {}", chunk.metadata.transfer_id)));
         }
@@ -1512,7 +1512,7 @@ fn assemble_parent_d2h_chunks(
             .ok_or_else(|| ThoError::new("parent D2H destination pointer overflow"))?;
         let source = unsafe {
             // SAFETY: validate_for_buffer checked offset + byte_len against the live mmap and the buffer is held until this copy finishes.
-            chunk.buffer.0.as_ptr().add(chunk.metadata.offset)
+            chunk.buffer.as_ptr().add(chunk.metadata.offset)
         };
         unsafe {
             // SAFETY: source points into the validated live mmap chunk, destination points into the owned CPU tensor byte range checked by tensor offsets, and the copy completes before pooled buffers are released.
