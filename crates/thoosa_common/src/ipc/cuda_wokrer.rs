@@ -124,7 +124,7 @@ impl CudaWorker {
         let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
-        let all_cuda_tensors = Arc::new(Mutex::new(HashMap::new()));
+        let all_cuda_tensors = Arc::new(parking_lot::Mutex::new(HashMap::new()));
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
@@ -363,7 +363,7 @@ impl CudaWorker {
                 let tensor_key = input.parse::<u64>()?;
                 debug!("run_worker: drop ther-tensor: tensor_key={tensor_key}");
 
-                let msg = match all_cuda_tensors.lock().await.remove(&tensor_key) {
+                let msg = match all_cuda_tensors.lock().remove(&tensor_key) {
                     None => "Not found",
                     Some(_) => "Ok"
                 };
@@ -404,11 +404,11 @@ impl CudaWorker {
 }
 
 pub trait WorkerStageInput: Debug + Sized {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
 }
 
 pub trait WorkerStageOutput: Debug + Sized {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError>;
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError>;
 }
 
 impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
@@ -416,14 +416,14 @@ where
     D: Dims,
     Id: Named + Debug + Clone + DeserializeOwned,
 {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         debug!("ThoTensor::decode_for_worker: input={input:?}");
         let input_ref = C::decode::<Self>(input)?;
         debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
 
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
         let input_tensor = tokio::task::block_in_place(|| {
-            let tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+            let tensors = all_cuda_tensors.lock();
 
             let source = tensors
                 .get(&input_key)
@@ -461,7 +461,7 @@ where
     D: Dims,
     Id: Named + Debug + Clone + Serialize,
 {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let size = out_tensor.size();
@@ -472,9 +472,9 @@ where
     }
 }
 
-pub fn insert_worker_tensor(all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
+pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
     tokio::task::block_in_place(|| {
-        let mut tensors = tokio::runtime::Handle::current().block_on(all_cuda_tensors.lock());
+        let mut tensors = all_cuda_tensors.lock();
         let mut key = tensors
             .keys()
             .copied()

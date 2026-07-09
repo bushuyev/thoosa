@@ -15,7 +15,7 @@ use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 
 pub trait SyncStageIpcWrapper:Debug {
-    fn do_run(&self, _input: &[u8], all_cuda_tensors:&Arc<Mutex<HashMap<u64, Tensor>>>) ->Result<Vec<u8>, ThoError>;
+    fn do_run(&self, _input: &[u8], all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) ->Result<Vec<u8>, ThoError>;
 }
 
 #[derive(Debug)]
@@ -50,7 +50,7 @@ where
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
 {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
         let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(input) {
             Ok(input) => input.into_parts(),
             Err(_) => (input.to_vec(), None),

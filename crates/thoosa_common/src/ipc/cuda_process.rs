@@ -384,10 +384,10 @@ where
 }
 
 pub(crate) async fn describe_worker_tensor(
-    all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
+    all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     tensor_key: u64,
 ) -> Result<WorkerTensorInfoPayload, ThoError> {
-    let tensors = all_cuda_tensors.lock().await;
+    let tensors = all_cuda_tensors.lock();
     let tensor = tensors
         .get(&tensor_key)
         .ok_or_else(|| ThoError::new(format!("worker tensor key={tensor_key} not found")))?;
@@ -543,7 +543,7 @@ fn copy_worker_h2d_transfer_to_cuda(
 pub(crate) fn spawn_worker_h2d_copy_task(
     transfer: PendingWorkerH2dTransfer,
     resources: Arc<WorkerCudaResources>,
-    all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
+    all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     reply_tx: mpsc::Sender<WorkerReply>,
 ) {
     tokio::spawn(async move {
@@ -557,7 +557,7 @@ pub(crate) fn spawn_worker_h2d_copy_task(
         let payload = match copy_result {
             Ok((transfer_id, tensor, tensor_digest_hex)) => {
                 //TODO should tensors have their own id generator?
-                all_cuda_tensors.lock().await.insert(transfer_id, tensor);
+                all_cuda_tensors.lock().insert(transfer_id, tensor);
                 let done = WorkerCopyDonePayload { transfer_id, tensor_digest_hex };
                 match serde_json::to_string(&done) {
                     Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
@@ -638,14 +638,14 @@ fn copy_worker_d2h_transfer_to_memfd(
 pub(crate) fn spawn_worker_d2h_copy_task(
     transfer: PendingWorkerD2hTransfer,
     resources: Arc<WorkerCudaResources>,
-    all_cuda_tensors: Arc<Mutex<HashMap<u64, Tensor>>>,
+    all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     reply_tx: mpsc::Sender<WorkerReply>,
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
         let tensor_key = transfer.tensor_key;
         let source = {
-            let tensors = all_cuda_tensors.lock().await;
+            let tensors = all_cuda_tensors.lock();
             tensors.get(&tensor_key).map(Tensor::shallow_clone)
         };
         let copy_result = match source {
@@ -2004,7 +2004,7 @@ mod tests {
         }
 
         impl SyncStageIpcWrapper for _SyncStageJsonWrapper {
-            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
                 debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
                 if _input.eq(b"fail") {
                     fail_with_unrecoverable_error();

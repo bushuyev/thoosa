@@ -558,8 +558,8 @@ impl DistsMask {
         }
     }
 
-    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<tokio::sync::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<tokio::sync::Mutex<HashMap<u64, Tensor>>>) -> Result<DistsMaskTensor, ThoError> {
+    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<DistsMaskTensor, ThoError> {
             let tensor = DistsMask::into_local_tensor(tensor, "into_worker_ipc_refs")?;
             let size = tensor.size();
             let kind = tensor.kind();
@@ -875,7 +875,7 @@ impl<'de> Deserialize<'de> for DistsMask {
 }
 
 impl WorkerStageOutput for DistsMask {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<tokio::sync::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
         C::encode(&self.into_worker_ipc_refs(all_cuda_tensors)?)
     }
 }
