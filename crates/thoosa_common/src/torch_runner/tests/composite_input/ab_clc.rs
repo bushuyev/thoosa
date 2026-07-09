@@ -274,7 +274,7 @@ where
 }
 
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 struct ABClcSyncStageIpcInputRef<'a> {
     id: &'a SynKey,
     from_a: &'a ThoTensor<AStageOutputDims, ()>,

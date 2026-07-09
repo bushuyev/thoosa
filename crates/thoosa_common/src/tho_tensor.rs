@@ -63,17 +63,33 @@ impl<D: Dims> ThoTensor<D, SimpleId> {
 
 }
 
-impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
+impl<D, Id> ThoTensor<D, Id>
+where
+    D:Dims,
+    Id:Named + Debug + Clone
+{
 
 
     pub fn to_kind(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
         Ok(ThoTensor {
             id: self.id.clone(),
-            inner: ThoTensorInner::Val { t: self.t_ref().f_to_kind(k)? },
+            inner: ThoTensorInner::Val { t: self.t_ref().f_to_kind(k)? },//TODO ref
             tracking: Default::default(),
             pd: PhantomData,
         })
     }
+
+    pub(crate) fn kind(&self) -> Kind {
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                t.kind()
+            }
+            ThoTensorInner::Ref { kind, .. } => {
+                kind.clone()
+            }
+        }
+    }
+
 
 }
 
@@ -112,7 +128,7 @@ where
     Id:Named + Debug + Clone
 {
     pub id: Id,
-    pub inner: ThoTensorInner,
+    pub inner: ThoTensorInner,//TODO pub
 
     #[allow(dead_code)]
     tracking: parking_lot::RwLock<Vec<&'static str>>,

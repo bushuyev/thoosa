@@ -546,11 +546,11 @@ where
                         info!("  {task}");
                     }
 
-                    if !cuda_activity_gate().is_paused() {
-                        debug!("run_cli: purge_cpu tick");
-                        GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
-                        debug!("run_cli: purge_cpu done");
-                    }
+                    // if !cuda_activity_gate().is_paused() {
+                    //     debug!("run_cli: purge_cpu tick");
+                    //     GlobalCtx::global().purge_cpu(10).instrument(tracing::debug_span!("run_cli/4", file = file!(), line = line!())).await;
+                    //     debug!("run_cli: purge_cpu done");
+                    // }
                 }
                 _ = rx.changed() => {
                     if *rx.borrow() {

@@ -2,6 +2,7 @@ use std::fmt::Debug;
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use tracing::debug;
 use thoosa_shared::ThoError;
 
 use crate::copy_ctx::CudaActorHandle;
@@ -85,8 +86,9 @@ pub async fn install_empty_ipc_endpoint(
     endpoint_name: &str,
 ) -> Result<(), ThoError> {
     actor
-        .install_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &[]).into_bytes())
-        .await
+        .install_endpoint_bytes(
+            encode_endpoint_payload_bytes(endpoint_name, &[]).into_bytes()
+        ).await
 }
 
 pub async fn invoke_ipc_endpoint<C, I, O>(
@@ -96,14 +98,22 @@ pub async fn invoke_ipc_endpoint<C, I, O>(
 ) -> Result<O, ThoError>
 where
     C: IpcCodec,
-    I: Serialize + ?Sized,
-    O: DeserializeOwned,
+    I: Debug + Serialize + ?Sized,
+    O: Debug + DeserializeOwned,
 {
+    debug!("invoke_ipc_endpoint: endpoint_name={endpoint_name} input={input:?}");
+
     let input = C::encode(input)?;
-    let response = actor
-        .invoke_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes())
-        .await?;
-    C::decode(&response)
+
+    let response = actor.invoke_endpoint_bytes(
+        encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
+    ).await?;
+
+    let r = C::decode(&response);
+
+    debug!("invoke_ipc_endpoint: endpoint_name={endpoint_name} response={r:?}");
+
+    r
 }
 
 pub async fn invoke_ipc_sync_stage<C, I, O>(
@@ -114,13 +124,22 @@ pub async fn invoke_ipc_sync_stage<C, I, O>(
 ) -> Result<O, ThoError>
 where
     C: IpcCodec,
-    I: Serialize + ?Sized,
-    O: DeserializeOwned,
+    I: Debug + Serialize + ?Sized,
+    O: Debug + DeserializeOwned,
 {
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}  input={input:?}");
+
     let input = C::encode(input)?;
     let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
-    let response = actor
-        .invoke_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes())
-        .await?;
-    C::decode(&response)
+
+
+
+    let response = actor.invoke_endpoint_bytes(
+        encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
+    ).await?;
+
+    let r = C::decode(&response);
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} response={r:?}");
+
+    r
 }

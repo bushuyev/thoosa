@@ -10,6 +10,7 @@ use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
+use log::debug;
 use tch::Device;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
 use thoosa_common::tho_device::ThoDevice;
@@ -75,6 +76,8 @@ where
     ) -> Result<Self::Out, ThoError> {
         // TODO(perf): add a shared raw-resource tensor cache/prefetch layer here; traced runs repeatedly reload tens of thousands of raw tensors through this stage.
         let tensor = (self.loader_fn)(input.as_ref(), &self.device)?;
+
+        debug!("RawTensorLoader::run: tensor={tensor:?}");
 
         Ok(Arc::new(DevicesWrap::wrap(tensor)))
     }

@@ -119,7 +119,7 @@ impl CrossInputIpcResource {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub(crate) struct CrossInputFindMotifsIpcInputRef<'a> {
     id: &'a SynKey,
     tensors: Vec<&'a ThoTensor<ChannelsData, SynKey>>,
@@ -431,16 +431,14 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
         type __ProxyIpcCodec = thoosa_common::ipc::codec::JsonIpcCodec;
         let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(input)?;
 
-        debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: input: {input:?}");
+        debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: input={input:?}");
 
         let tensors = input
             .tensors
             .into_iter()
             .map(|tensor| {
-                <ThoTensor<ChannelsData, SynKey> as thoosa_common::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(
-                    &<__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::encode(&tensor)?,
-                    all_cuda_tensors,
-                )
+                ThoTensor::<ChannelsData, SynKey>::ref_to_tensor(&all_cuda_tensors, tensor)
+
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
 
@@ -449,13 +447,16 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
         let tensor_refs = tensors.iter().map(ThoDataRef::Borrowed).collect::<Vec<_>>();
         let cross_input = CrossInput::from_decoded_parts(tensor_refs, resources_0.as_slice(), resources_1.as_slice(), input.id);
 
-        debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: cross_input: {cross_input:?}");
+        debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: cross_input={cross_input:?}");
 
         let mut ctx = RunCtxImpl::new(1, SYNC_CROSS_UNFOLD_CLC_ENDPOINT);
         if let Some(max_other_parallel) = input.max_other_parallel {
             ctx.set_max_other_parallel(max_other_parallel);
         }
         let out = Arc::clone(&self.stage).do_run(&cross_input, &ctx)?;
+
+        debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: out={out:?}");
+
         <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, all_cuda_tensors)
     }
 }
@@ -764,14 +765,18 @@ where
         debug!("CrossUnfoldClc::do_run: input.id={:?} batch_0_t={batch_0_t:?}  batch_1_t={batch_1_t:?} mem_0={} mem_1={}", input.id, tensor_mem_size(&batch_0_t), tensor_mem_size(&batch_1_t));
 
         let cross_batch_ctx = (self.cross_batch_ctx)(ctx)?;
-        self.batch_clc_fn.call(batch_0_t, batch_1_t, &input/*TODO it's only used to check if we're on diagonal*/, &cross_batch_ctx, ctx).map(|v| {
+        let result = self.batch_clc_fn.call(batch_0_t, batch_1_t, &input/*TODO it's only used to check if we're on diagonal*/, &cross_batch_ctx, ctx).map(|v| {
             CrossUnfoldClcOutput::new(
                 v,
                 SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_0),
                 SlicesIter::new_with_offsets(unfold_params.step as usize, resource_ids_sizes_1),
                 input.id.clone(),
             )
-        })
+        });
+
+        debug!("CrossUnfoldClc::do_run: result={result:?}");
+
+        result
     }
 }
 

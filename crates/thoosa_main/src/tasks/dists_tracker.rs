@@ -552,7 +552,12 @@ impl DistsMask {
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} device={device:?}");
                 let actor = GlobalCtx::global().cuda_actor(device);
                 let copied = track_await(actor.copy(ThoTensor::new_ref((), key, size, kind, selector), 0.into())).await?.t();
+                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} device={device:?} copied={copied:?}");
+
                 track_await(actor.drop_tho_tensor(ThoTensor::new_ref((), key, vec![], tch::Kind::Float, None))).await?;
+
+                debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} dropped");
+
                 Ok(copied)
             }
         }
@@ -652,18 +657,20 @@ impl DistsMask {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="DistsMask::to_cpu"))]
     pub async fn to_cpu(self) -> Result<Self, ThoError>  {
-        debug!("DistsMask::to_cpu: self.mask.device={:?}", Self::tensor_device(&self.mask));
+        debug!("DistsMask::to_cpu: self.mask.device={:?} self.mask_type={:?} self.mask={:?}", Self::tensor_device(&self.mask), self.mask_type, self.mask);
 
         match self.mask_type {
             DistsMaskType::AsIs => {
-                let mask = Self::into_local_tensor(self.mask, "to_cpu AsIs mask")?;
-                assert!(mask.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU mask");
+                assert!(self.mask.tho_device().eq(&Cpu.into()), "DistsMask::to_cpu: AsIs expects CPU mask");
 
-                let dists = self.dists.map(|dists| Self::into_local_tensor(dists, "to_cpu AsIs dists")).transpose()?;
-                if let Some(dists) = dists.as_ref() {
-                    assert!(dists.device().eq(&Cpu), "DistsMask::to_cpu: AsIs expects CPU dists");
+                if let Some(dists) = self.dists.as_ref() {
+                    assert!(dists.tho_device().eq(&Cpu.into()), "DistsMask::to_cpu: AsIs expects CPU dists");
                 }
-                Self::from_local_tensors(mask, dists, DistsMaskType::AsIs)
+                Ok(Self {
+                    mask: self.mask,
+                    dists: self.dists,
+                    mask_type: DistsMaskType::AsIs,
+                })
             }
             mask_type @ (DistsMaskType::MaskPacked(_, _) | DistsMaskType::MaskIndexes(_)) => {
                 let mask = Self::copy_tensor_to_cpu(self.mask, "mask").await?;
