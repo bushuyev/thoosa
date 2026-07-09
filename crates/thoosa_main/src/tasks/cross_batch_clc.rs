@@ -417,6 +417,42 @@ where
 {
 }
 
+#[derive(Debug)]
+struct CrossUnfoldClcFindMotifsIpcWrapper {
+    stage: Arc<CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<RunCtxImpl>, DistsMask, crate::tasks::find_motifs::MasksCtx, RunCtxImpl>>,
+}
+
+impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMotifsIpcWrapper {
+    fn do_run(
+        &self,
+        input: &[u8],
+        all_cuda_tensors: &Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>,
+    ) -> Result<Vec<u8>, ThoError> {
+        type __ProxyIpcCodec = thoosa_common::ipc::codec::JsonIpcCodec;
+        let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(input)?;
+        let tensors = input
+            .tensors
+            .into_iter()
+            .map(|tensor| {
+                <ThoTensor<ChannelsData, SynKey> as thoosa_common::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(
+                    &<__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::encode(&tensor)?,
+                    all_cuda_tensors,
+                )
+            })
+            .collect::<Result<Vec<_>, ThoError>>()?;
+        let resources_0 = input.resources_0.into_iter().map(|resource| Arc::new(resource.into_resource())).collect::<Vec<_>>();
+        let resources_1 = input.resources_1.into_iter().map(|resource| Arc::new(resource.into_resource())).collect::<Vec<_>>();
+        let tensor_refs = tensors.iter().map(ThoDataRef::Borrowed).collect::<Vec<_>>();
+        let cross_input = CrossInput::from_decoded_parts(tensor_refs, resources_0.as_slice(), resources_1.as_slice(), input.id);
+        let mut ctx = RunCtxImpl::new(1, SYNC_CROSS_UNFOLD_CLC_ENDPOINT);
+        if let Some(max_other_parallel) = input.max_other_parallel {
+            ctx.set_max_other_parallel(max_other_parallel);
+        }
+        let out = Arc::clone(&self.stage).do_run(&cross_input, &ctx)?;
+        <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, all_cuda_tensors)
+    }
+}
+
 #[derive(Proxy)]
 #[proxy(
     common = "thoosa_common",
@@ -430,8 +466,7 @@ where
     endpoint_init = "sync_cross_unfold_clc_endpoint_init",
     init_type = "crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit",
     init_stage = "CrossUnfoldClc::new_for_find_motifs(init)?",
-    wrapper = "CrossUnfoldClcFindMotifsIpcWrapper",
-    worker_body = "let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(input)?; let tensors = input.tensors.into_iter().map(|tensor| <ThoTensor<ChannelsData, SynKey> as thoosa_common::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::encode(&tensor)?, all_cuda_tensors)).collect::<Result<Vec<_>, thoosa_shared::ThoError>>()?; let resources_0 = input.resources_0.into_iter().map(|resource| Arc::new(resource.into_resource())).collect::<Vec<_>>(); let resources_1 = input.resources_1.into_iter().map(|resource| Arc::new(resource.into_resource())).collect::<Vec<_>>(); let tensor_refs = tensors.iter().map(ThoDataRef::Borrowed).collect::<Vec<_>>(); let cross_input = CrossInput::from_decoded_parts(tensor_refs, resources_0.as_slice(), resources_1.as_slice(), input.id); let mut ctx = thoosa_common::runner::run_ctx_2::RunCtxImpl::new(1, SYNC_CROSS_UNFOLD_CLC_ENDPOINT); if let Some(max_other_parallel) = input.max_other_parallel { ctx.set_max_other_parallel(max_other_parallel); } let out = std::sync::Arc::clone(&self.stage).do_run(&cross_input, &ctx)?; <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, all_cuda_tensors)"
+    wrapper = "CrossUnfoldClcFindMotifsIpcWrapper"
 )]
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where

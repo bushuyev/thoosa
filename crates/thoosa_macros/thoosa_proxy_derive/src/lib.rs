@@ -33,8 +33,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     let in_type = attrs.in_type;
     let init = attrs.init;
     let init_stage = attrs.init_stage;
-    let worker_body = attrs.worker_body;
-    let wrapper_name = attrs.wrapper_name.unwrap_or_else(|| Ident::new(&format!("{base_ident}IpcWrapper"), base_ident.span()));
+    let wrapper_name = attrs.wrapper_name;
     let counter_method = attrs.counter_method;
 
     let field_defs = fields.iter().map(|field| {
@@ -82,8 +81,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
         },
     };
 
-    let endpoint_init_tokens = match (endpoint_init, worker_body) {
-        (Some(endpoint_init), Some(worker_body)) => {
+    let endpoint_init_tokens = match endpoint_init {
+        Some(endpoint_init) => {
             let stage_init = match (init_type.as_ref(), init_stage.as_ref()) {
                 (Some(init_type), Some(init_stage)) => quote! {
                     let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
@@ -92,54 +91,40 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                 (None, None) => quote! {
                     let stage = #base_ident::new();
                 },
-                _ => return Err(syn::Error::new_spanned(&base_ident, "`worker_body` endpoint init must provide both `init_type` and `init_stage`, or neither")),
+                _ => return Err(syn::Error::new_spanned(&base_ident, "`endpoint_init` must provide both `init_type` and `init_stage`, or neither")),
             };
-            quote! {
-                #[derive(Debug)]
-                struct #wrapper_name {
-                    stage: std::sync::Arc<#base_ty>,
-                }
 
-                impl #common::ipc::json_ser::SyncStageIpcWrapper for #wrapper_name {
-                    fn do_run(
-                        &self,
-                        input: &[u8],
-                        all_cuda_tensors: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>>,
-                    ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
-                        type __ProxyIpcCodec = #codec;
-                        #worker_body
+            match wrapper_name {
+                Some(wrapper_name) => quote! {
+                    pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                        #stage_init
+                        Ok(Box::new(#wrapper_name {
+                            stage: std::sync::Arc::new(stage),
+                        }))
+                    }
+                },
+                None => {
+                    let init_type = init_type.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `wrapper` requires `init_type = \"...\"`"))?;
+                    let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `wrapper` requires `init_stage = \"...\"`"))?;
+                    let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
+                    quote! {
+                        pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                            let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
+                            Ok(#common::ipc::json_ser::make_ipc_sync_stage_wrapper::<
+                                #codec,
+                                #base_ty,
+                                #in_type,
+                                <#base_ty as #common::runner::common::runnable::Stage>::Out,
+                            >(
+                                #endpoint,
+                                #init_stage,
+                            ))
+                        }
                     }
                 }
-
-                pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
-                    #stage_init
-                    Ok(Box::new(#wrapper_name {
-                        stage: std::sync::Arc::new(stage),
-                    }))
-                }
             }
         },
-        (Some(endpoint_init), None) => {
-            let init_type = init_type.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `worker_body` requires `init_type = \"...\"`"))?;
-            let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `worker_body` requires `init_stage = \"...\"`"))?;
-            let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
-            quote! {
-                pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
-                    let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
-                    Ok(#common::ipc::json_ser::make_ipc_sync_stage_wrapper::<
-                        #codec,
-                        #base_ty,
-                        #in_type,
-                        <#base_ty as #common::runner::common::runnable::Stage>::Out,
-                    >(
-                        #endpoint,
-                        #init_stage,
-                    ))
-                }
-            }
-        },
-        (None, Some(_)) => return Err(syn::Error::new_spanned(&base_ident, "`worker_body` requires `endpoint_init = \"...\"`")),
-        (None, None) => quote! {},
+        None => quote! {},
     };
 
     let counter_method = match counter_method {
@@ -227,7 +212,6 @@ struct ProxyAttrs {
     init_type: Option<Type>,
     in_type: Option<Type>,
     init_stage: Option<Expr>,
-    worker_body: Option<proc_macro2::TokenStream>,
     wrapper_name: Option<Ident>,
     counter_method: Option<Ident>,
 }
@@ -261,7 +245,6 @@ impl ProxyAttrs {
                     "init_type" => out.init_type = Some(lit.parse()?),
                     "in_type" => out.in_type = Some(lit.parse()?),
                     "init_stage" => out.init_stage = Some(lit.parse()?),
-                    "worker_body" => out.worker_body = Some(parse_tokens(&lit)?),
                     "wrapper" => out.wrapper_name = Some(lit.parse()?),
                     "counter" => out.counter_method = Some(lit.parse()?),
                     _ => return Err(meta.error(format!("unsupported proxy attribute `{key}`"))),
