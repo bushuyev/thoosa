@@ -1,5 +1,5 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
-use crate::ipc::ipc_cuda_utils::{SharedMemfdBuffer, ipc_copy_d2h_from_ptr, ipc_copy_h2d_from_ptr};
+use crate::ipc::ipc_cuda_utils::{SharedMemfdBuffer, ipc_copy_h2d_from_ptr};
 use async_trait::async_trait;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -442,7 +442,7 @@ pub struct CopyCtx {
     exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
     bufs_pool_d2h: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
     bufs_pool_h2d: Option<Arc<Pool<(PinnedHostBuffer, Arc<ThoCudaStream>)>>>,
-    pub(crate)  ipc_bufs_pool: Option<Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>>>,
+    pub(crate)  ipc_bufs_pool: Option<Arc<Pool<SharedMemfdBuffer>>>,
 }
 
 impl Debug for CopyCtx {
@@ -497,13 +497,10 @@ impl CopyCtx {
         num_buffs: usize,
         buf_size: usize,
         cuda_device: usize,
-    ) -> Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>> {
+    ) -> Arc<Pool<SharedMemfdBuffer>> {
         Arc::new(Pool::from_iter((0..num_buffs).map(|_| {
             let buffer_id = NEXT_IPC_BUFFER_ID.fetch_add(1, Relaxed);
-            (
-                SharedMemfdBuffer::create(buffer_id, buf_size).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(cuda_device as i32, true).unwrap()),
-            )
+            SharedMemfdBuffer::create(buffer_id, buf_size).unwrap()
         })))
     }
 
@@ -543,10 +540,7 @@ impl CopyCtx {
 
         drop(Arc::into_inner(std::mem::replace(
             &mut self.ipc_bufs_pool,
-            Some(Arc::new(Pool::from_vec(vec![(
-                SharedMemfdBuffer::create(NEXT_IPC_BUFFER_ID.fetch_add(1, Relaxed), 1).unwrap(),
-                Arc::new(ThoCudaStream::from_pool(0, true).unwrap()),
-            )]))),
+            Some(Arc::new(Pool::from_vec(vec![SharedMemfdBuffer::create(NEXT_IPC_BUFFER_ID.fetch_add(1, Relaxed), 1).unwrap()]))),
         ).unwrap()));
 
         self.buffs = buffs;
@@ -667,32 +661,32 @@ impl CopyCtx {
         t
     }
 
-    pub async fn ipc_copy_from_ptr(
-        &self,
-        src_ptr: usize,
-        src_size: &[i64],
-        dst_tho_device_idx: usize,
-        kind: Kind,
-    ) -> Result<Tensor, ThoError> {
-        if dst_tho_device_idx == 0 {
-            track_await(ipc_copy_d2h_from_ptr(
-                kind,
-                self.buf_size,
-                self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool"),
-                src_ptr,
-                src_size,
-            )).await
-        } else {
-            track_await(ipc_copy_h2d_from_ptr(
-                kind,
-                self.buf_size,
-                self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool"),
-                dst_tho_device_idx,
-                src_ptr,
-                src_size,
-            )).await
-        }
-    }
+    // pub async fn ipc_copy_from_ptr(
+    //     &self,
+    //     src_ptr: usize,
+    //     src_size: &[i64],
+    //     dst_tho_device_idx: usize,
+    //     kind: Kind,
+    // ) -> Result<Tensor, ThoError> {
+    //     if dst_tho_device_idx == 0 {
+    //         track_await(ipc_copy_d2h_from_ptr(
+    //             kind,
+    //             self.buf_size,
+    //             self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool"),
+    //             src_ptr,
+    //             src_size,
+    //         )).await
+    //     } else {
+    //         track_await(ipc_copy_h2d_from_ptr(
+    //             kind,
+    //             self.buf_size,
+    //             self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool"),
+    //             dst_tho_device_idx,
+    //             src_ptr,
+    //             src_size,
+    //         )).await
+    //     }
+    // }
 
     pub fn buf_size(&self) -> usize {
         self.buf_size

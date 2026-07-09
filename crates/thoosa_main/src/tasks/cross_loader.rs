@@ -329,12 +329,14 @@ where
         let cross_loader_inner = CollectEtaInvocationGuard::new(&format!("CrossLoader::run, inner: run_config_id={} i_0={outer_batch_last_i}", self.find_motifs_run_config_id), resources.len(), 1);
 
         for (i_1, resource_1) in resources.iter().enumerate().skip(skip_0_i) {
-            let t_1 = track_await(Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await?;
+            let t_1 = track_await(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_1.as_ref().clone()), ctx.branch(false))).await?;
             let t_1_len = t_1.size().dim_1();
+
+            debug!("CrossLoader::run: t_1={t_1:?} loaded, t_1_len={t_1_len}");
 
             if t_1_len > max_batch {
                 if !t_1_batch.is_empty() {
+
                     track_await(self.run_loaded_batch(
                         t_0_batch.clone(),
                         t_0_batch_resources.clone(),
@@ -484,13 +486,15 @@ where
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("CrossLoader::run: find_motifs_run_config_id={} on i_0={i_0} resource_0={resource_0:?}", self.find_motifs_run_config_id);
 
-            let t_0 = track_await(Arc::clone(&self.configured_loader)
-                .run_cached(Arc::new(resource_0.as_ref().clone()), ctx.branch(false))).await?;
+            let t_0 = track_await(Arc::clone(&self.configured_loader).run_cached(Arc::new(resource_0.as_ref().clone()), ctx.branch(false))).await?;
             let t_0_len = t_0.size().dim_1();
+
+            debug!("CrossLoader::run: t_0={t_0:?} loaded, t_0_len={t_0_len}");
 
             if t_0_len > max_batch {
                 if !t_0_batch.is_empty() {
                     let pending_last_i = t_0_batch_last_i.expect("CrossLoader::run: missing t_0_batch_last_i for pending batch");
+
                     track_await(self.run_inner_batches(
                         resources.as_slice(),
                         std::mem::take(&mut t_0_batch),

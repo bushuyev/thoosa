@@ -647,76 +647,7 @@ pub async fn ipc_copy_h2d_from_ptr(
     Ok(destination)
 }
 
-/// Same-process-shaped D2H entry point backed by cached memfd mappings.
-///
-/// Each chunk is copied from the process-local CUDA pointer into a registered shared
-/// mapping, synchronized, and then copied into owned CPU tensor storage.
-pub async fn ipc_copy_d2h_from_ptr(
-    kind: Kind,
-    buf_size: usize,
-    ipc_bufs_pool: &Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>>,
-    src_ptr: usize,
-    size: &[i64],
-) -> Result<Tensor, ThoError> {
-    let byte_len = tensor_mem_size(kind, size);
-    if byte_len != 0 && src_ptr == 0 {
-        return Err(invalid("ipc_copy_d2h_from_ptr source pointer is null"));
-    }
-    let chunks = copy_chunks(byte_len, buf_size, "ipc_copy_d2h_from_ptr")?;
-    let chunk_count = chunks.len();
-    let destination = Tensor::f_empty(size, (kind, Device::Cpu))?;
-    let dst_ptr = destination.data_ptr() as usize;
 
-    track_await(collect_futures_with_progress(
-        chunks.into_iter().map(|chunk| {
-            let pool = Arc::clone(ipc_bufs_pool);
-            async move {
-                let mut buf_stream = track_await(pool.acquire()).await;
-                let result = track_await(spawn_blocking(move || {
-                    tracing::info_span!(
-                        "interprocess_cuda_copy::ipc_copy_d2h_from_ptr_chunk",
-                        kind = "spawn_blocking",
-                        file = file!(),
-                        line = line!(),
-                        chunk = chunk.index,
-                    ).in_scope(|| {
-                        if chunk.len > buf_stream.0.len() {
-                            return Err(invalid(format!("D2H chunk length={} exceeds pooled mmap length={}", chunk.len, buf_stream.0.len())));
-                        }
-                        let source = src_ptr.checked_add(chunk.offset).ok_or_else(|| invalid("D2H source pointer overflow"))? as u64;
-                        let destination = dst_ptr.checked_add(chunk.offset).ok_or_else(|| invalid("D2H destination pointer overflow"))?;
-                        let shared_ptr = buf_stream.0.as_mut_ptr();
-                        let stream = Arc::clone(&buf_stream.1);
-                        let _thread_context = ThoCudaContext::new(stream.device())?;
-                        let _stream_guard = ThoStreamGuard::new(stream.as_ref())?;
-                        let _registration = CuMemHostRegistrationGuard::new(&buf_stream.0)?;
-                        let result = unsafe {
-                            // SAFETY: source is a process-local CUDA allocation,
-                            // shared_ptr is within the registered mmap, and the stream's
-                            // CUDA context is current on this OS thread.
-                            tho_cu_memcpy_dtoh_async(shared_ptr.cast::<c_void>(), source, chunk.len, stream.as_mut_ptr())
-                        };
-                        check_cuda_status(result, "cuMemcpyDtoHAsync(memfd pool)")?;
-                        stream.synchronize()?;
-                        unsafe {
-                            // SAFETY: the Driver copy and stream synchronization completed,
-                            // destination points into the live CPU tensor, and both ranges
-                            // are validated for chunk.len bytes.
-                            std::ptr::copy_nonoverlapping(shared_ptr, destination as *mut u8, chunk.len);
-                        }
-                        Ok::<(), ThoError>(())
-                    })
-                })).await.map_err(join_error_to_tho_error).and_then(|result| result);
-                Ok::<_, ThoError>(result)
-            }
-        }),
-        chunk_count,
-        FuturesOrdering::Unordered,
-        COPY_D2H,
-    )).await.into_iter().collect::<Result<(), ThoError>>()?;
-
-    Ok(destination)
-}
 
 pub fn ipc_h2d_producer_write_bytes(
     buffer: &mut SharedMemfdBuffer,
