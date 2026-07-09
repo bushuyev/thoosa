@@ -298,6 +298,21 @@ struct ABClcSyncStageIpcInput {
     from_b: ThoTensor<BStageOutputDims, ()>,
 }
 
+#[derive(Debug)]
+struct ABClcSyncStageIpcWrapper {
+    stage: std::sync::Arc<ABClcSyncStage>,
+}
+impl crate::ipc::json_ser::SyncStageIpcWrapper for ABClcSyncStageIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>> ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
+        type __ProxyIpcCodec = crate::ipc::codec::JsonIpcCodec;
+        let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(input)?;
+        let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, all_cuda_tensors)?;
+        let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, all_cuda_tensors)?;
+        let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?;
+        <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&out)
+    }
+}
+
 #[derive(Debug, Named, Proxy)]
 #[proxy(
     name = "ProxyABClcSyncStage",
@@ -309,13 +324,7 @@ struct ABClcSyncStageIpcInput {
     run_input = "ABClcSyncStageIpcInputRef::new(input)",
     counter = "num_calls",
     endpoint_init = "sync_ab_clc_endpoint_init",
-    wrapper = "ABClcSyncStageIpcWrapper",
-    worker_body = "\
-     let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(input)?; \
-     let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, all_cuda_tensors)?; \
-     let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, all_cuda_tensors)?; \
-     let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?; <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&out)\
-     "
+    wrapper = "ABClcSyncStageIpcWrapper"
 )]
 pub struct ABClcSyncStage {
     id:MonoKey,
