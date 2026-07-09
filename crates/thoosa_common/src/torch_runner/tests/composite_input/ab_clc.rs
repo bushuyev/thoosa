@@ -303,7 +303,7 @@ struct ABClcSyncStageIpcWrapper {
     stage: std::sync::Arc<ABClcSyncStage>,
 }
 impl crate::ipc::json_ser::SyncStageIpcWrapper for ABClcSyncStageIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &std::sync::Arc<tokio::sync::Mutex<std::collections::HashMap<u64, tch::Tensor>>> ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<u64, tch::Tensor>>> ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
         type __ProxyIpcCodec = crate::ipc::codec::JsonIpcCodec;
         let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(input)?;
         let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, all_cuda_tensors)?;

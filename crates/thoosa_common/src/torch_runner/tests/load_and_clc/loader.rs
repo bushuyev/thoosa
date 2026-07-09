@@ -130,7 +130,7 @@ impl From<std::ops::Range<MonoMetrics<1, 2>>> for LoadedRange {
 }
 
 impl WorkerStageInput for LoaderInput {
-    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
         C::decode(input)
     }
 }
