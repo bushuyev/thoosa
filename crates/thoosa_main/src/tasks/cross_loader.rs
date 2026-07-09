@@ -263,6 +263,8 @@ where
             t_1_batch_resources.clone(),
             CacheArea::default()
         );
+        debug!("CrossLoader::run_loaded_batch: input={input:?}");
+
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
         match track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, CrossInputSelector>::new(
             vec![
@@ -288,6 +290,8 @@ where
             ),
         )).await {
             Ok(mut cross_clc_output) => {
+                debug!("CrossLoader::run_loaded_batch: cross_clc_output={cross_clc_output:?}");
+
                 let cross_clc_output = track_await(cross_clc_output.replace_clc_result(&self.on_batch_done)).await?;
                 let receiver_ctx = ctx.branch(false);
 

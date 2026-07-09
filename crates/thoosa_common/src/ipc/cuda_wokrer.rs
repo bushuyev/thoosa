@@ -32,10 +32,7 @@ use crate::tho_tensor::ThoTensor;
 
 const WORKER_EXEC_STREAMS: usize = 32;
 
-pub struct CudaWorker {
-    all_cuda_tensors:DashMap<u64, Tensor>,
-    handle:JoinHandle<Result<(), ThoError>>,
-}
+pub struct CudaWorker;
 
 
 pub trait Init {
@@ -188,6 +185,8 @@ impl CudaWorker {
             }
 
             if let Some(start_json) = payload.strip_prefix(H2D_START_PAYLOAD_PREFIX) {
+                debug!("run_worker: H2D_START_PAYLOAD_PREFIX, start_json={start_json:?}");
+
                 let payload = match serde_json::from_str::<WorkerH2dStartPayload>(start_json) {
                     Ok(start) => {
                         let transfer_id = start.transfer_id;
@@ -215,8 +214,13 @@ impl CudaWorker {
             }
 
             if let Some(start_json) = payload.strip_prefix(D2H_START_PAYLOAD_PREFIX) {
-                let start: WorkerD2hStartPayload = serde_json::from_str(start_json)
-                    .map_err(|e| ThoError::new(format!("failed to parse D2H start payload: {e}")))?;
+                debug!("run_worker: D2H_START_PAYLOAD_PREFIX, start_json={start_json:?}");
+
+                let start: WorkerD2hStartPayload = serde_json::from_str(start_json).map_err(|e| ThoError::new(format!("failed to parse D2H start payload: {e}")))?;
+                if !all_cuda_tensors.lock().contains_key(&start.tensor_key) {
+                    return Err(ThoError::new(format!("No tensor with tensor_key={}", start.tensor_key)));
+                }
+
                 let old = pending_d2h_transfers.insert(start.transfer_id, PendingWorkerD2hTransfer::new(start.transfer_id, start.tensor_key));
                 if old.is_some() {
                     return Err(ThoError::new(format!("duplicate D2H transfer start for transfer_id={}", start.transfer_id)));
@@ -225,6 +229,7 @@ impl CudaWorker {
             }
 
             if let Some(metadata_json) = payload.strip_prefix(SHARED_MEMFD_PAYLOAD_PREFIX) {
+                debug!("run_worker: SHARED_MEMFD_PAYLOAD_PREFIX, start_json={metadata_json:?}");
 
                 let metadata: IpcTensorTransferMetadata = serde_json::from_str(metadata_json)
                     .map_err(|e| ThoError::new(format!("failed to parse shared memfd metadata: {e}")))?;
@@ -234,6 +239,8 @@ impl CudaWorker {
                 let buffer = SharedMemfdBuffer::from_received_fd(fd, metadata.mapped_len)?;
                 match metadata.direction {
                     IpcTransferDirection::HostToDevice => {
+                        debug!("run_worker: IpcTransferDirection::HostToDevice");
+
                         let chunk = WorkerH2dChunk { metadata, buffer };
                         let cuda_device = cuda_process::validate_worker_h2d_chunk(&chunk)?;
 
@@ -258,6 +265,8 @@ impl CudaWorker {
                         }
                     }
                     IpcTransferDirection::DeviceToHost => {
+                        debug!("run_worker: IpcTransferDirection::DeviceToHost");
+
                         let chunk = WorkerD2hChunk { metadata, buffer };
                         let cuda_device = cuda_process::validate_worker_d2h_chunk(&chunk)?;
                         debug!("run_worker: received shared memfd D2H tensor chunk: metadata={:?} local_mmap_ptr={:?}", chunk.metadata, chunk.buffer.as_ptr());
@@ -421,38 +430,44 @@ where
         let input_ref = C::decode::<Self>(input)?;
         debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
 
+        Self::ref_to_tensor(all_cuda_tensors, input_ref)
+    }
+}
+
+impl<D, Id> ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Clone + Debug + DeserializeOwned + Named,
+{
+    pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
-        let input_tensor = tokio::task::block_in_place(|| {
-            let tensors = all_cuda_tensors.lock();
 
-            let source = tensors
-                .get(&input_key)
-                .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
-            let mut tensor = source.f_alias()?;
+        let tensors = all_cuda_tensors.lock();
 
-            if let Some(selector) = input_ref.selector() {
-                let ranges = selector.tensor_ranges()?;
-                if ranges.len() > tensor.dim() {
-                    return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
-                }
-                for (dim, range) in ranges.into_iter().enumerate() {
-                    let dim_size = tensor.size()[dim];
-                    if range.start < 0 || range.end < range.start {
-                        return Err(ThoError::new(format!("selector {selector:?} has invalid range {range:?} for dimension {dim}")));
-                    }
-                    let end = range.end.min(dim_size);
-                    if range.start > end {
-                        return Err(ThoError::new(format!("selector {selector:?} starts outside dimension {dim} with size {dim_size}")));
-                    }
-                    tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
-                }
+        let source = tensors
+            .get(&input_key)
+            .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
+        let mut tensor = source.f_alias()?;
+
+        if let Some(selector) = input_ref.selector() {
+            let ranges = selector.tensor_ranges()?;
+            if ranges.len() > tensor.dim() {
+                return Err(ThoError::new(format!("selector {selector:?} has {} ranges for a {}-dimensional tensor", ranges.len(), tensor.dim())));
             }
+            for (dim, range) in ranges.into_iter().enumerate() {
+                let dim_size = tensor.size()[dim];
+                if range.start < 0 || range.end < range.start {
+                    return Err(ThoError::new(format!("selector {selector:?} has invalid range {range:?} for dimension {dim}")));
+                }
+                let end = range.end.min(dim_size);
+                if range.start > end {
+                    return Err(ThoError::new(format!("selector {selector:?} starts outside dimension {dim} with size {dim_size}")));
+                }
+                tensor = tensor.f_narrow(dim as i64, range.start, end - range.start)?;
+            }
+        }
 
-
-            Ok::<_, ThoError>(tensor)
-
-        })?;
-        ThoTensor::new(input_ref.id().clone(), input_tensor)
+        ThoTensor::new(input_ref.id().clone(), tensor)
     }
 }
 
@@ -473,19 +488,19 @@ where
 }
 
 pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
-    tokio::task::block_in_place(|| {
-        let mut tensors = all_cuda_tensors.lock();
-        let mut key = tensors
-            .keys()
-            .copied()
-            .max()
-            .unwrap_or(0)
-            .checked_add(1)
-            .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-        while tensors.contains_key(&key) {
-            key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-        }
-        tensors.insert(key, tensor);
-        Ok(key)
-    })
+
+    let mut tensors = all_cuda_tensors.lock();
+    let mut key = tensors
+        .keys()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+    while tensors.contains_key(&key) {
+        key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+    }
+    tensors.insert(key, tensor);
+    Ok(key)
+
 }

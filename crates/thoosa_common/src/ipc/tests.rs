@@ -166,7 +166,7 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
             debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
 
             let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .copy(ThoTensor::new_ref((), out_key, vec![], tch::Kind::Float, None), 0.into()).await?;
+                .copy(ThoTensor::new_ref((), out_key, output_ref.size(), output_ref.kind(), None), 0.into()).await?;
             let cpu_out: ThoTensor<ClcStageOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
 
 
@@ -348,8 +348,8 @@ async fn test_simp_copy() -> Result<(), ThoError> {
         let tho_device_idx = 1;
         let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
 
-        let smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
-        let expected_smoke = lin_for_size(1.0, [3, 10], Float, &Device::Cpu);
+        let smoke = lin_for_size(1.0, [3000, 30000], Float, &Device::Cpu);
+        let expected_smoke = smoke.copy();
         let worker_ref = track_await(cuda_actor.copy(smoke.into(), tho_device_idx.into())).await?;
         assert!(worker_ref.ref_key().is_some(), "expected IPC H2D copy to return worker tensor ref, got {worker_ref:?}");
         let cpu_copy = track_await(cuda_actor.copy(worker_ref, 0.into())).await?;
