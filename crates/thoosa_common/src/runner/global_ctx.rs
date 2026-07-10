@@ -1,5 +1,5 @@
 use crate::runner::purge::FuturesRunnerMapPurger;
-use log::{debug, info};
+use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
@@ -125,8 +125,7 @@ impl GlobalCtx {
             num_devices,
             executors: (0..num_devices).map(|tho_device_idx| {
                 DynamicTaskExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
-            })
-                .collect(),
+            }).collect(),
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -249,6 +248,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::remove_cache: {} lock acquired/released, removed ", key);
     }
 
+    #[inline]
     pub fn global() -> &'static Self {
         GLOBAL_CTX.get().expect("call `init_devices` first")
     }
@@ -424,11 +424,15 @@ impl GlobalCtx {
 
     pub async fn shutdown(&self) {
         self.shutting_down.store(true, Relaxed);
-        //TODO
 
-
+        for (i, actor) in self.cuda_actors.iter().enumerate() {
+            if let Err(e) = actor.shutdown().await {
+                error!("Got {e} while shutting down actor {i}");
+            }
+        }
     }
 
+    #[inline]
     pub fn is_shutting_down(&self)->bool {
         self.shutting_down.load(Relaxed)
     }
@@ -780,97 +784,18 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
 
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[test]
-    fn test_0() -> Result<(), ThoError>{
-         fn test_xxx(gate:Arc<(Condvar, Mutex<bool>)>){
-            let (cvar, lock) = &*gate;
-            let mut released = lock.lock();
 
-            while !*released {
-                cvar.wait(&mut released);
-            }
-
-            debug!("test_0");
-        }
-
-        let gate = Arc::new((Condvar::new(), Mutex::new(false)));
-        let gate_0 = Arc::clone(&gate);
-        let gate_1 = Arc::clone(&gate);
-
-
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .max_blocking_threads(2)
-            .enable_all()
-            .build()?;
-
-
-        // #[tracing::instrument(level = "debug")]
-        async fn zzzz() -> Result<(), ThoError>{
-            tokio::time::sleep(Duration::from_secs(600)).await;
-            Ok(())
-        }
-
-
-        rt.block_on(async {
-
-            tokio::task::spawn(async move {
-                debug!("spawn 0");
-                let x = zzzz()
-                    // .instrument(tracing::debug_span!("zzzz", file = file!(), line = line!()))
-                    .await?;
-
-                Ok::<(), ThoError>(())
-            });
-
-            // spawn_blocking(move ||{
-            //     let i = test_xxx(gate_0)
-            //         .instrument(tracing::debug_span!("test_0/1", file = file!(), line = line!()));
-            //
-            //     debug!("spawn_blocking 0");
-            //     Ok::<_, ThoError>(i.into_inner())
-            // });
-            //
-            // spawn_blocking(move ||{
-            //     let i = test_xxx(gate_1)
-            //         .instrument(tracing::debug_span!("test_0/1", file = file!(), line = line!()));
-            //
-            //     debug!("spawn_blocking 1");
-            //     Ok::<_, ThoError>(i.into_inner())
-            // });
-            //
-            // spawn_blocking(move ||{
-            //
-            //     debug!("spawn_blocking 2");
-            //     Ok::<_, ThoError>(())
-            // })
-
-
-        });
-
-        let (cvar, lock) = &*gate;
-        *lock.lock() = true;
-
-
-        Ok(())
-    }
-
-    // TODO
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_device_reset() -> Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // let cu_ctx = ThoCudaContext::new(0 as i32)?;
-        // cu_ctx.reset()?;
+
 
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let tmp_cache:TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;
-
-        // let t_0 = Arc::new(DevicesWrap::wrap(ThoTensor::new((), Tensor::rand(&[100000], FLOAT_CUDA))?));
 
         tmp_cache.insert(ThoTensor::new(777u32, Tensor::rand(&[100000], FLOAT_CUDA))?);
         let t_0 = tmp_cache.get(&777u32).unwrap();
@@ -883,9 +808,7 @@ mod tests {
         debug!("sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-        // GlobalCtx::global().drop_device(1, "drop").await?;
-        // let cu_ctx = ThoCudaContext::new(0 as i32)?;
-        // cu_ctx.reset()?;
+
 
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         cuda_actor.reset().await?;

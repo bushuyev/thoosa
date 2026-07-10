@@ -25,6 +25,7 @@ use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
+use crate::ipc::cuda_process::DeviceInfo;
 use crate::runner::common::cachable::{BorrowRef, SelectRef};
 use crate::runner::common::RunCtx;
 use crate::runner::common::runnable::{Stage, SyncStage};
@@ -164,7 +165,7 @@ impl dyn CudaActorHandle + '_ {
 
 }
 
-struct CudaActor {
+struct CudaActor {//TODO rename CudaLocalActor
     tho_device_idx:usize,
     receiver: mpsc::Receiver<CudaActorMessage>,
     copy_ctx:Arc<RwLock<CopyCtx>>,
@@ -436,7 +437,8 @@ impl CudaActorHandle for CudaLocalActorHandle {
 
 //TODO to be renamed to StreamCtx?
 pub struct CopyCtx {
-    pub(crate) cu_ctx: ThoCudaContext,
+    cuda_device: usize,
+    // pub(crate) cu_ctx: ThoCudaContext,
     pub(crate) buffs: usize,
     pub(crate) buf_size: usize,
     exec_stream_pool: Option<Arc<Pool<ThoCudaStream>>>,
@@ -461,7 +463,7 @@ impl CopyCtx {
     pub fn new(cuda_device: usize, mem_k: f64, buffs: usize) -> Self {
         debug!("CopyCtx::new: cuda_device={cuda_device} mem_k={mem_k} buffs={buffs}");
 
-        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
+        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs, cuda_mem_for_device(cuda_device).1);
         Self::new_with_buf_size(cuda_device, buffs, buf_size)
     }
 
@@ -472,13 +474,9 @@ impl CopyCtx {
     fn new_with_buf_size_inner(cuda_device: usize, buffs: usize, buf_size: usize, is_ipc: bool) -> Self {
         debug!("CopyCtx::new_with_buf_size: cuda_device={cuda_device} buffs={buffs} buf_size={buf_size}");
 
-        let cuda_context = ThoCudaContext::new(cuda_device as i32).unwrap();
-        cuda_context.bind_to_thread().unwrap();
-        // let cu_ctx = ThoCudaContext::new(cuda_device as i32).expect("failed to create CUDA context");
-        //TODO all state from CopyCtx should be moved into ActorHandles
 
         Self {
-            cu_ctx: cuda_context,
+            cuda_device,
             buffs,
             buf_size,
             exec_stream_pool: (!is_ipc).then(||Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(cuda_device as i32, false).unwrap())))),//TODO unwrap)),
@@ -544,7 +542,7 @@ impl CopyCtx {
         ).unwrap()));
 
         self.buffs = buffs;
-        self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs);
+        self.buf_size = Self::clc_buff_size(0/*self.cu_ctx.ordinal()*/, mem_k, buffs, cuda_mem_for_device(0).1);
         self.bufs_pool_h2d = Some(Self::build_pool(buffs, self.buf_size, 0, CU_MEMHOSTALLOC_WRITECOMBINED/*&self.cu_ctx*/));
         self.ipc_bufs_pool = Some(Self::build_ipc_pool(buffs, self.buf_size, 0/*&self.cu_ctx*/));
     }
@@ -563,16 +561,20 @@ impl CopyCtx {
         drop(self.ipc_bufs_pool.take());
         drop(self.exec_stream_pool.take());
 
-        self.cu_ctx.reset()?;
+        let cuda_context = ThoCudaContext::new(self.cuda_device as i32).unwrap();
+        cuda_context.bind_to_thread()?;
+        let mut cu_ctx = ThoCudaContext::new(self.cuda_device as i32).expect("failed to create CUDA context");
+        cu_ctx.reset()?;
+
         info!("CopyCtx::reset_cuda_context: cu_ctx.reset done");
 
-        self.bufs_pool_h2d = Some(Self::build_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize, CU_MEMHOSTALLOC_WRITECOMBINED));
+        self.bufs_pool_h2d = Some(Self::build_pool(self.buffs, self.buf_size, self.cuda_device, CU_MEMHOSTALLOC_WRITECOMBINED));
         info!("CopyCtx::reset_cuda_context: bufs_pool rebuilt");
 
-        self.ipc_bufs_pool = Some(Self::build_ipc_pool(self.buffs, self.buf_size, self.cu_ctx.device as usize));
+        self.ipc_bufs_pool = Some(Self::build_ipc_pool(self.buffs, self.buf_size, self.cuda_device));
         info!("CopyCtx::reset_cuda_context: ipc_bufs_pool rebuilt");
 
-        self.exec_stream_pool = Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cu_ctx.device, false).unwrap()))));
+        self.exec_stream_pool = Some(Arc::new(Pool::from_iter((0..32).map(|_| ThoCudaStream::from_pool(self.cuda_device as i32, false).unwrap()))));
 
         info!("CopyCtx::reset_cuda_context: exec_stream_pool rebuilt");
 
@@ -590,15 +592,14 @@ impl CopyCtx {
         CopyCtx::new(cuda_device, mem_k, buffs)
     }
 
-    pub(crate) fn make_ipc_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize) -> CopyCtx {
+    pub(crate) fn make_ipc_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize, device_info: &DeviceInfo) -> CopyCtx {
         debug!("make_ipc_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
 
-        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs);
+        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs, device_info.total_mem);
         Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, true)
     }
 
-    fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize) -> usize {
-        let (_free_mem, total_mem) = cuda_mem_for_device(cuda_device);
+    fn clc_buff_size(cuda_device: usize, mem_k: f64, buffs: usize, total_mem: usize) -> usize {
 
         let init_type = Int64;
 

@@ -16,6 +16,7 @@ use tch::Device::{Cpu, Cuda};
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::InferArgs;
@@ -48,7 +49,7 @@ fn main() -> Result<(), ThoError> {
 
     println!("CudaWorker::run_if_sock: running main");
 
-    kick_register_cuda_hooks();
+    // kick_register_cuda_hooks();
 
     let t1 = Instant::now();
 
@@ -141,5 +142,5 @@ fn main() -> Result<(), ThoError> {
             Err(e)
         }
     }
-
+    
 }

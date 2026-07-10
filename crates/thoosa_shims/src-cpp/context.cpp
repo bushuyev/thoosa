@@ -68,7 +68,7 @@ CUresult tho_cu_device_get(CUdevice *device, int ordinal) {
 }
 
 CUresult tho_cu_device_primary_ctx_retain(CUcontext *ctx, CUdevice device) {
-  tho_log(CppLogLevel::Info, "tho_cu_device_primary_ctx_retain: entered");
+  tho_log(CppLogLevel::Info, "tho_cu_device_primary_ctx_retain: retained");
 
   return tho_record_cuda_result("cuDevicePrimaryCtxRetain", cuDevicePrimaryCtxRetain(ctx, device));
 }
