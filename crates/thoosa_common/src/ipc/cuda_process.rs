@@ -44,16 +44,15 @@ use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, I
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
 use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::common::RunCtx;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::oom_handler::{Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::utils::tensor_digest;
-// #[cfg(test)]
-// use crate::torch_runner::tests::load_and_clc::clc::ClcStage;
-// #[cfg(test)]
-// use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
 
+
+pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
 const MAX_FRAME_LEN: usize = 16 * 1024 * 1024;
 pub(crate) const SHARED_MEMFD_PAYLOAD_PREFIX: &str = "shared-memfd:";
@@ -752,7 +751,7 @@ struct SpawnedState {
     writer_handle:JoinHandle<()>,
     reader_handle:JoinHandle<()>,
     cancel: CancellationToken,
-
+    device_info:DeviceInfo
 }
 
 impl SpawnedState {
@@ -805,7 +804,7 @@ impl CudaIPCActor {
         let spawned_state = Self::spawn_worker_and_loops(tho_device_idx, &cuda_worker_args).await?;
 
 
-        let copy_ctx = CopyCtx::make_ipc_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16);
+        let copy_ctx = CopyCtx::make_ipc_instance_for_cuda_device(tho_device_idx - 1, 0.2, 16, &spawned_state.device_info);
         let buf_size = copy_ctx.buf_size;
 
         Ok(Self {
@@ -822,7 +821,7 @@ impl CudaIPCActor {
     async fn spawn_worker_and_loops(tho_device_idx: usize, cuda_worker_args: &Vec<String>) -> Result<SpawnedState, ThoError> {
         debug!("CudaIPCActor::spawn_worker_and_loops, cuda_worker_args={cuda_worker_args:?}");
 
-        let (mut child, stream) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args).await?;
+        let (mut child, stream, device_info) = Self::spawn_worker_for_cuda_device(tho_device_idx - 1, cuda_worker_args).await?;
 
         let (reader, writer) = stream.into_split();
 
@@ -841,16 +840,17 @@ impl CudaIPCActor {
             pending,
             writer_handle,
             reader_handle,
-            cancel
+            cancel,
+            device_info
         })
     }
 
     #[cfg(test)]
-    async fn spawn_worker(args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
+    async fn spawn_worker(args: &Vec<String>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
         Self::spawn_worker_for_cuda_device(0, args).await
     }
 
-    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>) -> Result<(Child, UnixStream), ThoError> {
+    async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
         let exe = std::env::current_exe()?;
 
         debug!("CudaIPCActor::spawn_worker, exe={exe:?}");
@@ -873,7 +873,7 @@ impl CudaIPCActor {
         debug!("CudaIPCActor::spawn_worker, command={command:?}");
 
         let mut child = command
-
+            .env_remove(CUDA_VISIBLE_DEVICES)
             .env(IPC_SOCK_ENV, &sock_path)
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
@@ -903,15 +903,15 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::spawn_worker: _addr={_addr:?}");
 
-        let ready = read_text_frame(&mut stream).await?;
-        debug!("CudaIPCActor::spawn_worker: main received: {ready:?}");
-        assert_eq!(ready, "worker-ready");
+        let device_info:DeviceInfo = serde_json5::from_str(&read_text_frame(&mut stream).await?)?;
+        debug!("CudaIPCActor::spawn_worker: main received: {device_info:?}");
+
 
         // The socket file can be removed after accept. The connected UnixStream
         // remains valid.
         drop(dir);
 
-        Ok((child, stream))
+        Ok((child, stream, device_info))
     }
 
 
@@ -1409,6 +1409,8 @@ async fn reader_loop<R>(
     loop {
         let frame = tokio::select! {
             _ = cancel.cancelled() => {
+                debug!("worker IPC reader cancelled");
+
                 break;
             }
 
@@ -1822,7 +1824,17 @@ where
 {
     let mut len_buf = [0u8; 4];
 
-    reader.read_exact(&mut len_buf).await?;
+
+    match reader.read_exact(&mut len_buf).await {
+        Ok(v) => Ok(v),
+        Err(e) =>  {
+            if !GlobalCtx::global().is_shutting_down(){
+                error!("read_frame/read_exact error: len_buf {e}");
+            }
+
+            Err(e)
+        }
+    }?;
 
     let len = u32::from_le_bytes(len_buf) as usize;
 
@@ -1835,11 +1847,24 @@ where
 
     let mut payload = vec![0u8; len];
 
-    reader.read_exact(&mut payload).await?;
+    match reader.read_exact(&mut payload).await {
+        Ok(v) => Ok(v),
+        Err(e) =>  {
+            if !GlobalCtx::global().is_shutting_down() {
+                error!("read_frame/read_exact error: payload, len={len} {e}");
+            }
+            Err(e)
+        }
+    }?;
 
     Ok(payload)
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+pub(crate) struct DeviceInfo {
+    pub(crate) free_mem:usize,
+    pub(crate) total_mem:usize,
+}
 
 #[cfg(test)]
 mod tests {
@@ -1876,7 +1901,7 @@ mod tests {
     // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, OOMRunnerConfig};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
-    use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, IPC_SOCK_ENV};
+    use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, DeviceInfo, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::init_ipc_test;
@@ -1897,7 +1922,7 @@ mod tests {
         }};
     }
 
-    async fn spawn_test_worker(test_name: &str) -> Result<(Child, UnixStream), ThoError> {
+    async fn spawn_test_worker(test_name: &str) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
 
         let module = pure_module_path!();
 
@@ -2019,7 +2044,7 @@ mod tests {
             debug!("run_ipc_copy_oom: error={error:?}");
 
             match error.what() {
-                thoosa_shared::Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
+                Cause::CudaWorker { is_oom, is_retryable_oom, needs_cuda_ctx_reset, .. } => {
                     assert!(*is_oom, "worker OOM flag was not propagated: {error:?}");
                     assert!(*is_retryable_oom, "worker retryable OOM flag was not propagated: {error:?}");
                     assert!(!*needs_cuda_ctx_reset, "plain worker OOM should not request CUDA context reset: {error:?}");
@@ -2113,7 +2138,7 @@ mod tests {
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
             CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
         } else {
-            init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
+            init_ipc_test("heavy_copy_ipc_cuda_worker_once", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
@@ -2128,35 +2153,35 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker() -> Result<(), ThoError> {
+    async fn test_copy_ipc_cuda_worker_ok() -> Result<(), ThoError> {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
             CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
 
         } else {
-            init_ipc_test("test_copy_ipc_cuda_worker", pure_module_path!()).await?;
+            init_ipc_test("test_copy_ipc_cuda_worker_ok", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
 
-            let main_process_cpu_tensor = Tensor::rand(&[1000, 10000], FLOAT_CPU);
+            let main_process_cpu_tensor = Tensor::rand(&[10_000, 10000], FLOAT_CPU);
             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
 
 
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             let cuda_ref = track_await(cuda_actor.copy(
-                    main_process_cpu_tensor.into(),
-                    tho_device_idx.into(),//Cuda
-                )).await?;
+                main_process_cpu_tensor.into(),
+                tho_device_idx.into(),//Cuda
+            )).await?;
 
             debug!("run_main: cuda_ref={cuda_ref:?}");
 
             let reff = cuda_ref.ref_key().unwrap();
 
             let cpu_tensor = track_await(cuda_actor.copy(
-                    cuda_ref,
-                    0.into(),//Cpu
-                )).await?;
+                cuda_ref,
+                0.into(),//Cpu
+            )).await?;
 
             debug!("run_main: cpu_tensor={cpu_tensor:?}");
 
@@ -2169,11 +2194,10 @@ mod tests {
 
             debug!("run_main: drop ok");
 
-            let r = track_await(cuda_actor
-                .copy(
-                    ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None),
-                    0.into(), //Cpu
-                )).await;
+            let r = track_await(cuda_actor.copy(
+                ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None),
+                0.into(), //Cpu
+            )).await;
 
             let Err(ThoError { msg, what:Cause::CudaWorker { msg:what_msg, is_oom, is_retryable_oom, needs_cuda_ctx_reset },.. }) = r else {
                 panic!("Got r={r:?}, expected CudaWorker error");

@@ -15,15 +15,17 @@ use tch::{Device, Tensor};
 use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::Serializer;
 use thoosa_shared::traits::Named;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
 use thoosa_shared::perf_logging::init_tracing;
+use crate::cuda_utils::cuda_mem_for_device;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{DeviceInfo, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::common::runnable::SyncStage;
@@ -61,9 +63,7 @@ impl CudaWorker {
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
 
         if ipc_sock.is_some() {
-            // console_subscriber::ConsoleLayer::builder()
-            //     .server_addr(([127, 0, 0, 1], 6677))
-            //     .init();
+
 
             let worker_cli = WorkerCli::parse();
             let ws_root:PathBuf = worker_cli.ws_path.into();
@@ -79,7 +79,7 @@ impl CudaWorker {
                 log_filename,
                 "info",
                 None,
-                true,
+                Some(([127, 0, 0, 1], 6667).into()),
             )?;
             debug!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
 
@@ -116,7 +116,12 @@ impl CudaWorker {
 
         let (mut reader, mut writer) = stream.into_split();
 
-        cuda_process::write_text_frame(&mut writer, "worker-ready").await?;
+        let (free_mem, total_mem) = cuda_mem_for_device(cuda_device);
+
+        cuda_process::write_text_frame(&mut writer, &serde_json5::to_string(&DeviceInfo{
+            free_mem,
+            total_mem
+        })?).await?;
 
         let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
 
