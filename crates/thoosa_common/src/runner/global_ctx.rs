@@ -1,5 +1,5 @@
 use crate::runner::purge::FuturesRunnerMapPurger;
-use log::{debug, info};
+use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
 use std::collections::{HashMap, HashSet};
@@ -24,6 +24,8 @@ use thoosa_shims::context::ThoCudaContext;
 use tracing::Instrument;
 use thoosa_shared::tracked_await::track_await;
 use crate::ipc::cuda_process::CudaIPCActorHandle;
+
+pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug)]
 pub struct GlobalCtx {
@@ -125,8 +127,7 @@ impl GlobalCtx {
             num_devices,
             executors: (0..num_devices).map(|tho_device_idx| {
                 DynamicTaskExecutor::new_with_reset_hook(1024, tho_device_idx, Arc::new(GlobalCtx::reset_cuda_context))
-            })
-                .collect(),
+            }).collect(),
 
             caches: parking_lot::RwLock::new(HashMap::new()),
 
@@ -249,6 +250,7 @@ impl GlobalCtx {
         debug!("GlobalCtx::remove_cache: {} lock acquired/released, removed ", key);
     }
 
+    #[inline]
     pub fn global() -> &'static Self {
         GLOBAL_CTX.get().expect("call `init_devices` first")
     }
@@ -423,14 +425,18 @@ impl GlobalCtx {
 
 
     pub async fn shutdown(&self) {
-        self.shutting_down.store(true, Relaxed);
-        //TODO
+        GLB_SHUTTING_DOWN.store(true, Relaxed);
 
-
+        for (i, actor) in self.cuda_actors.iter().enumerate() {
+            if let Err(e) = actor.shutdown().await {
+                error!("Got {e} while shutting down actor {i}");
+            }
+        }
     }
 
-    pub fn is_shutting_down(&self)->bool {
-        self.shutting_down.load(Relaxed)
+    #[inline]
+    pub fn is_shutting_down()->bool {
+        GLB_SHUTTING_DOWN.load(Relaxed)
     }
 
     //for tests and temporary fixes - use CudaActors for ipc/no ipc implemenations
@@ -484,6 +490,17 @@ pub mod mock_global_ctx {
         }
     }
 
+    #[cfg(any(test, feature = "mock_global_ctx"))]
+    pub trait GlobalCtxMockGuard {}
+
+    #[cfg(any(test, feature = "mock_global_ctx"))]
+    struct GlobalCtxMockContexts<G, S> {
+        _global_context: G,
+        _shutdown_context: S,
+    }
+
+    #[cfg(any(test, feature = "mock_global_ctx"))]
+    impl<G, S> GlobalCtxMockGuard for GlobalCtxMockContexts<G, S> {}
 
 
     #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -646,36 +663,49 @@ pub mod mock_global_ctx {
             build_with_params_inner(self, MockGlobalCtxBuildParams::default(), true)
         }
 
+
+
         #[cfg(any(test, feature = "mock_global_ctx"))]
-        pub fn install_global_ctx_mock(use_real_ctx: bool, is_ipc: bool) -> impl Drop {
+        pub fn install_global_ctx_mock(
+            use_real_ctx: bool,
+            is_ipc: bool,
+        ) -> impl GlobalCtxMockGuard {
+            use crate::runner::global_ctx::{
+                mock_global_ctx,
+                MockGlobalCtx,
+            };
+
             debug!("install_global_ctx_mock");
-            use crate::runner::global_ctx::{mock_global_ctx, MockGlobalCtx};
-            let ctx = MockGlobalCtx::global_context();
-            if use_real_ctx {
+
+            let shutdown_ctx = MockGlobalCtx::is_shutting_down_context();
+            shutdown_ctx.expect().return_const(false);
+
+            let global_ctx = MockGlobalCtx::global_context();
+
+            let global: &'static MockGlobalCtx = if use_real_ctx {
                 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 
                 let real: &'static RealGlobalCtx = RealGlobalCtx::real_global();
+
                 mock_global_ctx::set_manual_method_real_ctx(Some(real));
 
+                Box::leak(Box::new(from_real(real).build()))
+            } else {
+                mock_global_ctx::set_manual_method_real_ctx(None);
 
-                ctx.expect().returning(move || {
-                    // NOTE: this leaks once per call to GlobalCtx::global() in the test.
-                    Box::leak(Box::new(from_real(real).build()))
-                });
+                Box::leak(Box::new(build_with_params(
+                    MockGlobalCtxBuildParams::default(),
+                    is_ipc,
+                )))
+            };
 
-                return ctx;
+            global_ctx.expect().return_const(global);
+
+            GlobalCtxMockContexts {
+                _global_context: global_ctx,
+                _shutdown_context: shutdown_ctx,
             }
-
-            mock_global_ctx::set_manual_method_real_ctx(None);
-            ctx.expect().returning(move || {
-                Box::leak(Box::new(
-                    build_with_params(MockGlobalCtxBuildParams::default(), is_ipc),
-                )) as &'static MockGlobalCtx
-            });
-
-            ctx
         }
-
     }
 
     fn build_with_params_inner(builder: MockGlobalCtxBuilder, params: MockGlobalCtxBuildParams, is_ipc: bool) -> MockGlobalCtx {
@@ -780,97 +810,18 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
 
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    #[test]
-    fn test_0() -> Result<(), ThoError>{
-         fn test_xxx(gate:Arc<(Condvar, Mutex<bool>)>){
-            let (cvar, lock) = &*gate;
-            let mut released = lock.lock();
 
-            while !*released {
-                cvar.wait(&mut released);
-            }
-
-            debug!("test_0");
-        }
-
-        let gate = Arc::new((Condvar::new(), Mutex::new(false)));
-        let gate_0 = Arc::clone(&gate);
-        let gate_1 = Arc::clone(&gate);
-
-
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .max_blocking_threads(2)
-            .enable_all()
-            .build()?;
-
-
-        // #[tracing::instrument(level = "debug")]
-        async fn zzzz() -> Result<(), ThoError>{
-            tokio::time::sleep(Duration::from_secs(600)).await;
-            Ok(())
-        }
-
-
-        rt.block_on(async {
-
-            tokio::task::spawn(async move {
-                debug!("spawn 0");
-                let x = zzzz()
-                    // .instrument(tracing::debug_span!("zzzz", file = file!(), line = line!()))
-                    .await?;
-
-                Ok::<(), ThoError>(())
-            });
-
-            // spawn_blocking(move ||{
-            //     let i = test_xxx(gate_0)
-            //         .instrument(tracing::debug_span!("test_0/1", file = file!(), line = line!()));
-            //
-            //     debug!("spawn_blocking 0");
-            //     Ok::<_, ThoError>(i.into_inner())
-            // });
-            //
-            // spawn_blocking(move ||{
-            //     let i = test_xxx(gate_1)
-            //         .instrument(tracing::debug_span!("test_0/1", file = file!(), line = line!()));
-            //
-            //     debug!("spawn_blocking 1");
-            //     Ok::<_, ThoError>(i.into_inner())
-            // });
-            //
-            // spawn_blocking(move ||{
-            //
-            //     debug!("spawn_blocking 2");
-            //     Ok::<_, ThoError>(())
-            // })
-
-
-        });
-
-        let (cvar, lock) = &*gate;
-        *lock.lock() = true;
-
-
-        Ok(())
-    }
-
-    // TODO
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_device_reset() -> Result<(), ThoError>{
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
-        // let cu_ctx = ThoCudaContext::new(0 as i32)?;
-        // cu_ctx.reset()?;
+
 
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
         let tmp_cache:TmpCached<ThoTensor<AnyDims, u32>> = TmpCached::new("tmp").await;
-
-        // let t_0 = Arc::new(DevicesWrap::wrap(ThoTensor::new((), Tensor::rand(&[100000], FLOAT_CUDA))?));
 
         tmp_cache.insert(ThoTensor::new(777u32, Tensor::rand(&[100000], FLOAT_CUDA))?);
         let t_0 = tmp_cache.get(&777u32).unwrap();
@@ -883,9 +834,7 @@ mod tests {
         debug!("sum_0={sum_0}");
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
-        // GlobalCtx::global().drop_device(1, "drop").await?;
-        // let cu_ctx = ThoCudaContext::new(0 as i32)?;
-        // cu_ctx.reset()?;
+
 
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
         cuda_actor.reset().await?;

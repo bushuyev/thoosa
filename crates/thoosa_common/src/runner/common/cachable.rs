@@ -204,6 +204,10 @@ where
                 trace!("Cachable::purge_gpu_cache_area: 1  key={key_for_purger:?}");
 
                 async move {
+                    if GlobalCtx::is_shutting_down(){
+                        return Ok(());
+                    }
+
                     let Some(shared_fut) = track_await(Self::cache()).await.get(&key_for_purger) else {
                         debug!("Cachable::purge_gpu_cache_area: key_for_purger={key_for_purger:?} not found in {:?}", Self::name()); //must have been purged by dump_all_to_cpu
                         return Ok(());
@@ -621,6 +625,10 @@ where
 
     pub async fn dump_to_cpu(&self, device_idx: usize) -> Result<(), ThoError>
     {
+        if GlobalCtx::is_shutting_down(){
+            return Ok(());
+        }
+
         if self.is_all_on_cpu_resident() {
             self.mark_on_cpu_since_if_all_on_cpu(GlobalCtx::global().cache_age());
             return Ok(());
