@@ -19,7 +19,7 @@ use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
 use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use crate::runner::common::runnable::{AsyncStage, SyncStage};
-use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
@@ -69,7 +69,7 @@ fn test_worker_args(test_name: &str, module: &str) -> Vec<String> {
     vec![test_name, "--exact".to_string(), "--nocapture".to_string()]
 }
 
-pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, ThoError> {
+pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl GlobalCtxMockGuard, ThoError> {
     unsafe {
         let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
     }
@@ -78,7 +78,7 @@ pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, T
     RealGlobalCtx::init_devices_ipc(2, test_worker_args(test_name, module)).await?;
     let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
-    debug!("init_ipc_test: don ok");
+    debug!("init_ipc_test: done");
 
     Ok(ctx)
 }

@@ -9,6 +9,7 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
 use std::sync::{Arc, LazyLock, OnceLock};
 use std::time::{Duration, Instant};
+use console_subscriber::ServerAddr;
 use dashmap::DashMap;
 use log::{debug, LevelFilter};
 use tracing::{error, Level};
@@ -357,7 +358,7 @@ pub fn init_tracing(
     log_file: PathBuf,
     perf_filter: &str,
     perf_file: Option<PathBuf>,
-    set_global_default: bool,
+    console_addr: Option<ServerAddr>,
 ) -> Result<(), ThoError> {
     if TRACING_INIT.get().is_some() {
         panic!("init_tracing() called more than once in the same process");
@@ -404,21 +405,23 @@ pub fn init_tracing(
         None
     };
 
-    if set_global_default {
-        let console_layer = console_subscriber::spawn();
 
-        let subscriber = registry()
-            .with(console_layer)
-            .with(stdout_layer)
-            .with(file_layer)
-            .with(perf_layer)
-            .with(PerfLayer::new());
+    let console_layer = console_subscriber::ConsoleLayer::builder()
+        .server_addr(console_addr.unwrap_or(([127, 0, 0, 1], 6677).into()))
+        .spawn();
 
-        tracing::subscriber::set_global_default(subscriber).map_err(|e| {
-            error!("Init tracing logging failed: {e:?}");
-            ThoError::from_error("set global tracing subscriber", e)
-        })?;
-    }
+    let subscriber = registry()
+        .with(console_layer)
+        .with(stdout_layer)
+        .with(file_layer)
+        .with(perf_layer)
+        .with(PerfLayer::new());
+
+    tracing::subscriber::set_global_default(subscriber).map_err(|e| {
+        error!("Init tracing logging failed: {e:?}");
+        ThoError::from_error("set global tracing subscriber", e)
+    })?;
+
 
     init_log_tracer(max_level);
 

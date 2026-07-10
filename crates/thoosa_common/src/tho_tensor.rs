@@ -122,7 +122,7 @@ impl Debug for ThoTensorInner {
 }
 
 //D:Dims - is just a reminder of what dimensions a tensor has.
-pub struct ThoTensor<D = AnyDims, Id = ()>
+pub struct  ThoTensor<D = AnyDims, Id = ()>
 where
     D:Dims,
     Id:Named + Debug + Clone
