@@ -37,7 +37,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 use std::{fs, process};
-use tch::kind::FLOAT_CPU;
+use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::nn::VarStore;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
@@ -79,7 +79,7 @@ use tokio::time::MissedTickBehavior;
 use tokio::{select, sync::watch, time::{self, Duration}};
 use torch_sys::at_grad_set_enabled;
 use tracing::Instrument;
-
+use thoosa_common::ipc::cuda_process::CUDA_VISIBLE_DEVICES;
 use crate::tasks::apply_motif_nets::apply_motif_net_forward;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use crate::tasks::bucketing::{BucketRunConfig, BucketRunConfigRangeOrValue, BucketingInput, BucketingStage};
@@ -147,8 +147,12 @@ pub struct Cli {
     #[arg(long)]
     pub run_id:Option<u32>,
 
+    #[arg(long)]
+    pub ipc:bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
+
 }
 
 #[derive(Args, Debug, Clone)]
@@ -433,7 +437,7 @@ where
         log_filename,
         "info",
         perf_path,
-        true,
+        None,
     )?;
 
     init_cpp_logging();
@@ -486,18 +490,24 @@ where
 
     let tensors_path = ws.read().tensors_path().clone();
 
-    // Creates CPU plus GPU device wrappers for the async runner. Big tensors crossing awaits should remain in run_cached/TmpCached so OOM handling can dump them to CPU.
-    // if tch::Cuda::is_available() {
-    //     kick_register_cuda_hooks();
-    //     // thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+    if cli.ipc {
+        info!("Running in IPC mode");
+
+        if !std::env::var(CUDA_VISIBLE_DEVICES).map(|v|v.eq("-1")).unwrap_or(false) {
+            println!("Run with CUDA_VISIBLE_DEVICES=-1 in IPC mode");
+            std::process::exit(0);
+        }
+
         thoosa_common::runner::global_ctx::GlobalCtx::init_devices_ipc(2, vec![
             format!("--ws-path={}", cli.ws_path),
             format!("--term-logger-level={}", cli.term_logger_level),
             format!("--write-logger-level={}", cli.write_logger_level)
         ]).await?;
-    // } else {
-    //     thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
-    // }
+    } else {
+        // kick_register_cuda_hooks();
+        thoosa_common::runner::global_ctx::GlobalCtx::init_devices(2);
+    }
+
 
     let (stop_cpu_purge_tx, mut rx) = watch::channel(false);
     let metrics = Handle::current().metrics();
@@ -580,10 +590,10 @@ where
                 )))?,
             )
         },
-        ThoDevice::from(Device::Cpu),//it's always cpu
+        ThoDevice::from(Cpu),//it's always cpu
     ));
 
-    let mut root_ctx = RunCtxImpl::new(1, "root_ctx");
+    let mut root_ctx = RunCtxImpl::new(1, "root_ctx");//TODO config
 
     // ImportResources is the only command that calls the project OGG decoder directly;
     // later commands load the persisted tensor files through RawTensorLoader.
@@ -971,6 +981,7 @@ where
 
     info!("\n{}", format_perf_map(&PERF));
 
+    // std::process::exit(0);
     track_await(GlobalCtx::global().shutdown()).await;
 
     let _ = stop_cpu_purge_tx.send(true);

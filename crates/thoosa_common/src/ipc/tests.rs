@@ -78,7 +78,7 @@ pub async fn init_ipc_test(test_name: &str, module: &str) -> Result<impl Drop, T
     RealGlobalCtx::init_devices_ipc(2, test_worker_args(test_name, module)).await?;
     let ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
 
-    debug!("init_ipc_test: don ok");
+    debug!("init_ipc_test: done");
 
     Ok(ctx)
 }
