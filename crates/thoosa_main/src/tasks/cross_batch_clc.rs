@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::HashMap;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::dists_tracker::DistsMask;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -21,6 +22,7 @@ use futures_util::FutureExt;
 use serde::{Deserialize, Serialize};
 use tch::{TchError, Tensor};
 use tch::kind::FLOAT_CPU;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_motifs::distance::clc_dist_d2;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -425,11 +427,12 @@ struct CrossUnfoldClcFindMotifsIpcWrapper {
 impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMotifsIpcWrapper {
     fn do_run(
         &self,
-        input: &[u8],
-        all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, tch::Tensor>>>,
+        _input: &[u8],
+        all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
+        tho_device: &ThoDevice,
     ) -> Result<Vec<u8>, ThoError> {
         type __ProxyIpcCodec = thoosa_common::ipc::codec::JsonIpcCodec;
-        let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(input)?;
+        let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(_input)?;
 
         debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: input={input:?}");
 
@@ -457,7 +460,7 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
 
         debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: out={out:?}");
 
-        <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, all_cuda_tensors)
+        <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, all_cuda_tensors, tho_device)
     }
 }
 
@@ -649,7 +652,8 @@ impl<R: Debug> CrossUnfoldClcOutput<R> {
 impl thoosa_common::ipc::cuda_wokrer::WorkerStageOutput for CrossUnfoldClcOutput<DistsMask> {
     fn encode_from_worker<C: thoosa_common::ipc::codec::IpcCodec>(
         self,
-        all_cuda_tensors: &Arc<parking_lot::Mutex<std::collections::HashMap<u64, Tensor>>>,
+        all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
+        tho_device: &ThoDevice,
     ) -> Result<Vec<u8>, ThoError> {
         let Self {
             id,
@@ -657,7 +661,7 @@ impl thoosa_common::ipc::cuda_wokrer::WorkerStageOutput for CrossUnfoldClcOutput
             iter_0,
             iter_1,
         } = self;
-        let clc_result = clc_result.into_worker_ipc_refs(all_cuda_tensors)?;
+        let clc_result = clc_result.into_worker_ipc_refs(all_cuda_tensors, tho_device)?;
         C::encode(&CrossUnfoldClcOutput::new(clc_result, iter_0, iter_1, id))
     }
 }

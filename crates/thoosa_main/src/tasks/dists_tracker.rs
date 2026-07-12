@@ -534,7 +534,7 @@ impl DistsMask {
     }
 
     async fn copy_tensor_to_cpu(tensor: DistsMaskTensor, label: &'static str) -> Result<Tensor, ThoError> {
-        let device_idx = Data::device(&tensor);
+
         match tensor.inner {
             ThoTensorInner::Val { t } if t.device().eq(&Cpu) => Ok(t),
             ThoTensorInner::Val { t } => {
@@ -547,14 +547,14 @@ impl DistsMask {
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying local tensor device={device:?}");
                 Ok(track_await(GlobalCtx::global().cuda_actor(device).copy(t.into(), 0.into())).await?.t())
             }
-            ThoTensorInner::Ref { key, size, kind, selector } => {
-                let device = ThoDevice::from(device_idx);
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
+                let device = ThoDevice::from(tho_device_idx);
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} device={device:?}");
                 let actor = GlobalCtx::global().cuda_actor(device);
-                let copied = track_await(actor.copy(ThoTensor::new_ref((), key, size, kind, selector), 0.into())).await?.t();
+                let copied = track_await(actor.copy(ThoTensor::new_ref((), key, size, kind, selector, 1), 0.into())).await?.t();//TODO remove extra ThoTensor::new_ref
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} device={device:?} copied={copied:?}");
 
-                track_await(actor.drop_tho_tensor(ThoTensor::new_ref((), key, vec![], tch::Kind::Float, None))).await?;
+                track_await(actor.drop_tho_tensor(ThoTensor::new_ref((), key, vec![], tch::Kind::Float, None, 1))).await?;
 
                 debug!("DistsMask::copy_tensor_to_cpu: label={label} copying IPC tensor ref key={key} dropped");
 
@@ -563,18 +563,18 @@ impl DistsMask {
         }
     }
 
-    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<DistsMaskTensor, ThoError> {
+    pub(crate) fn into_worker_ipc_refs(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Self, ThoError> {
+        fn to_ref(id: SynKey, tensor: DistsMaskTensor, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<DistsMaskTensor, ThoError> {
             let tensor = DistsMask::into_local_tensor(tensor, "into_worker_ipc_refs")?;
             let size = tensor.size();
             let kind = tensor.kind();
             let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
-            Ok(ThoTensor::new_ref(id, key, size, kind, None))
+            Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.ordinal()))
         }
 
         Ok(Self {
-            mask: to_ref("DistsMask.mask".into(), self.mask, all_cuda_tensors)?,
-            dists: self.dists.map(|dists| to_ref("DistsMask.dists".into(), dists, all_cuda_tensors)).transpose()?,
+            mask: to_ref("DistsMask.mask".into(), self.mask, all_cuda_tensors, tho_device)?,
+            dists: self.dists.map(|dists| to_ref("DistsMask.dists".into(), dists, all_cuda_tensors, tho_device)).transpose()?,
             mask_type: self.mask_type,
         })
     }
@@ -882,8 +882,8 @@ impl<'de> Deserialize<'de> for DistsMask {
 }
 
 impl WorkerStageOutput for DistsMask {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
-        C::encode(&self.into_worker_ipc_refs(all_cuda_tensors)?)
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        C::encode(&self.into_worker_ipc_refs(all_cuda_tensors, tho_device)?)
     }
 }
 

@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use clap::Parser;
 use dashmap::DashMap;
 use log::{debug, error, LevelFilter};
@@ -71,6 +72,7 @@ impl CudaWorker {
             let log_filename = ws_root.join("log")
                 .join(format!("thoosa_worker_{}.log", cdt).to_owned());
 
+
             let _logging_guards = init_tracing(
                 worker_cli.term_logger_level,
                 false,
@@ -85,6 +87,11 @@ impl CudaWorker {
 
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                .thread_name_fn(|| {
+                    static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+                    let id = TOKIO_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+                    format!("cuda-worker-{id}")
+                })
                 .build()?;
             rt.block_on(async {
                 CudaWorker::run_worker(init_map, ThoDevice::from(Device::Cuda(0))).await
@@ -98,6 +105,7 @@ impl CudaWorker {
 
     pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>, tho_device: ThoDevice) -> Result<(), ThoError> {
 
+        let with_digest = false;//TODO config
         let sock_path = std::env::var_os(IPC_SOCK_ENV)
             .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
         let cuda_device = tho_device.gpu_ordinal();
@@ -108,7 +116,7 @@ impl CudaWorker {
                 .collect::<Result<Vec<_>, _>>()?,
         ));
 
-        debug!("running worker: sock_path={sock_path:?} cuda_device={cuda_device} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
+        debug!("run_worker: sock_path={sock_path:?} cuda_device={cuda_device} endpoint_inits.keys={:?}", endpoint_inits.keys().collect::<Vec<_>>());
 
         let stream = UnixStream::connect(PathBuf::from(sock_path)).await?;
 
@@ -118,10 +126,14 @@ impl CudaWorker {
 
         let (free_mem, total_mem) = cuda_mem_for_device(cuda_device);
 
-        cuda_process::write_text_frame(&mut writer, &serde_json5::to_string(&DeviceInfo{
-            free_mem,
-            total_mem
-        })?).await?;
+        cuda_process::write_text_frame(
+            &mut writer,
+            &serde_json5::to_string(&DeviceInfo {
+                free_mem,
+                total_mem
+            })?,
+            "run_worker"
+        ).await?;
 
         let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
 
@@ -133,7 +145,7 @@ impl CudaWorker {
         let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
 
         loop {
-            let frame = match cuda_process::read_text_frame(&mut reader).await {
+            let frame = match cuda_process::read_text_frame(&mut reader, "run_worker").await {
                 Ok(frame) => frame,
                 Err(error) => {
                     if Error::source(&error)
@@ -208,6 +220,8 @@ impl CudaWorker {
                     }
                     Err(error) => cuda_process::encode_worker_copy_error(&ThoError::new(format!("failed to parse H2D start payload: {error}"))),
                 };
+
+                debug!("run_worker: H2D_START_PAYLOAD_PREFIX, payload={payload:?}");
                 reply_tx
                     .send(WorkerReply {
                         id,
@@ -266,7 +280,7 @@ impl CudaWorker {
                         if pending_h2d_transfers.get(&transfer_id).is_some_and(PendingWorkerH2dTransfer::is_complete) {
                             let transfer = pending_h2d_transfers.remove(&transfer_id).expect("complete H2D transfer disappeared");
                             let resources = cuda_process::get_or_create_worker_cuda_resources(&mut cuda_resources, cuda_device)?;
-                            cuda_process::spawn_worker_h2d_copy_task(transfer, resources, Arc::clone(&all_cuda_tensors), reply_tx.clone());
+                            cuda_process::spawn_worker_h2d_copy_task(transfer, resources, Arc::clone(&all_cuda_tensors), reply_tx.clone(), with_digest);
                         }
                     }
                     IpcTransferDirection::DeviceToHost => {
@@ -283,7 +297,7 @@ impl CudaWorker {
                         if pending_d2h_transfers.get(&transfer_id).is_some_and(PendingWorkerD2hTransfer::is_complete) {
                             let transfer = pending_d2h_transfers.remove(&transfer_id).expect("complete D2H transfer disappeared");
                             let resources = cuda_process::get_or_create_worker_cuda_resources(&mut cuda_resources, cuda_device)?;
-                            cuda_process::spawn_worker_d2h_copy_task(transfer, resources, Arc::clone(&all_cuda_tensors), reply_tx.clone());
+                            cuda_process::spawn_worker_d2h_copy_task(transfer, resources, Arc::clone(&all_cuda_tensors), reply_tx.clone(), with_digest);
                         }
                     }
                     IpcTransferDirection::GpuToGpuThroughHost => {
@@ -335,7 +349,7 @@ impl CudaWorker {
                                 let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
 
-                                let response = endpoint.do_run(&input, &all_cuda_tensors);
+                                let response = endpoint.do_run(&input, &all_cuda_tensors, &tho_device);
                                 let sync_result = stream.synchronize();
                                 match (response, sync_result) {
                                     (Ok(response), Ok(())) => Ok(response),
@@ -422,7 +436,7 @@ pub trait WorkerStageInput: Debug + Sized {
 }
 
 pub trait WorkerStageOutput: Debug + Sized {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError>;
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError>;
 }
 
 impl<D, Id> WorkerStageInput for ThoTensor<D, Id>
@@ -481,14 +495,14 @@ where
     D: Dims,
     Id: Named + Debug + Clone + Serialize,
 {
-    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let size = out_tensor.size();
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
 
-        C::encode(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None))
+        C::encode(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.ordinal()))
     }
 }
 
