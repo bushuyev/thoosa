@@ -103,19 +103,20 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
 
 pub/*TODO*/ enum ThoTensorInner {
     Val { t: Tensor },
-    Ref { key: u64, size:Vec<i64>, kind:Kind, selector:Option<Box<dyn ThoSelector>> },
+    Ref { key: u64, size:Vec<i64>, kind:Kind, selector:Option<Box<dyn ThoSelector>>, tho_device_idx:usize },
 }
 
 impl Debug for ThoTensorInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ThoTensorInner::Val { t } => f.debug_struct("Val").field("t", t).finish(),
-            ThoTensorInner::Ref { key, size, kind, selector } => f
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => f
                 .debug_struct("Ref")
                 .field("key", key)
                 .field("size", size)
                 .field("kind", kind)
                 .field("selector", selector)
+                .field("tho_device_idx", tho_device_idx)
                 .finish(),
         }
     }
@@ -217,7 +218,7 @@ where
                     .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
                     .unwrap_or(Self::Metrics::default())
             },
-            ThoTensorInner::Ref { key, size, kind, selector } => {
+            ThoTensorInner::Ref { size, .. } => {
                 Self::Metrics::try_from(size.clone()).unwrap_or_else(|e| {
                     panic!("Tho tensor size metrics conversion failed")
                 })
@@ -226,13 +227,13 @@ where
 
     }
 
-    fn device(&self) -> usize {
+    fn device(&self) -> usize {//TODO rename tho_device
         match &self.inner {
             ThoTensorInner::Val { t } => {
                 ThoDevice::from(t.device()).ordinal()
             }
-            ThoTensorInner::Ref { key, .. } => {
-                1
+            ThoTensorInner::Ref { tho_device_idx, .. } => {
+                *tho_device_idx
             }
         }
     }
@@ -302,7 +303,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         })
     }
 
-    pub fn new_ref(id: Id, key:u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>) -> Self {
+    pub fn new_ref(id: Id, key:u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, tho_device_idx: usize) -> Self {
 
         Self {
             id,
@@ -311,6 +312,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
                 size,
                 kind,
                 selector,
+                tho_device_idx,
             },
             tracking: Default::default(),
             pd: PhantomData,
@@ -379,7 +381,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     // #[cfg(test)]
-    pub fn t_ref(&self) -> &Tensor {
+    pub fn t_ref(&self) -> &Tensor {//TODO remove
         self.inner_tensor_ref()
     }
 
@@ -409,7 +411,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         let Self { id, inner, .. } = self;
         let t = match inner {
             ThoTensorInner::Val { t } => t,
-            ThoTensorInner::Ref { key, size, kind, selector } => todo!("out-of-process ThoTensor ref is not mutable in this process, key={key}"),
+            ThoTensorInner::Ref { key, .. } => todo!("out-of-process ThoTensor ref is not mutable in this process, key={key}"),
         };
         ThoTensorMut {
             id,
@@ -427,7 +429,15 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     pub fn tho_device(&self) -> ThoDevice {
-        ThoDevice::from(self.t_ref().device())
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                ThoDevice::from(t.device())
+            }
+            ThoTensorInner::Ref {  tho_device_idx, .. } => {
+                <usize as Into<ThoDevice>>::into(*tho_device_idx)
+            }
+        }
+
     }
 
 
@@ -495,11 +505,11 @@ where
                         dst_device,
                     )).await?
             }
-            ThoTensorInner::Ref { key, size, kind, selector } => {
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key} dst_device.ordinal={:?}", self.id, dst_device.ordinal());
                 track_await(cuda_actor
                     .copy(
-                        ThoTensor::new_ref((), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box())),
+                        ThoTensor::new_ref((), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx),//TODO remove extra ThoTensor::new_ref
                         dst_device,
                     )).await?
             }
@@ -507,7 +517,7 @@ where
 
         if let Some(key) = copy.ref_key() {
             debug!("CopyToDevice for ThoTensor: self.id={:?} dst_device={dst_device:?} copied to out-of-process ref key={key}", self.id);
-            return Ok(ThoTensor::new_ref(id, key, vec![], tch::Kind::Float, None));
+            return Ok(ThoTensor::new_ref(id, key, vec![], tch::Kind::Float, None, 1));
         }
 
         let copy = copy.t();

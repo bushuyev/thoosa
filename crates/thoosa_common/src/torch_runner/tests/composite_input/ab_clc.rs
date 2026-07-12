@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use tch::Kind;
+use tch::{Kind, Tensor};
 use tracing::debug;
 use cached_derive::Cached;
 use thoosa_dummy_data_derive::DummyData;
@@ -303,9 +304,9 @@ struct ABClcSyncStageIpcWrapper {
     stage: std::sync::Arc<ABClcSyncStage>,
 }
 impl crate::ipc::json_ser::SyncStageIpcWrapper for ABClcSyncStageIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<u64, tch::Tensor>>> ) -> Result<Vec<u8>, thoosa_shared::ThoError> {
+    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
         type __ProxyIpcCodec = crate::ipc::codec::JsonIpcCodec;
-        let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(input)?;
+        let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(_input)?;
         let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, all_cuda_tensors)?;
         let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, all_cuda_tensors)?;
         let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?;

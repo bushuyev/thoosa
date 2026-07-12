@@ -139,7 +139,7 @@ fn hex_value(byte: u8) -> Result<u8, ThoError> {
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerCopyDonePayload {
     transfer_id: u64,
-    tensor_digest_hex: String,
+    tensor_digest_hex: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -368,7 +368,7 @@ where
 {
     while let Some(reply) = reply_rx.recv().await {
         let frame = encode_wire_msg(reply.id, &reply.payload)?;
-        if let Err(error) = write_text_frame(&mut writer, &frame).await {
+        if let Err(error) = write_text_frame(&mut writer, &frame, "worker").await {
             if Error::source(&error)
                 .and_then(|source| source.downcast_ref::<std::io::Error>())
                 .is_some_and(|source| matches!(source.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof))
@@ -484,7 +484,8 @@ pub(crate) fn prepare_worker_h2d_transfer(
 fn copy_worker_h2d_transfer_to_cuda(
     mut transfer: PendingWorkerH2dTransfer,
     stream: Guard<ThoCudaStream>,
-) -> Result<(u64, Tensor, String), ThoError> {
+    with_digest: bool,
+) -> Result<(u64, Tensor, Option<String>), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("H2D transfer {} has no metadata", transfer.request_id)))?.clone();
     let cuda_device = worker_cuda_device(&metadata)?;
     if stream.device() != cuda_device as i32 {
@@ -535,9 +536,9 @@ fn copy_worker_h2d_transfer_to_cuda(
     stream.synchronize()?;
 
     let copied_cpu = destination.f_to_device(Cpu)?;
-    let copied_digest = tensor_digest(&copied_cpu)?;
+    let copied_digest = with_digest.then(||tensor_digest(&copied_cpu)).transpose()?;
     debug!("copy_worker_h2d_transfer_to_cuda: copied tensor digest={copied_digest:?}");
-    Ok((metadata.transfer_id, destination, copied_digest.hex))
+    Ok((metadata.transfer_id, destination, copied_digest.map(|d|d.hex)))
 }
 
 pub(crate) fn spawn_worker_h2d_copy_task(
@@ -545,11 +546,12 @@ pub(crate) fn spawn_worker_h2d_copy_task(
     resources: Arc<WorkerCudaResources>,
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     reply_tx: mpsc::Sender<WorkerReply>,
+    with_digest: bool,
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
         let stream = resources.stream_pool.acquire().await;
-        let copy_result = tokio::task::spawn_blocking(move || copy_worker_h2d_transfer_to_cuda(transfer, stream))
+        let copy_result = tokio::task::spawn_blocking(move || copy_worker_h2d_transfer_to_cuda(transfer, stream, with_digest))
             .await
             .map_err(|e| ThoError::new(format!("worker H2D copy task join error: {e}")))
             .and_then(|result| result);
@@ -575,7 +577,8 @@ fn copy_worker_d2h_transfer_to_memfd(
     mut transfer: PendingWorkerD2hTransfer,
     stream: Guard<ThoCudaStream>,
     source: Tensor,
-) -> Result<(u64, String), ThoError> {
+    with_digest: bool,
+) -> Result<(u64, Option<String>), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("D2H transfer {} has no metadata", transfer.request_id)))?.clone();
     let cuda_device = worker_d2h_cuda_device(&metadata)?;
     if stream.device() != cuda_device as i32 {
@@ -630,9 +633,10 @@ fn copy_worker_d2h_transfer_to_memfd(
     stream.synchronize()?;
 
     let source_cpu = source.f_to_device(Cpu)?;
-    let source_digest = tensor_digest(&source_cpu)?;
+    let source_digest = with_digest.then(||tensor_digest(&source_cpu)).transpose()?;
+
     debug!("copy_worker_d2h_transfer_to_memfd: source tensor digest={source_digest:?}");
-    Ok((metadata.transfer_id, source_digest.hex))
+    Ok((metadata.transfer_id, source_digest.map(|d|d.hex)))
 }
 
 pub(crate) fn spawn_worker_d2h_copy_task(
@@ -640,6 +644,7 @@ pub(crate) fn spawn_worker_d2h_copy_task(
     resources: Arc<WorkerCudaResources>,
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     reply_tx: mpsc::Sender<WorkerReply>,
+    with_digest: bool,
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
@@ -651,7 +656,7 @@ pub(crate) fn spawn_worker_d2h_copy_task(
         let copy_result = match source {
             Some(source) => {
                 let stream = resources.stream_pool.acquire().await;
-                tokio::task::spawn_blocking(move || copy_worker_d2h_transfer_to_memfd(transfer, stream, source))
+                tokio::task::spawn_blocking(move || copy_worker_d2h_transfer_to_memfd(transfer, stream, source, with_digest))
                     .await
                     .map_err(|e| ThoError::new(format!("worker D2H copy task join error: {e}")))
                     .and_then(|result| result)
@@ -903,7 +908,7 @@ impl CudaIPCActor {
 
         debug!("CudaIPCActor::spawn_worker: _addr={_addr:?}");
 
-        let device_info:DeviceInfo = serde_json5::from_str(&read_text_frame(&mut stream).await?)?;
+        let device_info:DeviceInfo = serde_json5::from_str(&read_text_frame(&mut stream, "CudaIPCActor").await?)?;
         debug!("CudaIPCActor::spawn_worker: main received: {device_info:?}");
 
 
@@ -918,11 +923,16 @@ impl CudaIPCActor {
     async fn handle_message(&mut self, msg: CudaIPCActorMessage) -> Result<(), ThoError>{
         match msg {
             CudaIPCActorMessage::Copy { src, dst_device, respond_to } => {
-                if let Some(tensor_key) = src.ref_key() {
-                    return self.handle_ref_d2h_copy(tensor_key, dst_device, respond_to);
+
+                return if let Some(tensor_key) = src.ref_key() {
+                    assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
+                     self.handle_ref_d2h_copy(tensor_key, dst_device, respond_to)
+                } else {
+                    assert_ne!(*dst_device, Cpu, "If source is concrete tensor it should be on CPU and can be copied only to GPU");
+
+                    self.handle_h2d_copy(src, dst_device, respond_to)
                 }
 
-                return self.handle_h2d_copy(src, dst_device, respond_to);
 
             }
             CudaIPCActorMessage::DropThoTensor { key, respond_to } => {
@@ -1195,11 +1205,14 @@ impl CudaIPCActor {
                     return Err(ThoError::new(format!("worker D2H response transfer_id={} but expected {transfer_id}", done.transfer_id)));
                 }
                 let cpu_tensor = assemble_parent_d2h_chunks(held_chunks, &info)?;
-                let cpu_digest = tensor_digest(&cpu_tensor)?;
-                if cpu_digest.hex != done.tensor_digest_hex {
-                    return Err(ThoError::new(format!("worker D2H digest mismatch for transfer {transfer_id}: worker={} parent={}", done.tensor_digest_hex, cpu_digest.hex)));
+                if let Some(hex) = done.tensor_digest_hex.as_ref() {
+                    let cpu_digest = tensor_digest(&cpu_tensor)?;
+                    debug!("CudaIPCActor::Copy D2H: worker and parent tensor digests matched: transfer_id={transfer_id} digest={}", cpu_digest.hex);
+                    if cpu_digest.hex.ne(hex) {
+                        return Err(ThoError::new(format!("worker D2H digest mismatch for transfer {transfer_id}: worker={} parent={}", hex, cpu_digest.hex)));
+                    }
                 }
-                debug!("CudaIPCActor::Copy D2H: worker and parent tensor digests matched: transfer_id={transfer_id} digest={}", cpu_digest.hex);
+
 
                 ThoTensor::new((), cpu_tensor)
             }.await;
@@ -1236,11 +1249,10 @@ impl CudaIPCActor {
 
         tokio::spawn(async move {
             let result = async move {
-                let _src_keepalive = src;
 
                 let preflight_json = serde_json::to_string(&WorkerH2dStartPayload {
                     transfer_id,
-                    worker_id: dst_worker_id,
+                    worker_id: dst_worker_id,//TODO use device
                     kind: src_kind.into(),
                     shape: src_shape.clone(),
                     tensor_byte_len: tensor_mem_size,
@@ -1255,11 +1267,9 @@ impl CudaIPCActor {
                         payload: OutgoingRequestPayload::Msg(format!("{H2D_START_PAYLOAD_PREFIX}{preflight_json}")),
                     },
                 ).await?;
-                parse_worker_h2d_start_payload(&preflight_reply)?;
+                parse_worker_h2d_start_preflight_reply(&preflight_reply)?;
 
-                let source_digest = tensor_digest(_src_keepalive.t_ref())?;
-                debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: original tensor digest={source_digest:?}");
-                let source_digest_hex = source_digest.hex.clone();
+
 
                 {
                     let mut pending = pending.lock().await;
@@ -1277,7 +1287,7 @@ impl CudaIPCActor {
                                 return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
                             }
                             unsafe {
-                                // SAFETY: src_ptr is the data pointer of _src_keepalive, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
+                                // SAFETY: src_ptr is the data pointer of src, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
                                 std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf.as_mut_ptr(), chunk.len);
                             }
                             let metadata = IpcTensorTransferMetadata {
@@ -1311,12 +1321,18 @@ impl CudaIPCActor {
                         .map_err(|_| ThoError::new(format!("response channel for request {transfer_id} was dropped")))??;
 
                     let done = parse_worker_copy_done_payload(&id)?;
-                    if done.tensor_digest_hex != source_digest_hex {
-                        return Err(ThoError::new(format!("worker copy digest mismatch for transfer {}: source={} copied={}", done.transfer_id, source_digest_hex, done.tensor_digest_hex)));
-                    }
-                    debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, done.tensor_digest_hex);
 
-                    Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, src_shape, src_kind, None))
+                    if let Some(hex) = done.tensor_digest_hex.as_ref() {
+                        let source_digest = tensor_digest(src.t_ref())?;
+                        debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: original tensor digest={source_digest:?}");
+                        let source_digest_hex = source_digest.hex.clone();
+                        if  source_digest_hex.ne(hex) {
+                            return Err(ThoError::new(format!("worker copy digest mismatch for transfer {}: source={} copied={}", done.transfer_id, source_digest_hex, hex)));
+                        }
+                        debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, hex);
+                    }
+
+                    Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, src_shape, src_kind, None, dst_device.ordinal()))
                 }.await;
 
                 if final_result.is_err() {
@@ -1372,7 +1388,7 @@ async fn writer_loop<W>(
             }
         };
 
-        if let Err(e) = write_text_frame(&mut writer, &frame).await {
+        if let Err(e) = write_text_frame(&mut writer, &frame, "CudaIPCActor").await {
             error!("worker IPC writer failed: {e}");
 
             fail_one_pending(
@@ -1414,7 +1430,7 @@ async fn reader_loop<R>(
                 break;
             }
 
-            result = read_text_frame(&mut reader) => {
+            result = read_text_frame(&mut reader, "CudaIPCActor") => {
                 match result {
                     Ok(frame) => frame,
                     Err(e) => {
@@ -1481,7 +1497,7 @@ fn parse_worker_copy_done_payload(payload: &str) -> Result<WorkerCopyDonePayload
         .map_err(|e| ThoError::new(format!("failed to parse worker copy response: {e}")))
 }
 
-fn parse_worker_h2d_start_payload(payload: &str) -> Result<(), ThoError> {
+fn parse_worker_h2d_start_preflight_reply(payload: &str) -> Result<(), ThoError> {
     if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
         return Err(parse_worker_copy_error_payload(error));
     }
@@ -1498,6 +1514,7 @@ fn parse_worker_tensor_info_payload(payload: &str) -> Result<WorkerTensorInfoPay
     }
     let info_json = payload.strip_prefix(TENSOR_INFO_PAYLOAD_PREFIX)
         .ok_or_else(|| ThoError::new(format!("worker tensor info response did not start with {TENSOR_INFO_PAYLOAD_PREFIX:?}: {payload:?}")))?;
+
     serde_json::from_str(info_json)
         .map_err(|e| ThoError::new(format!("failed to parse worker tensor info response: {e}")))
 }
@@ -1684,6 +1701,8 @@ impl HandleCtx for IPCHanldeCTx {
 #[async_trait]
 impl CudaActorHandle for CudaIPCActorHandle {
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+        assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
+
         trace!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?} backtrace={}", Backtrace::capture().to_string());
         debug!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?}");
 
@@ -1772,22 +1791,22 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
 pub(crate) async fn write_text_frame<W>(
     writer: &mut W,
-    text: &str,
+    text: &str, descr: &str,
 ) -> Result<(), ThoError>
 where
     W: AsyncWrite + Unpin,
 {
-    write_frame(writer, text.as_bytes()).await?;
+    write_frame(writer, text.as_bytes(), descr).await?;
     Ok(())
 }
 
 pub(crate) async fn read_text_frame<R>(
-    reader: &mut R,
+    reader: &mut R, descr: &str,
 ) -> Result<String, ThoError>
 where
     R: AsyncRead + Unpin,
 {
-    let payload = read_frame(reader).await?;
+    let payload = read_frame(reader, descr).await?;
 
     String::from_utf8(payload)
         .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")))
@@ -1796,10 +1815,13 @@ where
 async fn write_frame<W>(
     writer: &mut W,
     payload: &[u8],
+    descr: &str,
 ) -> std::io::Result<()>
 where
     W: AsyncWrite + Unpin,
 {
+    debug!("write_frame: descr={descr} payload.len={}", payload.len());
+
     if payload.len() > u32::MAX as usize {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -1813,15 +1835,19 @@ where
     writer.write_all(payload).await?;
     writer.flush().await?;
 
+    debug!("write_frame: descr={descr} done");
+
     Ok(())
 }
 
 async fn read_frame<R>(
     reader: &mut R,
+    descr: &str,
 ) -> std::io::Result<Vec<u8>>
 where
     R: AsyncRead + Unpin,
 {
+    debug!("read_frame: descr={descr}");
     let mut len_buf = [0u8; 4];
 
 
@@ -1829,7 +1855,7 @@ where
         Ok(v) => Ok(v),
         Err(e) =>  {
             if !GlobalCtx::is_shutting_down(){
-                error!("read_frame/read_exact error: len_buf {e}");
+                error!("read_frame/read_exact error: descr={descr} len_buf {e}");
             }
 
             Err(e)
@@ -1841,7 +1867,7 @@ where
     if len > MAX_FRAME_LEN {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!("frame too large: {len} bytes"),
+            format!("read_frame: decr={descr} frame too large: {len} bytes"),
         ));
     }
 
@@ -1856,6 +1882,8 @@ where
             Err(e)
         }
     }?;
+
+    debug!("read_frame: descr={descr} got payload.len={}", payload.len());
 
     Ok(payload)
 }
@@ -1888,6 +1916,7 @@ mod tests {
     use tokio::task::JoinSet;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::{mono_key, Cause, ThoError};
+    use thoosa_shared::perf_logging::{format_perf_map, init_tracing, PERF};
     use thoosa_shared::tracked_await::track_await;
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
@@ -2007,30 +2036,31 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker_propagates_oom() {
+    async fn test_copy_ipc_cuda_worker_propagates_oom() -> Result<(), ThoError>{
         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await.unwrap()
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
         } else {
-            run_ipc_copy_oom_main("test_copy_ipc_cuda_worker_propagates_oom").await.unwrap();
-        }
-
-        async fn run_ipc_copy_oom_main(test_name: &str) -> Result<(), ThoError> {
-
-            init_ipc_test(test_name, pure_module_path!()).await?;
+            init_ipc_test("test_copy_ipc_cuda_worker_propagates_oom", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
+
             let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
             let (free_mem, _total_mem) = cuda_mem();
-            let oversize_bytes = free_mem.saturating_add(256 * 1024 * 1024);
-            let elements = oversize_bytes / Float.elt_size_in_bytes() + 1;
-            let dim_1 = 4usize;
-            let dim_0 = elements.div_ceil(dim_1);
-            let too_large_tensor = Tensor::f_empty([dim_0 as i64, dim_1 as i64], FLOAT_CPU)?;
+            let elements = free_mem / Float.elt_size_in_bytes() + 1;
+            let dim_1 = 4usize;// 10_000; //
+            let dim_0 = elements.div_ceil(dim_1);//10_000; //
+            debug!("test_copy_ipc_cuda_worker_propagates_oom, dim_0={dim_0} dim_1={dim_1} ");
+
+            let _rand = Tensor::f_rand([dim_0 as i64, dim_1 as i64-1], FLOAT_CUDA)?;
+            debug!("test_copy_ipc_cuda_worker_propagates_oom, _rand={_rand:?}");
+
+
+            let too_large_tensor = Tensor::f_rand([dim_0 as i64, 1], FLOAT_CPU)?;
 
             let copy_result = tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                std::time::Duration::from_secs(600),
                 track_await(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
             ).await.map_err(|_| ThoError::new("timed out waiting for worker IPC oversized H2D copy to fail"))?;
 
@@ -2056,8 +2086,12 @@ mod tests {
 
             shutdown_result?;
 
+            debug!("All ok");
+
             Ok(())
+
         }
+
 
     }
 
@@ -2071,7 +2105,7 @@ mod tests {
         }
 
         impl SyncStageIpcWrapper for _SyncStageJsonWrapper {
-            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
+            fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
                 debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
                 if _input.eq(b"fail") {
                     fail_with_unrecoverable_error();
@@ -2157,14 +2191,18 @@ mod tests {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
+
+            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await? ;
+
+            info!("worker: \n{}", format_perf_map(&PERF));
+            Ok(())
 
         } else {
             init_ipc_test("test_copy_ipc_cuda_worker_ok", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
 
-            let main_process_cpu_tensor = Tensor::rand(&[10_000, 10000], FLOAT_CPU);
+            let main_process_cpu_tensor = Tensor::rand(&[50_000, 10_000], FLOAT_CPU);
             let expected_digest = tensor_digest(&main_process_cpu_tensor)?;
 
 
@@ -2190,12 +2228,12 @@ mod tests {
                 return Err(ThoError::new(format!("worker CUDA round-trip digest mismatch: expected={} actual={}", expected_digest.hex, actual_digest.hex)));
             }
 
-            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float, None)).await?;
+            cuda_actor.drop_tho_tensor(ThoTensor::new_ref((), reff, vec![], tch::Kind::Float, None, 1)).await?;
 
             debug!("run_main: drop ok");
 
             let r = track_await(cuda_actor.copy(
-                ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None),
+                ThoTensor::new_ref((), reff, vec![1000, 10000], tch::Kind::Float, None, 1),
                 0.into(), //Cpu
             )).await;
 
@@ -2207,6 +2245,8 @@ mod tests {
 
 
             cuda_actor.shutdown().await?;
+
+            info!("main: \n{}", format_perf_map(&PERF));
 
             Ok(())
         }

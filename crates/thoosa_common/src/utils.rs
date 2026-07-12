@@ -1828,7 +1828,7 @@ pub mod tests {
     use crate::batches::BatchLengths;
     use crate::bool_iter::BoolTensorIterator;
 
-    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, to_vec_f32, to_vec_i64, TrainListener};
+    use crate::utils::{assert_tensor_eq, hist_1_dim, local_max_1d, local_max_1d_mask, masked_max, masked_mean, mix_x_binary_with_labels, pad_stack_with_mask, pad_to_2, plot_spectrogram, stretch, tensor_digest, to_vec_f32, to_vec_i64, TrainListener};
     use clap::{Args, Parser, Subcommand};
 
     use log::{debug, set_max_level};
@@ -3100,6 +3100,7 @@ pub struct TensorDigest {
 /// - Half/BFloat16 are converted to Float before hashing because extracting raw
 ///   f16/bf16 bytes ergonomically in `tch` is awkward. If you need bit-exact
 ///   distinction between Float16/BFloat16 payloads, that can be added separately.
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="tensor_digest"))]
 pub fn tensor_digest(t: &Tensor) -> tch::Result<TensorDigest> {
     let shape = t.size();
     let stride = t.stride();
