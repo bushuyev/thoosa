@@ -12,6 +12,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::test_utils::init_test_logging;
 use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
@@ -114,7 +115,7 @@ impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {
                 todo!()
             }
             ThoTensorInner::Ref { key, size, kind, .. } => {
-                ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float, None)
+                ThoTensor::new_ref(mono_key!(0, "todo").into(), key, vec![], tch::Kind::Float, None, 1)
             }
         }
     }
@@ -166,7 +167,7 @@ async fn run_load_and_clc_ipc_cuda_worker(test_name: &str, resources: &[&'static
             debug!("run_load_and_clc_ipc_cuda_worker: out_key={out_key:?} output_ref.id={:?}", output_ref.id());
 
             let tensor = GlobalCtx::global().cuda_actor(1/*TODO take ctx*/)
-                .copy(ThoTensor::new_ref((), out_key, output_ref.size(), output_ref.kind(), None), 0.into()).await?;
+                .copy(ThoTensor::new_ref((), out_key, output_ref.size(), output_ref.kind(), None, 1), 0.into()).await?;
             let cpu_out: ThoTensor<ClcStageOutput, SynKey> =  ThoTensor::new(output_ref.id().clone(), tensor.t())?;
 
 
@@ -366,6 +367,7 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), Tho
     debug!("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
     if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        init_test_logging();
         CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor", pure_module_path!()).await?;

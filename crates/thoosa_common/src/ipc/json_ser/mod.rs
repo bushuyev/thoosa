@@ -13,9 +13,10 @@ use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::runner::common::MaxParallelCtx;
 use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::tho_device::ThoDevice;
 
 pub trait SyncStageIpcWrapper:Debug {
-    fn do_run(&self, _input: &[u8], all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) ->Result<Vec<u8>, ThoError>;
+    fn do_run(&self, _input: &[u8], all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError>;
 }
 
 #[derive(Debug)]
@@ -50,10 +51,10 @@ where
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
 {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Vec<u8>, ThoError> {
-        let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(input) {
+    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(_input) {
             Ok(input) => input.into_parts(),
-            Err(_) => (input.to_vec(), None),
+            Err(_) => (_input.to_vec(), None),
         };
         let input = I::decode_for_worker::<C>(&input, all_cuda_tensors)?;
         let mut ctx = RunCtxImpl::new(1, self.endpoint_name);
@@ -62,7 +63,7 @@ where
         }
         let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
         debug!("IpcSyncStageWrapper::do_run: out={out:?}");
-        out.encode_from_worker::<C>(all_cuda_tensors)
+        out.encode_from_worker::<C>(all_cuda_tensors, tho_device)
     }
 }
 

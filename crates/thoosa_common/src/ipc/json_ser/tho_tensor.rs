@@ -26,7 +26,8 @@ where
             ref_key: u64,
             size: Vec<i64>,
             kind: SerdeKind,
-            selector:Option<Box<dyn ThoSelector>>
+            selector:Option<Box<dyn ThoSelector>>,
+            tho_device_idx:usize
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -38,7 +39,8 @@ where
             helper.ref_key,
             helper.size,
             helper.kind.0,
-            helper.selector
+            helper.selector,
+            helper.tho_device_idx
         ))
 
     }
@@ -142,17 +144,19 @@ where
         S: Serializer
     {
         match &self.inner {
-            ThoTensorInner::Ref { key, size, kind, selector } => {
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
 
                 let mut state = serializer.serialize_struct("ThoTensor", 4)?;
 
                 state.serialize_field("id", &self.id)?;
                 state.serialize_field("ref_key", key)?;
                 state.serialize_field("size", size)?;
+
                 state.serialize_field("kind", kind_to_str(kind).map_err(S::Error::custom)?)?;
                 if let Some(selector) = selector {
                     state.serialize_field("selector", selector)?;
                 }
+                state.serialize_field("tho_device_idx", tho_device_idx)?;
                 state.end()
             }
             ThoTensorInner::Val { .. } => Err(serde::ser::Error::custom("only out-of-process ThoTensor refs can be serialized")),
