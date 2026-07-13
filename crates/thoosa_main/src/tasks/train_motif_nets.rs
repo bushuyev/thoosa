@@ -413,6 +413,10 @@ pub(crate) fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Ve
             Box::new(sync_motif_bastch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
+            SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT.to_string(),
+            Box::new(split_motif_into_train_valid_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+        (
             SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT.to_string(),
             Box::new(sync_load_motif_resources_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
@@ -1245,6 +1249,260 @@ where
     }
 }
 
+pub(crate) const SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT: &str = "SplitMotifIntoTrainValid";
+
+#[derive(Debug)]
+enum SplitMotifTensorRef<'a> {
+    WithExtra(ThoDataRef<'a, DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>),
+    Plain(ThoDataRef<'a, ThoTensor<MotifSlices, SynKey>>),
+}
+
+impl SplitMotifTensorRef<'_> {
+    fn motif(&self) -> &ThoTensor<MotifSlices, SynKey> {
+        match self {
+            Self::WithExtra(motif) => motif.as_ref().data(),
+            Self::Plain(motif) => motif.as_ref(),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SplitMotifIntoTrainValidInput<'a> {
+    id: SynKey,
+    motif: SplitMotifTensorRef<'a>,
+}
+
+impl Input for SplitMotifIntoTrainValidInput<'_> {}
+
+impl WithId for SplitMotifIntoTrainValidInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+#[derive(Debug)]
+struct SplitMotifIntoTrainValidInputWrapper {
+    id: SynKey,
+    motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
+}
+
+impl SplitMotifIntoTrainValidInputWrapper {
+    fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>) -> Self {
+        Self { id: motif.id().clone(), motif }
+    }
+}
+
+impl WithId for SplitMotifIntoTrainValidInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl thoosa_common::runner::common::cachable::BorrowRef for SplitMotifIntoTrainValidInputWrapper {
+    type Out<'a> = SplitMotifIntoTrainValidInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let motif = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_to(&self.motif, to_device_idx)).await?;
+            Ok(SplitMotifIntoTrainValidInput { id: self.id.clone(), motif: SplitMotifTensorRef::WithExtra(motif) })
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SplitMotifIntoTrainValidOutput {
+    id: SynKey,
+    train_motifs: ThoTensor<MotifSlices, SynKey>,
+    valid_motifs: ThoTensor<MotifSlices, SynKey>,
+    num_motif_slices: u32,
+}
+
+impl WithId for SplitMotifIntoTrainValidOutput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Output for SplitMotifIntoTrainValidOutput {}
+
+impl WorkerStageOutput for SplitMotifIntoTrainValidOutput {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let Self { id, train_motifs, valid_motifs, num_motif_slices } = self;
+        let train_motifs = C::decode::<ThoTensor<MotifSlices, SynKey>>(&<ThoTensor<MotifSlices, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(train_motifs, all_cuda_tensors, tho_device)?)?;
+        let valid_motifs = C::decode::<ThoTensor<MotifSlices, SynKey>>(&<ThoTensor<MotifSlices, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(valid_motifs, all_cuda_tensors, tho_device)?)?;
+        C::encode(&Self { id, train_motifs, valid_motifs, num_motif_slices })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SplitMotifIntoTrainValidIpcInputRef<'a> {
+    id: &'a SynKey,
+    motif: &'a ThoTensor<MotifSlices, SynKey>,
+    max_other_parallel: u8,
+}
+
+impl<'a> SplitMotifIntoTrainValidIpcInputRef<'a> {
+    fn new(input: &'a SplitMotifIntoTrainValidInput<'_>, ctx: &RunCtxImpl) -> Self {
+        Self { id: &input.id, motif: input.motif.motif(), max_other_parallel: ctx.max_other_parallel() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SplitMotifIntoTrainValidIpcInput {
+    id: SynKey,
+    motif: ThoTensor<MotifSlices, SynKey>,
+    max_other_parallel: u8,
+}
+
+#[derive(Debug)]
+struct SplitMotifIntoTrainValidIpcWrapper {
+    stage: Arc<SplitMotifIntoTrainValid>,
+}
+
+impl SyncStageIpcWrapper for SplitMotifIntoTrainValidIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SplitMotifIntoTrainValidIpcInput>(input)?;
+        let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, input.motif)?;
+        let stage_input = SplitMotifIntoTrainValidInput { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Borrowed(&motif)) };
+        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
+        ctx.set_max_other_parallel(input.max_other_parallel);
+        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
+        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxySplitMotifIntoTrainValid",
+    endpoint = "SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    out_id = "input_id.clone()",
+    run_input = "SplitMotifIntoTrainValidIpcInputRef::new(input, ctx)",
+    endpoint_init = "split_motif_into_train_valid_endpoint_init",
+    wrapper = "SplitMotifIntoTrainValidIpcWrapper"
+)]
+pub struct SplitMotifIntoTrainValid;
+
+impl SplitMotifIntoTrainValid {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Adjustable for SplitMotifIntoTrainValid {}
+
+impl OutId for SplitMotifIntoTrainValid {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl Stage for SplitMotifIntoTrainValid {
+    type Ctx = RunCtxImpl;
+    type In<'a> = SplitMotifIntoTrainValidInput<'a>;
+    type Out = SplitMotifIntoTrainValidOutput;
+}
+
+impl SyncStage for SplitMotifIntoTrainValid {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SplitMotifIntoTrainValid::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let motif = input.motif.motif();
+        let motif_size = motif.size();
+        let num_motif_slices = *motif_size.first().ok_or_else(|| ThoError::new("SplitMotifIntoTrainValid: motif tensor has no dimensions"))?;
+        if num_motif_slices <= 1 {
+            return Err(ThoError::new(format!("SplitMotifIntoTrainValid: expected more than one motif slice, got {num_motif_slices}")));
+        }
+        if !matches!(motif_size.len(), 2 | 3) {
+            return Err(ThoError::new(format!("SplitMotifIntoTrainValid: unsupported motif tensor rank={} size={motif_size:?}", motif_size.len())));
+        }
+        let num_validation_slices = ((num_motif_slices as f32 * 0.2) as i64).max(1);
+        let split = num_motif_slices - num_validation_slices;
+        debug!("SplitMotifIntoTrainValid::do_run: id={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", input.id);
+
+        let motifs_t = motif.t_ref();
+        debug_plot!(&motifs_t, "motifs_t{}", input.id)?;
+        let train_motifs = motifs_t.f_narrow(0, 0, split)?;
+        let valid_motifs = motifs_t.f_narrow(0, split, num_validation_slices)?;
+
+        Ok(SplitMotifIntoTrainValidOutput {
+            id: input.id.clone(),
+            train_motifs: ThoTensor::new(SynKey::new([mono_key!("train_motifs", "split")]), train_motifs)?,
+            valid_motifs: ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?,
+            num_motif_slices: u32::try_from(num_motif_slices).map_err(|error| ThoError::new(format!("SplitMotifIntoTrainValid: invalid motif slice count: {error}")))?,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum SplitMotifIntoTrainValidStage {
+    Local(Arc<SplitMotifIntoTrainValid>),
+    Proxy(Arc<ProxySplitMotifIntoTrainValid>),
+}
+
+#[derive(Debug)]
+struct SplitMotifIntoTrainValidDynStage<C> {
+    stage: SplitMotifIntoTrainValidStage,
+    pd: PhantomData<C>,
+}
+
+impl<C> SplitMotifIntoTrainValidDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
+        let stage = if GlobalCtx::global().is_ipc() {
+            SplitMotifIntoTrainValidStage::Proxy(Arc::new(ProxySplitMotifIntoTrainValid::new(tho_device_idx).await?))
+        } else {
+            SplitMotifIntoTrainValidStage::Local(Arc::new(SplitMotifIntoTrainValid::new()))
+        };
+        Ok(Self { stage, pd: PhantomData })
+    }
+}
+
+impl<C> Adjustable for SplitMotifIntoTrainValidDynStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for SplitMotifIntoTrainValidDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl<C> Stage for SplitMotifIntoTrainValidDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SplitMotifIntoTrainValidInput<'a>;
+    type Out = SplitMotifIntoTrainValidOutput;
+}
+
+impl<C> SyncStage for SplitMotifIntoTrainValidDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
+        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
+        match &self.stage {
+            SplitMotifIntoTrainValidStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+            SplitMotifIntoTrainValidStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+        }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct MotifsBatch<L, C>
@@ -1279,52 +1537,24 @@ where
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
         let sync_motif_batch = Arc::new(SyncMotifBatchDynStage::new(ctx.tho_device_idx()).await?);
+        let motif_meta = track_await(motif.extra()).await?;
+        let split_motif = Arc::new(SplitMotifIntoTrainValidDynStage::<C>::new(ctx.tho_device_idx()).await?);
+        let split_input = Arc::new(SplitMotifIntoTrainValidInputWrapper::new(motif));
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+        let split_output = track_await(oom_handler.run(&split_motif, split_input, ctx.branch(false), NoContexts)).await?;
 
-        {
-            let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            let motif = motif_ref.as_ref();
-            let motif_meta = motif.extra().clone();
-
-            let num_motif_slices = motif.data().t_ref().size()[0];
-            debug!("MotifsBatch::new: motif.data={:?}", motif.data());
-            assert!(num_motif_slices > 1);
-            let num_validation_slices = (num_motif_slices as f32 * 0.2) as i64;
-            let num_validation_slices = if num_validation_slices <= 0 { 1 } else { num_validation_slices };
-            let split = num_motif_slices - num_validation_slices;
-
-            debug!("MotifsBatch::new: motif={:?} num_motif_slices={num_motif_slices} num_validation_slices={num_validation_slices} split={split}", motif.extra());
-
-            let motifs_t = motif.data().t_ref();
-            debug_plot!(&motifs_t, "motifs_t{}", motif.id())?;
-
-            // let train_motifs = motifs_t.i((0..split, .., ..));
-            // let valid_motifs = motifs_t.i((split.., .., ..));
-
-            let (train_motifs, valid_motifs) = match motifs_t.size().len() {
-                2 => (motifs_t.i((0..split, ..)), motifs_t.i((split.., ..))),
-                3 => (motifs_t.i((0..split, .., ..)), motifs_t.i((split.., .., ..))),
-                len => return Err(ThoError::new(format!("MotifsBatch::new: unsupported motif tensor rank={len} size={:?}", motifs_t.size()))),
-            };
-
-            // debug_plot!(&train_motifs, "train_motif_net_new_train_motif_{}", motif.id())?;
-            // debug_plot!(&train_motifs, "train_motif_net_new_valid_motifs_{}", motif.id())?;
-
-            let train_motifs = ThoTensor::new(SynKey::new([mono_key!("train_motifs", "split")]), train_motifs)?;
-            let valid_motifs = ThoTensor::new(SynKey::new([mono_key!("valid_motifs", "split")]), valid_motifs)?;
-
-            Ok::<_, ThoError>(Self {
-                motif_id: motif.id().clone(),
-                train_motifs: Arc::new(DevicesWrap::wrap(train_motifs)),
-                valid_motifs: Arc::new(DevicesWrap::wrap(valid_motifs)),
-                random_slices_loader,
-                random_slices: Mutex::new(CurrentRandomSlices::default()),
-                random_slices_limit: num_motif_slices as u32,
-                motif_meta,
-                batch_size: batch_size as u32,
-                epoch_size,
-                sync_motif_batch,
-            })
-        }
+        Ok(Self {
+            motif_id: split_output.id,
+            train_motifs: Arc::new(DevicesWrap::wrap(split_output.train_motifs)),
+            valid_motifs: Arc::new(DevicesWrap::wrap(split_output.valid_motifs)),
+            random_slices_loader,
+            random_slices: Mutex::new(CurrentRandomSlices::default()),
+            random_slices_limit: split_output.num_motif_slices,
+            motif_meta,
+            batch_size: batch_size as u32,
+            epoch_size,
+            sync_motif_batch,
+        })
     }
 
     async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoError> {
