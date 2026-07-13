@@ -1723,13 +1723,6 @@ mod tests {
         thoosa_shared::test_utils::init_test_logging();
     }
 
-    #[tokio::test]
-    async fn test_0() -> Result<(), ThoError> {
-        let v:Vec<usize>= Vec::default();
-
-        debug!("v={}", v.capacity());
-        Ok(())
-    }
 
     fn mask_values(mask: &Tensor) -> Vec<i64> {
         mask.reshape([-1])
