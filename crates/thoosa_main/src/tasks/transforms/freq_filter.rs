@@ -84,7 +84,6 @@ where
 #[derive(Debug, Proxy)]
 #[proxy(
     common = "thoosa_common",
-    base = "SyncFreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>",
     name = "ProxySyncFreqFilter",
     endpoint = "SYNC_FREQ_FILTER_ENDPOINT",
     new_args = "init: SyncFreqFilterIpcInit, tho_device_idx: usize",
@@ -95,6 +94,11 @@ where
     init_type = "SyncFreqFilterIpcInit",
     init_stage = "SyncFreqFilter::new_for_ipc(init)?"
 )]
+struct SyncFreqFilterProxyTarget {
+    base: SyncFreqFilter<thoosa_common::runner::run_ctx_2::RunCtxImpl>,
+}
+
+#[derive(Debug)]
 pub struct SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
