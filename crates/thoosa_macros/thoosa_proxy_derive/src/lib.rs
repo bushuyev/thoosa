@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Attribute, DeriveInput, Expr, FnArg, Ident, Pat, Path, Result as SynResult, Token, Type, parse_macro_input};
+use syn::{Attribute, Data, DeriveInput, Expr, Fields, FnArg, Ident, Pat, Path, Result as SynResult, Token, Type, parse_macro_input};
 
 #[proc_macro_derive(Proxy, attributes(proxy))]
 pub fn derive_proxy(input: TokenStream) -> TokenStream {
@@ -14,11 +14,11 @@ pub fn derive_proxy(input: TokenStream) -> TokenStream {
 }
 
 fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
+    let base_ty = proxy_base_type(&input)?;
     let base_ident = input.ident;
     let attrs = ProxyAttrs::from_attrs(&input.attrs)?;
     let proxy_ident = attrs.proxy_name.ok_or_else(|| syn::Error::new_spanned(&base_ident, "missing `name = \"ProxyType\"` in `proxy` attribute"))?;
     let common = attrs.common.unwrap_or_else(|| syn::parse_quote!(crate));
-    let base_ty = attrs.base_type.unwrap_or_else(|| syn::parse_quote!(#base_ident));
     let endpoint = attrs.endpoint.ok_or_else(|| syn::Error::new_spanned(&base_ident, "missing `endpoint = \"...\"` in `proxy` attribute"))?;
     let codec = attrs.codec.map(|codec| quote!(#codec)).unwrap_or_else(|| quote!(#common::ipc::codec::JsonIpcCodec));
     let new_args = attrs.new_args.unwrap_or_default();
@@ -198,7 +198,6 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 struct ProxyAttrs {
     proxy_name: Option<Ident>,
     common: Option<Path>,
-    base_type: Option<Type>,
     endpoint: Option<Expr>,
     codec: Option<Path>,
     new_args: Option<Punctuated<FnArg, Token![,]>>,
@@ -230,7 +229,6 @@ impl ProxyAttrs {
                 match key.as_str() {
                     "name" => out.proxy_name = Some(lit.parse()?),
                     "common" => out.common = Some(lit.parse()?),
-                    "base" => out.base_type = Some(lit.parse()?),
                     "endpoint" => out.endpoint = Some(lit.parse()?),
                     "codec" => out.codec = Some(lit.parse()?),
                     "new_args" => out.new_args = Some(parse_fn_args(&lit)?),
@@ -254,6 +252,25 @@ impl ProxyAttrs {
         }
         Ok(out)
     }
+}
+
+fn proxy_base_type(input: &DeriveInput) -> SynResult<Type> {
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(&input.generics, "Proxy can only be derived for an unparameterized struct"));
+    }
+
+    let Data::Struct(data) = &input.data else {
+        return Err(syn::Error::new_spanned(input, "Proxy can only be derived for an unparameterized struct"));
+    };
+
+    if let Fields::Named(fields) = &data.fields
+        && let Some(field) = fields.named.iter().find(|field| field.ident.as_ref().is_some_and(|ident| ident == "base"))
+    {
+        return Ok(field.ty.clone());
+    }
+
+    let ident = &input.ident;
+    Ok(syn::parse_quote!(#ident))
 }
 
 struct ProxyField {
@@ -293,4 +310,43 @@ fn proxy_device_param(new_args: &Punctuated<FnArg, Token![,]>) -> Option<Ident> 
             FnArg::Receiver(_) => None,
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_proxy_base_type_uses_target_struct_without_base_field() {
+        let input: DeriveInput = syn::parse_quote!(struct ConcreteStage;);
+
+        let base_ty = proxy_base_type(&input).unwrap();
+
+        assert_eq!(quote!(#base_ty).to_string(), "ConcreteStage");
+    }
+
+    #[test]
+    fn test_proxy_base_type_uses_base_field_type() {
+        let input: DeriveInput = syn::parse_quote! {
+            struct ProxyTarget {
+                base: GenericStage<ConcreteCtx>,
+            }
+        };
+
+        let base_ty = proxy_base_type(&input).unwrap();
+
+        assert_eq!(quote!(#base_ty).to_string(), "GenericStage < ConcreteCtx >");
+    }
+
+    #[test]
+    fn test_proxy_base_type_rejects_parameterized_struct() {
+        let input: DeriveInput = syn::parse_quote!(struct GenericStage<C>(C););
+
+        let error = match proxy_base_type(&input) {
+            Ok(_) => panic!("parameterized proxy target should be rejected"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("unparameterized struct"));
+    }
 }
