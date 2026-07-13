@@ -2035,7 +2035,6 @@ pub async fn opt_train<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,
     run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P> >,
-    device: Device,
     descr: &str,
     reusable_completed_trials: Vec<CompletedTrial>,
 ) -> Result<(VarStore, N, R, f32), ThoError>
@@ -2043,10 +2042,9 @@ where
     P: FieldName + 'static,
     R: RunConfig + From<std::vec::IntoIter<NamedVal<P>>> + Clone + ToHashmap,
     F: for<'a, 'b> AsyncFnMut(
-            Arc<Mutex<VarStore>>,
             R,
             &'a mut (dyn TrainListener + 'b),
-        ) -> Result<(f32, N), ThoError>,
+        ) -> Result<(VarStore, f32, N), ThoError>,
 {
     let const_vals = run_config_source
         .grid_run_config_source()
@@ -2090,22 +2088,23 @@ where
                     .into_iter()
                     .into();
 
-                let vs = Arc::new(Mutex::new(VarStore::new(device)));
-
                 let mut listener = PlotVecf32::new(
                     format!("_params_{:?}", "id" /*TODO run_config.get_id()*/).as_str(),
                 ); //motif_id ?train_net
 
-                let (loss, node_params) = panic_to_err_async!(
+                let train_result = panic_to_err_async!(
                     train_clone(
-                        Arc::clone(&vs),
                         run_config.clone(),
                         &mut listener
                     )
-                ).unwrap_or_else(|e| {
-                    warn!("opt_train failed with {e:?} on {run_config:?} ");
-                    (MAX_LOSS, Default::default())
-                });
+                );
+                let (var_store, loss, node_params) = match train_result {
+                    Ok(result) => result,
+                    Err(e) => {
+                        warn!("opt_train failed with {e:?} on {run_config:?} ");
+                        return MAX_LOSS;
+                    }
+                };
                 // listener.plot();
 
                 let min_loss_val = *min_loss_moved.read();
@@ -2113,13 +2112,9 @@ where
 
                 if loss < min_loss_val {
                     *min_loss_moved.write() = loss;
-                    let vs = Arc::try_unwrap(vs)
-                        .expect("opt_train: VarStore still shared after train")
-                        .into_inner();
-
                     min_var_store_clone
                         .write()
-                        .replace((vs, node_params, run_config, loss));
+                        .replace((var_store, node_params, run_config, loss));
                 }
 
                 loss

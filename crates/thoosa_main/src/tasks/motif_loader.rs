@@ -774,8 +774,10 @@ where
         // TODO(perf): load raw resource tensors with bounded concurrency; this loop is sequential and sits under the MotifLoader critical path.
         let resource = resources_map.get(&resource_id).cloned().expect(&format!("no resource with id={resource_id}"));
         let resource_cache = Arc::new(resource);
-        let raw_tensor = track_await(Arc::clone(&configurable_loader)
-            .run_cached(resource_cache, ctx.branch(false))).await?;
+        let raw_tensor = track_await(Arc::clone(&configurable_loader).run_cached(resource_cache, ctx.branch(false))).await?;
+
+        debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} raw_tensor={raw_tensor:?} descr={descr}");
+
         let channel_tensor = {
             let raw_tt = SelectRef::borrow_to(&raw_tensor, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
             let size = raw_tt.size();

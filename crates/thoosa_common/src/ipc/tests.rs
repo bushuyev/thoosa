@@ -224,25 +224,25 @@ where
 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_load_and_clc_ipc_cuda_worker_no_oom_tensor() {
+async fn test_load_and_clc_ipc_cuda_worker_no_oom_tensor() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
-        run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await.unwrap();
+        run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], false).await
     }
 }
 
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor() {
+async fn test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await.unwrap()
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
-        run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await.unwrap();
+        run_load_and_clc_ipc_cuda_worker("test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor", &["resource_1", "resource_2", "resource_3"], true).await
     }
 }
 
@@ -250,8 +250,8 @@ async fn test_load_and_clc_ipc_cuda_worker_sum_no_oom_tensor() {
 async fn test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor", pure_module_path!()).await?;
         let tho_device_idx = 1;
@@ -296,8 +296,8 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_till_min_max_parallel_tensor() ->
 async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor", pure_module_path!()).await?;
         let tho_device_idx = 1;
@@ -342,8 +342,8 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_compete_for_max_parallel_tensor()
 async fn test_simp_copy() -> Result<(), ThoError> {
     debug!("test_copy, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let _ctx = init_ipc_test("test_simp_copy", pure_module_path!()).await?;
         let tho_device_idx = 1;
@@ -366,9 +366,8 @@ async fn test_simp_copy() -> Result<(), ThoError> {
 async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        init_test_logging();
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_splits_tensor", pure_module_path!()).await?;
         let tho_device_idx = 1;
@@ -428,8 +427,8 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_splits_tensor() -> Result<(), Tho
 async fn test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let resources = (0..3)
             .map(|i| &*format!("resource_{i}").leak())
@@ -490,8 +489,8 @@ async fn test_load_and_clc_ipc_cuda_worker_oom_max_parallel_and_splits_tensor() 
 async fn test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu() -> Result<(), ThoError> {
     debug!("test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let _ctx = init_ipc_test("test_load_and_clc_ipc_cuda_worker_oom_dump_to_cpu", pure_module_path!()).await?;
         let tho_device_idx = 1;
@@ -538,8 +537,8 @@ async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu() -> Result<(), ThoEr
     log::set_max_level(LevelFilter::Info);
     debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu", || async {
             run_model_test_pipeline(
@@ -562,8 +561,8 @@ async fn test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files() -> Resul
     log::set_max_level(LevelFilter::Info);
     debug!("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         run_model_test_ipc_cuda_worker("test_ab_loader_and_classifier_ipc_cuda_worker_cpu_many_files", || async {
             run_model_test_pipeline(
@@ -591,8 +590,8 @@ async fn test_classifier_ipc_cuda_worker_oom_max_parallel_escalates() -> Result<
     log::set_max_level(LevelFilter::Debug);
     debug!("test_classifier_ipc_cuda_worker_oom_max_parallel_escalates, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-    if std::env::var_os(IPC_SOCK_ENV).is_some() {
-        CudaWorker::run_worker(sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        CudaWorker::run_worker(sock_path, sync_model_test_endpoint_inits(), ThoDevice::from(Cuda(0))).await
     } else {
         let files: Vec<(&'static str, f64)> = (0..16)
             .map(|i| {
@@ -648,8 +647,8 @@ mod composite_input {
     async fn test_ipc_ab_clc() -> Result<(), ThoError> {
         debug!("test_ipc_ab_clc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(sock_path, sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
         } else {
             let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
@@ -672,8 +671,8 @@ mod composite_input {
     async fn test_ipc_ab_clc_sync_with_selector() -> Result<(), ThoError> {
         debug!("test_ipc_ab_clc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(sock_path, sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await
         } else {
             let _ctx = super::init_ipc_test("test_ipc_ab_clc", pure_module_path!()).await?;
             let cuda_actor = GlobalCtx::global().cuda_actor(1);

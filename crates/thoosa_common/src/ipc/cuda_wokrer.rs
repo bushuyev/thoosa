@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::path::PathBuf;
@@ -63,7 +64,7 @@ impl CudaWorker {
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
 
-        if ipc_sock.is_some() {
+        if let Some(sock_path) = ipc_sock {
 
 
             let worker_cli = WorkerCli::parse();
@@ -83,7 +84,7 @@ impl CudaWorker {
                 None,
                 Some(([127, 0, 0, 1], 6667).into()),
             )?;
-            debug!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
+            debug!("CudaWorker::run_if_sock: sock_path={sock_path:?}");
 
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -94,7 +95,7 @@ impl CudaWorker {
                 })
                 .build()?;
             rt.block_on(async {
-                CudaWorker::run_worker(init_map, ThoDevice::from(Device::Cuda(0))).await
+                CudaWorker::run_worker(sock_path, init_map, ThoDevice::from(Device::Cuda(0))).await//TODO Cuda(0)
             })?;
 
             std::process::exit(0);
@@ -103,11 +104,14 @@ impl CudaWorker {
         Ok(())
     }
 
-    pub async fn run_worker(endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>, tho_device: ThoDevice) -> Result<(), ThoError> {
+    pub async fn run_worker(
+        sock_path:OsString,
+        endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>,
+        tho_device: ThoDevice
+    ) -> Result<(), ThoError> {
 
         let with_digest = false;//TODO config
-        let sock_path = std::env::var_os(IPC_SOCK_ENV)
-            .ok_or_else(|| ThoError::new("missing THOOSA_WORKER_IPC_SOCK"))?;
+
         let cuda_device = tho_device.gpu_ordinal();
         // let _exec_context = ThoCudaContext::new(cuda_device as i32)?;
         let exec_stream_pool = Arc::new(Pool::from_iter(
