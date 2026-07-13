@@ -4,8 +4,9 @@ use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextI
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelStep, MaxParallelAndDumpToCpuAdjustableContex, MAX_PARALLEL};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
@@ -51,6 +52,46 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_properties_map::ToHashmap;
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
+
+pub(crate) type TrainStepXFn<D> = Box<dyn Fn(ThoBatch<D>) -> ThoBatch<D> + Send + Sync + 'static>;
+
+#[async_trait]
+pub(crate) trait TrainStepWeightsSync: Debug + Send + Sync {
+    async fn sync_to(&self, var_store: &Arc<Mutex<VarStore>>) -> Result<(), ThoError>;
+}
+
+pub(crate) struct TrainStepProxyParts<DX, DY, C>
+where
+    DX: Dims + 'static,
+    DY: Dims + 'static,
+    C: RunCtx + 'static,
+{
+    stage: Arc<DynSyncStageBox<TrainStepInput<DX, DY>, (), C>>,
+    weights_sync: Arc<dyn TrainStepWeightsSync>,
+}
+
+impl<DX, DY, C> TrainStepProxyParts<DX, DY, C>
+where
+    DX: Dims + 'static,
+    DY: Dims + 'static,
+    C: RunCtx + 'static,
+{
+    pub(crate) fn new(stage: Arc<DynSyncStageBox<TrainStepInput<DX, DY>, (), C>>, weights_sync: Arc<dyn TrainStepWeightsSync>) -> Self {
+        Self { stage, weights_sync }
+    }
+}
+
+#[async_trait]
+pub(crate) trait TrainStepProxyFactory<DX, DY, C, NP, RC>: Debug + Send + Sync
+where
+    DX: Dims + 'static,
+    DY: Dims + 'static,
+    C: RunCtx + 'static,
+    NP: Debug + Send + Sync + 'static,
+    RC: Debug + Send + Sync + 'static,
+{
+    async fn new_proxy(&self, node_params: &NP, run_config: &RC, var_store: &Arc<Mutex<VarStore>>, tho_device_idx: usize) -> Result<TrainStepProxyParts<DX, DY, C>, ThoError>;
+}
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
     match device {
@@ -152,6 +193,7 @@ where
     validation_step: u32,
     descr:String,
     reusable_completed_trials: Vec<CompletedTrial>,
+    train_step_proxy_factory: Option<Arc<dyn TrainStepProxyFactory<DX, DY, C, NP, RC>>>,
     pd:PhantomData<(C, DX, DY, BF, P, RC)>
 }
 
@@ -189,11 +231,16 @@ where
     FC: Fn(&RC) -> u32 + Send + Sync + 'static,
 {
     pub fn new(batch: BF, net: NF, opt_config: Arc<OptConfig>, run_config_source: Arc<OptRunConfigs<Vec<NamedVal<P>>, Vec<NamedRange<P>>, Vec<Hyperparameter<P>>, P>>, loss_fn: LossFp, optimizer: FO, x_f: XF, epochs: FC, validation_step: u32, descr: String) -> Self {
-        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs, validation_step, descr, reusable_completed_trials: vec![] }
+        Self { batch, net, pd: PhantomData, opt_config, run_config_source, loss_fn, optimizer, x_f, epochs, validation_step, descr, reusable_completed_trials: vec![], train_step_proxy_factory: None }
     }
 
     pub fn with_reusable_completed_trials(mut self, reusable_completed_trials: Vec<CompletedTrial>) -> Self {
         self.reusable_completed_trials = reusable_completed_trials;
+        self
+    }
+
+    pub(crate) fn with_train_step_proxy_factory(mut self, train_step_proxy_factory: Arc<dyn TrainStepProxyFactory<DX, DY, C, NP, RC>>) -> Self {
+        self.train_step_proxy_factory = Some(train_step_proxy_factory);
         self
     }
 
@@ -223,13 +270,26 @@ where
             let epochs = (self.epochs)(&run_config);
 
             let self_x_f = Arc::clone(&self);
+            let x_f: Arc<TrainStepXFn<DX>> = Arc::new(Box::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)));
             let train_step = Arc::new(TrainStep::new(
                 device,
                 node,
                 optimizer,
-                Arc::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)),
+                Arc::clone(&vs),
+                x_f,
                 self.loss_fn,
             ));
+            let proxy_parts = match (&self.train_step_proxy_factory, GlobalCtx::global().is_ipc()) {
+                (Some(factory), true) => Some(track_await(factory.new_proxy(&params, &run_config, &vs, tho_device_idx)).await?),
+                _ => None,
+            };
+            let train_stage = match proxy_parts.as_ref() {
+                Some(parts) => Arc::clone(&parts.stage),
+                None => {
+                    let train_step_dyn: Arc<dyn DynSyncStage<TrainStepInput<DX, DY>, (), C>> = Arc::clone(&train_step) as Arc<dyn DynSyncStage<TrainStepInput<DX, DY>, (), C>>;
+                    Arc::new(DynSyncStageBox::new(train_step_dyn))
+                }
+            };
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
@@ -284,7 +344,7 @@ where
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
                     oom_handler.run(
-                        &train_step,
+                        &train_stage,
                         Arc::clone(&input),
                         ctx.branch(false),
                         WithRunCtxContext::new(
@@ -304,6 +364,10 @@ where
                 }
 
                 if idx % validation_step == 0 || idx == epochs - 1 {
+
+                    if let Some(parts) = proxy_parts.as_ref() {
+                        track_await(parts.weights_sync.sync_to(&vs)).await?;
+                    }
 
                     debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?} tokio::task_id={:?}", maybe_cuda_mem(&device), tokio::task::try_id());
 
@@ -468,7 +532,7 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
-    fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>) -> Self {
+    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>) -> Self {
         Self {
             id: SynKey::new([mono_key!("train_step", "stage")]),
             x,
@@ -484,6 +548,18 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
 
     fn expected_y(&self) -> ThoBatch<DO> {
         self.expected_y.shallow_clone::<Batch<DO>>()
+    }
+
+    pub(crate) fn x_ref(&self) -> &ThoBatch<DI> {
+        &self.x
+    }
+
+    pub(crate) fn lengths_ref(&self) -> Option<&BatchLengths> {
+        self.lengths.as_ref()
+    }
+
+    pub(crate) fn expected_y_ref(&self) -> &ThoBatch<DO> {
+        &self.expected_y
     }
 }
 
@@ -560,6 +636,7 @@ pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: Device,
     net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
     opt: Mutex<Optimizer>,
+    var_store: Arc<Mutex<VarStore>>,
     x_f: Arc<F>,
     loss_fn: LossFp,
     pd: PhantomData<C>,
@@ -578,11 +655,12 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    fn new(device: Device, net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, opt: Optimizer, x_f: Arc<F>, loss_fn: LossFp) -> Self {
+    pub(crate) fn new(device: Device, net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, opt: Optimizer, var_store: Arc<Mutex<VarStore>>, x_f: Arc<F>, loss_fn: LossFp) -> Self {
         Self {
             device,
             net: Mutex::new(net),
             opt: Mutex::new(opt),
+            var_store,
             x_f,
             loss_fn,
             pd: PhantomData,
@@ -605,6 +683,11 @@ where
 
     fn loss_fn(&self) -> LossFp {
         self.loss_fn
+    }
+
+    pub(crate) fn save_var_store_to_stream(&self, output: &mut Vec<u8>) -> Result<(), ThoError> {
+        let var_store = perf_log!(sync_mutex_lock!(self.var_store));
+        var_store.save_to_stream(output).map_err(ThoError::from)
     }
 
     fn set_lr(&self, lr: f64) {
