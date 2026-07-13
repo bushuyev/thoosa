@@ -865,7 +865,7 @@ impl Data for ApplyMotifNetInput<'_> {
     }
 
     fn device(&self) -> usize {
-        self.batch.device_idx()
+        self.batch.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

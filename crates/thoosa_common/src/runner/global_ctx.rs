@@ -774,7 +774,7 @@ impl MockGlobalCtx {
         }
 
         static COPY_CTX_ONCE: std::sync::OnceLock<Box<dyn CudaActorHandle>> = std::sync::OnceLock::new();
-        COPY_CTX_ONCE.get_or_init(|| Box::new(CudaLocalActorHandle::new(device.ordinal())) as Box<dyn CudaActorHandle>)
+        COPY_CTX_ONCE.get_or_init(|| Box::new(CudaLocalActorHandle::new(device.tho_device_idx())) as Box<dyn CudaActorHandle>)
     }
 
 

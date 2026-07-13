@@ -230,7 +230,7 @@ where
     fn device(&self) -> usize {//TODO rename tho_device
         match &self.inner {
             ThoTensorInner::Val { t } => {
-                ThoDevice::from(t.device()).ordinal()
+                ThoDevice::from(t.device()).tho_device_idx()
             }
             ThoTensorInner::Ref { tho_device_idx, .. } => {
                 *tho_device_idx
@@ -432,8 +432,16 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.t_ref().double_value(idx)
     }
 
-    pub fn device_idx(&self) -> usize {
-        ThoDevice::from(self.t_ref().device()).ordinal()
+    pub fn tho_device_idx(&self) -> usize {
+
+        match &self.inner {
+            ThoTensorInner::Val { t } => {
+                ThoDevice::from(self.t_ref().device()).tho_device_idx()
+            }
+            ThoTensorInner::Ref {  tho_device_idx, .. } => {
+                *tho_device_idx
+            }
+        }
     }
 
     pub fn tho_device(&self) -> ThoDevice {
@@ -506,7 +514,7 @@ where
                     Some(src_tensor.f_contiguous()?)
                 };
                 let src_ref = src.as_ref().unwrap_or(src_tensor);
-                debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.ordinal(), src.is_none());
+                debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.tho_device_idx(), src.is_none());
                 track_await(cuda_actor
                     .copy(
                         src_ref.shallow_clone().into(),
@@ -514,7 +522,7 @@ where
                     )).await?
             }
             ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
-                debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key} dst_device.ordinal={:?}", self.id, dst_device.ordinal());
+                debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key} dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
                 track_await(cuda_actor
                     .copy(
                         ThoTensor::new_ref((), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx),//TODO remove extra ThoTensor::new_ref

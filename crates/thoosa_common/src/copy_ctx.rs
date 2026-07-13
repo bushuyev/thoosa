@@ -208,7 +208,7 @@ impl CudaActor {
                     let result = copy_ctx.read().await.copy_from_ptr(
                         src_ptr,
                         &src_size,
-                        dst_device.ordinal(),
+                        dst_device.tho_device_idx(),
                         src_kind,
                     ).await;
 

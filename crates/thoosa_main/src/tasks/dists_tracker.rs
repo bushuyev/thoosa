@@ -569,7 +569,7 @@ impl DistsMask {
             let size = tensor.size();
             let kind = tensor.kind();
             let key = insert_worker_tensor(all_cuda_tensors, tensor)?;
-            Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.ordinal()))
+            Ok(ThoTensor::new_ref(id, key, size, kind, None, tho_device.tho_device_idx()))
         }
 
         Ok(Self {

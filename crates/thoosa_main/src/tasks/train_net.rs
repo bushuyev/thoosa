@@ -573,7 +573,7 @@ impl<DI: Dims, DO: Dims> Data for TrainStepInput<DI, DO> {
     }
 
     fn device(&self) -> usize {
-        self.x.device_idx()
+        self.x.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
@@ -602,15 +602,15 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
 impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
     type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
 
-    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    fn borrow_to<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
     where
         Self: 'a,
     {
         async move {
-            if self.device() == to_device_idx {
+            if self.device() == to_tho_device_idx {
                 Ok(ThoDataRef::Borrowed(self))
             } else {
-                Ok(ThoDataRef::Owned(track_await(self.copy_to_device(to_device_idx)).await?))
+                Ok(ThoDataRef::Owned(track_await(self.copy_to_device(to_tho_device_idx)).await?))
             }
         }
     }
