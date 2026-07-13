@@ -853,7 +853,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
-    use thoosa_shared::{TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{cdt_for_dir, TensorIdSliceIdx, ThoError};
     use thoosa_shared::traits::Named;
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -861,17 +861,25 @@ mod tests {
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_common::dims::MotifSlices;
+    use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
+    use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::tho_device::ThoDevice;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_motif_nets() -> Result<(), ThoError> {
-        let test_dir = Path::new("/tmp/test_train_motif_nets");//.join(cdt_for_dir());
+        let test_dir = Path::new("/tmp/test_train_motif_nets").join(cdt_for_dir());
+
+        debug!("test_train_motif_nets: test_dir={test_dir:?}");
+
         fs::create_dir_all(test_dir).await?;
 
-        log::set_max_level(Trace);
+
+        log::set_max_level(Debug);
         reset_print_options();
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
@@ -998,6 +1006,26 @@ mod tests {
         assert!(r.train_motif_nets_results[0].loss < 0.69);
         run_test_net(&r.train_motif_nets_results[0].params, &r.train_motif_nets_results[0].vs)?;
 
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_train_motif_nets_ipc() -> Result<(), ThoError> {
+        debug!("test_train_motif_nets_ipc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+        if std::env::var_os(IPC_SOCK_ENV).is_some() {
+            CudaWorker::run_worker(
+                HashMap::new(),
+                // HashMap::from([
+                //       (
+                          // TRAIN_STEP_ENDPOINT,
+                          // Box::new(..._endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                      // ),
+                // ]),
+                ThoDevice::from(Cuda(0))).await?
+        } else {
+            test_train_motif_nets()?;
+        }
         Ok(())
     }
 
