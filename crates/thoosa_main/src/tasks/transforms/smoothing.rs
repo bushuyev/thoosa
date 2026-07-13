@@ -380,26 +380,6 @@ mod tests {
     use tch::Tensor;
     use crate::tasks::transforms::smoothing::{median, moving_average, smoothing_spline_1d_channels, spline_lambda_from_window_and_extrema};
 
-    #[test]
-    fn test_0() -> Result<(), ThoError> {
-        #[derive(Debug)]
-        struct A {
-            val:&'static str
-        }
-        impl Drop for A {
-            fn drop(&mut self) {
-                debug!("{:?} dropped", self.val)
-            }
-        }
-
-        {
-            let _ = A { val: "_" };
-            let _x = A { val: "_x" };
-            debug!("scope ended");
-        };
-
-        Ok(())
-    }
 
     #[test]
     fn test_moving_average_replicates_edges() -> Result<(), ThoError> {

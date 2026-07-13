@@ -1224,14 +1224,4 @@ mod tests {
     }
 
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_0() -> Result<(), ThoError> {
-        let store = SqlStore::from_path(&"/home/bu/tmp/ws_clef/main_db.db3").await?;
-
-        let train_motif_net_run_config: TrainMotifNetRunConfig = TrainMotifNetRunConfig::from_properties_map(None, &store.list_run_config_values(39713).await?)?;
-
-        debug!("train_motif_net_run_config={train_motif_net_run_config:?}");
-
-        Ok(())
-    }
 }

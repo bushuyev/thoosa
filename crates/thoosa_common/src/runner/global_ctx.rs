@@ -810,7 +810,6 @@ mod tests {
     use crate::tho_tensor::ThoTensor;
 
 
-
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_device_reset() -> Result<(), ThoError>{
         unsafe {
@@ -856,15 +855,5 @@ mod tests {
 
         Ok(())
     }
-
-    fn sync_probe(label: &str, inst: &Instant) {
-        let t = Instant::now();
-
-        // Adjust device id if needed.
-        tch::Cuda::synchronize(0);
-
-        debug!("SYNC {label}: waited={:?} total_elapsed={:?}",t.elapsed(),inst.elapsed());
-    }
-
 
 }

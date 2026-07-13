@@ -120,12 +120,3 @@ where
     E:Debug + Send + Sync,
 {}
 
-#[cfg(test)]
-pub mod tests {
-
-    #[test]
-    fn test_0(){
-
-    }
-
-}
