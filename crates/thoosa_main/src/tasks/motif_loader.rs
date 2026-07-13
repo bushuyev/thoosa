@@ -9,15 +9,19 @@ use std::time::Instant;
 use async_trait::async_trait;
 use log::{debug, error, info, trace, warn};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use tch::Device::Cpu;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
 use cached_derive::Cached;
 use thoosa_named_derive::Named;
-use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
+use thoosa_common::runner::common::{DropIf, MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 
 use thoosa_common::runner::tmp_cache::TmpCached;
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::{copy_ctx, debug_plot};
 use thoosa_common::dims::{AnyDims, ChannelsData, Dims, MotifSlices};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
@@ -37,7 +41,7 @@ use rand::distr::{Alphanumeric, SampleString};
 use tch::Kind::Float;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::ws::Workspace;
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::traits::Adjustable;
@@ -50,11 +54,13 @@ use thoosa_shared::comp_id::{MonoKey, SynKey};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::utils::load_run_config;
 use crate::tasks::stage_ids::{MOTIF_LOADER, MOTIF_LOADER_SYNC_STAGE, RAW_TENSOR_LOADER};
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_proxy_derive::Proxy;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, DummyData)]
 pub struct MotifLoaderInput {
@@ -750,6 +756,276 @@ where
     }
 }
 
+pub(crate) const SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT: &str = "SyncLoadMotifResources";
+
+#[derive(Debug)]
+pub struct SyncLoadMotifResourcesInput<'a> {
+    id: SynKey,
+    raw_tensor: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
+    motif_id: DataId,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channel: i64,
+    window: u32,
+    slices: Vec<u32>,
+    descr: String,
+}
+
+impl Input for SyncLoadMotifResourcesInput<'_> {}
+
+impl WithId for SyncLoadMotifResourcesInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+#[derive(Debug)]
+struct SyncLoadMotifResourcesInputWrapper {
+    id: SynKey,
+    raw_tensor: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
+    motif_id: DataId,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channel: i64,
+    window: u32,
+    slices: Vec<u32>,
+    descr: String,
+}
+
+impl SyncLoadMotifResourcesInputWrapper {
+    fn new(raw_tensor: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, motif_id: DataId, resource_id: ResourceId, find_motifs_run_config_id: u32, channel: i64, window: u32, slices: Vec<u32>, descr: String) -> Self {
+        Self { id: raw_tensor.id().clone(), raw_tensor, motif_id, resource_id, find_motifs_run_config_id, channel, window, slices, descr }
+    }
+}
+
+impl WithId for SyncLoadMotifResourcesInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl BorrowRef for SyncLoadMotifResourcesInputWrapper {
+    type Out<'a> = SyncLoadMotifResourcesInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let raw_tensor = track_await(BorrowRef::borrow_to(&self.raw_tensor, to_device_idx)).await?;
+            Ok(SyncLoadMotifResourcesInput {
+                id: self.id.clone(),
+                raw_tensor,
+                motif_id: self.motif_id.clone(),
+                resource_id: self.resource_id,
+                find_motifs_run_config_id: self.find_motifs_run_config_id,
+                channel: self.channel,
+                window: self.window,
+                slices: self.slices.clone(),
+                descr: self.descr.clone(),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SyncLoadMotifResourcesIpcInputRef<'a> {
+    id: &'a SynKey,
+    raw_tensor: &'a ThoTensor<ChannelsData, SynKey>,
+    motif_id: u32,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channel: i64,
+    window: u32,
+    slices: &'a [u32],
+    descr: &'a str,
+    max_other_parallel: u8,
+}
+
+impl<'a> SyncLoadMotifResourcesIpcInputRef<'a> {
+    fn new(input: &'a SyncLoadMotifResourcesInput<'_>, ctx: &RunCtxImpl) -> Self {
+        Self {
+            id: &input.id,
+            raw_tensor: input.raw_tensor.as_ref(),
+            motif_id: *input.motif_id,
+            resource_id: input.resource_id,
+            find_motifs_run_config_id: input.find_motifs_run_config_id,
+            channel: input.channel,
+            window: input.window,
+            slices: input.slices.as_slice(),
+            descr: input.descr.as_str(),
+            max_other_parallel: ctx.max_other_parallel(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncLoadMotifResourcesIpcInput {
+    id: SynKey,
+    raw_tensor: ThoTensor<ChannelsData, SynKey>,
+    motif_id: u32,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channel: i64,
+    window: u32,
+    slices: Vec<u32>,
+    descr: String,
+    max_other_parallel: u8,
+}
+
+#[derive(Debug)]
+struct SyncLoadMotifResourcesIpcWrapper {
+    stage: Arc<SyncLoadMotifResources>,
+}
+
+impl SyncStageIpcWrapper for SyncLoadMotifResourcesIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncLoadMotifResourcesIpcInput>(input)?;
+        let raw_tensor = ThoTensor::ref_to_tensor(all_cuda_tensors, input.raw_tensor)?;
+        let stage_input = SyncLoadMotifResourcesInput {
+            id: input.id,
+            raw_tensor: ThoDataRef::Borrowed(&raw_tensor),
+            motif_id: input.motif_id.into(),
+            resource_id: input.resource_id,
+            find_motifs_run_config_id: input.find_motifs_run_config_id,
+            channel: input.channel,
+            window: input.window,
+            slices: input.slices,
+            descr: input.descr,
+        };
+        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT);
+        ctx.set_max_other_parallel(input.max_other_parallel);
+        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
+        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxySyncLoadMotifResources",
+    endpoint = "SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    out_id = "input_id.clone()",
+    run_input = "SyncLoadMotifResourcesIpcInputRef::new(input, ctx)",
+    endpoint_init = "sync_load_motif_resources_endpoint_init",
+    wrapper = "SyncLoadMotifResourcesIpcWrapper"
+)]
+pub struct SyncLoadMotifResources;
+
+impl SyncLoadMotifResources {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Adjustable for SyncLoadMotifResources {}
+
+impl OutId for SyncLoadMotifResources {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl Stage for SyncLoadMotifResources {
+    type Ctx = RunCtxImpl;
+    type In<'a> = SyncLoadMotifResourcesInput<'a>;
+    type Out = ThoTensor<MotifSlices, SynKey>;
+}
+
+impl SyncStage for SyncLoadMotifResources {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncLoadMotifResources::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let size = input.raw_tensor.size();
+        let mut valid_slices = Vec::with_capacity(input.slices.len());
+
+        for &slice in &input.slices {
+            let Some(slice_end) = slice.checked_add(input.window) else {
+                warn!("SyncLoadMotifResources::do_run: motif_id={} slice={slice:?}+{} overflows for resource_id={} in find_motifs_run_config_id={} in {}", input.motif_id, input.window, input.resource_id, input.find_motifs_run_config_id, input.descr);
+                continue;
+            };
+
+            if slice_end as i64 > size[1] {
+                warn!("SyncLoadMotifResources::do_run: motif_id={} slice={slice:?}+{} is bigger than size={size:?} for resource_id={} in find_motifs_run_config_id={} in {}", input.motif_id, input.window, input.resource_id, input.find_motifs_run_config_id, input.descr);
+            } else {
+                valid_slices.push(slice);
+            }
+        }
+
+        let mut dst = Tensor::f_zeros([valid_slices.len() as i64, input.window as i64], (input.raw_tensor.t_ref().kind(), input.raw_tensor.t_ref().device()))?;
+        for (slice_i, slice) in valid_slices.into_iter().enumerate() {
+            let src = input.raw_tensor.t_ref().f_i((input.channel, slice as i64..(slice + input.window) as i64))?;
+            dst.f_get(slice_i as i64)?.f_copy_(&src)?;
+        }
+
+        ThoTensor::new(input.raw_tensor.id().clone(), dst)
+    }
+}
+
+#[derive(Debug)]
+enum SyncLoadMotifResourcesStage {
+    Local(Arc<SyncLoadMotifResources>),
+    Proxy(Arc<ProxySyncLoadMotifResources>),
+}
+
+#[derive(Debug)]
+struct SyncLoadMotifResourcesDynStage<C> {
+    stage: SyncLoadMotifResourcesStage,
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncLoadMotifResourcesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
+        let stage = if GlobalCtx::global().is_ipc() {
+            SyncLoadMotifResourcesStage::Proxy(Arc::new(ProxySyncLoadMotifResources::new(tho_device_idx).await?))
+        } else {
+            SyncLoadMotifResourcesStage::Local(Arc::new(SyncLoadMotifResources::new()))
+        };
+        Ok(Self { stage, pd: PhantomData })
+    }
+}
+
+impl<C> Adjustable for SyncLoadMotifResourcesDynStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for SyncLoadMotifResourcesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl<C> Stage for SyncLoadMotifResourcesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SyncLoadMotifResourcesInput<'a>;
+    type Out = ThoTensor<MotifSlices, SynKey>;
+}
+
+impl<C> SyncStage for SyncLoadMotifResourcesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT);
+        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
+        match &self.stage {
+            SyncLoadMotifResourcesStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+            SyncLoadMotifResourcesStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+        }
+    }
+}
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_resource_tensors"))]
 async fn load_motif_resource_tensors<L, C>(
     motif_id: DataId,
@@ -767,6 +1043,8 @@ where
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
 {
     let loaded_resources = track_await(TmpCached::new(&format!("tmp_loaded_motif_resources_{descr}"))).await;
+    let sync_load_motif_resources = Arc::new(SyncLoadMotifResourcesDynStage::new(ctx.tho_device_idx()).await?);
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
     let mut loaded_resources_count = 0usize;
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} slices={slices:?} descr={descr}");
@@ -778,33 +1056,17 @@ where
 
         debug!("load_motif_resource_tensors: motif_id={motif_id} resource_id={resource_id} raw_tensor={raw_tensor:?} descr={descr}");
 
-        let channel_tensor = {
-            let raw_tt = SelectRef::borrow_to(&raw_tensor, ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            let size = raw_tt.size();
-            let mut valid_slices = Vec::with_capacity(slices.len());
-
-            for &slice in &slices {
-                let Some(slice_end) = slice.checked_add(window) else {
-                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} overflows for resource_id={resource_id} in find_motifs_run_config_id={find_motifs_run_config_id} in {descr}");
-                    continue;
-                };
-
-                if slice_end as i64 > size[1] {
-                    warn!("load_motif_resource_tensors: motif_id={motif_id} slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_config_id={find_motifs_run_config_id} in {descr}");
-                } else {
-                    valid_slices.push(slice);
-                }
-            }
-
-            let mut dst = Tensor::f_zeros([valid_slices.len() as i64, window as i64], (raw_tt.t_ref().kind(), raw_tt.t_ref().device()))?;
-            for (slice_i, slice) in valid_slices.into_iter().enumerate() {
-                // TODO(perf): replace per-slice f_get/f_copy with an index tensor/gather or batched narrow copy when slices are contiguous enough.
-                let src = raw_tt.t_ref().f_i((channel, slice as i64..(slice + window) as i64))?;
-                dst.f_get(slice_i as i64)?.f_copy_(&src)?;
-            }
-
-            ThoTensor::new(raw_tt.id().clone(), dst)
-        }?;
+        let sync_input = Arc::new(SyncLoadMotifResourcesInputWrapper::new(
+            Arc::clone(&raw_tensor),
+            motif_id.clone(),
+            resource_id,
+            find_motifs_run_config_id,
+            channel,
+            window,
+            slices.clone(),
+            descr.to_string(),
+        ));
+        let channel_tensor = track_await(oom_handler.run(&sync_load_motif_resources, sync_input, ctx.branch(false), NoContexts)).await?;
         drop(raw_tensor);
         loaded_resources.insert(LoadedMotifResource {
             id: LoadedMotifResourceId::new(resource_id),
