@@ -129,7 +129,7 @@ pub mod tests {
     use crate::input_probs::{InputProbs, compare_input_probs};
 
     #[test]
-    fn test_0() {
+    fn test_input_probs() {
         // Example: 3 labels
         let labels = vec!["cat".into(), "dog".into(), "mouse".into()];
 
