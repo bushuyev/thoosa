@@ -538,7 +538,7 @@ impl SyncStageIpcWrapper for SyncMotifLoaderIpcWrapper {
             loaded_resources,
             input.descr,
         );
-        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SYNC_MOTIF_LOADER_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_MOTIF_LOADER_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
         drop(stage_input);
@@ -960,12 +960,14 @@ where
             WithRunCtxContext::new(MaxParallelAndDumpToCpuAdjustableContex::new(MaxParallelAdjustContextImpl::new(), DumpToCpuContextImpl::new(&required_ids))),
         )).await?;
 
-        let motif = motif.into_data_with_extra();
+        let DataWithExtra { data, ..} = motif.into_data_with_extra();
 
         #[cfg(tho_debug_plots)]
         debug_plot!(motif.data().as_ref(), "random_motif_{motif_id}")?;
 
-        let arc: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = Arc::new(DevicesWrap::wrap(ThoTensor::new(mono_key!("random", "random") + motif.id(), motif.data().t_ref().shallow_clone())?));
+
+
+        let arc: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>> = Arc::new(DevicesWrap::wrap(data));
 
         Ok(arc)
     }
@@ -1112,7 +1114,7 @@ impl SyncStageIpcWrapper for SyncLoadMotifResourcesIpcWrapper {
             slices: input.slices,
             descr: input.descr,
         };
-        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
         output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)

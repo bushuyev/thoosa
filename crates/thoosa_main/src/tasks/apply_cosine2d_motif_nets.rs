@@ -440,7 +440,7 @@ impl Data for ApplyCosine2DMotifNetsSyncInput<'_> {
     }
 
     fn device(&self) -> usize {
-        self.input.device_idx()
+        self.input.tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

@@ -13,7 +13,7 @@ where
     D:Data+CopyToDevice+WithId,
     E:Debug + Send + Sync,
 {
-    data: D,//needs to be copied to GPU
+    pub data: D,//needs to be copied to GPU
     extra: Arc<E>,// CPU-only, small, or at least not huge, usually cloneable struct which is logically related to data
 }
 

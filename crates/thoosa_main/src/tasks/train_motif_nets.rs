@@ -90,7 +90,7 @@ impl TrainStepTensorRef {
             ref_key: tensor.ref_key().ok_or_else(|| ThoError::new(format!("TrainMotifStep expected worker tensor ref, got {tensor:?}")))?,
             size: tensor.size(),
             kind: thoosa_common::ipc::json_ser::tho_tensor::kind_to_str(&tensor.kind()).map_err(ThoError::new)?.to_string(),
-            tho_device_idx: tensor.tho_device().ordinal(),
+            tho_device_idx: tensor.tho_device().tho_device_idx(),
             remove_after_run: false,
         })
     }
@@ -170,7 +170,7 @@ fn new_train_motif_step_for_ipc(init: &TrainMotifStepIpcInit, all_cuda_tensors: 
         init.motif.size(),
         init.motif.kind(),
         init.motif.selector(),
-        init.motif.tho_device().ordinal(),
+        init.motif.tho_device().tho_device_idx(),
     );
     let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, motif_ref)?;
     let cosine_motif = match &init.params.net_type {
@@ -393,7 +393,7 @@ where
             motif.size(),
             motif.kind(),
             motif.selector(),
-            motif.tho_device().ordinal(),
+            motif.tho_device().tho_device_idx(),
         );
         let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr, motif, stft_config };
         let proxy = Arc::new(ProxyTrainMotifStep::new(init, tho_device_idx).await?);
@@ -1117,7 +1117,7 @@ impl SyncStageIpcWrapper for SyncMotifBatchIpcWrapper {
             num_slices: input.num_slices,
             descr: input.descr,
         };
-        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SYNC_MOTIF_BASTCH_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
         output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
@@ -1373,7 +1373,7 @@ impl SyncStageIpcWrapper for SplitMotifIntoTrainValidIpcWrapper {
         let input = JsonIpcCodec::decode::<SplitMotifIntoTrainValidIpcInput>(input)?;
         let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, input.motif)?;
         let stage_input = SplitMotifIntoTrainValidInput { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Borrowed(&motif)) };
-        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
         output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)

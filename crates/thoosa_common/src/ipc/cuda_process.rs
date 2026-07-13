@@ -1089,7 +1089,7 @@ impl CudaIPCActor {
         dst_device: ThoDevice,
         respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>,
     ) -> Result<(), ThoError> {
-        if dst_device.ordinal() != 0 {
+        if dst_device.tho_device_idx() != 0 {
             return Err(ThoError::new(format!("worker tensor ref copy currently supports only CPU destination, got dst_device={dst_device:?}")));
         }
 
@@ -1232,7 +1232,7 @@ impl CudaIPCActor {
         let self_tx = self.spawned_state.tx.clone();
         let copy_ctx = Arc::clone(&self.copy_ctx);
         let buf_size = self.buf_size;
-        let dst_worker_id = dst_device.ordinal() as u64;
+        let dst_worker_id = dst_device.tho_device_idx() as u64;
 
         let tensor_mem_size = tensor_mem_size(src.t_ref().kind(), &src.t_ref().size());
         debug!("CudaIPCActor::handle_message: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.t_ref().size());
@@ -1332,7 +1332,7 @@ impl CudaIPCActor {
                         debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, hex);
                     }
 
-                    Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, src_shape, src_kind, None, dst_device.ordinal()))
+                    Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, src_shape, src_kind, None, dst_device.tho_device_idx()))
                 }.await;
 
                 if final_result.is_err() {

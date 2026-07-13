@@ -407,7 +407,7 @@ impl <'a> Data for ClcResourcesMotifsDistInput<'a> {
     }
 
     fn device(&self) -> usize {
-        self.batch[0].device_idx()
+        self.batch[0].tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {
