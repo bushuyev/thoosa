@@ -456,7 +456,7 @@ where
 impl<D, Id> ThoTensor<D, Id>
 where
     D: Dims,
-    Id: Clone + Debug + DeserializeOwned + Named,
+    Id: Clone + Debug + Named,
 {
     pub fn ref_to_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, input_ref: ThoTensor<D, Id>) -> Result<ThoTensor<D, Id>, ThoError> {
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
