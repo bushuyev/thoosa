@@ -16,6 +16,7 @@ Data (run  resources, labels, configuration parameters etc) is kept in sqlite da
 - if you've got any questions, ask before starting tasks.
 - before finishing task always check if everything compiles (run `cargo build --release && cargo test --no-run`) and relevant tests pass (`cargo nextest run --profile codex  --no-fail-fast --retries=0 -p [crate]`)
 - Never use Tensor::shallow_clone to return tensor out of sync function or over .await wrapped in ThoTensor
+- Always add comments explaining why changes were made, especially for new code.
 
 ## Project Structure & Module Organization
 - Workspace root with `Cargo.toml` (Rust 2024, nightly toolchain).
