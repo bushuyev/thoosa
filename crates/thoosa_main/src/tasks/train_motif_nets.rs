@@ -59,7 +59,7 @@ use thoosa_store::Store;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::motif_loader::{MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput};
+use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::stage_ids::TRAIN_MOTIF_NETS;
 use thoosa_common::stages_seq::ABStage;
@@ -329,6 +329,10 @@ pub(crate) fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Ve
         (
             SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
             Box::new(sync_motif_bastch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+        (
+            SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT.to_string(),
+            Box::new(sync_load_motif_resources_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
     ])
 }
