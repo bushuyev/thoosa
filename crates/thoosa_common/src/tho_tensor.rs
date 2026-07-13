@@ -79,7 +79,7 @@ where
         })
     }
 
-    pub(crate) fn kind(&self) -> Kind {
+    pub fn kind(&self) -> Kind {
         match &self.inner {
             ThoTensorInner::Val { t } => {
                 t.kind()
@@ -319,7 +319,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         }
     }
 
-    pub(crate) fn ref_key(&self) -> Option<u64> {
+    pub fn ref_key(&self) -> Option<u64> {
         match &self.inner {
             ThoTensorInner::Val { .. } => None,
             ThoTensorInner::Ref { key, .. } => Some(*key),
