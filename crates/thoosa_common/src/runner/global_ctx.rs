@@ -27,6 +27,7 @@ use crate::ipc::cuda_process::CudaIPCActorHandle;
 
 pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 
+///supposed to be internal, don't use it in Stages except when instantiating to check if it should be ipc proxy
 #[derive(Debug)]
 pub struct GlobalCtx {
 

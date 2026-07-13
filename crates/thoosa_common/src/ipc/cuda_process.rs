@@ -2039,8 +2039,8 @@ mod tests {
     async fn test_copy_ipc_cuda_worker_propagates_oom() -> Result<(), ThoError>{
         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await
         } else {
             init_ipc_test("test_copy_ipc_cuda_worker_propagates_oom", pure_module_path!()).await?;
 
@@ -2117,8 +2117,10 @@ mod tests {
             }
         }
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+
             let r= CudaWorker::run_worker(
+            sock_path,
                 HashMap::from([
                             (
                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
@@ -2169,9 +2171,9 @@ mod tests {
     async fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
         debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await
-        } else {
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await
+        } else  {
             init_ipc_test("heavy_copy_ipc_cuda_worker_once", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
@@ -2190,9 +2192,8 @@ mod tests {
     async fn test_copy_ipc_cuda_worker_ok() -> Result<(), ThoError> {
         debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-
-            CudaWorker::run_worker(HashMap::new(), ThoDevice::from(Cuda(0))).await? ;
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await?;
 
             info!("worker: \n{}", format_perf_map(&PERF));
             Ok(())
