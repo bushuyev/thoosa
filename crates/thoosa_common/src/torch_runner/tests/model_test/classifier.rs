@@ -129,28 +129,7 @@ impl SyncStage for Classifier {
     }
 }
 
-// impl AsyncStage for Classifier {
-//     // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-//     // type RunOutput = Arc<DevicesWrap<Self::Out>>;
-//
-//     // fn run_input_id(input: &Self::In<'static>) -> &<<Self as Stage>::In<'static> as WithId>::ID {
-//     //     WithId::id(input)
-//     // }
-//     async fn run(
-//         self: Arc<Self>,
-//         input: Self::In<'static>,
-//         ctx: Self::Ctx,
-//     ) -> Result<Self::Out, ThoError> {
-//         let device_idx = ctx.tho_device_idx();
-//         let stage = Arc::clone(&self.sync_classifier);
-//         let output = input.with_data_ref(device_idx, ctx, None, move |tensor: &<Self::In<'_> as WithDataRef>::O<'_>, run_ctx| {
-//             Arc::clone(&stage).do_run(tensor, run_ctx)
-//         })
-//         .await?;
-//
-//         Ok(Arc::new(DevicesWrap::wrap(output)))
-//     }
-// }
+
 
 #[derive(Debug, Proxy)]
 #[proxy(
