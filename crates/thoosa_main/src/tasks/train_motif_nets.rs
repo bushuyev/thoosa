@@ -1387,11 +1387,13 @@ mod tests {
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::tho_device::ThoDevice;
+    use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT};
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_motif_nets::{TrainMotifNetInput, TrainMotifNets};
+    use crate::tasks::train_motif_nets::{train_motif_step_endpoint_inits, TrainMotifNetInput, TrainMotifNets};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_motif_nets() -> Result<(), ThoError> {
@@ -1541,7 +1543,11 @@ mod tests {
         debug!("test_train_motif_nets_ipc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
         if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await?;
+            CudaWorker::run_worker(
+                sock_path,
+                train_motif_step_endpoint_inits(),
+                ThoDevice::from(Cuda(0)),
+            ).await?;
         } else {
             let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
             let test_name = format!("{module}::test_train_motif_nets_ipc");
