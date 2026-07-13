@@ -249,7 +249,7 @@ where
     type Gradient = ArgminThoTensor;
 
     fn gradient(&self, p: &ArgminThoTensor) -> Result<Self::Gradient, Error> {
-        debug!("gradient: p={:?} device={:?} requires_grad={:?}",p,p.0.device_idx(),p.0.requires_grad());
+        debug!("gradient: p={:?} device={:?} requires_grad={:?}",p,p.0.tho_device_idx(),p.0.requires_grad());
 
         let grad = p.grad(); //.to_device(Cpu);
         debug!("gradient: grad={}", grad);
@@ -317,7 +317,7 @@ mod tests {
             type Output = f64;
 
             fn cost(&self, p: &Self::Param) -> Result<Self::Output, Error> {
-                debug!("cost: p={:?} device={:?} requires_grad={:?}",p,p.0.device_idx(),p.0.requires_grad());
+                debug!("cost: p={:?} device={:?} requires_grad={:?}",p,p.0.tho_device_idx(),p.0.requires_grad());
 
                 Ok(tch::with_grad(|| {
                     p.force_requires_grad();
@@ -339,7 +339,7 @@ mod tests {
             type Gradient = ArgminThoTensor;
 
             fn gradient(&self, p: &Self::Param) -> Result<Self::Gradient, Error> {
-                debug!("gradient: p={:?} device={:?} requires_grad={:?}",p,p.0.device_idx(),p.0.requires_grad());
+                debug!("gradient: p={:?} device={:?} requires_grad={:?}",p,p.0.tho_device_idx(),p.0.requires_grad());
                 let grad = p.grad(); //.to_device(Cpu);
                 debug!("gradient: grad={:?}", grad);
                 Ok(grad.into())

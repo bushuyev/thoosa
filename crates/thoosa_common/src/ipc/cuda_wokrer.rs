@@ -506,7 +506,7 @@ where
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
 
-        C::encode(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.ordinal()))
+        C::encode(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.tho_device_idx()))
     }
 }
 

@@ -515,7 +515,7 @@ where
     }
 
     fn device(&self) -> usize {
-        ThoDevice::from(self.var_store.device()).ordinal()
+        ThoDevice::from(self.var_store.device()).tho_device_idx()
     }
 
     fn mem_size(&self) -> u64 {

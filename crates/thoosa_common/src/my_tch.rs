@@ -54,7 +54,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
     }
 
     fn run_layers(&self, t: &ThoTensor<DI, SimpleId>, mut lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.device_idx(), self.layers[0]);
+        debug!("MySequential::run_layers: t.size={:?} device={:?} self.layers[0]={:?}", t.as_ref().size(), t.tho_device_idx(), self.layers[0]);
 
         let output_t = self.layers[0].tho_forward(&t.as_ref().into(), lengths.as_deref_mut(), train)?;
 
@@ -63,7 +63,7 @@ impl<DI: Dims, DO: Dims> MySequential<DI, DO> {
             .skip(1)
             .enumerate()
             .try_fold(output_t, |output_t, (i, layer)| {
-                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.device_idx(), layer);
+                debug!("MySequential::run_layers={i} output_t.size={:?} output_t.device={:?} layer={:?}", output_t.size(), output_t.tho_device_idx(), layer);
 
                 layer.tho_forward(&output_t, lengths.as_deref_mut(), train)
             })?
@@ -1090,7 +1090,7 @@ where
         #[cfg(any(debug_assertions, tho_debug))]
         {
             debug!("Module for MyLinear::forward: descr={} in_t={in_t:?} self.ws={:?} self.bs={:?}", self.descr, self.ws, self.bs);
-            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),in_t.device_idx());
+            debug!("Module for MyLinear::forward: devices ws={:?} bs={:?} t={:?}",self.ws.device(),self.bs.as_ref().map(|bs| bs.device()),in_t.tho_device_idx());
             debug!("Module for MyLinear::forward: sizes ws={:?} bs={:?} t={:?}",self.ws.size(),self.bs.as_ref().map(|bs| bs.size()),in_t.size());
         }
         match &self.quantized {
