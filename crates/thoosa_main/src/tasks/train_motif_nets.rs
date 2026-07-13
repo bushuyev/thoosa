@@ -145,7 +145,6 @@ impl TrainMotifStepIpcRequest {
 pub(crate) struct TrainMotifStepIpcInit {
     params: MotifNetParams,
     learning_rate: f64,
-    weights: Vec<u8>,
 }
 
 fn train_motif_x_f(batch: ThoBatch<Slice>) -> ThoBatch<Slice> {
@@ -157,12 +156,20 @@ fn train_motif_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError
 }
 
 fn new_train_motif_step_for_ipc(init: TrainMotifStepIpcInit) -> Result<TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, RunCtxImpl>, ThoError> {
-    let mut var_store = VarStore::new(Cuda(0));
-    let net = init.params.motif_net(None)?.build_tch_module::<thoosa_common::dims::Batch<Slice>, thoosa_common::dims::Batch<MotifProbability>>(&var_store.root())?;
-    var_store.load_from_stream(Cursor::new(init.weights))?;
-    let optimizer = AdamW::default().amsgrad(true).build(&var_store, init.learning_rate)?;
+    let params = init.params;
+    let learning_rate = init.learning_rate;
     let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
-    Ok(TrainStep::new(Cuda(0), net, optimizer, Arc::new(Mutex::new(var_store)), x_f, train_motif_loss))
+    let (train_step, ()) = futures::executor::block_on(TrainStep::new(
+        Cuda(0),
+        move |var_store| async move {
+            let net = params.motif_net(None)?.build_tch_module::<thoosa_common::dims::Batch<Slice>, thoosa_common::dims::Batch<MotifProbability>>(&var_store.lock().root())?;
+            Ok((net, ()))
+        },
+        move |var_store| AdamW::default().amsgrad(true).build(var_store, learning_rate).map_err(ThoError::from),
+        x_f,
+        train_motif_loss,
+    ))?;
+    Ok(train_step)
 }
 
 #[derive(Debug)]
@@ -303,14 +310,8 @@ impl<C> TrainStepProxyFactory<Slice, MotifProbability, C, MotifNetParams, TrainM
 where
     C: RunCtx + 'static,
 {
-    async fn new_proxy(&self, node_params: &MotifNetParams, run_config: &TrainMotifNetRunConfig, var_store: &Arc<Mutex<VarStore>>, tho_device_idx: usize) -> Result<TrainStepProxyParts<Slice, MotifProbability, C>, ThoError> {
-        let weights = {
-            let var_store = perf_log!(thoosa_shared::sync_mutex_lock!(var_store));
-            let mut weights = Vec::new();
-            var_store.save_to_stream(&mut weights)?;
-            weights
-        };
-        let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr, weights };
+    async fn new_proxy(&self, node_params: &MotifNetParams, run_config: &TrainMotifNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<Slice, MotifProbability, C>, ThoError> {
+        let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr };
         let proxy = Arc::new(ProxyTrainMotifStep::new(init, tho_device_idx).await?);
         let stage = Arc::new(DynSyncStageBox::new(Arc::new(TrainMotifStepProxyCtx::<C> { proxy: Arc::clone(&proxy), pd: PhantomData })));
         Ok(TrainStepProxyParts::new(stage, Arc::new(TrainMotifStepWeightsSync { proxy })))
@@ -1281,8 +1282,8 @@ mod tests {
     async fn test_train_motif_nets_ipc() -> Result<(), ThoError> {
         debug!("test_train_motif_nets_ipc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
 
-        if std::env::var_os(IPC_SOCK_ENV).is_some() {
-            CudaWorker::run_worker(super::train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await?
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await?;
         } else {
             let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
             let test_name = format!("{module}::test_train_motif_nets_ipc");

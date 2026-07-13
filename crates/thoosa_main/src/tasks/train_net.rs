@@ -90,7 +90,7 @@ where
     NP: Debug + Send + Sync + 'static,
     RC: Debug + Send + Sync + 'static,
 {
-    async fn new_proxy(&self, node_params: &NP, run_config: &RC, var_store: &Arc<Mutex<VarStore>>, tho_device_idx: usize) -> Result<TrainStepProxyParts<DX, DY, C>, ThoError>;
+    async fn new_proxy(&self, node_params: &NP, run_config: &RC, tho_device_idx: usize) -> Result<TrainStepProxyParts<DX, DY, C>, ThoError>;
 }
 
 fn maybe_cuda_mem(device: &Device) -> Option<(usize, usize)> {
@@ -248,39 +248,28 @@ where
         self: Arc<Self>,
         mut ctx: C,
         tho_device_idx: usize,
-        vs: Arc<Mutex<VarStore>>,
         run_config: RC,
         validation_step: u32,
         descr:String
-    ) -> BoxFuture<'static, Result<(f32, NP), ThoError>> {
-        let optimizer = {
-            let vs_guard = perf_log!(sync_mutex_lock!(vs));
-            match (self.optimizer)(&run_config, &vs_guard) {
-                Ok(v) => v,
-                Err(e) => return Box::pin(async { Err(e) }),
-            }
-        };
-
+    ) -> BoxFuture<'static, Result<(VarStore, f32, NP), ThoError>> {
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
-            let (node, params) =  track_await((self.net)(ctx.branch(false), &run_config, Arc::clone(&vs)))
-                .await?;
-
             let device = Device::from(ThoDevice::from(tho_device_idx));
             let epochs = (self.epochs)(&run_config);
 
             let self_x_f = Arc::clone(&self);
             let x_f: Arc<TrainStepXFn<DX>> = Arc::new(Box::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)));
-            let train_step = Arc::new(TrainStep::new(
+            let (train_step, params) = track_await(TrainStep::new(
                 device,
-                node,
-                optimizer,
-                Arc::clone(&vs),
+                |var_store| (self.net)(ctx.branch(false), &run_config, var_store),
+                |var_store| (self.optimizer)(&run_config, var_store),
                 x_f,
                 self.loss_fn,
-            ));
+            )).await?;
+            let train_step = Arc::new(train_step);
+            let vs = train_step.var_store();
             let proxy_parts = match (&self.train_step_proxy_factory, GlobalCtx::global().is_ipc()) {
-                (Some(factory), true) => Some(track_await(factory.new_proxy(&params, &run_config, &vs, tho_device_idx)).await?),
+                (Some(factory), true) => Some(track_await(factory.new_proxy(&params, &run_config, tho_device_idx)).await?),
                 _ => None,
             };
             let train_stage = match proxy_parts.as_ref() {
@@ -364,11 +353,6 @@ where
                 }
 
                 if idx % validation_step == 0 || idx == epochs - 1 {
-
-                    if let Some(parts) = proxy_parts.as_ref() {
-                        track_await(parts.weights_sync.sync_to(&vs)).await?;
-                    }
-
                     debug!("TrainNet::run_inner, valid: descr={descr}  0. cuda_mem={:?} tokio::task_id={:?}", maybe_cuda_mem(&device), tokio::task::try_id());
 
                     let mut batches = batch.valid_batch_stream(ctx.branch(false));
@@ -435,8 +419,13 @@ where
                 warn!("TrainNet::run_inner: descr={descr}  done without saving best for run_config={run_config:?}");
             }
 
+            drop(train_stage);
+            drop(proxy_parts);
+            drop(vs);
+            let train_step = Arc::try_unwrap(train_step).map_err(|_| ThoError::new("TrainNet::run_inner: TrainStep still shared after training"))?;
+            let var_store = train_step.into_var_store()?;
 
-            Ok((best_valid_loss, params))
+            Ok((var_store, best_valid_loss, params))
         })
 
 
@@ -495,7 +484,7 @@ where
             let validation_step = self.validation_step;
             let (var_store, node_params, run_config, loss) = track_await(opt_train::<_, _, _, NP>(
                 Arc::clone(&self.opt_config),
-                move |vs: Arc<Mutex<VarStore>>, run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
+                move |run_config: RC, _listener: &mut (dyn TrainListener + '_)| {
                     debug!("TrainNet::run, about to call run_inner: descr={descr:?} run_config={:?}", run_config);
 
                     let self_arc = Arc::clone(&self_for_train);
@@ -503,14 +492,12 @@ where
                     self_arc.run_inner(
                         ctx.branch(false),
                         device_idx_for_train,
-                        vs,
                         run_config,
                         validation_step,
                         descr.clone()
                     )
                 },
                 run_config_source,
-                ThoDevice::from(device_idx).into(),
                 &self.descr,
                 reusable_completed_trials,
             )).await?;
@@ -655,8 +642,19 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    pub(crate) fn new(device: Device, net: Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, opt: Optimizer, var_store: Arc<Mutex<VarStore>>, x_f: Arc<F>, loss_fn: LossFp) -> Self {
-        Self {
+    pub(crate) async fn new<NP, NB, NBF, OF>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp) -> Result<(Self, NP), ThoError>
+    where
+        NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
+        NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
+        OF: FnOnce(&VarStore) -> Result<Optimizer, ThoError>,
+    {
+        let var_store = Arc::new(Mutex::new(VarStore::new(device)));
+        let (net, node_params) = net_builder(Arc::clone(&var_store)).await?;
+        let opt = {
+            let var_store = perf_log!(sync_mutex_lock!(var_store));
+            optimizer_builder(&var_store)?
+        };
+        Ok((Self {
             device,
             net: Mutex::new(net),
             opt: Mutex::new(opt),
@@ -664,7 +662,18 @@ where
             x_f,
             loss_fn,
             pd: PhantomData,
-        }
+        }, node_params))
+    }
+
+    fn var_store(&self) -> Arc<Mutex<VarStore>> {
+        Arc::clone(&self.var_store)
+    }
+
+    fn into_var_store(self) -> Result<VarStore, ThoError> {
+        let Self { net, opt, var_store, .. } = self;
+        drop(net);
+        drop(opt);
+        Arc::try_unwrap(var_store).map(Mutex::into_inner).map_err(|_| ThoError::new("TrainStep::into_var_store: VarStore still shared after training"))
     }
 
     fn device(&self) -> &Device {
