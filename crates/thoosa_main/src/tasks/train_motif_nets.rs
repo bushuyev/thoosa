@@ -21,11 +21,13 @@ use tch::{IndexOp, Reduction, Tensor};
 use tch::Kind::Float;
 use serde::{Deserialize, Serialize};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 
 use mockall_double::double;
@@ -34,7 +36,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::debug_plot;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths};
-use thoosa_common::dims::{MotifProbability, MotifSlices, Slice, ThoBatch};
+use thoosa_common::dims::{Batch, MotifProbability, MotifSlices, Slice, ThoBatch};
 use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
@@ -44,7 +46,7 @@ use thoosa_common::utils::{mix_x_binary_with_labels, plot_spectrogram, plot_seri
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_run_config_args::OptRunConfigSource;
-use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::hyperparameter::Hyperparameter;
@@ -319,10 +321,16 @@ where
 }
 
 pub(crate) fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
-    HashMap::from([(
-        TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
-        Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
-    )])
+    HashMap::from([
+        (
+            TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
+            Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+        (
+            SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
+            Box::new(sync_motif_bastch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+    ])
 }
 
 type RandomSlicesStft<C> = Stft<C, MotifSlices, MotifSlices>;
@@ -874,6 +882,279 @@ where
 
 }
 
+pub(crate) const SYNC_MOTIF_BASTCH_ENDPOINT: &str = "SyncMotifBatch";
+
+#[derive(Debug)]
+pub struct SyncMotifBatchInput<'a> {
+    id: SynKey,
+    motifs: ThoDataRef<'a, ThoTensor<MotifSlices, SynKey>>,
+    random_slices: ThoDataRef<'a, ThoTensor<MotifSlices, SynKey>>,
+    num_slices: i64,
+    descr: String,
+}
+
+impl Input for SyncMotifBatchInput<'_> {}
+
+impl WithId for SyncMotifBatchInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+#[derive(Debug)]
+struct SyncMotifBatchInputWrapper {
+    id: SynKey,
+    motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
+    random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>,
+    num_slices: i64,
+    descr: String,
+}
+
+impl SyncMotifBatchInputWrapper {
+    fn new(id: SynKey, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, random_slices: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, num_slices: i64, descr: String) -> Self {
+        Self { id, motifs, random_slices, num_slices, descr }
+    }
+}
+
+impl WithId for SyncMotifBatchInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl thoosa_common::runner::common::cachable::BorrowRef for SyncMotifBatchInputWrapper {
+    type Out<'a> = SyncMotifBatchInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let motifs = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_to(&self.motifs, to_device_idx)).await?;
+            let random_slices = track_await(thoosa_common::runner::common::cachable::BorrowRef::borrow_to(&self.random_slices, to_device_idx)).await?;
+            Ok(SyncMotifBatchInput { id: self.id.clone(), motifs, random_slices, num_slices: self.num_slices, descr: self.descr.clone() })
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncMotifBatchOutput {
+    id: SynKey,
+    x: ThoTensor<Batch<Slice>, SynKey>,
+    y: ThoTensor<Batch<MotifProbability>, SynKey>,
+}
+
+impl SyncMotifBatchOutput {
+    fn into_parts(self) -> (ThoBatch<Slice>, ThoBatch<MotifProbability>) {
+        (self.x.with_id(thoosa_shared::simple_id!("sync_motif_bastch_x")), self.y.with_id(thoosa_shared::simple_id!("sync_motif_bastch_y")))
+    }
+}
+
+impl WithId for SyncMotifBatchOutput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Output for SyncMotifBatchOutput {}
+
+impl WorkerStageOutput for SyncMotifBatchOutput {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let Self { id, x, y } = self;
+        let x = C::decode::<ThoTensor<Batch<Slice>, SynKey>>(&<ThoTensor<Batch<Slice>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(x, all_cuda_tensors, tho_device)?)?;
+        let y = C::decode::<ThoTensor<Batch<MotifProbability>, SynKey>>(&<ThoTensor<Batch<MotifProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(y, all_cuda_tensors, tho_device)?)?;
+        C::encode(&Self { id, x, y })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SyncMotifBatchIpcInputRef<'a> {
+    id: &'a SynKey,
+    motifs: &'a ThoTensor<MotifSlices, SynKey>,
+    random_slices: &'a ThoTensor<MotifSlices, SynKey>,
+    num_slices: i64,
+    descr: &'a str,
+    max_other_parallel: u8,
+}
+
+impl<'a> SyncMotifBatchIpcInputRef<'a> {
+    fn new(input: &'a SyncMotifBatchInput<'_>, ctx: &RunCtxImpl) -> Self {
+        Self {
+            id: &input.id,
+            motifs: input.motifs.as_ref(),
+            random_slices: input.random_slices.as_ref(),
+            num_slices: input.num_slices,
+            descr: input.descr.as_str(),
+            max_other_parallel: ctx.max_other_parallel(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncMotifBatchIpcInput {
+    id: SynKey,
+    motifs: ThoTensor<MotifSlices, SynKey>,
+    random_slices: ThoTensor<MotifSlices, SynKey>,
+    num_slices: i64,
+    descr: String,
+    max_other_parallel: u8,
+}
+
+#[derive(Debug)]
+struct SyncMotifBatchIpcWrapper {
+    stage: Arc<SyncMotifBatch>,
+}
+
+impl SyncStageIpcWrapper for SyncMotifBatchIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncMotifBatchIpcInput>(input)?;
+        let motifs = ThoTensor::ref_to_tensor(all_cuda_tensors, input.motifs)?;
+        let random_slices = ThoTensor::ref_to_tensor(all_cuda_tensors, input.random_slices)?;
+        let stage_input = SyncMotifBatchInput {
+            id: input.id,
+            motifs: ThoDataRef::Borrowed(&motifs),
+            random_slices: ThoDataRef::Borrowed(&random_slices),
+            num_slices: input.num_slices,
+            descr: input.descr,
+        };
+        let mut ctx = RunCtxImpl::new(tho_device.ordinal(), SYNC_MOTIF_BASTCH_ENDPOINT);
+        ctx.set_max_other_parallel(input.max_other_parallel);
+        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
+        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxySyncMotifBatch",
+    endpoint = "SYNC_MOTIF_BASTCH_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    out_id = "input_id.clone()",
+    run_input = "SyncMotifBatchIpcInputRef::new(input, ctx)",
+    endpoint_init = "sync_motif_bastch_endpoint_init",
+    wrapper = "SyncMotifBatchIpcWrapper"
+)]
+pub struct SyncMotifBatch;
+
+impl SyncMotifBatch {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Adjustable for SyncMotifBatch {}
+
+impl OutId for SyncMotifBatch {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl Stage for SyncMotifBatch {
+    type Ctx = RunCtxImpl;
+    type In<'a> = SyncMotifBatchInput<'a>;
+    type Out = SyncMotifBatchOutput;
+}
+
+impl SyncStage for SyncMotifBatch {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncMotifBatch::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        debug!("SyncMotifBatch::do_run: descr={} num_slices={}", input.descr, input.num_slices);
+
+        let motifs = make_batch_with(input.motifs.t_ref(), input.num_slices, None)?;
+        let random = make_batch_with(input.random_slices.t_ref(), input.num_slices, None)?;
+
+        #[cfg(tho_debug_plots)]
+        plot_spectrogram(&motifs.i((0, .., ..)), format!("/tmp/plots/spectrogram_motif_{}.png", input.id), 1200, 600)?;
+
+        #[cfg(tho_debug_plots)]
+        plot_spectrogram(&random.i((0, .., ..)), format!("/tmp/plots/spectrogram_random_{}.png", input.id), 1200, 600)?;
+
+        let motif_plot_label = format!("motifs_batch_make_batch_{}_{}", input.id, input.descr);
+        let random_plot_label = format!("motifs_batch_make_batch_random_{}_{}", input.id, input.descr);
+        debug_plot!(&motifs.as_ref(), motif_plot_label, plot_repeats=11)?;
+        debug_plot!(&random.as_ref(), random_plot_label, plot_repeats=11)?;
+
+        let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
+
+        debug!("SyncMotifBatch::do_run: motifs={motifs:?} random={random:?}");
+        debug!("SyncMotifBatch::do_run: x={x:?} y={y:?}");
+
+        Ok(SyncMotifBatchOutput {
+            id: input.id.clone(),
+            x: ThoTensor::new(input.id.clone(), x)?,
+            y: ThoTensor::new(input.id.clone(), y)?,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum SyncMotifBatchStage {
+    Local(Arc<SyncMotifBatch>),
+    Proxy(Arc<ProxySyncMotifBatch>),
+}
+
+#[derive(Debug)]
+struct SyncMotifBatchDynStage<C> {
+    stage: SyncMotifBatchStage,
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncMotifBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
+        let stage = if GlobalCtx::global().is_ipc() {
+            SyncMotifBatchStage::Proxy(Arc::new(ProxySyncMotifBatch::new(tho_device_idx).await?))
+        } else {
+            SyncMotifBatchStage::Local(Arc::new(SyncMotifBatch::new()))
+        };
+        Ok(Self { stage, pd: PhantomData })
+    }
+}
+
+impl<C> Adjustable for SyncMotifBatchDynStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for SyncMotifBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl<C> Stage for SyncMotifBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SyncMotifBatchInput<'a>;
+    type Out = SyncMotifBatchOutput;
+}
+
+impl<C> SyncStage for SyncMotifBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
+        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
+        match &self.stage {
+            SyncMotifBatchStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+            SyncMotifBatchStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+        }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct MotifsBatch<L, C>
@@ -890,6 +1171,7 @@ where
     random_slices: Mutex<CurrentRandomSlices>,
     random_slices_limit: u32,
     motif_meta: MotifMeta,
+    sync_motif_batch: Arc<SyncMotifBatchDynStage<C>>,
 }
 
 impl<L, C> MotifsBatch<L, C>
@@ -906,6 +1188,7 @@ where
         epoch_size: u32,
     ) -> Result<Self, ThoError> {
         debug!("MotifsBatch::new: motif={motif:?}");
+        let sync_motif_batch = Arc::new(SyncMotifBatchDynStage::new(ctx.tho_device_idx()).await?);
 
         {
             let motif_ref = motif.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
@@ -949,53 +1232,20 @@ where
                 motif_meta,
                 batch_size: batch_size as u32,
                 epoch_size,
+                sync_motif_batch,
             })
         }
     }
 
-    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, Tensor), ThoError> {
+    async fn make_batch(&self, motifs: Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, motif_id: &SynKey, descr: &str, mut ctx: C) -> Result<(ThoBatch<Slice>, ThoBatch<MotifProbability>), ThoError> {
         let random_slices = track_await(self.current_random_slices(ctx.branch(false))).await?;
         let num_slices = (self.batch_size / 2) as i64;
 
         debug!("MotifsBatch::make_batch: descr={descr} random_slices={random_slices:?} num_slices={num_slices}");
-
-        {
-            let motifs = motifs.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            let random_slices = random_slices.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>).await?;
-            debug!("MotifsBatch::make_batch: descr={descr} num_slices={num_slices}");
-
-            // TODO(perf): make_batch_with is called twice for every train batch and does heavy random/mixup tensor setup; prebuild reusable mixed batches per epoch when memory allows.
-            let motifs = make_batch_with(motifs.t_ref(), num_slices, None,/*Some(MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })*/)?;//TODO MixupJitterCfg
-            let random = make_batch_with(random_slices.t_ref(), num_slices, None,/*Some(MixupJitterCfg { do_mixup: true, do_jitter: true, alpha: 0.4, sigma: 0.0 })*/)?;
-            // let motifs = &motifs.t;
-            // let random = &random_slices.t;
-
-            #[cfg(tho_debug_plots)]
-            plot_spectrogram(
-                &motifs.i((0, .., ..)),
-                format!("/tmp/plots/spectrogram_motif_{}.png", motif_id),
-                1200,
-                600,
-            )?;
-
-            #[cfg(tho_debug_plots)]
-            plot_spectrogram(
-                &random.i((0, .., ..)),
-                format!("/tmp/plots/spectrogram_random_{}.png", motif_id),
-                1200,
-                600,
-            )?;
-
-            debug_plot!(&motifs.as_ref(), "motifs_batch_make_batch_{motif_id}_{descr}", plot_repeats=11)?;
-            debug_plot!(&random.as_ref(), "motifs_batch_make_batch_random_{motif_id}_{descr}", plot_repeats=11)?;
-
-            let (x, _lengths, y) = mix_x_binary_with_labels(&motifs, None, &random, None)?;
-
-            debug!("MotifsBatch::train_batch: motifs={motifs:?} random={random:?}");
-            debug!("MotifsBatch::train_batch: x={x:?} y={y:?}");
-
-            Ok::<_, ThoError>((x.into(), y))
-        }
+        let input = Arc::new(SyncMotifBatchInputWrapper::new(motif_id.clone(), motifs, random_slices, num_slices, descr.to_string()));
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+        let output = track_await(oom_handler.run(&self.sync_motif_batch, input, ctx.branch(false), NoContexts)).await?;
+        Ok(output.into_parts())
     }
 
     async fn current_random_slices(&self, mut ctx: C) -> Result<Arc<DevicesWrap<ThoTensor<MotifSlices, SynKey>>>, ThoError> {
@@ -1054,7 +1304,7 @@ where
                     )).await
                 }
             })
-            .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
+            .map(|fut_res| fut_res.map(|v| (v.0, None, v.1)))
             .boxed()
     }
 
@@ -1081,7 +1331,7 @@ where
                     )).await
                 }
             })
-            .map(|fut_res| fut_res.map(|v| (v.0, None, v.1.into())))
+            .map(|fut_res| fut_res.map(|v| (v.0, None, v.1)))
             .boxed()
     }
 

@@ -380,6 +380,14 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         &self.id
     }
 
+    pub fn with_id<NewId>(self, id: NewId) -> ThoTensor<D, NewId>
+    where
+        NewId: Named + Debug + Clone,
+    {
+        let Self { inner, tracking, pd, .. } = self;
+        ThoTensor { id, inner, tracking, pd }
+    }
+
     // #[cfg(test)]
     pub fn t_ref(&self) -> &Tensor {//TODO remove
         self.inner_tensor_ref()
