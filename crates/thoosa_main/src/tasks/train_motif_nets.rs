@@ -41,7 +41,7 @@ use thoosa_common::my_tch::MotifInitMode;
 use thoosa_common::parzen::optimizer::CompletedTrial;
 use thoosa_common::runs::Empty;
 use thoosa_common::tho_tensor::{ThoTensor};
-use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
+use thoosa_common::train_nets::{lin_motif_node, opt_train, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetResult, TrainMotifsNetsResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields};
 use thoosa_common::utils::{mix_x_binary_with_labels, plot_spectrogram, plot_series_with_lanes, to_vec_f32, DummyListener};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -63,9 +63,9 @@ use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, sync_m
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::stage_ids::TRAIN_MOTIF_NETS;
 use thoosa_common::stages_seq::ABStage;
-use crate::tasks::stft::{Stft, SyncStftSelector};
+use crate::tasks::stft::{Stft, SyncStft, SyncStftSelector};
 use crate::tasks::tensor_loader::RawTensorLoader;
-use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainStep, TrainStepInput, TrainStepProxyFactory, TrainStepProxyParts, TrainStepWeightsSync, TrainStepXFn};
+use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainStep, TrainStepInput, TrainStepOutput, TrainStepProxyFactory, TrainStepProxyParts, TrainStepWeightsSync, TrainStepXFn};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_proxy_derive::Proxy;
 
@@ -127,6 +127,7 @@ enum TrainMotifStepIpcRequest {
         x: TrainStepTensorRef,
         lengths: Option<Vec<i64>>,
         expected_y: TrainStepTensorRef,
+        train: bool,
         max_other_parallel: u8,
     },
     ExportWeights,
@@ -138,15 +139,18 @@ impl TrainMotifStepIpcRequest {
             x: track_await(TrainStepTensorRef::from_tensor(input.x_ref(), ctx.tho_device_idx())).await?,
             lengths: input.lengths_ref().map(|lengths| lengths.as_slice().to_vec()),
             expected_y: track_await(TrainStepTensorRef::from_tensor(input.expected_y_ref(), ctx.tho_device_idx())).await?,
+            train: input.train(),
             max_other_parallel: ctx.max_other_parallel(),
         })
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct TrainMotifStepIpcInit {
     params: MotifNetParams,
     learning_rate: f64,
+    motif: ThoTensor<MotifSlices, SynKey>,
+    stft_config: Option<StftRunConfig>,
 }
 
 fn train_motif_x_f(batch: ThoBatch<Slice>) -> ThoBatch<Slice> {
@@ -157,14 +161,37 @@ fn train_motif_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError
     pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean).map_err(ThoError::from)
 }
 
-fn new_train_motif_step_for_ipc(init: TrainMotifStepIpcInit) -> Result<TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, RunCtxImpl>, ThoError> {
-    let params = init.params;
+type SyncTrainMotifStep = TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, RunCtxImpl>;
+
+fn new_train_motif_step_for_ipc(init: &TrainMotifStepIpcInit, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<SyncTrainMotifStep, ThoError> {
+    let motif_ref = ThoTensor::new_ref(
+        init.motif.id().clone(),
+        init.motif.ref_key().ok_or_else(|| ThoError::new(format!("TrainMotifStepIpcInit expected motif worker reference, got {:?}", init.motif)))?,
+        init.motif.size(),
+        init.motif.kind(),
+        init.motif.selector(),
+        init.motif.tho_device().ordinal(),
+    );
+    let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, motif_ref)?;
+    let cosine_motif = match &init.params.net_type {
+        MotifNetTypeParams::CosineNetParams(_) => Some(Arc::new(copy_motif(&motif)?)),
+        MotifNetTypeParams::CosineNet2DParams(_) => {
+            let stft_config = init.stft_config.clone().ok_or_else(|| ThoError::new("TrainMotifStepIpcInit missing STFT config for Cosine2DNet"))?;
+            let stft = SyncStft::<RunCtxImpl, MotifSlices, MotifSlices>::new(SynKey::new([mono_key!("TrainMotifStepIpc", "stft")]), stft_config)?;
+            let motif_specs = stft.build_spectrogram(motif.t_ref())?;
+            let mut copied = motif_specs.f_zeros_like()?;
+            copied.f_copy_(&motif_specs)?;
+            Some(Arc::new(ThoTensor::new(motif.id().clone(), copied)?))
+        }
+        _ => None,
+    };
+    let params = init.params.clone();
     let learning_rate = init.learning_rate;
     let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
-    let (train_step, ()) = futures::executor::block_on(TrainStep::new(
+    let (train_step, ()) = futures::executor::block_on(TrainStep::new_local(
         Cuda(0),
         move |var_store| async move {
-            let net = params.motif_net(None)?.build_tch_module::<thoosa_common::dims::Batch<Slice>, thoosa_common::dims::Batch<MotifProbability>>(&var_store.lock().root())?;
+            let net = params.motif_net(cosine_motif)?.build_tch_module::<thoosa_common::dims::Batch<Slice>, thoosa_common::dims::Batch<MotifProbability>>(&var_store.lock().root())?;
             Ok((net, ()))
         },
         move |var_store| AdamW::default().amsgrad(true).build(var_store, learning_rate).map_err(ThoError::from),
@@ -175,22 +202,43 @@ fn new_train_motif_step_for_ipc(init: TrainMotifStepIpcInit) -> Result<TrainStep
 }
 
 #[derive(Debug)]
+struct TrainMotifStepIpcInitStage {
+    init: TrainMotifStepIpcInit,
+    stage: Mutex<Option<Arc<SyncTrainMotifStep>>>,
+}
+
+impl TrainMotifStepIpcInitStage {
+    fn new(init: TrainMotifStepIpcInit) -> Self {
+        Self { init, stage: Mutex::new(None) }
+    }
+
+    fn stage(&self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Arc<SyncTrainMotifStep>, ThoError> {
+        let mut stage = self.stage.lock();
+        if stage.is_none() {
+            stage.replace(Arc::new(new_train_motif_step_for_ipc(&self.init, all_cuda_tensors)?));
+        }
+        Ok(Arc::clone(stage.as_ref().ok_or_else(|| ThoError::new("TrainMotifStepIpcInitStage failed to initialize stage"))?))
+    }
+}
+
+#[derive(Debug)]
 struct TrainMotifStepIpcWrapper {
-    stage: Arc<TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, RunCtxImpl>>,
+    stage: Arc<TrainMotifStepIpcInitStage>,
 }
 
 impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
     fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
         match JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)? {
-            TrainMotifStepIpcRequest::Run { x, lengths, expected_y, max_other_parallel } => {
+            TrainMotifStepIpcRequest::Run { x, lengths, expected_y, train, max_other_parallel } => {
+                let stage = self.stage.stage(all_cuda_tensors)?;
                 let remove_x = x.remove_after_run.then_some(x.ref_key);
                 let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
                 let x = ThoTensor::ref_to_tensor(all_cuda_tensors, x.into_tensor::<Slice>()?)?;
                 let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, expected_y.into_tensor::<MotifProbability>()?)?;
-                let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y);
+                let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
                 let mut ctx = RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT);
                 ctx.set_max_other_parallel(max_other_parallel);
-                let result = Arc::clone(&self.stage).do_run(&input, &ctx);
+                let result = stage.do_run(&input, &ctx);
                 drop(input);
                 if remove_x.is_some() || remove_expected_y.is_some() {
                     let mut tensors = all_cuda_tensors.lock();
@@ -201,12 +249,12 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
                         tensors.remove(&key);
                     }
                 }
-                result?;
-                JsonIpcCodec::encode(&())
+                JsonIpcCodec::encode(&result?)
             }
             TrainMotifStepIpcRequest::ExportWeights => {
+                let stage = self.stage.stage(all_cuda_tensors)?;
                 let mut weights = Vec::new();
-                self.stage.save_var_store_to_stream(&mut weights)?;
+                stage.save_var_store_to_stream(&mut weights)?;
                 JsonIpcCodec::encode(&weights)
             }
         }
@@ -225,7 +273,7 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
     run_input = "thoosa_shared::tracked_await::track_await(TrainMotifStepIpcRequest::run(input, ctx)).await?",
     endpoint_init = "train_motif_step_endpoint_init",
     init_type = "TrainMotifStepIpcInit",
-    init_stage = "new_train_motif_step_for_ipc(init)?",
+    init_stage = "TrainMotifStepIpcInitStage::new(init)",
     wrapper = "TrainMotifStepIpcWrapper"
 )]
 struct TrainMotifStepProxyTarget {
@@ -257,7 +305,7 @@ where
 {
     type Ctx = C;
     type In<'a> = TrainStepInput<Slice, MotifProbability>;
-    type Out = ();
+    type Out = TrainStepOutput;
 }
 
 impl<C> SyncStage for TrainMotifStepProxyCtx<C>
@@ -298,12 +346,35 @@ impl TrainStepWeightsSync for TrainMotifStepWeightsSync {
 
 #[derive(Debug)]
 struct TrainMotifStepProxyFactory<C> {
+    motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
+    motif_width: u32,
     pd: PhantomData<C>,
 }
 
-impl<C> Default for TrainMotifStepProxyFactory<C> {
-    fn default() -> Self {
-        Self { pd: PhantomData }
+impl<C> TrainMotifStepProxyFactory<C> {
+    fn new(motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, motif_width: u32) -> Self {
+        Self { motif, motif_width, pd: PhantomData }
+    }
+}
+
+fn train_motif_step_params(run_config: &TrainMotifNetRunConfig, motif_width: u32) -> Result<(MotifNetParams, Option<StftRunConfig>), ThoError> {
+    match &run_config.net {
+        MotifNetTypeArgs::ConvNet(net) => Ok((MotifNetParams::new_conv(motif_width, net.conv_layers, net.head_layers, net.step, net.channels, net.kernel), None)),
+        MotifNetTypeArgs::LinNet(net) => Ok((MotifNetParams::new_lin(motif_width, net.num_layers, net.step), None)),
+        MotifNetTypeArgs::CosineNet(net) => Ok((MotifNetParams::new_cosine(motif_width, net.a, net.b, net.init_mode.clone()), None)),
+        MotifNetTypeArgs::Cosine2DNet(args) => {
+            args.stft_config.validate()?;
+            let n_fft = args.stft_config.n_fft;
+            let hop_length = args.stft_config.hop_length.unwrap_or(n_fft / 4);
+            let motif_width_i64 = i64::from(motif_width);
+            if hop_length <= 0 || motif_width_i64 < n_fft {
+                return Err(ThoError::new(format!("TrainMotifStepProxyFactory invalid STFT dimensions: motif_width={motif_width} n_fft={n_fft} hop_length={hop_length}")));
+            }
+            let kw = u32::try_from((motif_width_i64 - n_fft) / hop_length + 1).map_err(|error| ThoError::new(format!("TrainMotifStepProxyFactory invalid STFT time dimension: {error}")))?;
+            let kh_i64 = if args.stft_config.onesided { n_fft / 2 + 1 } else { n_fft };
+            let kh = u32::try_from(kh_i64).map_err(|error| ThoError::new(format!("TrainMotifStepProxyFactory invalid STFT frequency dimension: {error}")))?;
+            Ok((MotifNetParams::new_cosine_2d(kw, kh, args.a, args.b, args.init_mode.clone(), motif_width), Some(args.stft_config.clone())))
+        }
     }
 }
 
@@ -312,11 +383,22 @@ impl<C> TrainStepProxyFactory<Slice, MotifProbability, C, MotifNetParams, TrainM
 where
     C: RunCtx + 'static,
 {
-    async fn new_proxy(&self, node_params: &MotifNetParams, run_config: &TrainMotifNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<Slice, MotifProbability, C>, ThoError> {
-        let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr };
+    async fn new_proxy(&self, run_config: &TrainMotifNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<Slice, MotifProbability, C, MotifNetParams>, ThoError> {
+        let (node_params, stft_config) = train_motif_step_params(run_config, self.motif_width)?;
+        let motif = track_await(self.motif.borrow_to(tho_device_idx, None::<SyncStftSelector>)).await?;
+        let motif = motif.as_ref().data();
+        let motif = ThoTensor::new_ref(
+            motif.id().clone(),
+            motif.ref_key().ok_or_else(|| ThoError::new(format!("TrainMotifStepProxyFactory expected motif worker reference, got {motif:?}")))?,
+            motif.size(),
+            motif.kind(),
+            motif.selector(),
+            motif.tho_device().ordinal(),
+        );
+        let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr, motif, stft_config };
         let proxy = Arc::new(ProxyTrainMotifStep::new(init, tho_device_idx).await?);
         let stage = Arc::new(DynSyncStageBox::new(Arc::new(TrainMotifStepProxyCtx::<C> { proxy: Arc::clone(&proxy), pd: PhantomData })));
-        Ok(TrainStepProxyParts::new(stage, Arc::new(TrainMotifStepWeightsSync { proxy })))
+        Ok(TrainStepProxyParts::new(stage, Arc::new(TrainMotifStepWeightsSync { proxy }), node_params))
     }
 }
 
@@ -848,7 +930,7 @@ where
                     format!("motif_{}", motif_id_rate.0)
                 )
                     .with_reusable_completed_trials(reusable_completed_trials)
-                    .with_train_step_proxy_factory(Arc::new(TrainMotifStepProxyFactory::<C>::default())));
+                    .with_train_step_proxy_factory(Arc::new(TrainMotifStepProxyFactory::<C>::new(motif_net, motif_width))));
 
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
