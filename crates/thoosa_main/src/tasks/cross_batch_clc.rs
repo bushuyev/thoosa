@@ -464,10 +464,9 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
     }
 }
 
-#[derive(Proxy)]
+#[derive(Debug, Proxy)]
 #[proxy(
     common = "thoosa_common",
-    base = "CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<thoosa_common::runner::run_ctx_2::RunCtxImpl>, crate::tasks::dists_tracker::DistsMask, crate::tasks::find_motifs::MasksCtx, thoosa_common::runner::run_ctx_2::RunCtxImpl>",
     name = "ProxyCrossUnfoldClc",
     endpoint = "SYNC_CROSS_UNFOLD_CLC_ENDPOINT",
     new_args = "init: crate::tasks::find_motifs::FindMotifsCrossUnfoldClcInit, tho_device_idx: usize",
@@ -479,6 +478,10 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
     init_stage = "CrossUnfoldClc::new_for_find_motifs(init)?",
     wrapper = "CrossUnfoldClcFindMotifsIpcWrapper"
 )]
+struct CrossUnfoldClcProxyTarget {
+    base: CrossUnfoldClc<crate::tasks::find_motifs::CrossUnfoldMaskFn<thoosa_common::runner::run_ctx_2::RunCtxImpl>, crate::tasks::dists_tracker::DistsMask, crate::tasks::find_motifs::MasksCtx, thoosa_common::runner::run_ctx_2::RunCtxImpl>,
+}
+
 pub struct CrossUnfoldClc<F, R, CUC, C>
 where
     F: CrossBatchFn<R, CUC, C>,
