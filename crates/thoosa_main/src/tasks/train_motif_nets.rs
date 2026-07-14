@@ -1706,7 +1706,7 @@ mod tests {
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
-    use thoosa_shared::{cdt_for_dir, mono_key, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::{cdt_for_dir, mono_key, simple_id, TensorIdSliceIdx, ThoError};
     use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
@@ -1839,6 +1839,8 @@ mod tests {
         let run_ctx_branch = run_ctx.branch(false);
         let r = train_motif_net.run(input, run_ctx_branch).await?;
 
+        debug!("test_train_motif_nets: r={r:?}");
+
         fn run_test_net(params: &MotifNetParams, vs: &VarStore) -> Result<(), ThoError> {
             let net = params.motif_net(None)?.build_tch_module::<MotifSlices, MotifProbability>(&vs.root())?;
 
@@ -1856,9 +1858,12 @@ mod tests {
             debug!("intervals={intervals:?} t.size={:?}", t.size());
             debug_plot!(&t, "channel_0")?;
 
-            let output = net.tho_forward(&t.to_device(Cuda(0)).i((0, ..)).unfold(0, 100, 1).into(), None, false)?;
+            let input = t.to_device(vs.device()).i((0, ..)).unfold(0, 100, 1).into();
+            debug!("test_train_motif_nets: input={input:?}");
 
-            debug!("output.t=\n{}", output.t_ref().view((1,-1)));
+            let output = net.tho_forward(&input, None, false)?;
+
+            debug!("test_train_motif_nets: output.t=\n{}", output.t_ref().view((1,-1)));
 
             debug_plot!(&output.t_ref().view((1,-1)), "applied 0")?;
 
@@ -2005,7 +2010,7 @@ mod tests {
         let ThoTensorInner::Ref{ key, size, kind, selector, tho_device_idx } = inner  else {
             panic!("should be ref")
         };
-        ThoTensor::new_ref(id.into(), key, size.clone(), kind, None, tho_device_idx)
+        ThoTensor::new_ref(simple_id!(id), key, size.clone(), kind, None, tho_device_idx)
     }
 
     fn cos_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
