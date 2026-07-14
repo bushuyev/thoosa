@@ -932,9 +932,8 @@ impl CudaIPCActor {
 
                     self.handle_h2d_copy(src, dst_device, respond_to)
                 }
-
-
             }
+
             CudaIPCActorMessage::DropThoTensor { key, respond_to } => {
                 let id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let (reply_tx, reply_rx) = oneshot::channel();
@@ -1224,9 +1223,10 @@ impl CudaIPCActor {
     }
 
 
-    fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError>{
+    fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let preflight_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+
         let (reply_tx, reply_rx) = oneshot::channel();
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
@@ -1235,7 +1235,7 @@ impl CudaIPCActor {
         let dst_worker_id = dst_device.tho_device_idx() as u64;
 
         let tensor_mem_size = tensor_mem_size(src.t_ref().kind(), &src.t_ref().size());
-        debug!("CudaIPCActor::handle_message: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.t_ref().size());
+        debug!("CudaIPCActor::handle_h2d_copy: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",src.t_ref().size());
         if tensor_mem_size == 0 {
             return Err(ThoError::new("worker IPC H2D copy does not support zero-byte tensors"));
         }
@@ -1306,7 +1306,7 @@ impl CudaIPCActor {
                                 producer: IpcProcessRole::Parent,
                                 consumer: IpcProcessRole::Worker { worker_id: dst_worker_id },
                             };
-                            debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
+                            debug!("CudaIPCActor::handle_h2d_copy:, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
 
                             let fd = buf.try_clone_fd()?;
                             if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await.is_err() {
@@ -1324,12 +1324,12 @@ impl CudaIPCActor {
 
                     if let Some(hex) = done.tensor_digest_hex.as_ref() {
                         let source_digest = tensor_digest(src.t_ref())?;
-                        debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: original tensor digest={source_digest:?}");
+                        debug!("CudaIPCActor::handle_h2d_copy:  original tensor digest={source_digest:?}");
                         let source_digest_hex = source_digest.hex.clone();
                         if  source_digest_hex.ne(hex) {
                             return Err(ThoError::new(format!("worker copy digest mismatch for transfer {}: source={} copied={}", done.transfer_id, source_digest_hex, hex)));
                         }
-                        debug!("CudaIPCActor::handle_message, CudaIPCActor::Copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, hex);
+                        debug!("CudaIPCActor::handle_h2d_copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, hex);
                     }
 
                     Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, src_shape, src_kind, None, dst_device.tho_device_idx()))
@@ -1395,8 +1395,7 @@ async fn writer_loop<W>(
                 &pending,
                 req.id,
                 format!("failed to write request {}: {e}", req.id),
-            )
-                .await;
+            ).await;
 
             fail_all_pending(&pending, format!("worker IPC writer stopped: {e}")).await;
             break;
@@ -1436,11 +1435,7 @@ async fn reader_loop<R>(
                     Err(e) => {
                         debug!("worker IPC reader stopped: {e}");
 
-                        fail_all_pending(
-                            &pending,
-                            format!("worker IPC reader stopped: {e}"),
-                        )
-                        .await;
+                        fail_all_pending(&pending, format!("worker IPC reader stopped: {e}"),).await;
 
                         break;
                     }

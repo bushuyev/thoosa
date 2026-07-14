@@ -971,6 +971,8 @@ where
             "train motif",
         )).await;
 
+        debug!("TrainMotifNets::run: results={results:?}");
+
         Ok(Arc::new(TrainMotifsNetsResult::new(select_motifs_run_config_ids, results)))
     }
 
