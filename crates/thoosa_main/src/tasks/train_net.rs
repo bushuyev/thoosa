@@ -739,7 +739,7 @@ where
         net.tho_forward(x_t, lengths, train)
     }
 
-    pub(crate) fn save_var_store_to_stream(&self, output: &mut Vec<u8>) -> Result<(), ThoError> {
+    pub(crate) fn save_var_store_to_stream(&self, output: &mut dyn Write) -> Result<(), ThoError> {
         let var_store = perf_log!(sync_mutex_lock!(self.var_store));
         debug!("save_var_store_to_stream: var_store={var_store:?}");
         var_store.save_to_stream(output).map_err(ThoError::from)

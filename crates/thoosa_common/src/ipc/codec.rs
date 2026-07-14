@@ -116,23 +116,22 @@ where
     r
 }
 
-pub async fn invoke_ipc_endpoint_binary<C, I>(
+pub async fn invoke_ipc_endpoint_to_file<C, I>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
     input: &I,
-) -> Result<Vec<u8>, ThoError>
+) -> Result<std::fs::File, ThoError>
 where
     C: IpcCodec,
     I: Debug + Serialize + ?Sized,
 {
-    debug!("invoke_ipc_endpoint_binary: endpoint_name={endpoint_name} input={input:?}");
+    debug!("invoke_ipc_endpoint_to_file: endpoint_name={endpoint_name} input={input:?}");
 
     let input = C::encode(input)?;
-    let response = actor.invoke_endpoint_binary(
-        encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
-    ).await?;
+    let output = tempfile::tempfile()?;
+    let response = actor.invoke_endpoint_to_file(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes(), output).await?;
 
-    debug!("invoke_ipc_endpoint_binary: endpoint_name={endpoint_name} response_len={}", response.len());
+    debug!("invoke_ipc_endpoint_to_file: endpoint_name={endpoint_name} done");
 
     Ok(response)
 }
