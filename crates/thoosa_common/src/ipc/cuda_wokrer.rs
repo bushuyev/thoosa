@@ -29,7 +29,7 @@ use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
-use crate::ipc::json_ser::SyncStageIpcWrapper;
+use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::common::runnable::SyncStage;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -354,7 +354,7 @@ impl CudaWorker {
                                 let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
 
-                                let response = endpoint.do_run(&input, &all_cuda_tensors, &tho_device);
+                                let response = endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device);
                                 let sync_result = stream.synchronize();
                                 match (response, sync_result) {
                                     (Ok(response), Ok(())) => Ok(response),
@@ -368,8 +368,12 @@ impl CudaWorker {
                             if let  Err(e) = &r {
 
                                 error!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
-                            }  else {
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} r={r:?}",);
+                            } else if let Ok(response) = &r {
+                                let (response_is_binary, response_len) = match response {
+                                    SyncStageIpcResponse::Encoded(response) => (false, response.len()),
+                                    SyncStageIpcResponse::Binary(response) => (true, response.len()),
+                                };
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} response_is_binary={response_is_binary} response_len={response_len}");
                             }
                             r
                         },
@@ -377,10 +381,9 @@ impl CudaWorker {
                     }
                 };
 
-                debug!("run_worker: invoke endpoint  response={response:?}");
-
                 let payload = match response {
-                    Ok(response) => OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response)),
+                    Ok(SyncStageIpcResponse::Encoded(response)) => OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response)),
+                    Ok(SyncStageIpcResponse::Binary(response)) => OutgoingRequestPayload::Binary(response),
                     Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
                 };
                 reply_tx
