@@ -21,7 +21,7 @@ use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
 use tch::Tensor;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
@@ -69,7 +69,9 @@ pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
 pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
 pub(crate) const DROP_THO_TENSOR: &str = "drop_tho_tensor:";
 const ENDPOINT_BYTES_PAYLOAD_PREFIX: &str = "endpoint-bytes:";
-const BINARY_RESPONSE_PAYLOAD_PREFIX: &[u8] = b"binary-response:";
+const BINARY_RESPONSE_CHUNK_PREFIX: &[u8] = b"binary-response-chunk:";
+const BINARY_RESPONSE_END_PAYLOAD: &[u8] = b"binary-response-end";
+const BINARY_RESPONSE_CHUNK_LEN: usize = 1024 * 1024;
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
@@ -358,6 +360,30 @@ pub(crate) struct WorkerReply {
     pub(crate) payload: OutgoingRequestPayload,
 }
 
+pub(crate) struct IpcChunkWriter {
+    chunks: mpsc::Sender<Result<Vec<u8>, ThoError>>,
+}
+
+impl IpcChunkWriter {
+    pub(crate) fn new(chunks: mpsc::Sender<Result<Vec<u8>, ThoError>>) -> Self {
+        Self { chunks }
+    }
+}
+
+impl std::io::Write for IpcChunkWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        for chunk in buf.chunks(BINARY_RESPONSE_CHUNK_LEN) {
+            self.chunks.blocking_send(Ok(chunk.to_vec()))
+                .map_err(|_| std::io::Error::new(ErrorKind::BrokenPipe, "worker binary response writer is closed"))?;
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 
 pub(crate) async fn worker_response_writer_loop<W>(
     mut writer: W,
@@ -367,8 +393,19 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(reply) = reply_rx.recv().await {
-        let frame = encode_wire_frame(reply.id, &reply.payload)?;
-        if let Err(error) = write_frame(&mut writer, &frame, "worker").await {
+        let write_result = match reply.payload {
+            OutgoingRequestPayload::BinaryStream { chunks, completed } => {
+                let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
+                let completion = result.as_ref().map(|_| ()).map_err(|error| ThoError::new(error.to_string()));
+                let _ = completed.send(completion);
+                result
+            }
+            payload => {
+                let frame = encode_wire_frame(reply.id, &payload)?;
+                write_frame(&mut writer, &frame, "worker").await
+            }
+        };
+        if let Err(error) = write_result {
             if matches!(error.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof) {
                 debug!("worker_response_writer_loop: parent IPC stream closed");
                 break;
@@ -378,6 +415,35 @@ where
     }
 
     Ok(())
+}
+
+async fn write_binary_stream_response<W>(writer: &mut W, id: u64, mut chunks: mpsc::Receiver<Result<Vec<u8>, ThoError>>) -> std::io::Result<()>
+where
+    W: AsyncWrite + Unpin,
+{
+    while let Some(chunk) = chunks.recv().await {
+        match chunk {
+            Ok(chunk) => {
+                let frame = encode_binary_response_frame(id, BINARY_RESPONSE_CHUNK_PREFIX, &chunk);
+                write_frame(writer, &frame, "worker binary response chunk").await?;
+            }
+            Err(error) => {
+                let frame = format!("{id}\t{}", encode_worker_copy_error(&error));
+                write_frame(writer, frame.as_bytes(), "worker binary response error").await?;
+                return Ok(());
+            }
+        }
+    }
+
+    let frame = encode_binary_response_frame(id, BINARY_RESPONSE_END_PAYLOAD, &[]);
+    write_frame(writer, &frame, "worker binary response end").await
+}
+
+fn encode_binary_response_frame(id: u64, prefix: &[u8], payload: &[u8]) -> Vec<u8> {
+    let mut frame = format!("{id}\t").into_bytes();
+    frame.extend_from_slice(prefix);
+    frame.extend_from_slice(payload);
+    frame
 }
 
 pub(crate) async fn describe_worker_tensor(
@@ -718,8 +784,10 @@ pub enum CudaIPCActorMessage {
     InvokeEndpoint {
         input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
     },
-    InvokeEndpointBinary {
-        input: String, respond_to: oneshot::Sender<Result<Vec<u8>, ThoError>>
+    InvokeEndpointToFile {
+        input: String,
+        output: std::fs::File,
+        respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
     },
 }
 
@@ -730,7 +798,10 @@ struct OutgoingRequest {
 
 pub enum OutgoingRequestPayload {
     Msg(String),//action:data
-    Binary(Vec<u8>),
+    BinaryStream {
+        chunks: mpsc::Receiver<Result<Vec<u8>, ThoError>>,
+        completed: oneshot::Sender<Result<(), ThoError>>,
+    },
     SharedMemfdBuffer{
         meta: IpcTensorTransferMetadata,
         fd:OwnedFd,
@@ -740,19 +811,30 @@ pub enum OutgoingRequestPayload {
 #[derive(Debug)]
 enum IncomingResponsePayload {
     Msg(String),
-    Binary(Vec<u8>),
+    BinaryChunk(Vec<u8>),
+    BinaryEnd,
 }
 
 impl IncomingResponsePayload {
     fn into_msg(self) -> Result<String, ThoError> {
         match self {
             Self::Msg(response) => Ok(response),
-            Self::Binary(_) => Err(ThoError::new("unexpected binary worker response")),
+            Self::BinaryChunk(_) | Self::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
         }
     }
 }
 
-type PendingResponses = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<IncomingResponsePayload, ThoError>>>>>;
+#[derive(Debug)]
+enum PendingResponse {
+    Buffered(oneshot::Sender<Result<IncomingResponsePayload, ThoError>>),
+    File {
+        output: tokio::fs::File,
+        respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
+        error: Option<ThoError>,
+    },
+}
+
+type PendingResponses = Arc<Mutex<HashMap<u64, PendingResponse>>>;
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
@@ -961,7 +1043,7 @@ impl CudaIPCActor {
                 tokio::spawn(async move {
                     {
                         let mut pending = pending.lock().await;
-                        let old = pending.insert(id, reply_tx);
+                        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
                         debug_assert!(old.is_none());
                     }
 
@@ -1012,7 +1094,7 @@ impl CudaIPCActor {
                 tokio::spawn(async move {
                     {
                         let mut pending = pending.lock().await;
-                        let old = pending.insert(id, reply_tx);
+                        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
                         debug_assert!(old.is_none());
                     }
 
@@ -1096,33 +1178,18 @@ impl CudaIPCActor {
                     Ok::<_, ThoError>(())
                 });
             }
-            CudaIPCActorMessage::InvokeEndpointBinary { input, respond_to } => {
+            CudaIPCActorMessage::InvokeEndpointToFile { input, output, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
-
-                tokio::spawn(async move {
-                    let response = send_request_and_wait_payload(
-                        self_tx,
-                        pending,
-                        OutgoingRequest {
-                            id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
-                        },
-                    ).await.and_then(|response| match response {
-                        IncomingResponsePayload::Binary(response) => Ok(response),
-                        IncomingResponsePayload::Msg(response) => {
-                            if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
-                                Err(parse_worker_copy_error_payload(error))
-                            } else {
-                                Err(ThoError::new(format!("expected binary endpoint response, got {response:?}")))
-                            }
-                        }
-                    });
-                    let _ = respond_to.send(response);
-
-                    Ok::<_, ThoError>(())
-                });
+                {
+                    let mut pending = pending.lock().await;
+                    let old = pending.insert(next_id, PendingResponse::File { output: tokio::fs::File::from_std(output), respond_to, error: None });
+                    debug_assert!(old.is_none());
+                }
+                if self_tx.send(OutgoingRequest { id: next_id, payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")) }).await.is_err() {
+                    fail_one_pending(&pending, next_id, format!("failed to send streaming endpoint request {next_id}")).await;
+                }
             }
 
         }
@@ -1186,7 +1253,7 @@ impl CudaIPCActor {
                 let (reply_tx, reply_rx) = oneshot::channel();
                 {
                     let mut pending = pending.lock().await;
-                    let old = pending.insert(transfer_id, reply_tx);
+                    let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
                     debug_assert!(old.is_none());
                 }
 
@@ -1322,7 +1389,7 @@ impl CudaIPCActor {
 
                 {
                     let mut pending = pending.lock().await;
-                    let old = pending.insert(transfer_id, reply_tx);
+                    let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
                     debug_assert!(old.is_none());
                 }
 
@@ -1479,7 +1546,7 @@ async fn reader_loop<R>(
                 break;
             }
 
-            result = read_frame(&mut reader, "CudaIPCActor", u32::MAX as usize) => {
+            result = read_frame(&mut reader, "CudaIPCActor", MAX_FRAME_LEN) => {
                 match result {
                     Ok(frame) => frame,
                     Err(e) => {
@@ -1502,14 +1569,45 @@ async fn reader_loop<R>(
             }
         };
 
-        let reply_tx = {
+        let pending_response = {
             let mut pending = pending.lock().await;
             pending.remove(&id)
         };
 
-        match reply_tx {
-            Some(reply_tx) => {
+        match pending_response {
+            Some(PendingResponse::Buffered(reply_tx)) => {
                 let _ = reply_tx.send(Ok(payload));
+            }
+            Some(PendingResponse::File { mut output, respond_to, mut error }) => {
+                match payload {
+                    IncomingResponsePayload::BinaryChunk(chunk) => {
+                        if error.is_none()
+                            && let Err(write_error) = output.write_all(&chunk).await
+                        {
+                            error = Some(ThoError::from(write_error));
+                        }
+                        let mut pending = pending.lock().await;
+                        let old = pending.insert(id, PendingResponse::File { output, respond_to, error });
+                        debug_assert!(old.is_none());
+                    }
+                    IncomingResponsePayload::BinaryEnd => {
+                        let result = async {
+                            if let Some(error) = error {
+                                return Err(error);
+                            }
+                            output.flush().await?;
+                            output.seek(std::io::SeekFrom::Start(0)).await?;
+                            Ok(output.into_std().await)
+                        }.await;
+                        let _ = respond_to.send(result);
+                    }
+                    IncomingResponsePayload::Msg(response) => {
+                        let error = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX)
+                            .map(parse_worker_copy_error_payload)
+                            .unwrap_or_else(|| ThoError::new(format!("expected streaming endpoint response, got {response:?}")));
+                        let _ = respond_to.send(Err(error));
+                    }
+                }
             }
             None => {
                 error!("received response for unknown request id={id}");
@@ -1540,8 +1638,10 @@ fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload),
         .parse::<u64>()
         .map_err(|e| ThoError::new(format!("bad request id in wire response: {e}")))?;
     let payload = &frame[separator + 1..];
-    if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_PAYLOAD_PREFIX) {
-        Ok((id, IncomingResponsePayload::Binary(payload.to_vec())))
+    if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_CHUNK_PREFIX) {
+        Ok((id, IncomingResponsePayload::BinaryChunk(payload.to_vec())))
+    } else if payload == BINARY_RESPONSE_END_PAYLOAD {
+        Ok((id, IncomingResponsePayload::BinaryEnd))
     } else {
         let payload = String::from_utf8(payload.to_vec())
             .map_err(|e| ThoError::new(format!("received non-utf8 message response: {e}")))?;
@@ -1638,7 +1738,7 @@ async fn send_request_and_wait(
 ) -> Result<String, ThoError> {
     match send_request_and_wait_payload(tx, pending, request).await? {
         IncomingResponsePayload::Msg(response) => Ok(response),
-        IncomingResponsePayload::Binary(_) => Err(ThoError::new("unexpected binary worker response")),
+        IncomingResponsePayload::BinaryChunk(_) | IncomingResponsePayload::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
     }
 }
 
@@ -1651,7 +1751,7 @@ async fn send_request_and_wait_payload(
     let (reply_tx, reply_rx) = oneshot::channel();
     {
         let mut pending = pending.lock().await;
-        let old = pending.insert(id, reply_tx);
+        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
         debug_assert!(old.is_none());
     }
     if tx.send(request).await.is_err() {
@@ -1683,8 +1783,15 @@ async fn fail_one_pending(
         pending.remove(&id)
     };
 
-    if let Some(reply_tx) = reply_tx {
-        let _ = reply_tx.send(Err(ThoError::new(msg)));
+    if let Some(pending_response) = reply_tx {
+        match pending_response {
+            PendingResponse::Buffered(reply_tx) => {
+                let _ = reply_tx.send(Err(ThoError::new(msg)));
+            }
+            PendingResponse::File { respond_to, .. } => {
+                let _ = respond_to.send(Err(ThoError::new(msg)));
+            }
+        }
     }
 }
 
@@ -1697,8 +1804,15 @@ async fn fail_all_pending(
         pending.drain().collect::<Vec<_>>()
     };
 
-    for (_id, reply_tx) in pending_items {
-        let _ = reply_tx.send(Err(ThoError::new(msg.clone())));
+    for (_id, pending_response) in pending_items {
+        match pending_response {
+            PendingResponse::Buffered(reply_tx) => {
+                let _ = reply_tx.send(Err(ThoError::new(msg.clone())));
+            }
+            PendingResponse::File { respond_to, .. } => {
+                let _ = respond_to.send(Err(ThoError::new(msg.clone())));
+            }
+        }
     }
 }
 
@@ -1706,10 +1820,7 @@ fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8
     let mut frame = format!("{id}\t").into_bytes();
     match payload {
         OutgoingRequestPayload::Msg(msg) => frame.extend_from_slice(msg.as_bytes()),
-        OutgoingRequestPayload::Binary(payload) => {
-            frame.extend_from_slice(BINARY_RESPONSE_PAYLOAD_PREFIX);
-            frame.extend_from_slice(payload);
-        }
+        OutgoingRequestPayload::BinaryStream { .. } => return Err(ThoError::new("binary stream payload must be written by worker_response_writer_loop")),
         OutgoingRequestPayload::SharedMemfdBuffer{ meta, .. } => {
             let metadata_json = serde_json::to_string(meta)
                 .map_err(|e| ThoError::new(format!("failed to encode shared memfd metadata: {e}")))?;
@@ -1764,11 +1875,12 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
-    async fn invoke_endpoint_binary_raw(&self, input: String) -> Result<Vec<u8>, ThoError> {
+    async fn invoke_endpoint_to_file_raw(&self, input: String, output: std::fs::File) -> Result<std::fs::File, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
-            CudaIPCActorMessage::InvokeEndpointBinary {
+            CudaIPCActorMessage::InvokeEndpointToFile {
                 input,
+                output,
                 respond_to,
             }
         ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
@@ -1857,8 +1969,8 @@ impl CudaActorHandle for CudaIPCActorHandle {
         decode_endpoint_response_bytes(&response)
     }
 
-    async fn invoke_endpoint_binary(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
-        self.invoke_endpoint_binary_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await
+    async fn invoke_endpoint_to_file(&self, input: Vec<u8>, output: std::fs::File) -> Result<std::fs::File, ThoError> {
+        self.invoke_endpoint_to_file_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?, output).await
     }
 
     async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {

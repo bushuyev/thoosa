@@ -2,6 +2,7 @@ pub mod tho_tensor;
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -15,10 +16,30 @@ use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 
+pub struct SyncStageIpcStreamResponse {
+    write: Option<Box<dyn FnOnce(&mut dyn Write) -> Result<(), ThoError> + Send>>,
+}
+
+impl Debug for SyncStageIpcStreamResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncStageIpcStreamResponse").finish()
+    }
+}
+
+impl SyncStageIpcStreamResponse {
+    pub fn new(write: impl FnOnce(&mut dyn Write) -> Result<(), ThoError> + Send + 'static) -> Self {
+        Self { write: Some(Box::new(write)) }
+    }
+
+    pub(crate) fn write_to(mut self, output: &mut dyn Write) -> Result<(), ThoError> {
+        self.write.take().ok_or_else(|| ThoError::new("IPC stream response writer already consumed"))?(output)
+    }
+}
+
 #[derive(Debug)]
 pub enum SyncStageIpcResponse {
     Encoded(Vec<u8>),
-    Binary(Vec<u8>),
+    Stream(SyncStageIpcStreamResponse),
 }
 
 pub trait SyncStageIpcWrapper:Debug {
