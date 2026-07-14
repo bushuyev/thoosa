@@ -1065,14 +1065,12 @@ mod tests {
                     NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::MinDelta), Val::Real(1e-4)),
                     NamedVal::new(TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), Val::Real(0.00001)),
                     NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::NumLayers)), Val::Int(8)),
-                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)), Val::Int(1)),
-                    NamedVal::new(TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Kernel)), kernel),
                 ]),
                 vec![],
             ),
             vec![
                 // Hyperparameter::UniformFloat { name: TrainMotifNetRunConfigFields::CommonTrainingArgs(CommonTrainingRunConfigFields::Lr), lower: 0.00001, upper: 0.0001 },
-                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Channels)), lower: 8, upper: 10 },
+                Hyperparameter::UniformInt { name: TrainMotifNetRunConfigFields::Net(MotifNetTypeArgsFields::LinNet(MotifLinNetArgsFields::Step)), lower: 8, upper: 10 },
             ],
         )
     }

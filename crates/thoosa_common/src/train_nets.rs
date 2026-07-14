@@ -688,15 +688,8 @@ pub struct MotifLinNetArgs {
 
     #[in_map]
     #[run_config]
-    pub step: u32,//TODO renamed to Conv stride
+    pub step: u32,
 
-    #[in_map]
-    #[run_config]
-    pub channels:u32,
-
-    #[in_map]
-    #[run_config]
-    pub kernel: u32
 }
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -797,7 +790,7 @@ impl Default for MotifNetTypeArgs {
 }
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[run_config_opt]
 pub struct TrainMotifNetRunConfig {
     #[in_map]
@@ -827,7 +820,7 @@ impl AsRef<CommonTrainingRunConfig> for TrainMotifNetRunConfig {
     }
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Serialize, Deserialize, Debug, PartialEq, Clone)] //PartialEq - for tests
 pub struct AdamW {
     #[in_map]
     #[run_config]
@@ -846,13 +839,13 @@ pub struct AdamW {
     amsgrad:bool
 }
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub enum Optimizers {
     AdamW(AdamW)
 }
 
 
-#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize)]
+#[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Serialize, Deserialize)]
 pub struct CommonTrainingRunConfig {
     #[in_map]
     #[run_config]

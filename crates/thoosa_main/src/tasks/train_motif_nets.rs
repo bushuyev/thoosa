@@ -16,7 +16,7 @@ use plotters::prelude::BLACK;
 use plotters::style::RED;
 use tch::Device::{Cpu, Cuda};
 use tch::kind::FLOAT_CUDA;
-use tch::nn::{AdamW, OptimizerConfig, VarStore};
+use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use tch::Kind::Float;
 use serde::{Deserialize, Serialize};
@@ -72,7 +72,7 @@ use thoosa_proxy_derive::Proxy;
 pub(crate) const TRAIN_MOTIF_STEP_ENDPOINT: &str = "TrainMotifStep";
 
 #[derive(Debug, Serialize, Deserialize)]
-struct TrainStepTensorRef {
+struct TrainStepTensorRef {//TODO replace with ThoTensor
     ref_key: u64,
     size: Vec<i64>,
     kind: String,
@@ -150,6 +150,7 @@ pub(crate) struct TrainMotifStepIpcInit {
     params: MotifNetParams,
     learning_rate: f64,
     motif: ThoTensor<MotifSlices, SynKey>,
+    run_config:TrainMotifNetRunConfig,
     stft_config: Option<StftRunConfig>,
 }
 
@@ -162,6 +163,10 @@ fn train_motif_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError
 }
 
 type SyncTrainMotifStep = TrainStep<TrainStepXFn<Slice>, Slice, MotifProbability, RunCtxImpl>;
+
+const OPTMIZER_FN: fn(&TrainMotifNetRunConfig, &VarStore) -> Result<Optimizer, ThoError> = move |rc:&TrainMotifNetRunConfig, vs: &VarStore|{
+    AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into())
+};
 
 fn new_train_motif_step_for_ipc(init: &TrainMotifStepIpcInit, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<SyncTrainMotifStep, ThoError> {
     let motif_ref = ThoTensor::new_ref(
@@ -190,13 +195,14 @@ fn new_train_motif_step_for_ipc(init: &TrainMotifStepIpcInit, all_cuda_tensors: 
     let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
     let (train_step, ()) = futures::executor::block_on(TrainStep::new_local(
         Cuda(0),
-        move |var_store| async move {
+        move |var_store| async move {//TODO use const like OPTMIZER_FN to make sure it's same as in local
             let net = params.motif_net(cosine_motif)?.build_tch_module::<thoosa_common::dims::Batch<Slice>, thoosa_common::dims::Batch<MotifProbability>>(&var_store.lock().root())?;
             Ok((net, ()))
         },
-        move |var_store| AdamW::default().amsgrad(true).build(var_store, learning_rate).map_err(ThoError::from),
-        x_f,
+        OPTMIZER_FN,
+        x_f,//TODO use const like OPTMIZER_FN to make sure it's same as in local
         train_motif_loss,
+        &init.run_config
     ))?;
     Ok(train_step)
 }
@@ -395,7 +401,7 @@ where
             motif.selector(),
             motif.tho_device().tho_device_idx(),
         );
-        let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr, motif, stft_config };
+        let init = TrainMotifStepIpcInit { params: node_params.clone(), learning_rate: run_config.common_training_args.lr, motif, run_config: run_config.clone(), stft_config };
         let proxy = Arc::new(ProxyTrainMotifStep::new(init, tho_device_idx).await?);
         let stage = Arc::new(DynSyncStageBox::new(Arc::new(TrainMotifStepProxyCtx::<C> { proxy: Arc::clone(&proxy), pd: PhantomData })));
         Ok(TrainStepProxyParts::new(stage, Arc::new(TrainMotifStepWeightsSync { proxy }), node_params))
@@ -768,7 +774,7 @@ where
                     ctx.branch(false),
                 )).await?;
 
-                let motif_net = Arc::clone(&motif);
+                let motif_for_net = Arc::clone(&motif);
 
                 let motif_meta = track_await(motif.extra()).await?;
                 let motif_width = motif_meta.window;
@@ -921,9 +927,7 @@ where
 
                         Ok(loss)
                     },
-                    move |rc:&TrainMotifNetRunConfig, vs: &VarStore|{
-                        AdamW::default().amsgrad(true).build(&vs, rc.common_training_args.lr).map_err(|e|e.into())
-                    },
+                    OPTMIZER_FN,
                     |t:ThoBatch<Slice>| {
                         t
                     },
@@ -934,7 +938,7 @@ where
                     format!("motif_{}", motif_id_rate.0)
                 )
                     .with_reusable_completed_trials(reusable_completed_trials)
-                    .with_train_step_proxy_factory(Arc::new(TrainMotifStepProxyFactory::<C>::new(motif_net, motif_width))));
+                    .with_train_step_proxy_factory(Arc::new(TrainMotifStepProxyFactory::<C>::new(motif_for_net, motif_width))));
 
                 debug!("TrainMotifNets::run: train_net={train_net:?}");
 
@@ -1671,28 +1675,29 @@ mod tests {
     use log::debug;
     use log::LevelFilter::{Debug, Trace};
     use parking_lot::RwLock;
-    use tch::{Device, IndexOp};
+    use tch::{Device, IndexOp, Kind, Tensor};
     use tch::Device::Cuda;
-    use tch::nn::VarStore;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::nn::{AdamW, OptimizerConfig, VarStore};
     use tokio::fs;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::mock_run_ctx;
     use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
-    use thoosa_common::runner::common::runnable::AsyncStage;
+    use thoosa_common::runner::common::runnable::{AsyncStage, SyncStage};
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::dims::{Batch, MotifProbability, Slice};
+    use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::tch_test_utils;
-    use thoosa_common::train_nets::{CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifNetParams, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfigFields, TrainMotifsNetsResult};
+    use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigFields, MotifConvNetArgsFields, MotifCosineNetArgsFields, MotifLinNetArgs, MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifsBy, OptConfig, ThoModuleWithStore, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifsNetsResult};
     use thoosa_common::debug_plot;
     use thoosa_common::utils::{reset_print_options, test_net};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
-    use thoosa_shared::{cdt_for_dir, TensorIdSliceIdx, ThoError};
-    use thoosa_shared::traits::Named;
+    use thoosa_shared::{cdt_for_dir, mono_key, TensorIdSliceIdx, ThoError};
+    use thoosa_shared::traits::{Named, SimpleId};
     use thoosa_shared::hyperparameter::Hyperparameter;
     use thoosa_shared::val::{NamedRange, NamedVal, Val};
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
@@ -1704,10 +1709,15 @@ mod tests {
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
-    use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT};
+    use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
+    use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::data_with_extra::DataWithExtra;
+    use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, sync_motif_loader_endpoint_init, MotifMeta, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, SYNC_MOTIF_LOADER_ENDPOINT};
     use crate::tasks::tensor_loader::mock_tensor_loader;
-    use crate::tasks::train_motif_nets::{train_motif_step_endpoint_inits, TrainMotifNetInput, TrainMotifNets};
+    use crate::tasks::train_motif_nets::{split_motif_into_train_valid_endpoint_init, sync_motif_bastch_endpoint_init, train_motif_step_endpoint_init, train_motif_step_endpoint_inits, TrainMotifNetInput, TrainMotifNets, TrainMotifStepProxyFactory, SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT, SYNC_MOTIF_BASTCH_ENDPOINT, TRAIN_MOTIF_STEP_ENDPOINT};
+    use crate::tasks::train_net::{TrainStep, TrainStepDynSyncStage, TrainStepInput, TrainStepProxyFactory};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
     async fn test_train_motif_nets() -> Result<(), ThoError> {
@@ -1877,6 +1887,113 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+    async fn test_train_step_ipc() -> Result<(), ThoError> {
+        debug!("test_train_step_ipc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
+
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            CudaWorker::run_worker(
+                sock_path,
+                HashMap::from([
+                    (
+                        TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
+                        Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                    ),
+
+                ])
+                ,
+                ThoDevice::from(Cuda(0)),
+            ).await?;
+        } else {
+            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+            let test_name = format!("{module}::test_train_motif_nets_ipc");
+            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, true);
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+            let ipc_ref = cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[100], FLOAT_CPU))?, 1.into()).await?;
+            let ThoTensorInner::Ref{ key, size, kind, selector, tho_device_idx } = ipc_ref.inner  else {
+                panic!("should be ref")
+            };
+
+            let motif : Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>= Arc::new(
+                DevicesWrap::wrap(
+                    DataWithExtra::new(
+                        ThoTensor::new_ref("1".into(), key, size, kind, selector, tho_device_idx),
+
+                        MotifMeta {
+                            channel: 0,
+                            find_motifs_run_config_id: 0,
+                            window: 0,
+                        }
+                    )
+                )
+            );
+            let run_config = TrainMotifNetRunConfig::new(Some(0), CommonTrainingRunConfig::new(1, 2, 3.0), MotifNetTypeArgs::LinNet(MotifLinNetArgs{
+                num_layers: 1,
+                step: 1,
+            }) );
+            let proxy_factory = Arc::new(TrainMotifStepProxyFactory::<RunCtxImpl>::new(motif, 100)) as Arc<dyn TrainStepProxyFactory<Slice, MotifProbability, RunCtxImpl, MotifNetParams, TrainMotifNetRunConfig>>;
+            let (TrainStepDynSyncStage::Proxy{stage:step, ..}, _node_params) = TrainStep::new(
+                Cuda(0),
+                |vs|  {
+                    async move {
+                        unimplemented!()
+                    }
+                },
+                |rc, var_store|  {
+                    unimplemented!()
+                },
+                Arc::new(|t|{
+                    unimplemented!()
+                }),
+                |pred_y: &Tensor, target: &Tensor|{
+                    unimplemented!()
+                },
+                Some(&proxy_factory),
+                &run_config,
+                1,
+            ).await? else {
+                panic!("ups");
+            };
+
+
+
+
+            let input = TrainStepInput::<Slice, MotifProbability>::new(
+                to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
+                None,
+                to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
+                false
+            );
+            let ctx = RunCtxImpl::new(1, "x");
+            let response = step.do_run(
+                &input,
+                &ctx
+            )?;
+
+            debug!("response={response:?}");
+
+            let shutdown_result = cuda_actor.shutdown().await;
+            // match (result, shutdown_result) {
+            //     (Ok(()), Ok(())) => (),
+            //     (Err(error), _) => return Err(error),
+            //     (Ok(()), Err(error)) => return Err(error),
+            // }
+        }
+        Ok(())
+    }
+
+    fn to_tho_tensor<D>(inner: ThoTensorInner, id: String) -> ThoTensor<D, SimpleId>
+    where
+        D:Dims
+    {
+        let ThoTensorInner::Ref{ key, size, kind, selector, tho_device_idx } = inner  else {
+            panic!("should be ref")
+        };
+        ThoTensor::new_ref(id.into(), key, size.clone(), kind, None, tho_device_idx)
     }
 
     fn cos_net_run_configs() -> OptRunConfigs<Vec<NamedVal<TrainMotifNetRunConfigFields>>, Vec<NamedRange<TrainMotifNetRunConfigFields>>, Vec<Hyperparameter<TrainMotifNetRunConfigFields>>, TrainMotifNetRunConfigFields> {
