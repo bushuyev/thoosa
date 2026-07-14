@@ -36,7 +36,7 @@ use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{opt_train, CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigResult};
+use thoosa_common::train_nets::{opt_train, CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigResult, TrainMotifNetRunConfig};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
@@ -264,7 +264,7 @@ where
             let (train_step, params) = track_await(TrainStep::new(
                 device,
                 |var_store| (self.net)(ctx.branch(false), &run_config, var_store),
-                |var_store| (self.optimizer)(&run_config, var_store),
+                |run_config, var_store| (self.optimizer)(&run_config, var_store),
                 x_f,
                 self.loss_fn,
                 self.train_step_proxy_factory.as_ref(),
@@ -382,6 +382,7 @@ where
                             best_valid_loss = avg_valid_loss;
                             bad_epochs = 0;
                             {
+
                                 // TODO(perf): best-checkpoint saves block the training loop; save on a background CPU task or only after a minimum score delta when configs produce many small improvements.
                                 // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO - download vs from Cuda/IPC
                                 // panic_to_err!(vs_guard.save(&best_checkpoint_path))?;//panics at safetensors.rs:97 self.tensor.f_copy_data_u8(&mut data, numel).unwrap();
@@ -689,7 +690,7 @@ where
         RC: Debug + Send + Sync + 'static,
         NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
         NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
-        OF: FnOnce(&VarStore) -> Result<Optimizer, ThoError>,
+        OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
     {
         if GlobalCtx::global().is_ipc()
             && let Some(proxy_factory) = proxy_factory
@@ -698,21 +699,21 @@ where
             return Ok((TrainStepDynSyncStage::Proxy { stage, _weights_sync: weights_sync }, node_params));
         }
 
-        let (stage, node_params) = Self::new_local(device, net_builder, optimizer_builder, x_f, loss_fn).await?;
+        let (stage, node_params) = Self::new_local(device, net_builder, optimizer_builder, x_f, loss_fn, run_config).await?;
         Ok((TrainStepDynSyncStage::Local(Arc::new(stage)), node_params))
     }
 
-    pub(crate) async fn new_local<NP, NB, NBF, OF>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp) -> Result<(Self, NP), ThoError>
+    pub(crate) async fn new_local<NP, NB, NBF, OF, RC>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
     where
         NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
         NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
-        OF: FnOnce(&VarStore) -> Result<Optimizer, ThoError>,
+        OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
     {
         let var_store = Arc::new(Mutex::new(VarStore::new(device)));
         let (net, node_params) = net_builder(Arc::clone(&var_store)).await?;
         let opt = {
             let var_store = perf_log!(sync_mutex_lock!(var_store));
-            optimizer_builder(&var_store)?
+            optimizer_builder(run_config, &var_store)?
         };
         Ok((Self {
             device,
@@ -846,6 +847,7 @@ where
         let mut lengths = input.lengths.clone();
         let mut calculate_loss = || {
             let predicted_y = self.forward(&x_t, lengths.as_mut(), input.train)?;
+            debug!("TrainStep::do_run: predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
             let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
             Ok::<_, ThoError>((predicted_y, loss))
         };
