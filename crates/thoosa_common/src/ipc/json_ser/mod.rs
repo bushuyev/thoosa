@@ -15,8 +15,18 @@ use crate::runner::common::runnable::{Stage, SyncStage};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 
+#[derive(Debug)]
+pub enum SyncStageIpcResponse {
+    Encoded(Vec<u8>),
+    Binary(Vec<u8>),
+}
+
 pub trait SyncStageIpcWrapper:Debug {
     fn do_run(&self, _input: &[u8], all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError>;
+
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+    }
 }
 
 #[derive(Debug)]
