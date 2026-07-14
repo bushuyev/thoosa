@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::ready;
-use std::io::Cursor;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::sync::Arc;
@@ -22,7 +21,7 @@ use tch::Kind::Float;
 use serde::{Deserialize, Serialize};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
-use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
+use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
@@ -266,9 +265,7 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
     fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
         if matches!(JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)?, TrainMotifStepIpcRequest::ExportWeights) {
             let stage = self.stage.stage(all_cuda_tensors)?;
-            let mut weights = Vec::new();
-            stage.save_var_store_to_stream(&mut weights)?;
-            Ok(SyncStageIpcResponse::Binary(weights))
+            Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
         } else {
             self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
         }
@@ -295,8 +292,8 @@ struct TrainMotifStepProxyTarget {
 }
 
 impl ProxyTrainMotifStep {
-    async fn export_weights(&self) -> Result<Vec<u8>, ThoError> {
-        thoosa_common::ipc::codec::invoke_ipc_endpoint_binary::<JsonIpcCodec, _>(
+    async fn export_weights(&self) -> Result<std::fs::File, ThoError> {
+        thoosa_common::ipc::codec::invoke_ipc_endpoint_to_file::<JsonIpcCodec, _>(
             thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(self.tho_device_idx).as_ref(),
             TRAIN_MOTIF_STEP_ENDPOINT,
             &TrainMotifStepIpcRequest::ExportWeights,
@@ -353,7 +350,7 @@ struct TrainMotifStepWeightsSync {
 impl TrainStepWeightsSync for TrainMotifStepWeightsSync {
     async fn into_var_store(&self) -> Result<VarStore, ThoError> {
         let weights = track_await(self.proxy.export_weights()).await?;
-        let named_tensors = Tensor::load_multi_from_stream_with_device(Cursor::new(weights), Cpu)?;
+        let named_tensors = Tensor::load_multi_from_stream_with_device(weights, Cpu)?;
         let var_store = VarStore::new(Cpu);
         var_store.variables_.lock().map_err(|_| ThoError::new("TrainMotifStepWeightsSync VarStore lock poisoned"))?.named_variables.extend(named_tensors);
         Ok(var_store)
