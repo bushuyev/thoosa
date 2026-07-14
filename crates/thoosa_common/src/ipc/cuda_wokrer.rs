@@ -142,7 +142,7 @@ impl CudaWorker {
         let (reply_tx, reply_rx) = mpsc::channel::<WorkerReply>(1024);
 
         let writer_task = tokio::spawn(cuda_process::worker_response_writer_loop(writer, reply_rx));
-        let all_cuda_tensors = Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let all_cuda_tensors = Arc::new(parking_lot::Mutex::new(HashMap::new()));//TODO to RwLock?
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
@@ -298,6 +298,7 @@ impl CudaWorker {
                             .get_mut(&transfer_id)
                             .ok_or_else(|| ThoError::new(format!("received D2H chunk before start for transfer_id={transfer_id}")))?;
                         transfer.push(chunk)?;
+
                         if pending_d2h_transfers.get(&transfer_id).is_some_and(PendingWorkerD2hTransfer::is_complete) {
                             let transfer = pending_d2h_transfers.remove(&transfer_id).expect("complete D2H transfer disappeared");
                             let resources = cuda_process::get_or_create_worker_cuda_resources(&mut cuda_resources, cuda_device)?;
