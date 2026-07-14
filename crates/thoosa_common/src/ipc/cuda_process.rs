@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::any::Any;
 use std::backtrace::Backtrace;
-use std::error::Error;
 use std::ffi::c_void;
 use std::fmt::Debug;
 use std::io::ErrorKind;
@@ -70,6 +69,7 @@ pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
 pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
 pub(crate) const DROP_THO_TENSOR: &str = "drop_tho_tensor:";
 const ENDPOINT_BYTES_PAYLOAD_PREFIX: &str = "endpoint-bytes:";
+const BINARY_RESPONSE_PAYLOAD_PREFIX: &[u8] = b"binary-response:";
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
@@ -367,16 +367,13 @@ where
     W: AsyncWrite + Unpin,
 {
     while let Some(reply) = reply_rx.recv().await {
-        let frame = encode_wire_msg(reply.id, &reply.payload)?;
-        if let Err(error) = write_text_frame(&mut writer, &frame, "worker").await {
-            if Error::source(&error)
-                .and_then(|source| source.downcast_ref::<std::io::Error>())
-                .is_some_and(|source| matches!(source.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof))
-            {
+        let frame = encode_wire_frame(reply.id, &reply.payload)?;
+        if let Err(error) = write_frame(&mut writer, &frame, "worker").await {
+            if matches!(error.kind(), ErrorKind::BrokenPipe | ErrorKind::UnexpectedEof) {
                 debug!("worker_response_writer_loop: parent IPC stream closed");
                 break;
             }
-            return Err(error);
+            return Err(error.into());
         }
     }
 
@@ -721,6 +718,9 @@ pub enum CudaIPCActorMessage {
     InvokeEndpoint {
         input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
     },
+    InvokeEndpointBinary {
+        input: String, respond_to: oneshot::Sender<Result<Vec<u8>, ThoError>>
+    },
 }
 
 struct OutgoingRequest {
@@ -730,11 +730,29 @@ struct OutgoingRequest {
 
 pub enum OutgoingRequestPayload {
     Msg(String),//action:data
+    Binary(Vec<u8>),
     SharedMemfdBuffer{
         meta: IpcTensorTransferMetadata,
         fd:OwnedFd,
     },
 }
+
+#[derive(Debug)]
+enum IncomingResponsePayload {
+    Msg(String),
+    Binary(Vec<u8>),
+}
+
+impl IncomingResponsePayload {
+    fn into_msg(self) -> Result<String, ThoError> {
+        match self {
+            Self::Msg(response) => Ok(response),
+            Self::Binary(_) => Err(ThoError::new("unexpected binary worker response")),
+        }
+    }
+}
+
+type PendingResponses = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<IncomingResponsePayload, ThoError>>>>>;
 
 #[derive(Debug)]
 pub struct CudaIPCActor {
@@ -750,7 +768,7 @@ pub struct CudaIPCActor {
 
 #[derive(Debug)]
 struct SpawnedState {
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: PendingResponses,
     tx:Sender<OutgoingRequest>,
     child:Child,
     writer_handle:JoinHandle<()>,
@@ -832,7 +850,7 @@ impl CudaIPCActor {
 
         let (tx, rx): (Sender<OutgoingRequest>, Receiver<OutgoingRequest>) = mpsc::channel::<OutgoingRequest>(1024);
 
-        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>> = Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingResponses = Arc::new(Mutex::new(HashMap::new()));
         let cancel = CancellationToken::new();
         let writer_handle = tokio::spawn(writer_loop(writer, rx, Arc::clone(&pending), cancel.child_token()));
         let reader_handle = tokio::spawn(reader_loop(reader, Arc::clone(&pending), cancel.child_token()));
@@ -957,7 +975,8 @@ impl CudaIPCActor {
                     let reply = reply_rx
                         .await
                         .map_err(|_| ThoError::new(format!("response channel for drop request {id} was dropped")))
-                        .and_then(|reply| reply);
+                        .and_then(|reply| reply)
+                        .and_then(IncomingResponsePayload::into_msg);
 
                     match reply {
                         Ok(reply) if reply == "Ok" => {
@@ -1007,7 +1026,8 @@ impl CudaIPCActor {
                     let reply = reply_rx
                         .await
                         .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
-                        .and_then(|reply| reply);
+                        .and_then(|reply| reply)
+                        .and_then(IncomingResponsePayload::into_msg);
 
                     match reply {
                         Ok(reply) if reply == "shutdown-ok" => {
@@ -1069,6 +1089,34 @@ impl CudaIPCActor {
                             Err(parse_worker_copy_error_payload(error))
                         } else {
                             Ok(response)
+                        }
+                    });
+                    let _ = respond_to.send(response);
+
+                    Ok::<_, ThoError>(())
+                });
+            }
+            CudaIPCActorMessage::InvokeEndpointBinary { input, respond_to } => {
+                let self_tx = self.spawned_state.tx.clone();
+                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.spawned_state.pending);
+
+                tokio::spawn(async move {
+                    let response = send_request_and_wait_payload(
+                        self_tx,
+                        pending,
+                        OutgoingRequest {
+                            id: next_id,
+                            payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
+                        },
+                    ).await.and_then(|response| match response {
+                        IncomingResponsePayload::Binary(response) => Ok(response),
+                        IncomingResponsePayload::Msg(response) => {
+                            if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                                Err(parse_worker_copy_error_payload(error))
+                            } else {
+                                Err(ThoError::new(format!("expected binary endpoint response, got {response:?}")))
+                            }
                         }
                     });
                     let _ = respond_to.send(response);
@@ -1190,7 +1238,8 @@ impl CudaIPCActor {
 
                 let reply = reply_rx
                     .await
-                    .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??;
+                    .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??
+                    .into_msg()?;
 
                  let final_result=   Ok::<_, ThoError>((reply, held_chunks));
 
@@ -1318,7 +1367,8 @@ impl CudaIPCActor {
 
                     let id = reply_rx
                         .await
-                        .map_err(|_| ThoError::new(format!("response channel for request {transfer_id} was dropped")))??;
+                        .map_err(|_| ThoError::new(format!("response channel for request {transfer_id} was dropped")))??
+                        .into_msg()?;
 
                     let done = parse_worker_copy_done_payload(&id)?;
 
@@ -1360,7 +1410,7 @@ impl CudaIPCActor {
 async fn writer_loop<W>(
     mut writer: W,
     mut rx: mpsc::Receiver<OutgoingRequest>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: PendingResponses,
     cancel: CancellationToken,
 ) where
     W: AsyncWrite + Unpin + AsRef<UnixStream>,
@@ -1379,7 +1429,7 @@ async fn writer_loop<W>(
             }
         };
 
-        let frame = match encode_wire_msg(req.id, &req.payload) {
+        let frame = match encode_wire_frame(req.id, &req.payload) {
             Ok(frame) => frame,
             Err(e) => {
                 error!("worker IPC writer failed to encode request {}: {e}", req.id);
@@ -1388,7 +1438,7 @@ async fn writer_loop<W>(
             }
         };
 
-        if let Err(e) = write_text_frame(&mut writer, &frame, "CudaIPCActor").await {
+        if let Err(e) = write_frame(&mut writer, &frame, "CudaIPCActor").await {
             error!("worker IPC writer failed: {e}");
 
             fail_one_pending(
@@ -1416,7 +1466,7 @@ async fn writer_loop<W>(
 
 async fn reader_loop<R>(
     mut reader: R,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: PendingResponses,
     cancel: CancellationToken,
 ) where
     R: AsyncRead + Unpin,
@@ -1429,7 +1479,7 @@ async fn reader_loop<R>(
                 break;
             }
 
-            result = read_text_frame(&mut reader, "CudaIPCActor") => {
+            result = read_frame(&mut reader, "CudaIPCActor", u32::MAX as usize) => {
                 match result {
                     Ok(frame) => frame,
                     Err(e) => {
@@ -1444,10 +1494,10 @@ async fn reader_loop<R>(
         };
 
 
-        let (id, payload) = match parse_wire_msg(&frame) {
+        let (id, payload) = match parse_wire_response(frame) {
             Ok(parsed) => parsed,
             Err(e) => {
-                error!("bad worker response frame {frame:?}: {e}");
+                error!("bad worker response frame: {e}");
                 continue;
             }
         };
@@ -1462,7 +1512,7 @@ async fn reader_loop<R>(
                 let _ = reply_tx.send(Ok(payload));
             }
             None => {
-                error!("received response for unknown request id={id}, payload={payload:?}");
+                error!("received response for unknown request id={id}");
             }
         }
     }
@@ -1480,6 +1530,23 @@ pub(crate) fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
         .map_err(|e| ThoError::new(format!("bad request id {id:?}: {e}")))?;
 
     Ok((id, payload.to_string()))
+}
+
+fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload), ThoError> {
+    let separator = frame.iter().position(|byte| *byte == b'\t')
+        .ok_or_else(|| ThoError::new("bad wire response without request id separator"))?;
+    let id = std::str::from_utf8(&frame[..separator])
+        .map_err(|e| ThoError::new(format!("bad utf8 request id in wire response: {e}")))?
+        .parse::<u64>()
+        .map_err(|e| ThoError::new(format!("bad request id in wire response: {e}")))?;
+    let payload = &frame[separator + 1..];
+    if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_PAYLOAD_PREFIX) {
+        Ok((id, IncomingResponsePayload::Binary(payload.to_vec())))
+    } else {
+        let payload = String::from_utf8(payload.to_vec())
+            .map_err(|e| ThoError::new(format!("received non-utf8 message response: {e}")))?;
+        Ok((id, IncomingResponsePayload::Msg(payload)))
+    }
 }
 
 fn parse_worker_copy_done_payload(payload: &str) -> Result<WorkerCopyDonePayload, ThoError> {
@@ -1566,9 +1633,20 @@ fn assemble_parent_d2h_chunks(
 
 async fn send_request_and_wait(
     tx: mpsc::Sender<OutgoingRequest>,
-    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: PendingResponses,
     request: OutgoingRequest,
 ) -> Result<String, ThoError> {
+    match send_request_and_wait_payload(tx, pending, request).await? {
+        IncomingResponsePayload::Msg(response) => Ok(response),
+        IncomingResponsePayload::Binary(_) => Err(ThoError::new("unexpected binary worker response")),
+    }
+}
+
+async fn send_request_and_wait_payload(
+    tx: mpsc::Sender<OutgoingRequest>,
+    pending: PendingResponses,
+    request: OutgoingRequest,
+) -> Result<IncomingResponsePayload, ThoError> {
     let id = request.id;
     let (reply_tx, reply_rx) = oneshot::channel();
     {
@@ -1587,7 +1665,7 @@ async fn send_request_and_wait(
 }
 
 async fn remove_pending_request(
-    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: &PendingResponses,
     id: u64,
 ) {
     let mut pending = pending.lock().await;
@@ -1596,7 +1674,7 @@ async fn remove_pending_request(
 
 
 async fn fail_one_pending(
-    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: &PendingResponses,
     id: u64,
     msg: String,
 ) {
@@ -1611,7 +1689,7 @@ async fn fail_one_pending(
 }
 
 async fn fail_all_pending(
-    pending: &Arc<Mutex<HashMap<u64, oneshot::Sender<Result<String, ThoError>>>>>,
+    pending: &PendingResponses,
     msg: String,
 ) {
     let pending_items = {
@@ -1624,20 +1702,22 @@ async fn fail_all_pending(
     }
 }
 
-fn encode_wire_msg(id: u64, payload: &OutgoingRequestPayload) -> Result<String, ThoError> {
-
-    let encoded_payload = match payload {
-        OutgoingRequestPayload::Msg(msg) => {
-            msg.clone()
+fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8>, ThoError> {
+    let mut frame = format!("{id}\t").into_bytes();
+    match payload {
+        OutgoingRequestPayload::Msg(msg) => frame.extend_from_slice(msg.as_bytes()),
+        OutgoingRequestPayload::Binary(payload) => {
+            frame.extend_from_slice(BINARY_RESPONSE_PAYLOAD_PREFIX);
+            frame.extend_from_slice(payload);
         }
         OutgoingRequestPayload::SharedMemfdBuffer{ meta, .. } => {
             let metadata_json = serde_json::to_string(meta)
                 .map_err(|e| ThoError::new(format!("failed to encode shared memfd metadata: {e}")))?;
-            format!("{SHARED_MEMFD_PAYLOAD_PREFIX}{metadata_json}")
+            frame.extend_from_slice(format!("{SHARED_MEMFD_PAYLOAD_PREFIX}{metadata_json}").as_bytes());
         }
-    };
+    }
 
-    Ok(format!("{id}\t{encoded_payload}"))
+    Ok(frame)
 }
 
 
@@ -1676,6 +1756,18 @@ impl CudaIPCActorHandle {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::InvokeEndpoint {
+                input,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
+    async fn invoke_endpoint_binary_raw(&self, input: String) -> Result<Vec<u8>, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::InvokeEndpointBinary {
                 input,
                 respond_to,
             }
@@ -1765,6 +1857,10 @@ impl CudaActorHandle for CudaIPCActorHandle {
         decode_endpoint_response_bytes(&response)
     }
 
+    async fn invoke_endpoint_binary(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
+        self.invoke_endpoint_binary_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await
+    }
+
     async fn drop_tho_tensor(&self, t:ThoTensor) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -1801,7 +1897,7 @@ pub(crate) async fn read_text_frame<R>(
 where
     R: AsyncRead + Unpin,
 {
-    let payload = read_frame(reader, descr).await?;
+    let payload = read_frame(reader, descr, MAX_FRAME_LEN).await?;
 
     String::from_utf8(payload)
         .map_err(|e| ThoError::new(format!("received non-utf8 frame: {e}")))
@@ -1838,6 +1934,7 @@ where
 async fn read_frame<R>(
     reader: &mut R,
     descr: &str,
+    max_len: usize,
 ) -> std::io::Result<Vec<u8>>
 where
     R: AsyncRead + Unpin,
@@ -1859,7 +1956,7 @@ where
 
     let len = u32::from_le_bytes(len_buf) as usize;
 
-    if len > MAX_FRAME_LEN {
+    if len > max_len {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!("read_frame: decr={descr} frame too large: {len} bytes"),

@@ -22,7 +22,7 @@ use tch::Kind::Float;
 use serde::{Deserialize, Serialize};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
@@ -258,11 +258,19 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
                 JsonIpcCodec::encode(&result?)
             }
             TrainMotifStepIpcRequest::ExportWeights => {
-                let stage = self.stage.stage(all_cuda_tensors)?;
-                let mut weights = Vec::new();
-                stage.save_var_store_to_stream(&mut weights)?;
-                JsonIpcCodec::encode(&weights)
+                Err(ThoError::new("TrainMotifStep ExportWeights requires binary endpoint invocation"))
             }
+        }
+    }
+
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        if matches!(JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)?, TrainMotifStepIpcRequest::ExportWeights) {
+            let stage = self.stage.stage(all_cuda_tensors)?;
+            let mut weights = Vec::new();
+            stage.save_var_store_to_stream(&mut weights)?;
+            Ok(SyncStageIpcResponse::Binary(weights))
+        } else {
+            self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
         }
     }
 }
@@ -288,7 +296,7 @@ struct TrainMotifStepProxyTarget {
 
 impl ProxyTrainMotifStep {
     async fn export_weights(&self) -> Result<Vec<u8>, ThoError> {
-        thoosa_common::ipc::codec::invoke_ipc_endpoint::<JsonIpcCodec, _, Vec<u8>>(
+        thoosa_common::ipc::codec::invoke_ipc_endpoint_binary::<JsonIpcCodec, _>(
             thoosa_common::runner::global_ctx::GlobalCtx::global().cuda_actor(self.tho_device_idx).as_ref(),
             TRAIN_MOTIF_STEP_ENDPOINT,
             &TrainMotifStepIpcRequest::ExportWeights,
@@ -343,10 +351,12 @@ struct TrainMotifStepWeightsSync {
 
 #[async_trait]
 impl TrainStepWeightsSync for TrainMotifStepWeightsSync {
-    async fn sync_to(&self, var_store: &Arc<Mutex<VarStore>>) -> Result<(), ThoError> {
+    async fn into_var_store(&self) -> Result<VarStore, ThoError> {
         let weights = track_await(self.proxy.export_weights()).await?;
-        let mut var_store = perf_log!(thoosa_shared::sync_mutex_lock!(var_store));
-        var_store.load_from_stream(Cursor::new(weights)).map_err(ThoError::from)
+        let named_tensors = Tensor::load_multi_from_stream_with_device(Cursor::new(weights), Cpu)?;
+        let var_store = VarStore::new(Cpu);
+        var_store.variables_.lock().map_err(|_| ThoError::new("TrainMotifStepWeightsSync VarStore lock poisoned"))?.named_variables.extend(named_tensors);
+        Ok(var_store)
     }
 }
 
@@ -1908,7 +1918,7 @@ mod tests {
             ).await?;
         } else {
             let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-            let test_name = format!("{module}::test_train_motif_nets_ipc");
+            let test_name = format!("{module}::test_train_step_ipc");
             GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
             let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, true);
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
@@ -1936,7 +1946,7 @@ mod tests {
                 step: 1,
             }) );
             let proxy_factory = Arc::new(TrainMotifStepProxyFactory::<RunCtxImpl>::new(motif, 100)) as Arc<dyn TrainStepProxyFactory<Slice, MotifProbability, RunCtxImpl, MotifNetParams, TrainMotifNetRunConfig>>;
-            let (TrainStepDynSyncStage::Proxy{stage:step, ..}, _node_params) = TrainStep::new(
+            let (train_step, _node_params) = TrainStep::new(
                 Cuda(0),
                 |vs|  {
                     async move {
@@ -1955,8 +1965,10 @@ mod tests {
                 Some(&proxy_factory),
                 &run_config,
                 1,
-            ).await? else {
-                panic!("ups");
+            ).await?;
+            let step = match &train_step {
+                TrainStepDynSyncStage::Proxy { stage, .. } => Arc::clone(stage),
+                TrainStepDynSyncStage::Local(_) => panic!("expected IPC TrainStep proxy"),
             };
 
 
@@ -1965,7 +1977,7 @@ mod tests {
             let input = TrainStepInput::<Slice, MotifProbability>::new(
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
                 None,
-                to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
+                to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
                 false
             );
             let ctx = RunCtxImpl::new(1, "x");
@@ -1976,12 +1988,12 @@ mod tests {
 
             debug!("response={response:?}");
 
+            let var_store_result = train_step.into_var_store().await;
             let shutdown_result = cuda_actor.shutdown().await;
-            // match (result, shutdown_result) {
-            //     (Ok(()), Ok(())) => (),
-            //     (Err(error), _) => return Err(error),
-            //     (Ok(()), Err(error)) => return Err(error),
-            // }
+            let var_store = var_store_result?;
+            shutdown_result?;
+            assert_eq!(var_store.device(), tch::Device::Cpu);
+            assert!(!var_store.is_empty());
         }
         Ok(())
     }

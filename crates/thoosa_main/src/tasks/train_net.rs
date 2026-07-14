@@ -58,7 +58,7 @@ pub(crate) type TrainStepXFn<D> = Box<dyn Fn(ThoBatch<D>) -> ThoBatch<D> + Send 
 
 #[async_trait]
 pub(crate) trait TrainStepWeightsSync: Debug + Send + Sync {
-    async fn sync_to(&self, var_store: &Arc<Mutex<VarStore>>) -> Result<(), ThoError>;
+    async fn into_var_store(&self) -> Result<VarStore, ThoError>;
 }
 
 pub(crate) struct TrainStepProxyParts<DX, DY, C, NP>
@@ -414,7 +414,7 @@ where
             }
 
             let train_step = Arc::try_unwrap(train_step).map_err(|_| ThoError::new("TrainNet::run_inner: TrainStep still shared after training"))?;
-            let var_store = train_step.into_var_store()?;
+            let var_store = track_await(train_step.into_var_store()).await?;
 
             Ok((var_store, best_valid_loss, params))
         })
@@ -653,7 +653,7 @@ pub(crate) enum TrainStepDynSyncStage<F, DI: Dims + 'static, DO: Dims + 'static,
     Local(Arc<TrainStep<F, DI, DO, C>>),
     Proxy {
         stage: Arc<DynSyncStageBox<TrainStepInput<DI, DO>, TrainStepOutput, C>>,
-        _weights_sync: Arc<dyn TrainStepWeightsSync>,
+        weights_sync: Arc<dyn TrainStepWeightsSync>,
     },
 }
 
@@ -696,7 +696,7 @@ where
             && let Some(proxy_factory) = proxy_factory
         {
             let TrainStepProxyParts { stage, weights_sync, node_params } = proxy_factory.new_proxy(run_config, tho_device_idx).await?;
-            return Ok((TrainStepDynSyncStage::Proxy { stage, _weights_sync: weights_sync }, node_params));
+            return Ok((TrainStepDynSyncStage::Proxy { stage, weights_sync }, node_params));
         }
 
         let (stage, node_params) = Self::new_local(device, net_builder, optimizer_builder, x_f, loss_fn, run_config).await?;
@@ -741,6 +741,7 @@ where
 
     pub(crate) fn save_var_store_to_stream(&self, output: &mut Vec<u8>) -> Result<(), ThoError> {
         let var_store = perf_log!(sync_mutex_lock!(self.var_store));
+        debug!("save_var_store_to_stream: var_store={var_store:?}");
         var_store.save_to_stream(output).map_err(ThoError::from)
     }
 
@@ -757,10 +758,10 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    fn into_var_store(self) -> Result<VarStore, ThoError> {
+    pub(crate) async fn into_var_store(self) -> Result<VarStore, ThoError> {
         match self {
             Self::Local(stage) => Arc::try_unwrap(stage).map_err(|_| ThoError::new("TrainStepDynSyncStage::into_var_store: local TrainStep still shared"))?.into_var_store(),
-            Self::Proxy { .. } => Err(ThoError::new("TrainStepDynSyncStage::into_var_store: IPC VarStore download is todo")),
+            Self::Proxy { weights_sync, .. } => weights_sync.into_var_store().await,
         }
     }
 }
