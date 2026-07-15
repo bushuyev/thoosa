@@ -27,7 +27,7 @@ use crate::cuda_utils::cuda_mem_for_device;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::common::runnable::SyncStage;
@@ -342,9 +342,10 @@ impl CudaWorker {
                 continue;
             }
 
-            if let Some(input) = payload.strip_prefix(INVOKE_ENDPOINT_PREFIX) {
+            let endpoint_request = payload.strip_prefix(CONSUME_ENDPOINT_PREFIX).map(|input| (true, input)).or_else(|| payload.strip_prefix(INVOKE_ENDPOINT_PREFIX).map(|input| (false, input)));
+            if let Some((consume, input)) = endpoint_request {
                 let (endpoint_name, input) = cuda_process::split_endpoint_payload_bytes(input)?;
-                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} input_len={}", input.len());
+                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} consume={consume} input_len={}", input.len());
 
                 let response = {
                     let stream = exec_stream_pool.acquire().await;
@@ -354,7 +355,11 @@ impl CudaWorker {
                                 let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
 
-                                let response = endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device);
+                                let response = if consume {
+                                    endpoint.consume_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response.response, response.consumed_tensor_keys))
+                                } else {
+                                    endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response, Vec::new()))
+                                };
                                 let sync_result = stream.synchronize();
                                 match (response, sync_result) {
                                     (Ok(response), Ok(())) => Ok(response),
@@ -369,11 +374,11 @@ impl CudaWorker {
 
                                 error!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} needs_cuda_ctx_reset={}", e.needs_cuda_ctx_reset());
                             } else if let Ok(response) = &r {
-                                let (response_is_binary, response_len) = match response {
+                                let (response_is_binary, response_len) = match &response.0 {
                                     SyncStageIpcResponse::Encoded(response) => (false, response.len()),
                                     SyncStageIpcResponse::Stream(_) => (true, 0),
                                 };
-                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} response_is_binary={response_is_binary} response_len={response_len}");
+                                debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} consume={consume} response_is_binary={response_is_binary} response_len={response_len}");
                             }
                             r
                         },
@@ -382,8 +387,14 @@ impl CudaWorker {
                 };
 
                 let payload = match response {
-                    Ok(SyncStageIpcResponse::Encoded(response)) => OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response)),
-                    Ok(SyncStageIpcResponse::Stream(response)) => {
+                    Ok((SyncStageIpcResponse::Encoded(response), consumed_tensor_keys)) => {
+                        let mut tensors = all_cuda_tensors.lock();
+                        for key in consumed_tensor_keys {
+                            tensors.remove(&key);
+                        }
+                        OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response))
+                    }
+                    Ok((SyncStageIpcResponse::Stream(response), consumed_tensor_keys)) => {
                         let (chunks_tx, chunks_rx) = mpsc::channel(2);
                         let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
                         reply_tx.send(WorkerReply { id, payload: OutgoingRequestPayload::BinaryStream { chunks: chunks_rx, completed: completed_tx } }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
@@ -409,11 +420,18 @@ impl CudaWorker {
                             Ok(result) => result,
                             Err(error) => Err(ThoError::new(format!("worker binary response serializer task failed: {error}"))),
                         };
+                        let serialization_succeeded = serialization_result.is_ok();
                         if let Err(error) = serialization_result {
                             let _ = chunks_tx.send(Err(error)).await;
                         }
                         drop(chunks_tx);
                         completed_rx.await.map_err(|_| ThoError::new("worker binary response completion channel was dropped"))??;
+                        if serialization_succeeded {
+                            let mut tensors = all_cuda_tensors.lock();
+                            for key in consumed_tensor_keys {
+                                tensors.remove(&key);
+                            }
+                        }
                         continue;
                     }
                     Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
@@ -473,6 +491,10 @@ impl CudaWorker {
 
 pub trait WorkerStageInput: Debug + Sized {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError>;
+
+    fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
+        Ok((Self::decode_for_worker::<C>(input, all_cuda_tensors)?, Vec::new()))
+    }
 }
 
 pub trait WorkerStageOutput: Debug + Sized {
@@ -490,6 +512,12 @@ where
         debug!("ThoTensor::decode_for_worker: input_ref={input_ref:?}");
 
         Self::ref_to_tensor(all_cuda_tensors, input_ref)
+    }
+
+    fn decode_for_worker_consuming<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<(Self, Vec<u64>), ThoError> {
+        let input_ref = C::decode::<Self>(input)?;
+        let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new(format!("worker consuming sync stage expected ThoTensor ref input, got {input_ref:?}")))?;
+        Ok((Self::ref_to_tensor(all_cuda_tensors, input_ref)?, vec![input_key]))
     }
 }
 

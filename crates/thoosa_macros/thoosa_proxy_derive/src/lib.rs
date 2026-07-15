@@ -35,6 +35,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     let init_stage = attrs.init_stage;
     let wrapper_name = attrs.wrapper_name;
     let counter_method = attrs.counter_method;
+    let consume = attrs.consume;
 
     let field_defs = fields.iter().map(|field| {
         let name = &field.name;
@@ -63,7 +64,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
         },
     };
 
-    let run_call = match run_input {
+    let run_call = match run_input.as_ref() {
         Some(run_input) => quote! {
             #common::ipc::codec::invoke_ipc_endpoint::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
@@ -77,6 +78,24 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                 #endpoint,
                 input,
                 ctx,
+            ).await
+        },
+    };
+
+    let consume_call = match run_input.as_ref() {
+        Some(run_input) => quote! {
+            #common::ipc::codec::consume_ipc_endpoint::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(&ctx)).as_ref(),
+                #endpoint,
+                &#run_input,
+            ).await
+        },
+        None => quote! {
+            #common::ipc::codec::consume_ipc_sync_stage::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(&ctx)).as_ref(),
+                #endpoint,
+                &input,
+                &ctx,
             ).await
         },
     };
@@ -136,6 +155,51 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
         None => quote! {},
     };
 
+    let sync_stage_impl = if consume {
+        quote! {
+            impl #common::runner::common::runnable::SyncStage for #proxy_ident {
+                fn consume<'a>(
+                    self: std::sync::Arc<Self>,
+                    input: Self::In<'a>,
+                    ctx: Self::Ctx,
+                ) -> #common::runner::common::runnable::ConsumeResult<Self::In<'a>, Self::Out>
+                where
+                    Self: Sized,
+                {
+                    let result = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            #consume_call
+                        })
+                    });
+                    match result {
+                        Ok(output) => #common::runner::common::runnable::ConsumeResult::Ok(output),
+                        Err(error) => #common::runner::common::runnable::ConsumeResult::Failed { input, error },
+                    }
+                }
+            }
+        }
+    } else {
+        quote! {
+            impl #common::runner::common::runnable::SyncStage for #proxy_ident {
+                fn do_run<'a>(
+                    self: std::sync::Arc<Self>,
+                    input: &Self::In<'a>,
+                    ctx: &Self::Ctx,
+                ) -> Result<Self::Out, thoosa_shared::ThoError>
+                where
+                    Self: Sized,
+                {
+                    #pre_run
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async move {
+                            #run_call
+                        })
+                    })
+                }
+            }
+        }
+    };
+
     Ok(quote! {
         #[derive(Debug)]
         pub struct #proxy_ident {
@@ -172,23 +236,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
             type Out = <#base_ty as #common::runner::common::runnable::Stage>::Out;
         }
 
-        impl #common::runner::common::runnable::SyncStage for #proxy_ident {
-            fn do_run<'a>(
-                self: std::sync::Arc<Self>,
-                input: &Self::In<'a>,
-                ctx: &Self::Ctx,
-            ) -> Result<Self::Out, thoosa_shared::ThoError>
-            where
-                Self: Sized,
-            {
-                #pre_run
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async move {
-                        #run_call
-                    })
-                })
-            }
-        }
+        #sync_stage_impl
 
         #endpoint_init_tokens
     })
@@ -213,6 +261,7 @@ struct ProxyAttrs {
     init_stage: Option<Expr>,
     wrapper_name: Option<Ident>,
     counter_method: Option<Ident>,
+    consume: bool,
 }
 
 impl ProxyAttrs {
@@ -245,6 +294,7 @@ impl ProxyAttrs {
                     "init_stage" => out.init_stage = Some(lit.parse()?),
                     "wrapper" => out.wrapper_name = Some(lit.parse()?),
                     "counter" => out.counter_method = Some(lit.parse()?),
+                    "consume" => out.consume = lit.value().parse().map_err(|_| meta.error("`consume` must be `\"true\"` or `\"false\"`"))?,
                     _ => return Err(meta.error(format!("unsupported proxy attribute `{key}`"))),
                 }
                 Ok(())

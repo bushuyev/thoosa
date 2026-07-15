@@ -42,11 +42,29 @@ pub enum SyncStageIpcResponse {
     Stream(SyncStageIpcStreamResponse),
 }
 
+#[derive(Debug)]
+pub struct SyncStageIpcConsumeResponse {
+    pub response: SyncStageIpcResponse,
+    pub consumed_tensor_keys: Vec<u64>,
+}
+
+impl SyncStageIpcConsumeResponse {
+    pub fn encoded(response: Vec<u8>, consumed_tensor_keys: Vec<u64>) -> Self {
+        Self { response: SyncStageIpcResponse::Encoded(response), consumed_tensor_keys }
+    }
+}
+
 pub trait SyncStageIpcWrapper:Debug {
-    fn do_run(&self, _input: &[u8], all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError>;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError> {
+        Err(ThoError::new("IPC endpoint does not support do_run"))
+    }
 
     fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
         self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+    }
+
+    fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
+        Err(ThoError::new("IPC endpoint does not support consume"))
     }
 }
 
@@ -95,6 +113,25 @@ where
         let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
         debug!("IpcSyncStageWrapper::do_run: out={out:?}");
         out.encode_from_worker::<C>(all_cuda_tensors, tho_device)
+    }
+
+    fn consume_response(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
+        let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(_input) {
+            Ok(input) => input.into_parts(),
+            Err(_) => (_input.to_vec(), None),
+        };
+        let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<C>(&input, all_cuda_tensors)?;
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), self.endpoint_name);
+        if let Some(max_other_parallel) = max_other_parallel {
+            ctx.set_max_other_parallel(max_other_parallel);
+        }
+        match Arc::clone(&self.sync_stage).consume(input, ctx) {
+            crate::runner::common::runnable::ConsumeResult::Ok(output) => {
+                let response = output.encode_from_worker::<C>(all_cuda_tensors, tho_device)?;
+                Ok(SyncStageIpcConsumeResponse::encoded(response, consumed_tensor_keys))
+            }
+            crate::runner::common::runnable::ConsumeResult::Failed { error, .. } => Err(error),
+        }
     }
 }
 
