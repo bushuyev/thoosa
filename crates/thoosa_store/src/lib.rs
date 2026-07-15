@@ -3674,6 +3674,8 @@ impl SqlStore {
         only_unused: bool,
         t: &Transaction,
     ) -> Result<(), ThoError> {
+        debug!("save_pure_sets: max_len={max_len} only_unused={only_unused}");
+
         let group_id = Self::save_resource_set_group(format!("pure group {}", max_len), t)?;
 
         let mut resource_resources_set_stmt = t.prepare(
@@ -3691,8 +3693,9 @@ impl SqlStore {
 
         let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
         let mut rows = stmt.query(())?;
+
         while let Some(label_row) = rows.next()? {
-            debug!("row={:?}", label_row);
+            debug!("save_pure_sets: row={:?}", label_row);
             let label_id = label_row.get::<usize, usize>(0)?;
             let label = label_row.get::<usize, String>(1)?;
             t.execute(
@@ -3716,7 +3719,7 @@ impl SqlStore {
         let mut stmt = t.prepare("SELECT id, label FROM labels ORDER BY id")?;
         let mut rows = stmt.query(())?;
         while let Some(label_row) = rows.next()? {
-            debug!("row={:?}", label_row);
+            debug!("save_all_sets: row={:?}", label_row);
             let label_id = label_row.get::<usize, usize>(0)?;
             let label = label_row.get::<usize, String>(1)?;
 

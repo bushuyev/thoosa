@@ -619,6 +619,7 @@ mod tests {
     use thoosa_shared::{mono_key, panic_to_err_async, RangeOrValue, ThoError};
     use thoosa_shared::hyperparameter::FieldName;
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
+    use thoosa_shared::run_configs::RUN_ID;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::SqlStore;
@@ -630,7 +631,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        // log::set_max_level(log::LevelFilter::Trace);
+        log::set_max_level(log::LevelFilter::Info   );
         let global_ctx = GlobalCtx::init_devices(2);
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -639,7 +640,7 @@ mod tests {
             fs::remove_dir_all(test_dir)?;
         }
 
-        debug!("test_motifs: test_dir={test_dir:?}");
+        debug!("heavy_test_run_all: test_dir={test_dir:?}");
         fs::create_dir_all(&test_dir)?;
 
         let base_path = test_dir.to_string_lossy().to_string();
@@ -655,38 +656,6 @@ mod tests {
         let max_y = 30.0;
 
 
-        // let x = lin_t(n);
-        // plot_series(
-        //     vec![
-        //         (
-        //             format!("Sig0"),
-        //             plotters::prelude::RED,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_0_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //         (
-        //             format!("Sig1"),
-        //             plotters::prelude::GREEN,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_1_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //         (
-        //             format!("Sig2"),
-        //             plotters::prelude::BLACK,
-        //             vec_f32_from(&x)
-        //                 .into_iter()
-        //                 .zip(sig_2_v.clone())
-        //                 .collect::<Vec<(f32, f32)>>(),
-        //         ),
-        //     ],
-        //     "test_find_motifs_euc",
-        //     (2000, 1000),
-        //     &format!("/tmp/plots/0_{:?}.png", chrono::Utc::now().to_rfc3339()).as_str(),
-        // )?;
         let mut import_hash = HashMap::new();
         for i in 0..30 {
             let (t, _intervals) = tensor_0()?;
@@ -717,7 +686,7 @@ mod tests {
 
         let mut store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 
-        debug!("test_run_all: import_hash={import_hash:?}");
+        debug!("heavy_test_run_all: import_hash={import_hash:?}");
 
         let imported_ids = import_resources(
             &ws,
@@ -734,10 +703,16 @@ mod tests {
             None,
             true,
             |t: &Transaction|{
+                for pure_sets_len in [(10, true), (20, true)] {
+                    SqlStore::save_pure_sets(pure_sets_len.0, pure_sets_len.1, &t)?;
+                }
+
                 Ok(())
             },
             // Some(&[(20, true), (10, true)])
         ).await?;
+
+        RUN_ID.set(store.save_run("heavy_test_run_all".into()).await?).expect("can't set run id");
 
         let resources = store.list_resources_by_ids(&imported_ids).await?;
 
@@ -764,7 +739,7 @@ mod tests {
             max_motif_net_loss: 0.4,
             selected_motif_nets_limit: None,
             motif_slices_step: 10,
-            with_plots: false,
+            with_plots: true,
             resolution: Resolution::Normal,
             labels: None,
         };
@@ -844,7 +819,7 @@ mod tests {
 
         /////////////////////train_motifs
         let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(150),
+            epochs: RangeOrValue::Value(50),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -858,7 +833,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(150),
+            epochs: RangeOrValue::Value(100),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -883,8 +858,6 @@ mod tests {
                 amsgrad: RangeOrValue::Value(false),
             })),
         };
-
-
 
         let train_motif_nets_run_config_range_or_value: TrainMotifNetRunConfigRangeOrValue = TrainMotifNetRunConfigRangeOrValue {
             id: None,
@@ -993,7 +966,7 @@ mod tests {
             motif_criteria: vec![
                 MotifCriterionConstraintRangeOrValue {
                     metric: MetricsRangeOrValue::NormThickness(NormThicknessRunConfigRangeOrValue { eps: RangeOrValue::Value(1e-8) }),
-                    min: RangeOrValue::Value(0.5),
+                    min: RangeOrValue::Value(0.9),
                 },
                 MotifCriterionConstraintRangeOrValue {
                     metric: MetricsRangeOrValue::InlierRatio(InlierRatioRunConfigRangeOrValue {
