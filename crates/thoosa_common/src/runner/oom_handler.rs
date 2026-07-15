@@ -708,6 +708,35 @@ where
     )).await
 }
 
+async fn consume_stage_owned<'z, R, W>(
+    task: Arc<R>,
+    input: W,
+    tho_device_idx: usize,
+    run_ctx: R::Ctx,
+    job_id_to_rerun: Option<u64>,
+) -> Result<ConsumeResult<R::In<'z>, R::Out>, ThoError>
+where
+    R: SyncStage + Send + Sync + 'static,
+    R::Ctx: Send + Sync + 'static,
+    for<'i> <R as Stage>::In<'i>: WithId + Send + Sync,
+    R::Out: WithId + Send + Sync + 'static,
+    W: ConsumeData<O = R::In<'z>> + Debug + Send + Sync + 'static,
+    R::In<'z>: 'static,
+{
+    if tho_device_idx == 0 {
+        return Ok(track_await(input.consume(0, run_ctx, None, |input, run_ctx| task.consume(input, run_ctx))).await);
+    }
+
+    track_await(oom_executor(tho_device_idx).submit(
+        run_ctx.max_other_parallel().into(),
+        async move {
+            let cuda_actor = GlobalCtx::global().cuda_actor(tho_device_idx);
+            Ok(cuda_actor.consume_stage(task, input, tho_device_idx, run_ctx).await)
+        },
+        job_id_to_rerun,
+    )).await
+}
+
 async fn run_stage_selected<R, W, S>(
     task: Arc<R>,
     input: Arc<W>,
@@ -902,11 +931,8 @@ where
             run_context,
             contexts,
             |task: Arc<R>, input: W, _selector: Option<S>, tho_device_idx: usize, run_ctx: R::Ctx, job_id_to_rerun| async move {
-                debug!("OOMHandler::run: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
-
-                Ok(track_await(input.consume(run_ctx.tho_device_idx(), run_ctx, None, |input, run_ctx| Arc::clone(&task).consume(input, run_ctx))).await)
-
-
+                debug!("OOMHandler::consume: task={task:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
+                track_await(consume_stage_owned(task, input, tho_device_idx, run_ctx, job_id_to_rerun)).await
             },
         )).await
     }

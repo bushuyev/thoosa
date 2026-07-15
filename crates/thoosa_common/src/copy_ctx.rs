@@ -27,9 +27,9 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
 use crate::ipc::cuda_process::DeviceInfo;
-use crate::runner::common::cachable::{BorrowRef, SelectRef};
+use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::runner::common::RunCtx;
-use crate::runner::common::runnable::{Stage, SyncStage};
+use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -95,6 +95,10 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(self.invoke_endpoint(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?.into_bytes())
     }
 
+    async fn consume_endpoint_bytes(&self, input: Vec<u8>)-> Result<Vec<u8>, ThoError> {
+        self.invoke_endpoint_bytes(input).await
+    }
+
     async fn invoke_endpoint_to_file(&self, input: Vec<u8>, mut output: std::fs::File)-> Result<std::fs::File, ThoError> {
         output.write_all(&self.invoke_endpoint_bytes(input).await?)?;
         output.seek(SeekFrom::Start(0))?;
@@ -110,6 +114,23 @@ pub trait CudaActorHandle: Debug + Send + Sync {
 }
 
 impl dyn CudaActorHandle + '_ {
+
+    pub async fn consume_stage<'z, S, W>(
+        &self,
+        stage: Arc<S>,
+        input: W,
+        to_device_idx: usize,
+        ctx: S::Ctx,
+    ) -> ConsumeResult<S::In<'z>, S::Out>
+    where
+        S: SyncStage + Send + Sync + 'static,
+        S::Out: Send,
+        W: ConsumeData<O = S::In<'z>> + Debug,
+        S::In<'z>: 'static,
+    {
+        debug!("CudaActorHandle::consume_stage: to_device_idx={to_device_idx} input={input:?}");
+        input.consume(to_device_idx, ctx, None, |input, ctx| stage.consume(input, ctx)).await
+    }
 
 
     pub async fn run_stage<S, W>(
