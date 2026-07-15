@@ -32,7 +32,7 @@ run-wrapper = 'passthrough'
 
 [profile.heavy]
 default-filter = 'test(/::heavy[^:]*$/)'
-retries = 3
+retries = 0
 
 [[profile.heavy.overrides]]
 filter = 'test(/::heavy[^:]*$/)'

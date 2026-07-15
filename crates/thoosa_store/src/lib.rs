@@ -6210,7 +6210,7 @@ impl MockStoreBuilder {
                 data.iter()
                     .find(|(expected_run_config_ids, expected_loss, expected_limit, _)| expected_run_config_ids.as_slice() == run_config_ids.as_slice() && *expected_loss == loss && *expected_limit == limit)
                     .map(|(_, _, _, result)| result.clone())
-                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return selected nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
+                    .unwrap_or_else(|| Err(ThoError::new(format!("mock is not configured to return trained nets for run ids {run_config_ids:?} loss={loss:?} limit={limit:?}"))))
             }
         );
         self
