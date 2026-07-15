@@ -4,12 +4,12 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering::Acquire;
 use log::{debug, LevelFilter};
 use serde::de::Unexpected::Option;
-use tch::Device;
+use tch::{Device, Tensor};
 use tch::Device::Cuda;
 use tch::Kind::Float;
 use tokio::task::JoinSet;
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::test_utils::init_test_logging;
@@ -17,12 +17,13 @@ use crate::ipc::cuda_process::IPC_SOCK_ENV;
 use crate::ipc::cuda_wokrer::CudaWorker;
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
-use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
+use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, SyncStage};
+use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use crate::runner::global_ctx::mock_global_ctx::{GlobalCtxMockGuard, MockGlobalCtxBuilder};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
 use crate::runner::test::FailUntil::NaxParallel;
 // use crate::runner::test::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
@@ -42,6 +43,8 @@ use crate::torch_runner::tests::model_test::common::ModelTestId;
 // use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
 // use crate::torch_runner::tests::model_test::common::ModelTestId;
 use crate::utils::lin_for_size;
+use thoosa_named_derive::Named;
+use thoosa_proxy_derive::Proxy;
 
 macro_rules! pure_module_path {
     () => {{
@@ -105,6 +108,139 @@ fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Bo
             Box::new(sync_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         )
     ])
+}
+
+const SYNC_CONSUME_TEST_ENDPOINT: &str = "SyncConsumeTestStage";
+
+#[derive(Debug, Named, Proxy)]
+#[proxy(
+    name = "ProxySyncConsumeTestStage",
+    endpoint = "SYNC_CONSUME_TEST_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    init = "()",
+    fields = "id: SynKey = mono_key!(\"SyncConsumeTestStage\", \"stage\").into()",
+    out_id = "&self.id + input_id",
+    endpoint_init = "sync_consume_test_endpoint_init",
+    init_type = "()",
+    in_type = "ThoTensor<LoadedTensor, SynKey>",
+    init_stage = "SyncConsumeTestStage::new()",
+    consume = "true"
+)]
+pub struct SyncConsumeTestStage {
+    id: SynKey,
+}
+
+impl SyncConsumeTestStage {
+    fn new() -> Self {
+        Self { id: mono_key!("SyncConsumeTestStage", "stage").into() }
+    }
+
+    fn consume_input(&self, input: &ThoTensor<LoadedTensor, SynKey>) -> Result<ThoTensor<LoadedTensor, SynKey>, ThoError> {
+        if input.t_ref().f_double_value(&[0, 0])? < 0.0 {
+            return Err(ThoError::new("consume test failure"));
+        }
+        ThoTensor::new(self.out_id(input.id()), input.t_ref().f_mul_scalar(2.0)?)
+    }
+}
+
+impl Adjustable for SyncConsumeTestStage {}
+
+impl OutId for SyncConsumeTestStage {
+    fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        &self.id + input_id
+    }
+}
+
+impl Stage for SyncConsumeTestStage {
+    type Ctx = RunCtxImpl;
+    type In<'a> = ThoTensor<LoadedTensor, SynKey>;
+    type Out = ThoTensor<LoadedTensor, SynKey>;
+}
+
+impl SyncStage for SyncConsumeTestStage {
+    fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, _ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
+        match self.consume_input(&input) {
+            Ok(output) => ConsumeResult::Ok(output),
+            Err(error) => ConsumeResult::Failed { input, error },
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ConsumeTestInput {
+    input: ThoTensor<LoadedTensor, SynKey>,
+}
+
+impl ConsumeTestInput {
+    fn new(input: ThoTensor<LoadedTensor, SynKey>) -> Self {
+        Self { input }
+    }
+}
+
+impl WithId for ConsumeTestInput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        self.input.id()
+    }
+}
+
+impl ConsumeData for ConsumeTestInput {
+    type O = ThoTensor<LoadedTensor, SynKey>;
+
+    fn consume<R: Send, F, P>(self, _to_device_idx: usize, ctx: P, _trace_ctx: std::option::Option<&'static str>, do_run: F) -> impl std::future::Future<Output = ConsumeResult<Self::O, R>> + Send
+    where
+        F: FnOnce(Self::O, P) -> ConsumeResult<Self::O, R> + Send,
+        P: RunCtx,
+    {
+        async move { do_run(self.input, ctx) }
+    }
+
+    fn burp(input: Self::O) -> impl std::future::Future<Output = Self> + Send {
+        async move { Self::new(input) }
+    }
+}
+
+fn sync_consume_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+    HashMap::from([(
+        SYNC_CONSUME_TEST_ENDPOINT.to_string(),
+        Box::new(sync_consume_test_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+    )])
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_consume_stage_ipc_releases_inputs_only_on_success() -> Result<(), ThoError> {
+    if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+        return CudaWorker::run_worker(sock_path, sync_consume_endpoint_inits(), ThoDevice::from(Cuda(0))).await;
+    }
+
+    let _ctx = init_ipc_test("test_consume_stage_ipc_releases_inputs_only_on_success", pure_module_path!()).await?;
+    let cuda_actor = GlobalCtx::global().cuda_actor(1);
+    let stage = Arc::new(ProxySyncConsumeTestStage::new(1).await?);
+    let oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
+
+    let input_tensor = Tensor::f_from_slice(&[1.0f32, 2.0])?.f_view([1, 2])?;
+    let input_ref = cuda_actor.copy(input_tensor.into(), ThoDevice::from(1)).await?;
+    let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected worker input ref"))?;
+    let input = ThoTensor::new_ref(mono_key!("consume-success", "input").into(), input_key, input_ref.size(), input_ref.kind(), None, 1);
+    let output = oom_handler.consume(&stage, ConsumeTestInput::new(input), RunCtxImpl::new(1, "consume-success"), NoContexts).await?;
+    let output_key = output.ref_key().ok_or_else(|| ThoError::new("consume test expected worker output ref"))?;
+    let output_cpu = cuda_actor.copy(ThoTensor::new_ref((), output_key, output.size(), output.kind(), None, 1), ThoDevice::from(0)).await?;
+    assert!(output_cpu.t_ref().f_allclose(&Tensor::f_from_slice(&[2.0f32, 4.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
+
+    let consumed_input = cuda_actor.copy(ThoTensor::new_ref((), input_key, vec![1, 2], Float, None, 1), ThoDevice::from(0)).await;
+    assert!(consumed_input.is_err(), "successful consume must remove the worker input tensor");
+
+    let failed_tensor = Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?;
+    let failed_ref = cuda_actor.copy(failed_tensor.into(), ThoDevice::from(1)).await?;
+    let failed_key = failed_ref.ref_key().ok_or_else(|| ThoError::new("consume test expected failed worker input ref"))?;
+    let failed_input = ThoTensor::new_ref(mono_key!("consume-failure", "input").into(), failed_key, failed_ref.size(), failed_ref.kind(), None, 1);
+    let failed_result = oom_handler.consume(&stage, ConsumeTestInput::new(failed_input), RunCtxImpl::new(1, "consume-failure"), NoContexts).await;
+    assert!(failed_result.is_err());
+    let preserved_input = cuda_actor.copy(ThoTensor::new_ref((), failed_key, vec![1, 2], Float, None, 1), ThoDevice::from(0)).await?;
+    assert!(preserved_input.t_ref().f_allclose(&Tensor::f_from_slice(&[-1.0f32, 2.0])?.f_view([1, 2])?, 0.0, 0.0, false)?);
+
+    cuda_actor.shutdown().await
 }
 
 impl From<ThoTensor> for ThoTensor<LoadedTensor, SynKey> {

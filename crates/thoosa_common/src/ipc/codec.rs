@@ -116,6 +116,27 @@ where
     r
 }
 
+pub async fn consume_ipc_endpoint<C, I, O>(
+    actor: &dyn CudaActorHandle,
+    endpoint_name: &str,
+    input: &I,
+) -> Result<O, ThoError>
+where
+    C: IpcCodec,
+    I: Debug + Serialize + ?Sized,
+    O: Debug + DeserializeOwned,
+{
+    debug!("consume_ipc_endpoint: endpoint_name={endpoint_name} input={input:?}");
+
+    let input = C::encode(input)?;
+    let response = actor.consume_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
+    let result = C::decode(&response);
+
+    debug!("consume_ipc_endpoint: endpoint_name={endpoint_name} response={result:?}");
+
+    result
+}
+
 pub async fn invoke_ipc_endpoint_to_file<C, I>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
@@ -162,4 +183,27 @@ where
     debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} response={r:?}");
 
     r
+}
+
+pub async fn consume_ipc_sync_stage<C, I, O>(
+    actor: &dyn CudaActorHandle,
+    endpoint_name: &str,
+    input: &I,
+    ctx: &RunCtxImpl,
+) -> Result<O, ThoError>
+where
+    C: IpcCodec,
+    I: Debug + Serialize + ?Sized,
+    O: Debug + DeserializeOwned,
+{
+    debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} input={input:?}");
+
+    let input = C::encode(input)?;
+    let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
+    let response = actor.consume_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
+    let result = C::decode(&response);
+
+    debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} response={result:?}");
+
+    result
 }

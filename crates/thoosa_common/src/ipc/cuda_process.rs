@@ -63,6 +63,7 @@ pub(crate) const H2D_START_PAYLOAD_PREFIX: &str = "h2d-start:";
 pub(crate) const D2H_START_PAYLOAD_PREFIX: &str = "d2h-start:";
 pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
 pub(crate) const INVOKE_ENDPOINT_PREFIX: &str = "invoke_endpoint:";
+pub(crate) const CONSUME_ENDPOINT_PREFIX: &str = "consume_endpoint:";
 const WORKER_COPY_STREAMS: usize = 16;
 pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
 pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
@@ -784,6 +785,9 @@ pub enum CudaIPCActorMessage {
     InvokeEndpoint {
         input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
     },
+    ConsumeEndpoint {
+        input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
+    },
     InvokeEndpointToFile {
         input: String,
         output: std::fs::File,
@@ -1165,6 +1169,31 @@ impl CudaIPCActor {
                         OutgoingRequest {
                             id: next_id,
                             payload: OutgoingRequestPayload::Msg(format!("{INVOKE_ENDPOINT_PREFIX}{input}")),
+                        },
+                    ).await.and_then(|response| {
+                        if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
+                            Err(parse_worker_copy_error_payload(error))
+                        } else {
+                            Ok(response)
+                        }
+                    });
+                    let _ = respond_to.send(response);
+
+                    Ok::<_, ThoError>(())
+                });
+            }
+            CudaIPCActorMessage::ConsumeEndpoint { input, respond_to } => {
+                let self_tx = self.spawned_state.tx.clone();
+                let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&self.spawned_state.pending);
+
+                tokio::spawn(async move {
+                    let response = send_request_and_wait(
+                        self_tx,
+                        pending,
+                        OutgoingRequest {
+                            id: next_id,
+                            payload: OutgoingRequestPayload::Msg(format!("{CONSUME_ENDPOINT_PREFIX}{input}")),
                         },
                     ).await.and_then(|response| {
                         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
@@ -1875,6 +1904,18 @@ impl CudaIPCActorHandle {
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
 
+    async fn consume_endpoint_raw(&self, input: String) -> Result<String, ThoError> {
+        let (respond_to, recv) = oneshot::channel();
+        self.sender.send(
+            CudaIPCActorMessage::ConsumeEndpoint {
+                input,
+                respond_to,
+            }
+        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+
+        recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
+    }
+
     async fn invoke_endpoint_to_file_raw(&self, input: String, output: std::fs::File) -> Result<std::fs::File, ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
@@ -1966,6 +2007,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     async fn invoke_endpoint_bytes(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
         let response = self.invoke_endpoint_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint invoke payload is not utf8: {e}")))?).await?;
+        decode_endpoint_response_bytes(&response)
+    }
+
+    async fn consume_endpoint_bytes(&self, input: Vec<u8>) -> Result<Vec<u8>, ThoError> {
+        let response = self.consume_endpoint_raw(String::from_utf8(input).map_err(|e| ThoError::new(format!("endpoint consume payload is not utf8: {e}")))?).await?;
         decode_endpoint_response_bytes(&response)
     }
 
