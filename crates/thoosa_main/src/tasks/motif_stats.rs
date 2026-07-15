@@ -10,7 +10,10 @@ use futures_util::future::try_join_all;
 use log::debug;
 use parking_lot::RwLock;
 use rand::prelude::{IndexedRandom, SliceRandom, StdRng};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tch::{IndexOp, Tensor};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
 use thoosa_common::tho_device::ThoDevice;
 use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, Metrics};
@@ -29,9 +32,13 @@ use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImp
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, CachedPurgeOutput, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
+use thoosa_properties_map::{FromHashmap, ToHashmap};
+use thoosa_proxy_derive::Proxy;
 use thoosa_shared::traits::{Adjustable, Data, DataId, MonoMetrics, WithId};
 use thoosa_shared::{mono_key, CopyToDevice, TensorIdSliceIdx, ThoError};
 use thoosa_common::copy_ctx;
@@ -565,7 +572,7 @@ fn calc_metrics(
     Ok(MotifStatsOutput::new(out_id, channels_values, num_slices as u32))
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricValue {
     value: f32,
     quantiles: Option<Vec<(f32, f32)>>,
@@ -585,8 +592,9 @@ impl MetricValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetricsValue {
+    #[serde(with = "metric_serde")]
     metric: Metrics,
     channels_values: Vec<MetricValue>,
 }
@@ -605,11 +613,66 @@ impl MetricsValue {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MotifStatsOutput {
     id: SynKey,
     channels_values: Vec<MetricsValue>,
     pub num_slices: u32,
+}
+
+mod metric_serde {
+    use super::*;
+
+    pub fn serialize<S>(metric: &Metrics, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        metric_to_ipc(metric).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Metrics, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let properties = HashMap::deserialize(deserializer)?;
+        metric_from_ipc(properties).map_err(serde::de::Error::custom)
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum MotifStatsIpcVal {
+    Real(f64),
+    Int(i64),
+    UInt(u32),
+    Str(String),
+    Bool(bool),
+}
+
+fn metric_to_ipc(metric: &Metrics) -> HashMap<String, MotifStatsIpcVal> {
+    metric.to_properties_iter(None).map(|(key, value)| {
+        let value = match value {
+            thoosa_shared::val::Val::Real(value) => MotifStatsIpcVal::Real(value),
+            thoosa_shared::val::Val::Int(value) => MotifStatsIpcVal::Int(value),
+            thoosa_shared::val::Val::UInt(value) => MotifStatsIpcVal::UInt(value),
+            thoosa_shared::val::Val::Str(value) => MotifStatsIpcVal::Str(value),
+            thoosa_shared::val::Val::Bool(value) => MotifStatsIpcVal::Bool(value),
+        };
+        (key, value)
+    }).collect()
+}
+
+fn metric_from_ipc(properties: HashMap<String, MotifStatsIpcVal>) -> Result<Metrics, ThoError> {
+    let properties = properties.into_iter().map(|(key, value)| {
+        let value = match value {
+            MotifStatsIpcVal::Real(value) => thoosa_shared::val::Val::Real(value),
+            MotifStatsIpcVal::Int(value) => thoosa_shared::val::Val::Int(value),
+            MotifStatsIpcVal::UInt(value) => thoosa_shared::val::Val::UInt(value),
+            MotifStatsIpcVal::Str(value) => thoosa_shared::val::Val::Str(value),
+            MotifStatsIpcVal::Bool(value) => thoosa_shared::val::Val::Bool(value),
+        };
+        (key, value)
+    }).collect();
+    Metrics::from_properties_map(None, &properties)
 }
 
 impl MotifStatsOutput {
@@ -722,8 +785,140 @@ impl CachedPurgeOutput for MotifStatsOutput {
 }
 
 
+pub const MOTIF_STATS_SYNC_ENDPOINT: &str = "MotifStatsSyncStage";
+
+#[derive(Debug, Serialize)]
+struct MotifStatsIpcMotifRef<'a> {
+    tensor: &'a ThoTensor<MotifSlices, SynKey>,
+    meta: &'a MotifMeta,
+}
+
+#[derive(Debug, Serialize)]
+enum MotifStatsIpcDataRef<'a> {
+    Managed(MotifStatsIpcMotifRef<'a>),
+    Motifs(Vec<MotifStatsIpcMotifRef<'a>>),
+}
+
+#[derive(Debug, Serialize)]
+struct MotifStatsSyncStageIpcInputRef<'a> {
+    id: &'a SynKey,
+    data: MotifStatsIpcDataRef<'a>,
+    metrics: Vec<HashMap<String, MotifStatsIpcVal>>,
+    quantiles: &'a Option<Vec<f32>>,
+    max_other_parallel: u8,
+}
+
+impl<'a> MotifStatsSyncStageIpcInputRef<'a> {
+    fn new(input: &'a MotifStatsCalcInput<'a>, ctx: &RunCtxImpl) -> Self {
+        let data = match input.data() {
+            MotifStatsCalcInputData::Managed(motif) => {
+                let motif = motif.as_ref();
+                MotifStatsIpcDataRef::Managed(MotifStatsIpcMotifRef { tensor: motif.data(), meta: motif.extra() })
+            }
+            MotifStatsCalcInputData::Motifs(motifs) => MotifStatsIpcDataRef::Motifs(
+                motifs.iter().map(|motif| {
+                    let motif = motif.as_ref();
+                    MotifStatsIpcMotifRef { tensor: motif.data(), meta: motif.extra() }
+                }).collect(),
+            ),
+        };
+        let metrics = input.metrics.iter().map(metric_to_ipc).collect();
+        Self { id: &input.id, data, metrics, quantiles: &input.quantiles, max_other_parallel: ctx.max_other_parallel() }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct MotifStatsIpcMotif {
+    tensor: ThoTensor<MotifSlices, SynKey>,
+    meta: MotifMeta,
+}
+
+#[derive(Debug, Deserialize)]
+enum MotifStatsIpcData {
+    Managed(MotifStatsIpcMotif),
+    Motifs(Vec<MotifStatsIpcMotif>),
+}
+
+#[derive(Debug, Deserialize)]
+struct MotifStatsSyncStageIpcInput {
+    id: SynKey,
+    data: MotifStatsIpcData,
+    metrics: Vec<HashMap<String, MotifStatsIpcVal>>,
+    quantiles: Option<Vec<f32>>,
+    max_other_parallel: u8,
+}
+
+#[derive(Debug)]
+struct MotifStatsSyncStageIpcWrapper {
+    stage: Arc<MotifStatsSyncStage<RunCtxImpl>>,
+}
+
+impl MotifStatsSyncStageIpcWrapper {
+    fn decode_motif(motif: MotifStatsIpcMotif, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<LoadedMotif, ThoError> {
+        Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, motif.tensor)?, motif.meta))
+    }
+
+    fn run_stage(&self, input: &MotifStatsCalcInput<'_>, max_other_parallel: u8, tho_device: &ThoDevice) -> Result<MotifStatsOutput, ThoError> {
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), MOTIF_STATS_SYNC_ENDPOINT);
+        ctx.set_max_other_parallel(max_other_parallel);
+        Arc::clone(&self.stage).do_run(input, &ctx)
+    }
+}
+
+impl SyncStageIpcWrapper for MotifStatsSyncStageIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<MotifStatsSyncStageIpcInput>(input)?;
+        let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>()?;
+        let output = match input.data {
+            MotifStatsIpcData::Managed(motif) => {
+                let motif = Self::decode_motif(motif, all_cuda_tensors)?;
+                let stage_input = MotifStatsCalcInput::from_managed(input.id, &motif, metrics, input.quantiles);
+                self.run_stage(&stage_input, input.max_other_parallel, tho_device)?
+            }
+            MotifStatsIpcData::Motifs(motifs) => {
+                let motifs = motifs.into_iter().map(|motif| Self::decode_motif(motif, all_cuda_tensors)).collect::<Result<Vec<_>, _>>()?;
+                let motif_refs = motifs.iter().collect();
+                let stage_input = MotifStatsCalcInput::from_motifs(input.id, motif_refs, metrics, input.quantiles);
+                self.run_stage(&stage_input, input.max_other_parallel, tho_device)?
+            }
+        };
+        JsonIpcCodec::encode(&output)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxyMotifStatsSyncStage",
+    endpoint = "MOTIF_STATS_SYNC_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    fields = "id: SynKey = motif_stats_stage_id()",
+    out_id = "&self.id + input_id",
+    run_input = "MotifStatsSyncStageIpcInputRef::new(input, ctx)",
+    endpoint_init = "motif_stats_sync_stage_endpoint_init",
+    wrapper = "MotifStatsSyncStageIpcWrapper"
+)]
+struct MotifStatsSyncStageProxyTarget {
+    base: MotifStatsSyncStage<RunCtxImpl>,
+}
+
+impl MotifStatsSyncStageProxyTarget {
+    fn new() -> MotifStatsSyncStage<RunCtxImpl> {
+        MotifStatsSyncStage::new_local()
+    }
+}
+
+#[derive(Debug)]
+enum MotifStatsDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    Local(Arc<MotifStatsSyncStage<C>>),
+    Proxy(Arc<ProxyMotifStatsSyncStage>),
+}
+
 #[derive(Debug, Named)]
-struct MotifStatsSyncStage<C>
+pub struct MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
@@ -735,7 +930,15 @@ impl<C> MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn new() -> Self {
+    async fn new(tho_device_idx: usize) -> Result<MotifStatsDynSyncStage<C>, ThoError> {
+        if GlobalCtx::global().is_ipc() {
+            Ok(MotifStatsDynSyncStage::Proxy(Arc::new(ProxyMotifStatsSyncStage::new(tho_device_idx).await?)))
+        } else {
+            Ok(MotifStatsDynSyncStage::Local(Arc::new(Self::new_local())))
+        }
+    }
+
+    fn new_local() -> Self {
         Self { id: motif_stats_stage_id(), _ctx: PhantomData }
     }
 
@@ -751,16 +954,25 @@ where
     }
 }
 
-impl<C> Default for MotifStatsSyncStage<C>
+impl<C> Adjustable for MotifStatsDynSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl<C> Adjustable for MotifStatsSyncStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for MotifStatsDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        match self {
+            Self::Local(stage) => stage.out_id(input_id),
+            Self::Proxy(stage) => stage.out_id(input_id),
+        }
+    }
+}
 
 impl<C> OutId for MotifStatsSyncStage<C>
 where
@@ -780,6 +992,15 @@ where
     type Out = MotifStatsOutput;
 }
 
+impl<C> Stage for MotifStatsDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = MotifStatsCalcInput<'a>;
+    type Out = MotifStatsOutput;
+}
+
 impl<C> SyncStage for MotifStatsSyncStage<C>
 where
     C: RunCtx + Adjustable + 'static,
@@ -790,6 +1011,22 @@ where
         let output = self.run_input(input)?;
         debug!("MotifStatsSyncStage::do_run: input.id={:?} channels_values={:?}", input.id(), output.channels_values);
         Ok(output)
+    }
+}
+
+impl<C> SyncStage for MotifStatsDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
+            Self::Proxy(stage) => {
+                let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), MOTIF_STATS_SYNC_ENDPOINT);
+                proxy_ctx.set_max_other_parallel(ctx.max_other_parallel());
+                Arc::clone(stage).do_run(input, &proxy_ctx)
+            }
+        }
     }
 }
 
@@ -873,7 +1110,6 @@ where
     loader: Arc<L>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     pub motif_loader: Arc<ML>,
-    clc_stats_run: Arc<MotifStatsSyncStage<C>>,
     clc_stats_consume: Arc<MotifStatsConsumeStage<C>>,
     _ctx: PhantomData<C>,
 }
@@ -907,7 +1143,6 @@ where
             loader,
             ws,
             motif_loader,
-            clc_stats_run: Arc::new(MotifStatsSyncStage::default()),
             clc_stats_consume: Arc::new(MotifStatsConsumeStage::default()),
             _ctx: PhantomData,
         }
@@ -959,6 +1194,7 @@ where
                     )).await?;
 
                 debug!("MotifStats::run: motif={motif:?}");
+                let clc_stats_run = Arc::new(MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?);
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_managed(input_id.clone(), motif, metrics.clone(), quantiles.clone()));
                 let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
@@ -969,7 +1205,7 @@ where
                     None,
                 );
                 track_await(oom_handler.run(
-                    &self.clc_stats_run,
+                    &clc_stats_run,
                     clc_input,
                     ctx.branch(false),
                     WithRunCtxContext::new(
@@ -1017,6 +1253,7 @@ where
                     motifs.push(motif);
                 }
 
+                let clc_stats_run = Arc::new(MotifStatsSyncStage::<C>::new(ctx.tho_device_idx()).await?);
                 let clc_input = Arc::new(MotifStatsCalcInputWrapper::from_motifs(input_id.clone(), motifs, metrics.clone(), quantiles.clone()));
                 let required_ids: HashMap<&'static str, &std::collections::HashSet<&dyn thoosa_shared::traits::CachableIdTr>> = HashMap::new();
                 let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()> = OOMHandler::new(
@@ -1027,7 +1264,7 @@ where
                     None,
                 );
                 track_await(oom_handler.run(
-                    &self.clc_stats_run,
+                    &clc_stats_run,
                     clc_input,
                     ctx.branch(false),
                     WithRunCtxContext::new(
