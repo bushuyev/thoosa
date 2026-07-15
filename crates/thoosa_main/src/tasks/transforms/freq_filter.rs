@@ -41,7 +41,7 @@ use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
 use thoosa_shared::tracked_await::track_await;
 
-pub(crate) const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
+pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
 #[derive(Debug)]
 pub enum FreqFilterDynSyncStage<C>

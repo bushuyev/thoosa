@@ -23,7 +23,7 @@ use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::{copy_ctx, debug_plot};
-use thoosa_common::dims::{AnyDims, ChannelsData, Dims, MotifSlices};
+use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
 use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::run_configs::RunConfigId;
@@ -1243,6 +1243,279 @@ where
     }
 }
 
+pub const SYNC_LOAD_RANDOM_SLICES_ENDPOINT: &str = "SyncLoadRandomSlices";
+
+#[derive(Debug)]
+pub struct SyncLoadRandomSlicesInput<'a> {
+    id: SynKey,
+    raw_tensor: ThoDataRef<'a, ThoTensor<ChannelsData, SynKey>>,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channels: i64,
+    window: u32,
+    slices: Vec<u32>,
+    descr: String,
+}
+
+impl Input for SyncLoadRandomSlicesInput<'_> {}
+
+impl WithId for SyncLoadRandomSlicesInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+#[derive(Debug)]
+struct SyncLoadRandomSlicesInputWrapper {
+    id: SynKey,
+    raw_tensor: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channels: i64,
+    window: u32,
+    slices: Vec<u32>,
+    descr: String,
+}
+
+impl SyncLoadRandomSlicesInputWrapper {
+    fn new(
+        raw_tensor: Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>,
+        resource_id: ResourceId,
+        find_motifs_run_config_id: u32,
+        channels: i64,
+        window: u32,
+        slices: Vec<u32>,
+        descr: String,
+    ) -> Self {
+        Self { id: raw_tensor.id().clone(), raw_tensor, resource_id, find_motifs_run_config_id, channels, window, slices, descr }
+    }
+}
+
+impl WithId for SyncLoadRandomSlicesInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl BorrowRef for SyncLoadRandomSlicesInputWrapper {
+    type Out<'a> = SyncLoadRandomSlicesInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let raw_tensor = track_await(BorrowRef::borrow_to(&self.raw_tensor, to_device_idx)).await?;
+            Ok(SyncLoadRandomSlicesInput {
+                id: self.id.clone(),
+                raw_tensor,
+                resource_id: self.resource_id,
+                find_motifs_run_config_id: self.find_motifs_run_config_id,
+                channels: self.channels,
+                window: self.window,
+                slices: self.slices.clone(),
+                descr: self.descr.clone(),
+            })
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SyncLoadRandomSlicesIpcInputRef<'a> {
+    id: &'a SynKey,
+    raw_tensor: &'a ThoTensor<ChannelsData, SynKey>,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channels: i64,
+    window: u32,
+    slices: &'a [u32],
+    descr: &'a str,
+    max_other_parallel: u8,
+}
+
+impl<'a> SyncLoadRandomSlicesIpcInputRef<'a> {
+    fn new(input: &'a SyncLoadRandomSlicesInput<'_>, ctx: &RunCtxImpl) -> Self {
+        Self {
+            id: &input.id,
+            raw_tensor: input.raw_tensor.as_ref(),
+            resource_id: input.resource_id,
+            find_motifs_run_config_id: input.find_motifs_run_config_id,
+            channels: input.channels,
+            window: input.window,
+            slices: input.slices.as_slice(),
+            descr: input.descr.as_str(),
+            max_other_parallel: ctx.max_other_parallel(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncLoadRandomSlicesIpcInput {
+    id: SynKey,
+    raw_tensor: ThoTensor<ChannelsData, SynKey>,
+    resource_id: ResourceId,
+    find_motifs_run_config_id: u32,
+    channels: i64,
+    window: u32,
+    slices: Vec<u32>,
+    descr: String,
+    max_other_parallel: u8,
+}
+
+#[derive(Debug)]
+struct SyncLoadRandomSlicesIpcWrapper {
+    stage: Arc<SyncLoadRandomSlices>,
+}
+
+impl SyncStageIpcWrapper for SyncLoadRandomSlicesIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncLoadRandomSlicesIpcInput>(input)?;
+        let raw_tensor = ThoTensor::ref_to_tensor(all_cuda_tensors, input.raw_tensor)?;
+        let stage_input = SyncLoadRandomSlicesInput {
+            id: input.id,
+            raw_tensor: ThoDataRef::Borrowed(&raw_tensor),
+            resource_id: input.resource_id,
+            find_motifs_run_config_id: input.find_motifs_run_config_id,
+            channels: input.channels,
+            window: input.window,
+            slices: input.slices,
+            descr: input.descr,
+        };
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT);
+        ctx.set_max_other_parallel(input.max_other_parallel);
+        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
+        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxySyncLoadRandomSlices",
+    endpoint = "SYNC_LOAD_RANDOM_SLICES_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    out_id = "input_id.clone()",
+    run_input = "SyncLoadRandomSlicesIpcInputRef::new(input, ctx)",
+    endpoint_init = "sync_load_random_slices_endpoint_init",
+    wrapper = "SyncLoadRandomSlicesIpcWrapper"
+)]
+pub struct SyncLoadRandomSlices;
+
+impl SyncLoadRandomSlices {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Adjustable for SyncLoadRandomSlices {}
+
+impl OutId for SyncLoadRandomSlices {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl Stage for SyncLoadRandomSlices {
+    type Ctx = RunCtxImpl;
+    type In<'a> = SyncLoadRandomSlicesInput<'a>;
+    type Out = ThoTensor<ChannelsMotifsSlices, SynKey>;
+}
+
+impl SyncStage for SyncLoadRandomSlices {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncLoadRandomSlices::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let size = input.raw_tensor.size();
+        let mut valid_slices = Vec::with_capacity(input.slices.len());
+        for &slice in &input.slices {
+            let Some(slice_end) = slice.checked_add(input.window) else {
+                warn!("SyncLoadRandomSlices::do_run: slice={slice:?}+{} overflows for resource_id={} in find_motifs_run_config_id={} in {}", input.window, input.resource_id, input.find_motifs_run_config_id, input.descr);
+                continue;
+            };
+            let in_range = size.len() >= 2 && input.channels <= size[0] && slice_end as i64 <= size[1];
+            if in_range {
+                valid_slices.push((slice, slice_end));
+            } else {
+                warn!("SyncLoadRandomSlices::do_run: slice={slice:?}+{} is bigger than size={size:?} for resource_id={} in find_motifs_run_config_id={} in {}", input.window, input.resource_id, input.find_motifs_run_config_id, input.descr);
+            }
+        }
+
+        let mut output = Tensor::f_zeros(
+            [input.channels, valid_slices.len() as i64, input.window as i64],
+            (Float, input.raw_tensor.t_ref().device()),
+        )?;
+        for (slice_i, (slice, slice_end)) in valid_slices.into_iter().enumerate() {
+            let src = input.raw_tensor.t_ref().f_i((0..input.channels, slice as i64..slice_end as i64))?;
+            output.f_i((0..input.channels, slice_i as i64, ..))?.f_copy_(&src)?;
+        }
+
+        ThoTensor::new(mono_key!(input.resource_id, format!("random_slices_resource_id={}", input.resource_id)).into(), output)
+    }
+}
+
+#[derive(Debug)]
+enum SyncLoadRandomSlicesStage {
+    Local(Arc<SyncLoadRandomSlices>),
+    Proxy(Arc<ProxySyncLoadRandomSlices>),
+}
+
+#[derive(Debug)]
+struct SyncLoadRandomSlicesDynStage<C> {
+    stage: SyncLoadRandomSlicesStage,
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncLoadRandomSlicesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
+        let stage = if GlobalCtx::global().is_ipc() {
+            SyncLoadRandomSlicesStage::Proxy(Arc::new(ProxySyncLoadRandomSlices::new(tho_device_idx).await?))
+        } else {
+            SyncLoadRandomSlicesStage::Local(Arc::new(SyncLoadRandomSlices::new()))
+        };
+        Ok(Self { stage, pd: PhantomData })
+    }
+}
+
+impl<C> Adjustable for SyncLoadRandomSlicesDynStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for SyncLoadRandomSlicesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl<C> Stage for SyncLoadRandomSlicesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SyncLoadRandomSlicesInput<'a>;
+    type Out = ThoTensor<ChannelsMotifsSlices, SynKey>;
+}
+
+impl<C> SyncStage for SyncLoadRandomSlicesDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT);
+        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
+        match &self.stage {
+            SyncLoadRandomSlicesStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+            SyncLoadRandomSlicesStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+        }
+    }
+}
+
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="load_motif_resource_tensors"))]
 async fn load_motif_resource_tensors<L, C>(
     motif_id: DataId,
@@ -1375,6 +1648,8 @@ where
     let tmp_cache = track_await(TmpCached::new(&format!("tmp_random_slices_{descr}"))).await;
 
     let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
+    let sync_load_random_slices = Arc::new(SyncLoadRandomSlicesDynStage::new(ctx.tho_device_idx()).await?);
+    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
     for (resource_id, slices) in resource_ids_slices {
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_0");
 
@@ -1383,44 +1658,19 @@ where
         let resource_cache = Arc::new(resource);
         let raw_tensor = track_await(Arc::clone(&configurable_loader)
             .run_cached(resource_cache, ctx.branch(false))).await?;
-        let size = raw_tensor.size();
         debug!("load_random_slices: resource_id={resource_id} slices={slices:?} in_loop_1");
 
-        let raw_tt = BorrowRef::borrow_to(&raw_tensor, ctx.tho_device_idx()).await?;
-            let resource_id = resource_id;
-            let resource_slice_count = slices.len() as i64;
-            let motif_t = ThoTensor::<AnyDims, DataId>::zeros(
-                DataId(resource_id),
-                [channels, resource_slice_count, window as i64],
-                (Float, ThoDevice::from(ctx.tho_device_idx()).into()),
-            )?;
-            let mut slice_i: i64 = 0;
-            for slice in slices {
-                let in_range = MonoMetrics::<1,2>::from([channels, (slice + window) as i64]) <= *size;
-                if !in_range {
-                    warn!("load_random_slices:  slice={slice:?}+{window} is bigger than size={size:?} for resource_id={resource_id} in find_motifs_run_config_id={find_motifs_run_config_id} in {descr}");
-                } else {
-                    debug!("load_random_slices:  slice_i={slice_i} slice={slice:?} size={size:?}");
-                    // TODO(perf): this copies one random slice at a time; build a batched index/gather path to reduce tensor indexing overhead during training.
-                    let src = raw_tt.t_ref().f_i((0..channels, slice as i64..(slice + window) as i64))?;
-                    let mut dst = motif_t.t_ref().f_i((0..channels, slice_i, ..))?;
-                    dst.f_copy_(&src)?;
-                    slice_i += 1;
-                }
-            }
-
-            debug!("load_random_slices: resource_id={resource_id} with_data_done");
-
-            let resource_slices = if slice_i == 0 {
-                Ok::<_, ThoError>(None)
-            } else {
-                Ok::<_, ThoError>(Some(ThoTensor::new(
-                    mono_key!(resource_id, format!("random_slices_resource_id={resource_id}")).into(),
-                    motif_t.t_ref().f_i((.., 0..slice_i, ..))?,
-                )?))
-            }?;
-
-        if let Some(resource_slices) = resource_slices {
+        let sync_input = Arc::new(SyncLoadRandomSlicesInputWrapper::new(
+            Arc::clone(&raw_tensor),
+            resource_id,
+            find_motifs_run_config_id,
+            channels,
+            window,
+            slices,
+            descr.to_string(),
+        ));
+        let resource_slices = track_await(oom_handler.run(&sync_load_random_slices, sync_input, ctx.branch(false), NoContexts)).await?;
+        if resource_slices.size()[1] > 0 {
             tmp_cache.insert(resource_slices);
         }
     }

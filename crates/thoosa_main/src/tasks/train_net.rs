@@ -256,7 +256,9 @@ where
     ) -> BoxFuture<'static, Result<(VarStore, f32, NP), ThoError>> {
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
-            let device = Device::from(ThoDevice::from(tho_device_idx));
+            let local_ipc_train_step = GlobalCtx::global().is_ipc() && self.train_step_proxy_factory.is_none();
+            let train_device_idx = if local_ipc_train_step { 0 } else { tho_device_idx };
+            let device = Device::from(ThoDevice::from(train_device_idx));
             let epochs = (self.epochs)(&run_config);
 
             let self_x_f = Arc::clone(&self);
@@ -269,7 +271,7 @@ where
                 self.loss_fn,
                 self.train_step_proxy_factory.as_ref(),
                 &run_config,
-                tho_device_idx,
+                train_device_idx,
             )).await?;
             let train_step = Arc::new(train_step);
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
@@ -321,7 +323,7 @@ where
                 while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
-                    let input = Arc::new(TrainStepInput::new(x_t_0, lengths, expected_y, true));
+                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true), local_ipc_train_step.then_some(0)));
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
@@ -356,7 +358,7 @@ where
                     while let Some(Ok((x_t_0, lengths, y_t))) = batches.next()
                         .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
                         .await {
-                        let input = Arc::new(TrainStepInput::new(x_t_0, lengths, y_t, false));
+                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false), local_ipc_train_step.then_some(0)));
                         let output = oom_handler.run(
                             &train_step,
                             input,
@@ -614,6 +616,37 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
                 Ok(ThoDataRef::Owned(track_await(self.copy_to_device(to_tho_device_idx)).await?))
             }
         }
+    }
+}
+
+#[derive(Debug)]
+struct TrainStepInputWrapper<DI: Dims, DO: Dims> {
+    input: TrainStepInput<DI, DO>,
+    force_device_idx: Option<usize>,
+}
+
+impl<DI: Dims, DO: Dims> TrainStepInputWrapper<DI, DO> {
+    fn new(input: TrainStepInput<DI, DO>, force_device_idx: Option<usize>) -> Self {
+        Self { input, force_device_idx }
+    }
+}
+
+impl<DI: Dims, DO: Dims> WithId for TrainStepInputWrapper<DI, DO> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        self.input.id()
+    }
+}
+
+impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
+    type Out<'a> = ThoDataRef<'a, TrainStepInput<DI, DO>> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        self.input.borrow_to(self.force_device_idx.unwrap_or(to_tho_device_idx))
     }
 }
 

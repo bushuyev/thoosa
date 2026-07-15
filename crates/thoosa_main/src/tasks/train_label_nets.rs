@@ -11,18 +11,23 @@ use futures::FutureExt;
 use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
+use serde::{Deserialize, Serialize};
 use tch::nn::{AdamW, OptimizerConfig, VarStore};
 use tch::{Device, Reduction, Tensor};
 use cached_derive::Cached;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::cuda_wokrer::{WorkerStageOutput};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::tho_tensor::{ThoTensor};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{build_resource_maps, Resource, ResourcesConfig};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 
 use mockall_double::double;
 #[double]
@@ -57,6 +62,304 @@ use thoosa_shared::comp_id::SynKey;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_proxy_derive::Proxy;
+
+pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
+
+type AppliedMotifOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
+
+#[derive(Debug)]
+pub struct SyncLabelBatchInput<'a> {
+    id: SynKey,
+    x_1: Vec<ThoDataRef<'a, AppliedMotifOutput>>,
+    x_0: Vec<ThoDataRef<'a, AppliedMotifOutput>>,
+    num_nets: i64,
+    label: String,
+}
+
+impl Data for SyncLabelBatchInput<'_> {
+    type Metrics = i64;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        (self.x_1.len() + self.x_0.len()) as i64
+    }
+
+    fn device(&self) -> usize {
+        self.x_1.iter().chain(self.x_0.iter()).next().map(|value| value.as_ref().device()).unwrap_or(0)
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.x_1.iter().chain(self.x_0.iter()).map(|value| value.as_ref().mem_size()).sum()
+    }
+}
+
+impl WithId for SyncLabelBatchInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Input for SyncLabelBatchInput<'_> {}
+
+#[derive(Debug)]
+struct SyncLabelBatchInputWrapper {
+    id: SynKey,
+    x_1: Vec<Arc<DevicesWrap<AppliedMotifOutput>>>,
+    x_0: Vec<Arc<DevicesWrap<AppliedMotifOutput>>>,
+    num_nets: i64,
+    label: String,
+}
+
+impl SyncLabelBatchInputWrapper {
+    fn new(x_1: Vec<Arc<DevicesWrap<AppliedMotifOutput>>>, x_0: Vec<Arc<DevicesWrap<AppliedMotifOutput>>>, num_nets: i64, label: String) -> Self {
+        Self { id: SynKey::new([mono_key!(label.clone(), "SyncLabelBatch")]), x_1, x_0, num_nets, label }
+    }
+}
+
+impl WithId for SyncLabelBatchInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl BorrowRef for SyncLabelBatchInputWrapper {
+    type Out<'a> = SyncLabelBatchInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let x_1 = try_join_all(self.x_1.iter().map(|value| BorrowRef::borrow_to(value, to_device_idx))).await?;
+            let x_0 = try_join_all(self.x_0.iter().map(|value| BorrowRef::borrow_to(value, to_device_idx))).await?;
+            Ok(SyncLabelBatchInput { id: self.id.clone(), x_1, x_0, num_nets: self.num_nets, label: self.label.clone() })
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SyncLabelBatchOutput {
+    id: SynKey,
+    x: ThoTensor<Batch<MotifProbability>, SynKey>,
+    lengths: Vec<i64>,
+    y: ThoTensor<Batch<LabelProbability>, SynKey>,
+}
+
+impl SyncLabelBatchOutput {
+    fn into_parts(self) -> (ThoBatch<MotifProbability>, Option<BatchLengths>, ThoBatch<LabelProbability>) {
+        (
+            self.x.with_id(thoosa_shared::simple_id!("sync_label_batch_x")),
+            Some(BatchLengths::new(self.lengths)),
+            self.y.with_id(thoosa_shared::simple_id!("sync_label_batch_y")),
+        )
+    }
+}
+
+impl WithId for SyncLabelBatchOutput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Output for SyncLabelBatchOutput {}
+
+impl WorkerStageOutput for SyncLabelBatchOutput {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let Self { id, x, lengths, y } = self;
+        let x = C::decode::<ThoTensor<Batch<MotifProbability>, SynKey>>(&<ThoTensor<Batch<MotifProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(x, all_cuda_tensors, tho_device)?)?;
+        let y = C::decode::<ThoTensor<Batch<LabelProbability>, SynKey>>(&<ThoTensor<Batch<LabelProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(y, all_cuda_tensors, tho_device)?)?;
+        C::encode(&Self { id, x, lengths, y })
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct SyncLabelBatchIpcInputRef<'a> {
+    id: &'a SynKey,
+    x_1: Vec<&'a ThoTensor<MotifProbability, SynKey>>,
+    x_1_lengths: Vec<&'a Vec<i64>>,
+    x_0: Vec<&'a ThoTensor<MotifProbability, SynKey>>,
+    x_0_lengths: Vec<&'a Vec<i64>>,
+    num_nets: i64,
+    label: &'a str,
+    max_other_parallel: u8,
+}
+
+impl<'a> SyncLabelBatchIpcInputRef<'a> {
+    fn new(input: &'a SyncLabelBatchInput<'_>, ctx: &RunCtxImpl) -> Self {
+        Self {
+            id: &input.id,
+            x_1: input.x_1.iter().map(|value| value.as_ref().data()).collect(),
+            x_1_lengths: input.x_1.iter().map(|value| value.as_ref().extra()).collect(),
+            x_0: input.x_0.iter().map(|value| value.as_ref().data()).collect(),
+            x_0_lengths: input.x_0.iter().map(|value| value.as_ref().extra()).collect(),
+            num_nets: input.num_nets,
+            label: input.label.as_str(),
+            max_other_parallel: ctx.max_other_parallel(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncLabelBatchIpcInput {
+    id: SynKey,
+    x_1: Vec<ThoTensor<MotifProbability, SynKey>>,
+    x_1_lengths: Vec<Vec<i64>>,
+    x_0: Vec<ThoTensor<MotifProbability, SynKey>>,
+    x_0_lengths: Vec<Vec<i64>>,
+    num_nets: i64,
+    label: String,
+    max_other_parallel: u8,
+}
+
+#[derive(Debug)]
+struct SyncLabelBatchIpcWrapper {
+    stage: Arc<SyncLabelBatch>,
+}
+
+impl SyncStageIpcWrapper for SyncLabelBatchIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncLabelBatchIpcInput>(input)?;
+        if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
+            return Err(ThoError::new("SyncLabelBatch: tensor and length metadata counts differ"));
+        }
+        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
+        let stage_input = SyncLabelBatchInput {
+            id: input.id,
+            x_1: x_1.iter().map(ThoDataRef::Borrowed).collect(),
+            x_0: x_0.iter().map(ThoDataRef::Borrowed).collect(),
+            num_nets: input.num_nets,
+            label: input.label,
+        };
+        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
+        ctx.set_max_other_parallel(input.max_other_parallel);
+        let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
+        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxySyncLabelBatch",
+    endpoint = "SYNC_LABEL_BATCH_ENDPOINT",
+    new_args = "tho_device_idx: usize",
+    out_id = "input_id.clone()",
+    run_input = "SyncLabelBatchIpcInputRef::new(input, ctx)",
+    endpoint_init = "sync_label_batch_endpoint_init",
+    wrapper = "SyncLabelBatchIpcWrapper"
+)]
+pub struct SyncLabelBatch;
+
+impl SyncLabelBatch {
+    fn new() -> Self {
+        Self
+    }
+}
+
+impl Adjustable for SyncLabelBatch {}
+
+impl OutId for SyncLabelBatch {
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl Stage for SyncLabelBatch {
+    type Ctx = RunCtxImpl;
+    type In<'a> = SyncLabelBatchInput<'a>;
+    type Out = SyncLabelBatchOutput;
+}
+
+impl SyncStage for SyncLabelBatch {
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let x_1 = input.x_1.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
+        let x_0 = input.x_0.iter().map(ThoDataRef::as_ref).collect::<Vec<_>>();
+        if x_1.is_empty() || x_0.is_empty() {
+            return Err(ThoError::new(format!("SyncLabelBatch: empty positive or negative resources for {}", input.label)));
+        }
+        let max_input = x_1.iter().chain(x_0.iter()).map(|value| value.data().size().get(1).copied().ok_or_else(|| ThoError::new(format!("SyncLabelBatch: invalid motif output shape for {}", input.label)))).collect::<Result<Vec<_>, _>>()?.into_iter().max().ok_or_else(|| ThoError::new(format!("batch resources are empty for {}", input.label)))?;
+        let x_1_refs = x_1.iter().map(|value| value.data()).collect::<Vec<_>>();
+        let x_0_refs = x_0.iter().map(|value| value.data()).collect::<Vec<_>>();
+        let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), input.num_nets, max_input)?;
+        let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), input.num_nets, max_input)?;
+        let (x, lengths, y) = mix_x_binary_with_labels(&x_1_batch, Some(&BatchLengths::new(lengths_1)), &x_0_batch, Some(&BatchLengths::new(lengths_0)))?;
+        let lengths = lengths.ok_or_else(|| ThoError::new("SyncLabelBatch: mixed batch did not return lengths"))?;
+        Ok(SyncLabelBatchOutput {
+            id: input.id.clone(),
+            x: ThoTensor::new(SynKey::new([mono_key!("x", "SyncLabelBatch")]), x)?,
+            lengths: lengths.as_slice().to_vec(),
+            y: ThoTensor::new(SynKey::new([mono_key!("y", "SyncLabelBatch")]), y)?,
+        })
+    }
+}
+
+#[derive(Debug)]
+enum SyncLabelBatchStage {
+    Local(Arc<SyncLabelBatch>),
+    Proxy(Arc<ProxySyncLabelBatch>),
+}
+
+#[derive(Debug)]
+struct SyncLabelBatchDynStage<C> {
+    stage: SyncLabelBatchStage,
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncLabelBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    async fn new(tho_device_idx: usize) -> Result<Self, ThoError> {
+        let stage = if GlobalCtx::global().is_ipc() {
+            SyncLabelBatchStage::Proxy(Arc::new(ProxySyncLabelBatch::new(tho_device_idx).await?))
+        } else {
+            SyncLabelBatchStage::Local(Arc::new(SyncLabelBatch::new()))
+        };
+        Ok(Self { stage, pd: PhantomData })
+    }
+}
+
+impl<C> Adjustable for SyncLabelBatchDynStage<C> where C: RunCtx + Adjustable + 'static {}
+
+impl<C> OutId for SyncLabelBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl<C> Stage for SyncLabelBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SyncLabelBatchInput<'a>;
+    type Out = SyncLabelBatchOutput;
+}
+
+impl<C> SyncStage for SyncLabelBatchDynStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
+        stage_ctx.set_max_other_parallel(ctx.max_other_parallel());
+        match &self.stage {
+            SyncLabelBatchStage::Local(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+            SyncLabelBatchStage::Proxy(stage) => Arc::clone(stage).do_run(input, &stage_ctx),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct TrainLabelNets<L, LM, C>
@@ -404,6 +707,7 @@ where
                     let resources_0_valid = Arc::new(resources_0.1.clone());
                     let label = label.clone();
                     let label_for_batch = label.clone();
+                    let sync_label_batch = Arc::new(SyncLabelBatchDynStage::<C>::new(ctx_for_task.tho_device_idx()).await?);
 
 
                     let train_net = Arc::new(TrainNet::new(
@@ -411,6 +715,7 @@ where
 
                             let applied_motif_loader = Arc::clone(&applied_motif_loader);
                             let label = label_for_batch.clone();
+                            let sync_label_batch = Arc::clone(&sync_label_batch);
                             ready(Ok(ResourcesBatch::new(
                                    Arc::clone(&applied_motif_loader),
                                    rc.common_training_args.batch_size,
@@ -420,44 +725,12 @@ where
                                    Arc::clone(&resources_0_valid),
                                    Arc::new(move |x_1_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, x_0_wrapped: Vec<Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>>, mut ctx: C| {
                                        let label = label.clone();
+                                       let sync_label_batch = Arc::clone(&sync_label_batch);
                                        async move {
-                                           let x_1_refs = try_join_all(x_1_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
-                                           let x_0_refs = try_join_all(x_0_wrapped.iter().map(|x| x.borrow_to(ctx.tho_device_idx(), None::<SyncStftSelector>))).await?;
-                                           let x_1 = x_1_refs.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-                                           let x_0 = x_0_refs.iter().map(|x| x.as_ref()).collect::<Vec<_>>();
-                                           let (x, lengths, y) = {
-
-                                               if x_1.is_empty() || x_1.is_empty(){
-                                                 error!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
-                                               } else {
-                                                 debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} x_1={x_1:?} x_0={x_0:?}");
-                                               }
-
-                                               let max_input = x_1.iter()
-                                                   .chain(x_0.iter())
-                                                   .map(|x|x.data().t_ref().size()[1])
-                                                   .max().ok_or_else(||ThoError::new(format!("batch resources are empty for {label}")))?;
-
-                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: label={label} max_input={max_input}");
-
-                                               let x_1_refs = x_1.iter().map(|x| x.data()).collect::<Vec<_>>();
-                                               let x_0_refs = x_0.iter().map(|x| x.data()).collect::<Vec<_>>();
-
-                                               // TODO(perf): pad_stack reallocates/copies variable-length motif outputs for every label batch; group by output length or reuse padded buffers across batches.
-                                               let (x_1_batch, lengths_1) = pad_stack_with_mask(x_1_refs.as_slice(), num_nets as i64, max_input)?;
-                                               let (x_0_batch, lengths_0) = pad_stack_with_mask(x_0_refs.as_slice(), num_nets as i64, max_input)?;
-                                               let lengths_1 = BatchLengths::new(lengths_1);
-                                               let lengths_0 = BatchLengths::new(lengths_0);
-
-                                               debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x_1.size={:?}, x_0.size={:?}, lengths_1={:?}, lengths_0={:?}", x_1_batch.size(), x_0_batch.size(), lengths_1, lengths_0);
-
-                                               mix_x_binary_with_labels(&x_1_batch, Some(&lengths_1), &x_0_batch, Some(&lengths_0))
-                                           }?;
-
-                                           debug!("TrainLabelNets/ResourcesBatch::train_batch_iter: x.size={:?} y.size={:?} lengths={lengths:?}", x.size(), y.size());
-
-
-                                           Ok((x.into(), lengths, y.into()))
+                                           let input = Arc::new(SyncLabelBatchInputWrapper::new(x_1_wrapped, x_0_wrapped, num_nets as i64, label));
+                                           let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+                                           let output = track_await(oom_handler.run(&sync_label_batch, input, ctx.branch(false), NoContexts)).await?;
+                                           Ok(output.into_parts())
                                        }.boxed()
                                    })
                                ))).boxed()

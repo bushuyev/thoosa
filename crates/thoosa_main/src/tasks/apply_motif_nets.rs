@@ -510,36 +510,55 @@ where
                         (tmp_cache_name, &set)
                     ]);
 
-                    let r = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
-                        vec![
-                            Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
-                            Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_moitf_net"))),
-                            Adjusters::Input(input_adjuster(StepAlignedSplitsAdjuster::new_with_overlap(
-                                [-1, min_split_len].into(),
-                                [-1, overlap_len].into(),
-                                slice_step as i64,
-                            ))),
-                        ], None)
-                        .run(
-                            &apply_motif_net,
-                            Arc::clone(&apply_motif_net_input),
-                            apply_motif_net_ctx,
-                            Contexts::<ApplyMotifNet<C>, _, _, _>::new(
-                                ApplyMotifNetSplitsContext::new(
-                                    input.size().clone(),
-                                    out_id.clone(),
-                                    slices,
-                                    (Float, ThoDevice::from(device_idx).into()),
-                                    motif_width_i64,
-                                    slice_step as i64,
-                                )?,
-                                NoopRunnableContext {},
-                                MaxParallelAndDumpToCpuAdjustableContex::new(
-                                    MaxParallelAdjustContextImpl::new(),
-                                    DumpToCpuContextImpl::new(&required_ids),
+                    let r = if GlobalCtx::global().is_ipc() {
+                        track_await(OOMHandler::<'_, '_, NoInputAdjuster, NoTaskAdjuster, _, ()>::new(
+                            vec![
+                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
+                                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_moitf_net"))),
+                            ], None)
+                            .run(
+                                &apply_motif_net,
+                                Arc::clone(&apply_motif_net_input),
+                                apply_motif_net_ctx,
+                                WithRunCtxContext::new(
+                                    MaxParallelAndDumpToCpuAdjustableContex::new(
+                                        MaxParallelAdjustContextImpl::new(),
+                                        DumpToCpuContextImpl::new(&required_ids),
+                                    ),
                                 ),
-                            ),
-                        )).await;
+                            )).await
+                    } else {
+                        track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
+                            vec![
+                                Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
+                                Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("apply_moitf_net"))),
+                                Adjusters::Input(input_adjuster(StepAlignedSplitsAdjuster::new_with_overlap(
+                                    [-1, min_split_len].into(),
+                                    [-1, overlap_len].into(),
+                                    slice_step as i64,
+                                ))),
+                            ], None)
+                            .run(
+                                &apply_motif_net,
+                                Arc::clone(&apply_motif_net_input),
+                                apply_motif_net_ctx,
+                                Contexts::<ApplyMotifNet<C>, _, _, _>::new(
+                                    ApplyMotifNetSplitsContext::new(
+                                        input.size().clone(),
+                                        out_id.clone(),
+                                        slices,
+                                        (Float, ThoDevice::from(device_idx).into()),
+                                        motif_width_i64,
+                                        slice_step as i64,
+                                    )?,
+                                    NoopRunnableContext {},
+                                    MaxParallelAndDumpToCpuAdjustableContex::new(
+                                        MaxParallelAdjustContextImpl::new(),
+                                        DumpToCpuContextImpl::new(&required_ids),
+                                    ),
+                                ),
+                            )).await
+                    };
 
                     debug!("ApplyMotifNets::run: after OOMHandler r={r:?}");
                     if let Ok(r)= r {
@@ -693,7 +712,7 @@ impl ConsumeData for StackAppliedMotifNetsInputWrapper {
     {
         async move {
             let StackAppliedMotifNetsInputWrapper { id, tmp_cache } = self;
-            let device_idx = ctx.tho_device_idx();
+            let device_idx = if GlobalCtx::global().is_ipc() { 0 } else { ctx.tho_device_idx() };
 
             match track_await(tmp_cache.take_all_recovering(device_idx)).await {
                 Ok(motif_nets_applied) => {
@@ -924,6 +943,7 @@ impl BorrowRef for ApplyMotifNetInputWrapper {
         Self: 'a,
     {
         async move {
+            let to_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
             let batch = track_await(BorrowRef::borrow_to(&self.batch, to_device_idx)).await?;
             let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
             Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
@@ -938,6 +958,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
         Self: 'a,
     {
         async move {
+            let to_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
             let Some(selector) = selector else {
                 return BorrowRef::borrow_to(self, to_device_idx).await;
             };

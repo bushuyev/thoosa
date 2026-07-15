@@ -19,10 +19,11 @@ use thoosa_common::ws::Workspace;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
 use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, OOMHandler, WithRunCtxContext};
 use thoosa_common::runner::tmp_cache::TmpCached;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{collect_futures_with_progress, mono_key, perf_log, sync_read_lock, FuturesOrdering, ThoError};
@@ -177,7 +178,8 @@ where
     {
         let tho_device_idx = stage_ctx.tho_device_idx();
 
-        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(tho_device_idx).into(), false)?;
+        let label_net_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { tho_device_idx };
+        let all_label_nets = perf_log!(sync_read_lock!(ws)).load_label_nets(Some(train_label_nets_run_config_ids.as_slice()), &ThoDevice::from(label_net_device_idx).into(), false)?;
 
         let mut apply_nets = vec![];
 
@@ -306,7 +308,9 @@ where
                     }
 
                     //gpt Each label net runs independently; ordering is preserved by buffer mode below - (relevant for final net training, if final inference done per label it doesn't matter).
-                    let result: ThoTensor<LabelProbability, SynKey> = apply_label_net.run(motif_probs, ctx.branch(false)).await?;
+                    let input = Arc::new(ApplyLabelNetInputWrapper::new(motif_probs, Arc::clone(&apply_label_net.net_wrapper)));
+                    let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+                    let result: ThoTensor<LabelProbability, SynKey> = track_await(oom_handler.run(&apply_label_net, input, ctx.branch(false), NoContexts)).await?;
 
                     #[cfg(test)]{
                         {
@@ -458,9 +462,10 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     {
         async move {
             let StackAppliedLabelNetsInputWrapper { id, tmp_cache } = self;
-            match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
-                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, to_device_idx), ctx),
-                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, to_device_idx), error: err.error },
+            let target_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
+            match track_await(tmp_cache.take_all_recovering(target_device_idx)).await {
+                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, target_device_idx), ctx),
+                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, target_device_idx), error: err.error },
             }
         }
     }
@@ -568,6 +573,77 @@ where
 }
 
 #[derive(Debug)]
+struct ApplyLabelNetInput<'a> {
+    id: SynKey,
+    input: ThoDataRef<'a, DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>,
+    net: ThoDataRef<'a, ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>,
+}
+
+impl Data for ApplyLabelNetInput<'_> {
+    type Metrics = <DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>> as Data>::Metrics;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.input.as_ref().size()
+    }
+
+    fn device(&self) -> usize {
+        self.input.as_ref().device()
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.input.as_ref().mem_size() + self.net.as_ref().mem_size()
+    }
+}
+
+impl WithId for ApplyLabelNetInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Input for ApplyLabelNetInput<'_> {}
+
+#[derive(Debug)]
+struct ApplyLabelNetInputWrapper {
+    id: SynKey,
+    input: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>,
+    net: Arc<DevicesWrap<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>>,
+}
+
+impl ApplyLabelNetInputWrapper {
+    fn new(input: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, net: Arc<DevicesWrap<ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>>>) -> Self {
+        Self { id: input.id().clone(), input, net }
+    }
+}
+
+impl WithId for ApplyLabelNetInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl BorrowRef for ApplyLabelNetInputWrapper {
+    type Out<'a> = ApplyLabelNetInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let target_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
+            let input = track_await(BorrowRef::borrow_to(&self.input, target_device_idx)).await?;
+            let net = track_await(BorrowRef::borrow_to(&self.net, target_device_idx)).await?;
+            Ok(ApplyLabelNetInput { id: self.id.clone(), input, net })
+        }
+    }
+}
+
+#[derive(Debug)]
 struct ApplyLabelNet<C>
 where
     C: RunCtx + Adjustable,
@@ -612,79 +688,26 @@ where
     C: RunCtx + Adjustable,
 {
     type Ctx = C;
-    type In<'a> = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>;
+    type In<'a> = ApplyLabelNetInput<'a>;
     type Out = ThoTensor<LabelProbability, SynKey>;//TODO it's Batch<LabelProbability>
 }
 
-impl<C> AsyncStage for ApplyLabelNet<C>
+impl<C> SyncStage for ApplyLabelNet<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    // type RunInput = Arc<DevicesWrap<Self::In<'static>>>;
-    // type RunOutput = Arc<DevicesWrap<Self::Out>>;
-    //
-    // fn run_input_id(input: &Self::RunInput) -> &<<Self as Stage>::In<'static> as thoosa_shared::traits::WithId>::ID {
-    //     thoosa_shared::traits::WithId::id(input)
-    // }
-
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::run"))]
-    fn run(
-        self: Arc<Self>,
-        input: Self::In<'static>,
-        mut ctx: Self::Ctx,
-    ) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::do_run"))]
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         debug!("ApplyLabelNet::run: id={:?} input={input:?}", self.id);
-
-        let net_wrapper = Arc::clone(&self.net_wrapper);
-
-        async move {
-            let out_id = self.out_id(input.id());
-
-            debug!("ApplyLabelNet::run: in async out_id={out_id:?}");
-
-            let tho_device_idx = ctx.tho_device_idx();
-            let net = BorrowRef::borrow_to(&net_wrapper, tho_device_idx).await?;
-            let input = SelectRef::borrow_to(&input, tho_device_idx, None::<SyncStftSelector>).await?;
-            let net = net.as_ref();
-            let input = input.as_ref();
-            {
-
-                debug!("ApplyLabelNet::run: input={input:?}");//[motif_nets x probabilities = input/
-
-
-                let batch_input_ = split_padded_motif_scores(input.data().t_ref(), &input.extra(), self.batch_in_chunks as i64, 0.0)?;
-                debug!("ApplyLabelNet::run: batch_input_={batch_input_:?}");
-                let batch_input = Tensor::f_stack(batch_input_.0.as_slice(), 1)?.f_transpose(0,1)?;
-                debug!("ApplyLabelNet::run: batch_input={batch_input:?} batch_input_.1={:?}", batch_input_.1);
-
-                let batch_input: ThoTensor<ChannelsMotifsData, thoosa_shared::traits::SimpleId> = batch_input.into();
-                let mut lengths = BatchLengths::new(batch_input_.1.iter().map(|v|v[0]).collect());//TODO take lengths
-
-                debug!("ApplyLabelNet::run: batch_input={batch_input:?}");
-                trace!("ApplyLabelNet::run: batch_input=\n{batch_input}");
-
-                #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyLabelNet::run/tho_forward"))]
-                fn _tho_forward(net:&ThoModuleWithStore<ChannelsMotifsData, Batch<LabelProbability>>, i: &ThoTensor<ChannelsMotifsData, SimpleId>, l: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<Batch<LabelProbability>, SimpleId>, ThoError> {
-                    net.tho_forward(&i, l, false)
-                }
-
-                // let out = net.tho_forward(&batch_input, Some(&mut lengths), false);
-                let out = _tho_forward(net, &batch_input, Some(&mut lengths), false);
-                debug!("ApplyLabelNet::run: out={out:?}");
-
-                let out = out?;
-                trace!("ApplyLabelNet::run: out.t_ref=\n{}", out.t_ref());
-
-                debug!("ApplyLabelNet::run: done, out_id={out_id} out={out:?}");
-
-                // let out = out.t_ref().f_i(0)?;
-                let out = ThoTensor::new(out_id, out.t())?;
-
-                trace!("ApplyLabelNets::run: out=\n{}", out.as_ref());
-
-                Ok(out)
-            }
-        }
+        let out_id = self.out_id(input.id());
+        let net = input.net.as_ref();
+        let input = input.input.as_ref();
+        let batch_input_parts = split_padded_motif_scores(input.data().t_ref(), input.extra(), self.batch_in_chunks as i64, 0.0)?;
+        let batch_input = Tensor::f_stack(batch_input_parts.0.as_slice(), 1)?.f_transpose(0, 1)?;
+        let batch_input: ThoTensor<ChannelsMotifsData, SimpleId> = batch_input.into();
+        let mut lengths = BatchLengths::new(batch_input_parts.1.iter().map(|value| value[0]).collect());
+        let out = net.tho_forward(&batch_input, Some(&mut lengths), false)?;
+        ThoTensor::new(out_id, out.t())
     }
 }
 

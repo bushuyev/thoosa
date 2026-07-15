@@ -1,5 +1,5 @@
 use thoosa_common::dims::ChannelsData;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 
 use mockall_double::double;
@@ -12,22 +12,101 @@ use std::ops::Deref;
 use std::sync::Arc;
 use log::debug;
 use tch::Device;
-use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::Dims;
 use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::Resource;
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{Adjustable, WithId};
 use thoosa_named_derive::Named;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::tracked_await::track_await;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
 
 type LoadFn =
     dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
+
+#[derive(Debug)]
+struct RawTensorLoaderInputWrapper {
+    resource: Arc<Resource>,
+}
+
+impl RawTensorLoaderInputWrapper {
+    fn new(resource: Arc<Resource>) -> Self {
+        Self { resource }
+    }
+}
+
+impl WithId for RawTensorLoaderInputWrapper {
+    type ID = Resource;
+
+    fn id(&self) -> &Self::ID {
+        self.resource.id()
+    }
+}
+
+impl BorrowRef for RawTensorLoaderInputWrapper {
+    type Out<'a> = Resource where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, _to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        std::future::ready(Ok(self.resource.as_ref().clone()))
+    }
+}
+
+struct SyncRawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
+    device: ThoDevice,
+    loader_fn: Arc<LoadFn>,
+    pd: PhantomData<C>,
+}
+
+impl<C> Debug for SyncRawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SyncRawTensorLoader").field("device", &self.device).finish()
+    }
+}
+
+impl<C> SyncRawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
+    fn new(loader_fn: Arc<LoadFn>, device: ThoDevice) -> Self {
+        Self { device, loader_fn, pd: PhantomData }
+    }
+}
+
+impl<C> Adjustable for SyncRawTensorLoader<C> where C: RunCtx + 'static {}
+
+impl<C> Stage for SyncRawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
+    type In<'a> = Resource;
+    type Out = ThoTensor<ChannelsData, SynKey>;
+    type Ctx = C;
+}
+
+impl<C> SyncStage for SyncRawTensorLoader<C>
+where
+    C: RunCtx + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        (self.loader_fn)(input, &self.device)
+    }
+}
 
 #[derive(cached_derive::Cached, Named)]
 #[cache_name = "RawTensors"]
@@ -37,7 +116,7 @@ where
 {
     id: SynKey,
     device: ThoDevice,
-    loader_fn: Box<LoadFn>,
+    loader_fn: Arc<LoadFn>,
     _ctx: PhantomData<C>,
 }
 
@@ -72,10 +151,13 @@ where
     async fn run(
         self: Arc<Self>,
         input: Self::In<'static>,
-        _ctx: Self::Ctx,
+        ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
         // TODO(perf): add a shared raw-resource tensor cache/prefetch layer here; traced runs repeatedly reload tens of thousands of raw tensors through this stage.
-        let tensor = (self.loader_fn)(input.as_ref(), &self.device)?;
+        let stage = Arc::new(SyncRawTensorLoader::<C>::new(Arc::clone(&self.loader_fn), self.device));
+        let input = Arc::new(RawTensorLoaderInputWrapper::new(input));
+        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+        let tensor = track_await(oom_handler.run(&stage, input, ctx, NoContexts)).await?;
 
         debug!("RawTensorLoader::run: tensor={tensor:?}");
 
@@ -107,7 +189,7 @@ where
         Self {
             id: (RAW_TENSOR_LOADER, "RawTensorLoader").into(),
             device,
-            loader_fn: Box::new(loader_fn),
+            loader_fn: Arc::new(loader_fn),
             _ctx: PhantomData,
         }
     }
