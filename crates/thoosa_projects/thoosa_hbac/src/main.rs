@@ -25,6 +25,7 @@ use thoosa_common::ws::Workspace;
 use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
+use thoosa_main::tasks::motif_stats::{motif_stats_sync_stage_endpoint_init, MOTIF_STATS_SYNC_ENDPOINT};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shared::{cdt_for_dir, ThoError};
 use thoosa_store::rusqlite::Transaction;
@@ -40,6 +41,10 @@ fn main() -> Result<(), ThoError> {
             (
                 CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
                 Box::new(sync_cross_unfold_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            ),
+            (
+                MOTIF_STATS_SYNC_ENDPOINT.to_string(),
+                Box::new(motif_stats_sync_stage_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
             ),
 
         ])
