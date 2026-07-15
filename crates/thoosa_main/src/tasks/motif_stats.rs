@@ -526,6 +526,14 @@ fn merged_channels_tensor(
         return Err(ThoError::new("MotifStatsSyncStage::merged_channels_tensor: empty channels_motifs_slices"));
     }
 
+    let invalid_shapes = channels_motifs_slices
+        .iter()
+        .filter_map(|slices| (slices.size().len() != 3).then(|| (slices.id().clone(), slices.size())))
+        .collect::<Vec<_>>();
+    if !invalid_shapes.is_empty() {
+        return Err(ThoError::new(format!("MotifStatsSyncStage::merged_channels_tensor: expected [channels x slices x window], got invalid_shapes={invalid_shapes:?} input_id={input_id:?}")));
+    }
+
     let channels_motifs_slices_refs = channels_motifs_slices.iter().map(|slices| slices.t_ref()).collect::<Vec<_>>();
     ThoTensor::new(input_id.clone(), Tensor::f_cat(channels_motifs_slices_refs.as_slice(), 1)?)
 }

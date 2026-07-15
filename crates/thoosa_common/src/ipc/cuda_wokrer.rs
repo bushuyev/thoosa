@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use clap::Parser;
 use dashmap::DashMap;
 use log::{debug, error, LevelFilter};
@@ -35,6 +35,7 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 
 const WORKER_EXEC_STREAMS: usize = 32;
+static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1 << 63);
 
 pub struct CudaWorker;
 
@@ -575,19 +576,14 @@ where
 }
 
 pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tensor: Tensor) -> Result<u64, ThoError> {
-
     let mut tensors = all_cuda_tensors.lock();
-    let mut key = tensors
-        .keys()
-        .copied()
-        .max()
-        .unwrap_or(0)
-        .checked_add(1)
-        .ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
-    while tensors.contains_key(&key) {
-        key = key.checked_add(1).ok_or_else(|| ThoError::new("worker tensor key space exhausted"))?;
+    loop {
+        let key = NEXT_WORKER_TENSOR_KEY
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))
+            .map_err(|_| ThoError::new("worker tensor key space exhausted"))?;
+        if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {
+            entry.insert(tensor);
+            return Ok(key);
+        }
     }
-    tensors.insert(key, tensor);
-    Ok(key)
-
 }
