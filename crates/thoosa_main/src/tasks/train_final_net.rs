@@ -27,15 +27,18 @@ use thoosa_common::train_nets::final_net;
 use thoosa_common::train_nets::{FinalNetParams, OptConfig, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetsRunConfigResult};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::applicables_runner::Output;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfigId};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
+use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_with_rng, FuturesOrdering, ThoError};
@@ -261,6 +264,158 @@ where
     }
 }
 
+#[derive(Debug)]
+struct SyncLogitsBatchInput<'a> {
+    id: SynKey,
+    outputs: Vec<ThoDataRef<'a, ThoTensor<LabelProbability, SynKey>>>,
+    labels: Vec<Vec<f32>>,
+    labels_len: usize,
+}
+
+impl Data for SyncLogitsBatchInput<'_> {
+    type Metrics = i64;
+    type M = CpuOnly<Self>;
+
+    fn size(&self) -> Self::Metrics {
+        self.outputs.len() as i64
+    }
+
+    fn device(&self) -> usize {
+        self.outputs.first().map(|output| output.as_ref().device()).unwrap_or(0)
+    }
+
+    fn mem_size(&self) -> u64 {
+        self.outputs.iter().map(|output| output.as_ref().mem_size()).sum()
+    }
+}
+
+impl WithId for SyncLogitsBatchInput<'_> {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Input for SyncLogitsBatchInput<'_> {}
+
+#[derive(Debug)]
+struct SyncLogitsBatchInputWrapper {
+    id: SynKey,
+    outputs: Vec<Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>>,
+    labels: Vec<Vec<f32>>,
+    labels_len: usize,
+}
+
+impl SyncLogitsBatchInputWrapper {
+    fn new(outputs: Vec<Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>>, labels: Vec<Vec<f32>>, labels_len: usize) -> Self {
+        Self { id: SynKey::new([mono_key!("logits_batch", "SyncLogitsBatch")]), outputs, labels, labels_len }
+    }
+}
+
+impl WithId for SyncLogitsBatchInputWrapper {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl BorrowRef for SyncLogitsBatchInputWrapper {
+    type Out<'a> = SyncLogitsBatchInput<'a> where Self: 'a;
+
+    fn borrow_to<'a>(&'a self, to_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+    where
+        Self: 'a,
+    {
+        async move {
+            let target_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
+            let outputs = try_join_all(self.outputs.iter().map(|output| BorrowRef::borrow_to(output, target_device_idx))).await?;
+            Ok(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
+        }
+    }
+}
+
+#[derive(Debug)]
+struct SyncLogitsBatchOutput {
+    id: SynKey,
+    x: ThoBatch<LabelProbability>,
+    y: ThoBatch<LabelsProbabilities>,
+}
+
+impl SyncLogitsBatchOutput {
+    fn into_parts(self) -> (ThoBatch<LabelProbability>, Option<BatchLengths>, ThoBatch<LabelsProbabilities>) {
+        (self.x, None, self.y)
+    }
+}
+
+impl WithId for SyncLogitsBatchOutput {
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl Output for SyncLogitsBatchOutput {}
+
+#[derive(Debug)]
+struct SyncLogitsBatch<C> {
+    pd: PhantomData<C>,
+}
+
+impl<C> SyncLogitsBatch<C> {
+    fn new() -> Self {
+        Self { pd: PhantomData }
+    }
+}
+
+impl<C> Adjustable for SyncLogitsBatch<C> where C: RunCtx + 'static {}
+
+impl<C> OutId for SyncLogitsBatch<C>
+where
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        input_id.clone()
+    }
+}
+
+impl<C> Stage for SyncLogitsBatch<C>
+where
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
+    type In<'a> = SyncLogitsBatchInput<'a>;
+    type Out = SyncLogitsBatchOutput;
+}
+
+impl<C> SyncStage for SyncLogitsBatch<C>
+where
+    C: RunCtx + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        if input.outputs.is_empty() {
+            return Err(ThoError::new("SyncLogitsBatch: empty outputs"));
+        }
+        let x_values = input.outputs.iter().map(|output| output.as_ref().t_ref().f_flatten(0, 1)).collect::<Result<Vec<_>, _>>()?;
+        let x = Tensor::f_stack(x_values.as_slice(), 0)?.f_squeeze()?;
+        let device = input.outputs[0].as_ref().t_ref().device();
+        let y_values = input.labels.iter().map(|labels| {
+            if labels.len() != input.labels_len {
+                return Err(ThoError::new("SyncLogitsBatch: bad label size"));
+            }
+            Ok(Tensor::f_from_slice(labels.as_slice())?.f_to_device(device)?)
+        }).collect::<Result<Vec<_>, ThoError>>()?;
+        let y = Tensor::f_stack(y_values.as_slice(), 0)?;
+        Ok(SyncLogitsBatchOutput {
+            id: input.id.clone(),
+            x: ThoTensor::new(thoosa_shared::simple_id!("sync_logits_batch_x"), x)?,
+            y: ThoTensor::new(thoosa_shared::simple_id!("sync_logits_batch_y"), y)?,
+        })
+    }
+}
+
 struct LogitsResourcesBatch<L, C>
 where
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<LabelProbability, SynKey>>>, Ctx = C> + AsyncStage + OutId + 'static,
@@ -347,35 +502,11 @@ where
                     a
                 });
 
-                let device_idx = ctx_for_batch.tho_device_idx();
-                let xs = try_join_all(outputs.iter().map(|output| output.borrow_to(device_idx, None::<SyncStftSelector>))).await?;
-                {
-                    let x = Tensor::f_stack(
-                        xs.iter()
-                            .map(|x| x.t_ref().f_flatten(0, 1))
-                            .collect::<Result<Vec<_>, _>>()?
-                            .as_slice(),
-                        0,
-                    )?.f_squeeze()?;
-                    let device = ThoDevice::from(device_idx).into();
-                    let y = Tensor::f_stack(
-                        labels.iter()
-                            .map(|labels| {
-                                if labels.len() != labels_len {
-                                    return Err(ThoError::new("LogitsResourcesBatch::build: bad label size"));
-                                }
-                                let t = Tensor::f_from_slice(labels.as_slice())?;
-                                Ok(t.f_to_device(device)?)
-                            })
-                            .collect::<Result<Vec<_>, _>>()?
-                            .as_slice(),
-                        0,
-                    )?;
-
-                    debug!("LogitsResourcesBatch::build_batch_stream: x={x} y={y}");
-
-                    Ok::<_, ThoError>((x.into(), None, y.into()))
-                }
+                let stage = Arc::new(SyncLogitsBatch::<C>::new());
+                let input = Arc::new(SyncLogitsBatchInputWrapper::new(outputs, labels, labels_len));
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+                let output = track_await(oom_handler.run(&stage, input, ctx_for_batch.branch(false), NoContexts)).await?;
+                Ok::<_, ThoError>(output.into_parts())
             }
         });
 

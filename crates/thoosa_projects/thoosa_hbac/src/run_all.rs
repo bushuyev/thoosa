@@ -593,7 +593,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::ops::Range;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use log::debug;
     use parking_lot::RwLock;
@@ -603,7 +603,13 @@ mod tests {
     use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
     use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::common::cachable::BorrowRef;
+    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_common::runner::common::OutId;
+    use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
+    use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::tch_test_utils::{resource_tensor_two_easy_motifs, Interval};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -618,14 +624,118 @@ mod tests {
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::copy_mode::CpuOnly;
     use thoosa_shared::{mono_key, panic_to_err_async, RangeOrValue, ThoError};
     use thoosa_shared::hyperparameter::FieldName;
+    use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::run_configs::RUN_ID;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::SqlStore;
     use crate::run_all::{run_all, AllConfigs, FindAndSelect};
+
+    #[derive(Clone, Debug)]
+    struct PrepareRunAllDataInput {
+        id: SynKey,
+        tensors_path: PathBuf,
+        resources_per_label: usize,
+    }
+
+    impl PrepareRunAllDataInput {
+        fn new(tensors_path: PathBuf, resources_per_label: usize) -> Self {
+            Self { id: mono_key!("prepare_run_all_data", "stage").into(), tensors_path, resources_per_label }
+        }
+    }
+
+    impl Data for PrepareRunAllDataInput {
+        type Metrics = ();
+        type M = CpuOnly<Self>;
+
+        fn size(&self) -> Self::Metrics {}
+
+        fn device(&self) -> usize { 0 }
+
+        fn mem_size(&self) -> u64 { 0 }
+    }
+
+    impl Input for PrepareRunAllDataInput {}
+
+    impl WithId for PrepareRunAllDataInput {
+        type ID = SynKey;
+
+        fn id(&self) -> &Self::ID { &self.id }
+    }
+
+    impl BorrowRef for PrepareRunAllDataInput {
+        type Out<'a> = Self where Self: 'a;
+
+        fn borrow_to<'a>(&'a self, _to_tho_device_idx: usize) -> impl std::future::Future<Output = Result<Self::Out<'a>, ThoError>> + Send where Self: 'a {
+            std::future::ready(Ok(self.clone()))
+        }
+    }
+
+    #[derive(Debug)]
+    struct PrepareRunAllDataOutput {
+        id: SynKey,
+        import_hash: HashMap<String, Vec<(String, f32)>>,
+    }
+
+    impl Data for PrepareRunAllDataOutput {
+        type Metrics = ();
+        type M = CpuOnly<Self>;
+
+        fn size(&self) -> Self::Metrics {}
+
+        fn device(&self) -> usize { 0 }
+
+        fn mem_size(&self) -> u64 { 0 }
+    }
+
+    impl Output for PrepareRunAllDataOutput {}
+
+    impl WithId for PrepareRunAllDataOutput {
+        type ID = SynKey;
+
+        fn id(&self) -> &Self::ID { &self.id }
+    }
+
+    #[derive(Debug)]
+    struct PrepareRunAllData;
+
+    impl Adjustable for PrepareRunAllData {}
+
+    impl OutId for PrepareRunAllData {
+        fn out_id<'a>(&self, input_id: &<Self::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID { input_id.clone() }
+    }
+
+    impl Stage for PrepareRunAllData {
+        type Ctx = RunCtxImpl;
+        type In<'a> = PrepareRunAllDataInput;
+        type Out = PrepareRunAllDataOutput;
+    }
+
+    impl SyncStage for PrepareRunAllData {
+        fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            let mut import_hash = HashMap::new();
+            for i in 0..input.resources_per_label {
+                let (t, _intervals) = tensor_0()?;
+                let stem = format!("t_0_{i}");
+                debug_plot!(&t, &stem)?;
+                t.save(input.tensors_path.join(format!("{stem}.pt")))?;
+                t.save(input.tensors_path.join(&stem))?;
+                import_hash.insert(stem, vec![("label_0".to_string(), 1.0)]);
+
+                let (t, _intervals) = tensor_1()?;
+                let stem = format!("t_1_{i}");
+                debug_plot!(&t, &stem)?;
+                t.save(input.tensors_path.join(format!("{stem}.pt")))?;
+                import_hash.insert(stem, vec![("label_1".to_string(), 1.0)]);
+            }
+            Ok(PrepareRunAllDataOutput { id: self.out_id(input.id()), import_hash })
+        }
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
     async fn heavy_test_run_all() -> Result<(), ThoError> {
@@ -635,11 +745,36 @@ mod tests {
 
         log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2);
+        let result = run_heavy_test_run_all("heavy_test_run_all").await;
+        global_ctx.shutdown().await;
+        result
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn heavy_test_run_all_ipc() -> Result<(), ThoError> {
+        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
+            return CudaWorker::run_worker(sock_path, crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await;
+        }
+
+        let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+        let test_name = format!("{module}::heavy_test_run_all_ipc");
+        GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+        let cuda_actor = GlobalCtx::global().cuda_actor(1);
+        let result = run_heavy_test_run_all("heavy_test_run_all_ipc").await;
+        let shutdown_result = cuda_actor.shutdown().await;
+        match (result, shutdown_result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+        }
+    }
+
+    async fn run_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let test_dir = Path::new("/tmp/heavy_test_run_all");
+        let test_dir = Path::new("/tmp").join(test_name);
         if test_dir.is_dir() {
-            fs::remove_dir_all(test_dir)?;
+            fs::remove_dir_all(&test_dir)?;
         }
 
         debug!("heavy_test_run_all: test_dir={test_dir:?}");
@@ -658,28 +793,10 @@ mod tests {
         let max_y = 30.0;
 
 
-        let mut import_hash = HashMap::new();
-        for i in 0..30 {
-            let (t, _intervals) = tensor_0()?;
-
-            let stem = format!("t_0_{i}");
-
-            debug_plot!(&t, &stem)?;
-            let tensors_path = ws.read().tensors_path().clone();
-            t.save(tensors_path.join(&format!("{stem}.pt")))?;
-            t.save(tensors_path.join(&stem))?;
-
-            import_hash.insert(stem, vec![("label_0".to_string(), 1.0)]);
-
-            let (t, _intervals) = tensor_1()?;
-
-            let stem = format!("t_1_{i}");
-
-            debug_plot!(&t, &stem)?;
-
-            t.save(tensors_path.join(&format!("{stem}.pt")))?;
-            import_hash.insert(stem, vec![("label_1".to_string(), 1.0)]);
-        }
+        let prepare_stage = Arc::new(PrepareRunAllData);
+        let prepare_input = Arc::new(PrepareRunAllDataInput::new(ws.read().tensors_path().clone(), 30));
+        let prepare_oom_handler = OOMHandler::<NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()>::new(vec![], None);
+        let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
 
 
         let channels = 3;
@@ -766,9 +883,6 @@ mod tests {
         };
 
         debug!("\n{}", format_perf_map(&PERF));
-
-        global_ctx.shutdown().await;
-
 
         Ok(())
     }

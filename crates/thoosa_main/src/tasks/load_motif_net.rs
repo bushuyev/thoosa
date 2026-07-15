@@ -9,6 +9,7 @@ use thoosa_named_derive::Named;
 use thoosa_common::runner::common::cachable::DevicesWrap;
 use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
@@ -128,7 +129,7 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="LoadMotifNet::run"))]
     async fn run(self: Arc<Self>, input: LoadMotifNetInput, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-        let device_idx = ctx.tho_device_idx();
+        let device_idx = if GlobalCtx::global().is_ipc() { 0 } else { ctx.tho_device_idx() };
 
         // let input = track_await(input.load_from_any_device_(0)).await?;//TODO clone_from_cpu
 

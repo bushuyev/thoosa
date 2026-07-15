@@ -58,7 +58,8 @@ use thoosa_store::Store;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, sync_motif_loader_endpoint_init, MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, SYNC_MOTIF_LOADER_ENDPOINT};
+use crate::tasks::motif_loader::{sync_load_motif_resources_endpoint_init, sync_load_random_slices_endpoint_init, sync_motif_loader_endpoint_init, MotifLoader, MotifLoaderInput, MotifMeta, RandomSlicesLoader, SlicesLoaderInput, SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT, SYNC_LOAD_RANDOM_SLICES_ENDPOINT, SYNC_MOTIF_LOADER_ENDPOINT};
+use crate::tasks::train_label_nets::{sync_label_batch_endpoint_init, SYNC_LABEL_BATCH_ENDPOINT};
 use crate::tasks::motifs_batch_builder::{make_batch_with, MixupJitterCfg};
 use crate::tasks::stage_ids::TRAIN_MOTIF_NETS;
 use thoosa_common::stages_seq::ABStage;
@@ -415,7 +416,7 @@ where
     }
 }
 
-pub(crate) fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+pub fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
     HashMap::from([
         (
             TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
@@ -434,8 +435,16 @@ pub(crate) fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Ve
             Box::new(sync_load_motif_resources_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
+            SYNC_LOAD_RANDOM_SLICES_ENDPOINT.to_string(),
+            Box::new(sync_load_random_slices_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+        (
             SYNC_MOTIF_LOADER_ENDPOINT.to_string(),
             Box::new(sync_motif_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+        (
+            SYNC_LABEL_BATCH_ENDPOINT.to_string(),
+            Box::new(sync_label_batch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
     ])
 }
