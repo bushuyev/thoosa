@@ -224,7 +224,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
 
 #[derive(Debug)]
 pub struct TrainFinalNetsRunConfigResult {
-    train_label_nodes_run_config_ids: Vec<RunConfigId>,
+    train_label_nets_run_config_ids: Vec<RunConfigId>,
     pub loss: f32,
     var_store: VarStore,
     final_node_params: FinalNetParams,
@@ -233,14 +233,14 @@ pub struct TrainFinalNetsRunConfigResult {
 
 impl TrainFinalNetsRunConfigResult {
     pub fn new(
-        train_label_nodes_run_config_ids: Option<&Vec<RunConfigId>>,
+        train_label_nets_run_config_ids: Option<&Vec<RunConfigId>>,
         loss: f32,
         var_store: VarStore,
         final_node_params: FinalNetParams,
         train_final_nodes_values: TrainFinalNetRunConfig,
     ) -> Self {
         Self {
-            train_label_nodes_run_config_ids: train_label_nodes_run_config_ids
+            train_label_nets_run_config_ids: train_label_nets_run_config_ids
                 .expect("train_label_nodes_run_config_ids")
                 .clone(),
             loss,
@@ -262,7 +262,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         p: Self::P<'_>
     ) -> Result<u32, ThoError> {
         let run_config_id = track_await(store.save_run_config(
-            Some(&self.train_label_nodes_run_config_ids),
+            Some(&self.train_label_nets_run_config_ids),
             &TrainFinalNetRunConfig::type_name(),
             "Final",
             self.train_final_net_run_config.to_properties_iter(None).collect(),
@@ -1756,6 +1756,13 @@ pub fn final_net(params: &FinalNetParams) -> Result<Node, ThoError> {
 
     let mut builder = SeqBuilder::new(params.in_features, None)?;
     let mut net = builder
+        .closure(
+            Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                debug!("final_net: input={t:?}");
+                Ok(t.shallow_clone())
+            })),
+            None,
+        )?
         .linear_s(
             2 * params.in_features,
             "final_net_first_layer".to_string(),

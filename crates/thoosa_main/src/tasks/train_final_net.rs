@@ -1,4 +1,4 @@
-use crate::tasks::apply_label_nets::ApplyLabelNets;
+use crate::tasks::apply_label_nets::{ApplyLabelNets, MotifNetsOutput};
 use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_common::stages_seq::ABStage;
@@ -8,7 +8,7 @@ use futures::FutureExt;
 use futures_util::future::try_join_all;
 use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
-use log::{debug, trace};
+use log::{debug, info, trace};
 use parking_lot::{Mutex, RwLock};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
@@ -42,6 +42,7 @@ use thoosa_shared::{collect_futures_with_progress, mono_key, shuffle_and_chunk_w
 use thoosa_store::Store;
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::tracked_await::track_await;
+use crate::ApplyMotifNets;
 
 #[derive(Debug)]
 pub struct TrainFinalNet<L, LL, C>
@@ -55,7 +56,7 @@ where
     pd: PhantomData<L>,
     label_loader: Arc<LL>,
     num_label_nets: u32,
-    label_net_run_config_ids: Vec<RunConfigId>,
+    // label_net_run_config_ids: Vec<RunConfigId>,
     ws: Arc<RwLock<Box<dyn Workspace>>>,
     store: Arc<Box<dyn Store>>,
     opt_config: Arc<OptConfig>,
@@ -71,14 +72,15 @@ pub async fn new_train_final_net<L, C, R>(
     opt_config: Arc<OptConfig>,
     slices_step: u32,
     selected_motif_nets_limit: Option<usize>,
-) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C>, C>, C>, ThoError>
+) -> Result<TrainFinalNet<L, ABStage<L, ApplyLabelNets<C, ApplyMotifNets<C>>, C>, C>, ThoError>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     C: RunCtx + Adjustable + 'static,
     R: RunCtx + Adjustable + 'static,
+
 {
     //gpt Build a label-net application stage that wraps the raw loader with motif+label inference.
-    let apply_label_nets = Arc::new(track_await(ApplyLabelNets::new(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step, 0, true)).await?);
+    let apply_label_nets = Arc::new(track_await(ApplyLabelNets::new_with_apply_motif_nets(ws, store, train_label_nets_run_config_ids.clone(), stage_ctx, slices_step, 1)).await?);//TODO config batch_in_chunks
 
     let label_loader = Arc::new(ABStage::new(
         SynKey::new([mono_key!("Loader_with_label_nets", "Loader_with_label_nets"), mono_key!(format!("{train_label_nets_run_config_ids:?}"), "train_label_nets_run_config_ids")]),
@@ -104,20 +106,21 @@ where
         store: &Arc<Box<dyn Store>>,
         opt_config: Arc<OptConfig>,
     ) -> Result<Self, ThoError> {
+        debug!("TrainFinalNet::new: train_label_nets_run_config_ids={train_label_nets_run_config_ids:?}");
         //gpt Collect all label-net output run ids produced by the input train_label_nets runs.
-        let label_net_run_config_ids = {
-            let store_guard = store;
-            let mut run_config_ids = HashSet::new();
-            for run_config_id in &train_label_nets_run_config_ids {
-                run_config_ids.extend(track_await(store_guard.list_output_run_config_ids(*run_config_id)).await?);
-            }
-            let mut run_config_ids = run_config_ids.into_iter().collect::<Vec<_>>();
-            run_config_ids.sort();
-            run_config_ids
-        };
-        if label_net_run_config_ids.is_empty() {
-            return Err(ThoError::new("TrainFinalNet::new: no label nets found"));
-        }
+        // let label_net_run_config_ids = {
+        //     let store_guard = store;
+        //     let mut run_config_ids = HashSet::new();
+        //     for run_config_id in &train_label_nets_run_config_ids {
+        //         run_config_ids.extend(track_await(store_guard.list_output_run_config_ids(*run_config_id)).await?);
+        //     }
+        //     let mut run_config_ids = run_config_ids.into_iter().collect::<Vec<_>>();
+        //     run_config_ids.sort();
+        //     run_config_ids
+        // };
+        // if label_net_run_config_ids.is_empty() {
+        //     return Err(ThoError::new("TrainFinalNet::new: no label nets found"));
+        // }
 
         Ok(Self {
             train_label_nets_run_config_ids,
@@ -125,7 +128,7 @@ where
             pd: PhantomData,
             label_loader,
             num_label_nets,
-            label_net_run_config_ids,
+            // label_net_run_config_ids,
             ws: Arc::clone(ws),
             store: Arc::clone(store),
             opt_config,
@@ -191,7 +194,7 @@ where
 
         let train_final_run_configs = Arc::clone(&self.run_configs);
         let label_loader = Arc::clone(&self.label_loader);
-        let label_net_run_config_ids = self.label_net_run_config_ids.clone();
+        let train_label_nets_run_config_ids = self.train_label_nets_run_config_ids.clone();
         let num_label_nets = self.num_label_nets;
         let opt_config = Arc::clone(&self.opt_config);
         let store = Arc::clone(&self.store);
@@ -250,8 +253,8 @@ where
             ).unwrap()
                 .take_data(0)).await?;
 
-            let final_result = TrainFinalNetsRunConfigResult::new(Some(&label_net_run_config_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
-            debug!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
+            let final_result = TrainFinalNetsRunConfigResult::new(Some(&train_label_nets_run_config_ids), result.min_loss, result.var_store, result.node_params, result.run_config);
+            info!("TrainFinalNet::run, done: min_loss={:?}", final_result.loss);
 
             Ok(Arc::new(TrainFinalNetOutput::new(SynKey::new([mono_key!("", "empty")]), final_result)))
         }
@@ -319,7 +322,12 @@ where
                     let ctx_for_loader = ctx_for_batch.branch(false);
 
                     async move {
+                        debug!("LogitsResourcesBatch::build_batch_stream: resource={resource:?} labels={labels:?}");
+
                         let out = track_await(Arc::clone(&loader).run_cached(Arc::new(resource), ctx_for_loader)).await?;
+
+                        debug!("LogitsResourcesBatch::build_batch_stream: out={out:?}");
+
                         Ok::<_, ThoError>((out, labels))
                     }
                 });
@@ -348,7 +356,7 @@ where
                             .collect::<Result<Vec<_>, _>>()?
                             .as_slice(),
                         0,
-                    )?;
+                    )?.f_squeeze()?;
                     let device = ThoDevice::from(device_idx).into();
                     let y = Tensor::f_stack(
                         labels.iter()
@@ -437,9 +445,11 @@ mod tests {
                 let k = k;
                 let builder = Arc::new(move |_path: &nn::Path| {
                     let module = MyClosureModule::new(Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                        let sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
-                        let mut sum = sum.f_unsqueeze(1)?;
+                        let mut sum = t.f_sum_dim_intlist(&[1, 2][..], false, None)?;
+                        // let mut sum = sum.f_unsqueeze(1)?;
                         let out = sum.f_mul_scalar_(k)?;
+
+                        debug!("const_label_net: t={t:?} out={out:?}");
                         Ok(out)
                     })));
                     Ok(Box::new(module) as Box<dyn ThoModule<ChannelsMotifsData, Batch<LabelProbability>>>)
@@ -451,7 +461,7 @@ mod tests {
         )
     }
 
-    // #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn test_train_final_net_smoke() -> Result<(), ThoError> {
         reset_print_options();
         GlobalCtx::init_devices(2);
@@ -472,6 +482,9 @@ mod tests {
         let net_id_0 = PathBuf::from("0/0_2");
         let net_id_1 = PathBuf::from("0/1_2");
 
+        let label_a_run_config_id = 111;
+        let label_b_run_config_id = 222;
+
         let ws = Arc::new(RwLock::new(
             WsMockBuilder::new(None, 1, 100, 1000)
                 .with_load_motif_net(vec![
@@ -479,8 +492,8 @@ mod tests {
                     (net_id_1.clone(), motif_1_params, motif_1_net),
                 ])
                 .with_load_label_nets(HashMap::from([
-                    ("A".to_string(), vec![(100, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
-                    ("B".to_string(), vec![(200, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
+                    ("A".to_string(), vec![(label_a_run_config_id, const_label_net(2, 1, 0.1, device).0, const_label_net(2, 1, 0.1, device).1)]),
+                    ("B".to_string(), vec![(label_b_run_config_id, const_label_net(2, 1, 0.2, device).0, const_label_net(2, 1, 0.2, device).1)]),
                 ]))
                 .build(),
         ));
@@ -512,10 +525,35 @@ mod tests {
                         Some(0.3),
                         Some(2),
                         Ok(vec![
+                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_0.clone(), loss: 0.1f32 },
+                            TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_1.clone(), loss: 0.2f32 },
+                        ]),
+                    ),
+                    (
+                        vec![train_motif_nets_run_config_id],
+                        None,
+                        None,
+                        Ok(vec![
                             TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_0, loss: 0.1f32 },
                             TrainedNet { id: 0, run_config_id: train_motif_nets_run_config_id, net_path: net_id_1, loss: 0.2f32 },
                         ]),
                     ),
+                    (
+                        vec![label_a_run_config_id],
+                        None,
+                        None,
+                        Ok(vec![
+                            TrainedNet { id: label_a_run_config_id*10/*net id != run id*/, run_config_id: label_a_run_config_id, net_path: "aaa".into(), loss: 0.1f32 },
+                        ]),
+                    ),
+                    (
+                        vec![label_b_run_config_id],
+                        None,
+                        None,
+                        Ok(vec![
+                            TrainedNet { id: label_b_run_config_id*10, run_config_id: label_b_run_config_id, net_path: "bbb".into(), loss: 0.2f32 },
+                        ]),
+                    )
                 ])
                 .with_get_motif_meta([
                     (0, Ok((0usize, 0))),
@@ -536,6 +574,10 @@ mod tests {
                 )])
                 .with_list_output_run_config_ids([(train_label_nets_run_config_id, Ok(vec![100, 200]))])
                 .with_list_resource_random_in_group([(train_group, Ok(train_logits)), (valid_group, Ok(valid_logits))])
+                .with_list_input_nets([
+                    (label_a_run_config_id*10, Ok(vec![train_motif_nets_run_config_id])),
+                    (label_b_run_config_id*10, Ok(vec![train_motif_nets_run_config_id]))
+                ])
                 .build(),
         );
 

@@ -45,6 +45,7 @@ use clap::Parser;
 use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
 use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
 use thoosa_common::tho_device::ThoDevice;
+use thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_shared::tracked_await::track_await;
 
 mod data;
@@ -373,12 +374,12 @@ async fn infer_labels(args:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, stor
     Ok(())
 }
 
-async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets<RunCtxImpl>>, ThoError> {
+async fn load_apply_label_nets_model(ws: Arc<RwLock<Box<dyn Workspace>>>, store: Arc<Box<dyn Store>>, ctx:  RunCtxImpl, label_models: Arc<HashMap<String, Vec<(PathBuf, PathBuf)>>>, label: &str, batch_in_chunks: usize, motif_slices_step: u32, run_stft: bool) -> Result<Arc<ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>>, ThoError> {
     let label_model = label_models.get(&label.to_string());
     let run_config_ids = track_await(store.list_label_nets_run_config_ids(label)).await?;
     debug!("load_apply_label_nets_model: label={label:?} label_model={label_model:?} run_config_ids={run_config_ids:?}");
 
-    let apply_label_nets = Arc::new(track_await(ApplyLabelNets::<RunCtxImpl>::new(
+    let apply_label_nets = Arc::new(track_await(ApplyLabelNets::<RunCtxImpl, ApplyCosine2DMotifNets<RunCtxImpl>>::new(
         &ws,
         &store,
         run_config_ids,

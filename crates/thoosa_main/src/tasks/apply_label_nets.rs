@@ -55,10 +55,10 @@ where
 /// scores (Model1ForLabelA, Model2ForLabelA, ...), not a per-label aggregate.
 /// This can be used both for applying models for various labels or many different models for same label (for final model or inference)
 #[derive(Debug, Cached, Named)]
-pub struct ApplyLabelNets<C, AMN = ApplyCosine2DMotifNets<C>>
+pub struct ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     id: SynKey,
@@ -159,7 +159,7 @@ where
 impl<C, AMN> ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     pub async fn new_with_motif_nets_builder<R, F, Fut>(
@@ -185,7 +185,7 @@ where
 
         for (label, nets) in all_label_nets {
 
-            debug!("ApplyLabelNets::new: label={label:?} nets.len={}", nets.len());
+            debug!("ApplyLabelNets::new: label={label:?} nets.len={} nets={nets:?}", nets.len());
 
             for (train_label_net_run_config_id, label_net_params, net) in nets {
                 let label_nets = track_await(store.list_trained_nets(vec![train_label_net_run_config_id], None, None)).await?;
@@ -232,7 +232,7 @@ where
 impl<C, AMN> Stage for ApplyLabelNets<C, AMN>
 where
     C: RunCtx + Adjustable + 'static,
-    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
+    AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
     type Ctx = C;
@@ -332,7 +332,7 @@ where
         .into_iter()
         .collect::<Vec<_>>();
 
-        debug!("ApplyLabelNets::run: label_outputs stacked count={}", self.apply_nets.len());
+        debug!("ApplyLabelNets::run: label_outputs stacked label_output_order={label_output_order:?} count={}", self.apply_nets.len());
 
         let label_output_order = Arc::into_inner(label_output_order)
             .expect("ApplyLabelNets::run: label_output_order still shared")

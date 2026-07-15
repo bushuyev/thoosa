@@ -1,6 +1,6 @@
 use std::ops::Range;
 use std::sync::Arc;
-use log::info;
+use log::{debug, info};
 use parking_lot::RwLock;
 use tch::Device::Cpu;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
@@ -9,7 +9,7 @@ use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
-use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
+use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfig, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
@@ -30,8 +30,10 @@ use thoosa_shared::hyperparameter::FieldName;
 use thoosa_shared::val::NamedVal;
 use thoosa_store::Store;
 use tracing::Instrument;
+use thoosa_main::tasks::train_final_net::new_train_final_net;
 use thoosa_shared::tracked_await::track_await;
 
+#[derive(Debug)]
 pub enum FindAndSelect {
     #[allow(dead_code)]
     GridOnly{
@@ -47,7 +49,7 @@ pub enum FindAndSelect {
     }
 }
 
-
+#[derive(Debug)]
 pub(crate) struct AllConfigs {
     pub find_and_select: FindAndSelect,
 
@@ -72,6 +74,7 @@ pub(crate) async fn run_all(
     run_all_args: &RunAllArgs,
     all_config:AllConfigs
 ) -> Result<(), ThoError> {
+    debug!("run_all: run_all_args={run_all_args:?} all_config={all_config:?}");
 
     //gpt Build the input for FindMotifs: wrap resource config in DevicesWrap and allocate a fresh cache area.
     let find_motifs_input = Arc::new(track_await(ResourcesConfigInput::new(run_all_args.find_resource_config()?).check(&store)).await?);
@@ -85,7 +88,7 @@ pub(crate) async fn run_all(
     ).check(&store)).await?);
 
     //gpt Build the input for final net training: usually a higher-level resource config (e.g., logits inputs).
-    let _train_final_input = Arc::new(track_await(ResourcesConfigInput::new(
+    let train_final_input = Arc::new(track_await(ResourcesConfigInput::new(
         run_all_args.train_final_resource_config()).check(&store)).await?);
 
 
@@ -294,7 +297,7 @@ pub(crate) async fn run_all(
 
     info!("train label nets done: run_config_ids={train_label_nets_run_config_ids:?}");
 
-    /*
+
     ////////////////////////
 
     //gpt Pre-create context and shared handles for final-net stage construction.
@@ -304,14 +307,13 @@ pub(crate) async fn run_all(
     let loader_in_train_final = Arc::clone(&loader);
 
     //gpt Run a grid over final-net training configs; consumes label-net run ids and produces final models.
-    let _run_config_ids = run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
-        None,
+    let _run_config_ids = track_await(run_opt::</*Labeled,*/ _, _, TrainFinalNetRunConfig, _, _>(
         all_config.train_final_net_run_config_range_or_value,
         train_final_input,
         &ws,
         &store,
         async move |run_configs| {
-            new_train_final_net(
+            track_await(new_train_final_net(
                 train_label_nets_run_config_ids,
                 loader_in_train_final,
                 run_configs,
@@ -321,11 +323,11 @@ pub(crate) async fn run_all(
                 Arc::clone(&all_config.train_final_opt_config),
                 10, //TODO
                 run_all_args.selected_motif_nets_limit,
-            ).instrument(tracing::debug_span!("run_all/16", file = file!(), line = line!())).await.map(|v| Arc::new(v))
+            )).await.map(|v| Arc::new(v))
         },
         || root_ctx.branch(true),
-    ).instrument(tracing::debug_span!("run_all/17", file = file!(), line = line!())).await?;
-    */
+    )).await?;
+
 
     Ok(())
 }
@@ -631,7 +633,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        log::set_max_level(log::LevelFilter::Info   );
+        log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2);
 
         // let test_dir = Path::new("/tmp").join(cdt_for_dir());
@@ -739,7 +741,7 @@ mod tests {
             max_motif_net_loss: 0.4,
             selected_motif_nets_limit: None,
             motif_slices_step: 10,
-            with_plots: true,
+            with_plots: false,
             resolution: Resolution::Normal,
             labels: None,
         };
@@ -819,7 +821,7 @@ mod tests {
 
         /////////////////////train_motifs
         let common_training_args_for_motifs = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(50),
+            epochs: RangeOrValue::Value(3),
             batch_size: RangeOrValue::Value(10),
             // lr: RangeOrValue::Value(0.0001),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
@@ -833,7 +835,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(100),
+            epochs: RangeOrValue::Value(10),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -846,7 +848,7 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(150),
+            epochs: RangeOrValue::Value(10),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -911,9 +913,9 @@ mod tests {
             train_motif_nets_run_config_range_or_value,
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
-            train_motifs_opt_config:Arc::new(OptConfig::new(60, 10)),
-            train_labels_opt_config: Arc::new(OptConfig::new(60, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(60, 10)),
+            train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
+            train_labels_opt_config: Arc::new(OptConfig::new(10, 3)),
+            train_final_opt_config: Arc::new(OptConfig::new(10, 3)),
         }
     }
 
@@ -940,7 +942,7 @@ mod tests {
     fn run_all_find_motifs_config_test_1<P: FieldName + 'static>() -> FindMotifsRunConfigRangeOrValue<P> {
         FindMotifsRunConfigRangeOrValue {
             id: None,
-            step: RangeOrValue::Value(1),
+            step: RangeOrValue::Value(10),
             window: RangeOrValue::Value(100),
             freq_filter: Some(vec![BandPassFilter(BandPassFilterParamsRangeOrValue {
                 low_hz: RangeOrValue::Range { range: Range { start: 0., end: 100. }, step: Some((10., 1)) },
@@ -952,7 +954,7 @@ mod tests {
             finder_kind: FinderKindRangeOrValue::CrossLoader(CrossLoaderRunConfigRangeOrValue {
                 similarity_metric: SimilarityMetricRangeOrValue::EucDist(EucDistConfigRangeOrValue { z_normalize: RangeOrValue::Value(false) }),
                 slices_filter: SlicesFilterRangeOrValue::Precalculate(PrecalculateStatsRangeOrValue {
-                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.05) }),
+                    aggr: AggrRangeOrValue::Quantile(QuantileAggrRangeOrValue { q: RangeOrValue::Value(0.01) }),
                     slices: RangeOrValue::Value(100),
                 }),
             }),
