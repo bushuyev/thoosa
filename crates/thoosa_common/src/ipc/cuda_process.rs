@@ -186,6 +186,7 @@ impl WorkerCopyErrorPayload {
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="encode_worker_copy_error"))]
 pub(crate) fn encode_worker_copy_error(error: &ThoError) -> String {
     let payload = WorkerCopyErrorPayload::from_error(error);
     match serde_json::to_string(&payload) {
@@ -219,19 +220,15 @@ pub(crate) struct WorkerD2hStartPayload {
 }
 
 pub(crate) struct WorkerCudaResources {
-    _context: Arc<ThoCudaContext>,
     stream_pool: Arc<Pool<ThoCudaStream>>,
 }
 
 impl WorkerCudaResources {
     fn new(cuda_device: usize) -> Result<Self, ThoError> {
-        let context = Arc::new(ThoCudaContext::new(cuda_device as i32)?);
-        context.bind_to_thread()?;
         let streams = (0..WORKER_COPY_STREAMS)
             .map(|_| ThoCudaStream::from_pool(cuda_device as i32, true))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
-            _context: context,
             stream_pool: Arc::new(Pool::from_iter(streams)),
         })
     }
@@ -447,6 +444,7 @@ fn encode_binary_response_frame(id: u64, prefix: &[u8], payload: &[u8]) -> Vec<u
     frame
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="describe_worker_tensor"))]
 pub(crate) async fn describe_worker_tensor(
     all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
     tensor_key: u64,
@@ -467,6 +465,7 @@ pub(crate) async fn describe_worker_tensor(
     })
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="worker_role_cuda_device"))]
 fn worker_role_cuda_device(role: &IpcProcessRole, context: &str) -> Result<usize, ThoError> {
     let IpcProcessRole::Worker { worker_id } = role else {
         return Err(ThoError::new(format!("{context} must be worker, got {role:?}")));
@@ -511,6 +510,7 @@ pub(crate) fn validate_worker_d2h_chunk(chunk: &WorkerD2hChunk) -> Result<usize,
     worker_d2h_cuda_device(&chunk.metadata)
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="get_or_create_worker_cuda_resources"))]
 pub(crate) fn get_or_create_worker_cuda_resources(
     resources: &mut HashMap<usize, Arc<WorkerCudaResources>>,
     cuda_device: usize,
@@ -545,6 +545,7 @@ pub(crate) fn prepare_worker_h2d_transfer(
     Ok(PendingWorkerH2dTransfer::new_preflight(start.transfer_id, destination))
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_worker_h2d_transfer_to_cuda"))]
 fn copy_worker_h2d_transfer_to_cuda(
     mut transfer: PendingWorkerH2dTransfer,
     stream: Guard<ThoCudaStream>,
@@ -568,7 +569,6 @@ fn copy_worker_h2d_transfer_to_cuda(
         return Err(ThoError::new(format!("H2D transfer {} copied {expected_offset} bytes but tensor has {} bytes", metadata.transfer_id, metadata.tensor_byte_len)));
     }
 
-    let _thread_context = ThoCudaContext::new(stream.device())?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
     let destination = match transfer.destination.take() {
         Some(destination) => {
@@ -595,9 +595,9 @@ fn copy_worker_h2d_transfer_to_cuda(
             tho_cu_memcpy_htod_async(destination_offset, source.cast::<c_void>(), chunk.metadata.byte_len, stream.as_mut_ptr())
         };
         check_cuda_status(result, "cuMemcpyHtoDAsync(worker memfd chunk)")?;
-
+        stream.synchronize()?;
     }
-    stream.synchronize()?;
+
 
     let copied_cpu = destination.f_to_device(Cpu)?;
     let copied_digest = with_digest.then(||tensor_digest(&copied_cpu)).transpose()?;
@@ -637,6 +637,7 @@ pub(crate) fn spawn_worker_h2d_copy_task(
     });
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_worker_d2h_transfer_to_memfd"))]
 fn copy_worker_d2h_transfer_to_memfd(
     mut transfer: PendingWorkerD2hTransfer,
     stream: Guard<ThoCudaStream>,
@@ -676,7 +677,6 @@ fn copy_worker_d2h_transfer_to_memfd(
         return Err(ThoError::new(format!("D2H transfer {} copied {expected_offset} bytes but tensor has {} bytes", metadata.transfer_id, metadata.tensor_byte_len)));
     }
 
-    let _thread_context = ThoCudaContext::new(stream.device())?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
     let src_base = source.data_ptr() as u64;
     for chunk in &mut transfer.chunks {
@@ -693,8 +693,9 @@ fn copy_worker_d2h_transfer_to_memfd(
             tho_cu_memcpy_dtoh_async(destination.cast::<c_void>(), source_offset, chunk.metadata.byte_len, stream.as_mut_ptr())
         };
         check_cuda_status(result, "cuMemcpyDtoHAsync(worker memfd chunk)")?;
+        stream.synchronize()?;
     }
-    stream.synchronize()?;
+
 
     let source_cpu = source.f_to_device(Cpu)?;
     let source_digest = with_digest.then(||tensor_digest(&source_cpu)).transpose()?;
@@ -1647,6 +1648,7 @@ async fn reader_loop<R>(
     debug!("worker IPC reader loop finished");
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_wire_msg"))]
 pub(crate) fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
     let Some((id, payload)) = frame.split_once('\t') else {
         return Err(ThoError::new(format!("bad wire frame without request id separator: {frame:?}")));
@@ -1659,6 +1661,7 @@ pub(crate) fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
     Ok((id, payload.to_string()))
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_wire_response"))]
 fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload), ThoError> {
     let separator = frame.iter().position(|byte| *byte == b'\t')
         .ok_or_else(|| ThoError::new("bad wire response without request id separator"))?;
@@ -1678,6 +1681,9 @@ fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload),
     }
 }
 
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_copy_done_payload"))]
+
 fn parse_worker_copy_done_payload(payload: &str) -> Result<WorkerCopyDonePayload, ThoError> {
     if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
         return Err(parse_worker_copy_error_payload(error));
@@ -1688,6 +1694,8 @@ fn parse_worker_copy_done_payload(payload: &str) -> Result<WorkerCopyDonePayload
         .map_err(|e| ThoError::new(format!("failed to parse worker copy response: {e}")))
 }
 
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_h2d_start_preflight_reply"))]
 fn parse_worker_h2d_start_preflight_reply(payload: &str) -> Result<(), ThoError> {
     if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
         return Err(parse_worker_copy_error_payload(error));
@@ -1699,6 +1707,8 @@ fn parse_worker_h2d_start_preflight_reply(payload: &str) -> Result<(), ThoError>
     }
 }
 
+
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_tensor_info_payload"))]
 fn parse_worker_tensor_info_payload(payload: &str) -> Result<WorkerTensorInfoPayload, ThoError> {
     if let Some(error) = payload.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
         return Err(parse_worker_copy_error_payload(error));
@@ -1710,6 +1720,7 @@ fn parse_worker_tensor_info_payload(payload: &str) -> Result<WorkerTensorInfoPay
         .map_err(|e| ThoError::new(format!("failed to parse worker tensor info response: {e}")))
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_worker_copy_error_payload"))]
 fn parse_worker_copy_error_payload(payload: &str) -> ThoError {
     match serde_json::from_str::<WorkerCopyErrorPayload>(payload) {
         Ok(error) => error.into_error(),
@@ -1722,6 +1733,7 @@ struct ParentD2hChunk {
     buffer: Guard<SharedMemfdBuffer>,
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="assemble_parent_d2h_chunks"))]
 fn assemble_parent_d2h_chunks(
     mut chunks: Vec<ParentD2hChunk>,
     info: &WorkerTensorInfoPayload,
@@ -1845,6 +1857,7 @@ async fn fail_all_pending(
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="encode_wire_frame"))]
 fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8>, ThoError> {
     let mut frame = format!("{id}\t").into_bytes();
     match payload {

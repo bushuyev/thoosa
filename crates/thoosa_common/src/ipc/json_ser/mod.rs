@@ -55,14 +55,17 @@ impl SyncStageIpcConsumeResponse {
 }
 
 pub trait SyncStageIpcWrapper:Debug {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run"))]
     fn do_run(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError> {
         Err(ThoError::new("IPC endpoint does not support do_run"))
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
     fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
         self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::consume_response"))]
     fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         Err(ThoError::new("IPC endpoint does not support consume"))
     }
