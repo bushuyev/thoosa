@@ -26,7 +26,6 @@ use thoosa_shared::{cuda_activity_gate, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use crate::dims::Dims;
-use crate::ipc::cuda_process::DeviceInfo;
 use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
 use crate::runner::common::RunCtx;
 use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
@@ -620,10 +619,9 @@ impl CopyCtx {
         CopyCtx::new(cuda_device, mem_k, buffs)
     }
 
-    pub(crate) fn make_ipc_instance_for_cuda_device(cuda_device: usize, mem_k: f64, buffs: usize, device_info: &DeviceInfo) -> CopyCtx {
-        debug!("make_ipc_instance_for_cuda_device: mem_k={mem_k} buffs={buffs}");
-
-        let buf_size = Self::clc_buff_size(cuda_device, mem_k, buffs, device_info.total_mem);
+    pub(crate) fn make_ipc_instance_for_cuda_device(cuda_device: usize, buffs: usize, buf_size: usize) -> CopyCtx {
+        // IPC staging memory is host memory, so its size must not scale with GPU VRAM. A fixed bound also limits mmap size and the maximum range CUDA may page-lock per chunk.
+        debug!("make_ipc_instance_for_cuda_device: buffs={buffs} buf_size={buf_size}");
         Self::new_with_buf_size_inner(cuda_device, buffs, buf_size, true)
     }
 
