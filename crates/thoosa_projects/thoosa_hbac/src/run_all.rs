@@ -615,6 +615,7 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::tch_test_utils::{resource_tensor_two_easy_motifs, Interval};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -744,7 +745,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn heavy_test_run_all__() -> Result<(), ThoError> {
+    async fn heavy_test_run_all_local() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -758,59 +759,6 @@ mod tests {
         result
     }
 
-    pub fn run_ipc_test<'f, FM, FW>(main_f:FM, worker_f:FW) -> Result<(), ThoError>
-    where
-        FM:Future<Output=Result<(), ThoError>>,
-        FW:AsyncFn(OsString)->Result<(), ThoError>,
-    {
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            let worker_rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(8)
-                .enable_all()
-                .on_thread_start(|| {
-                    if let Err(err) = ThoCudaContext::new(0) {
-                        panic!("Failed to create context: {err:?}"); //TODO device
-                    }
-                })
-                .thread_name_fn(|| {
-                    static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
-                    let id = TOKIO_THREAD_ID.fetch_add(1, Ordering::Relaxed);
-                    format!("test-cuda-worker-{id}")
-                })
-                .build()?;
-
-            worker_rt.block_on(async {
-                let r = worker_f(sock_path).await;
-
-                info!("\n{}", format_perf_map(&PERF));
-                info!("worker done: r={r:?}");
-
-                Ok::<_, ThoError>(())
-            })?;
-
-        } else {
-            let main_rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(8)
-                .enable_all()
-                .thread_name_fn(|| {
-                    static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
-                    let id = TOKIO_THREAD_ID.fetch_add(1, Ordering::Relaxed);
-                    format!("test-main-{id}")
-                })
-                .build()?;
-
-            main_rt.block_on(async {
-                let r = main_f.await;
-
-                info!("\n{}", format_perf_map(&PERF));
-                info!("main done: r={r:?}");
-
-                Ok::<_, ThoError>(())
-            })?;
-        }
-
-        Ok(())
-    }
 
     #[test]
     fn heavy_test_run_all_ipc() -> Result<(), ThoError> {

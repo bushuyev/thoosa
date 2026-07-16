@@ -227,20 +227,6 @@ pub(crate) struct WorkerCudaResources {
     stream_pool: Arc<Pool<ThoCudaStream>>,
 }
 
-std::thread_local! {
-    // Tokio blocking-pool threads are reused, so retain one primary CUDA context per device on each thread instead of retaining and releasing it for every tensor chunk.
-    static WORKER_COPY_CUDA_CONTEXTS: RefCell<HashMap<usize, ThoCudaContext>> = RefCell::new(HashMap::new());
-}
-
-fn bind_worker_copy_cuda_context(cuda_device: usize) -> Result<(), ThoError> {
-    WORKER_COPY_CUDA_CONTEXTS.try_with(|contexts| {
-        let mut contexts = contexts.borrow_mut();
-        if !contexts.contains_key(&cuda_device) {
-            contexts.insert(cuda_device, ThoCudaContext::new(cuda_device as i32)?);
-        }
-        contexts.get(&cuda_device).expect("worker copy CUDA context was just inserted").bind_to_thread()
-    }).map_err(|_| ThoError::new("worker copy CUDA context thread-local is unavailable"))?
-}
 
 fn validate_ipc_chunk_capacity(chunk_count: usize, label: &str) -> Result<(), ThoError> {
     if chunk_count > IPC_COPY_BUFFERS {
@@ -590,7 +576,7 @@ fn copy_worker_h2d_transfer_to_cuda_blocking(
 ) -> Result<(u64, Tensor, Option<String>), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("H2D transfer {} has no metadata", transfer.request_id)))?.clone();
     let cuda_device = worker_cuda_device(&metadata)?;
-    bind_worker_copy_cuda_context(cuda_device)?;
+    // bind_worker_copy_cuda_context(cuda_device)?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
 
     transfer.chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
@@ -688,7 +674,7 @@ fn copy_worker_d2h_transfer_to_memfd_blocking(
 ) -> Result<(u64, Option<String>), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("D2H transfer {} has no metadata", transfer.request_id)))?.clone();
     let cuda_device = worker_d2h_cuda_device(&metadata)?;
-    bind_worker_copy_cuda_context(cuda_device)?;
+    // bind_worker_copy_cuda_context(cuda_device)?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
     if source.kind() != metadata.tch_kind() {
         return Err(ThoError::new(format!("worker tensor key={} kind {:?} does not match D2H metadata {:?}", transfer.tensor_key, source.kind(), metadata.kind)));
@@ -2242,7 +2228,7 @@ mod tests {
     use crate::ipc::cuda_process::{encode_endpoint_payload, read_text_frame, write_text_frame, CudaIPCActor, DeviceInfo, IPC_SOCK_ENV};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
-    use crate::ipc::tests::init_ipc_test;
+    use crate::ipc::tests::{init_ipc_test, run_ipc_test};
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
@@ -2344,13 +2330,10 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker_propagates_oom() -> Result<(), ThoError>{
-        debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await
-        } else {
+    #[test]
+    fn test_copy_ipc_cuda_worker_propagates_oom() -> Result<(), ThoError>{
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(async {
             init_ipc_test("test_copy_ipc_cuda_worker_propagates_oom", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
@@ -2398,14 +2381,11 @@ mod tests {
             debug!("All ok");
 
             Ok(())
-
-        }
-
-
+        }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_unrecoverable_cuda_error() -> Result<(), ThoError> {
+    #[test]
+    fn test_copy_ipc_unrecoverable_cuda_error() -> Result<(), ThoError> {
         debug!("test_copy_ipc_cuda_worker_propagates_oom, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
 
         #[derive(Debug)]
@@ -2426,25 +2406,8 @@ mod tests {
             }
         }
 
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-
-            let r= CudaWorker::run_worker(
-            sock_path,
-                HashMap::from([
-                            (
-                                "test_copy_ipc_unrecoverable_cuda_error".to_string(),
-                                Box::new(|_s|{
-                                    debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper>)
-                                }) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
-                            )
-                ]),
-               ThoDevice::from(Cuda(0))
-            ).await;
-
-            debug!("test_copy_ipc_cuda_worker_propagates_oom: run_worker r={r:?}");
-
-        } else {
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(async {
             init_ipc_test("test_copy_ipc_unrecoverable_cuda_error", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
@@ -2465,24 +2428,33 @@ mod tests {
 
                 GlobalCtx::global().cuda_actor(tho_device_idx).reset().await?;
 
-
                 Ok::<(), ThoError>(())
             }.await?;
 
             debug!("test_copy_ipc_cuda_worker_propagates_oom: result={result:?}");
-        }
-
-        Ok(())
+            Ok(())
+        }, async |sock_path| {
+            CudaWorker::run_worker(
+                sock_path,
+                HashMap::from([
+                            (
+                                "test_copy_ipc_unrecoverable_cuda_error".to_string(),
+                                Box::new(|_s|{
+                                    debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
+                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper>)
+                                }) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                            )
+                ]),
+                ThoDevice::from(Cuda(0)),
+            ).await
+        })
     }
 
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
-    async fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
-        debug!("test_copy_ipc_cuda_worker_once, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await
-        } else  {
+    #[test]
+    fn heavy_copy_ipc_cuda_worker_once() -> Result<(), ThoError>{
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(async {
             init_ipc_test("heavy_copy_ipc_cuda_worker_once", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
@@ -2494,20 +2466,13 @@ mod tests {
             cuda_actor.shutdown().await?;
 
             Ok(())
-        }
+        }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_copy_ipc_cuda_worker_ok() -> Result<(), ThoError> {
-        debug!("test_cuda_process, IPC_SOCK_ENV={:?}",std::env::var_os(IPC_SOCK_ENV));
-
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await?;
-
-            info!("worker: \n{}", format_perf_map(&PERF));
-            Ok(())
-
-        } else {
+    #[test]
+    fn test_copy_ipc_cuda_worker_ok() -> Result<(), ThoError> {
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(async {
             init_ipc_test("test_copy_ipc_cuda_worker_ok", pure_module_path!()).await?;
 
             let tho_device_idx = 1;
@@ -2559,7 +2524,7 @@ mod tests {
             info!("main: \n{}", format_perf_map(&PERF));
 
             Ok(())
-        }
+        }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
     }
 
 }
