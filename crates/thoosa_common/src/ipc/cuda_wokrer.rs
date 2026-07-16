@@ -37,6 +37,7 @@ use crate::tho_tensor::ThoTensor;
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1 << 63);
 
+//1 cuda device per worker
 pub struct CudaWorker;
 
 
