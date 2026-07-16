@@ -1,5 +1,5 @@
 use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
-use crate::ipc::ipc_cuda_utils::{SharedMemfdBuffer, ipc_copy_h2d_from_ptr};
+use crate::ipc::ipc_cuda_utils::{SharedMemfdBuffer};
 use async_trait::async_trait;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -689,33 +689,6 @@ impl CopyCtx {
 
         t
     }
-
-    // pub async fn ipc_copy_from_ptr(
-    //     &self,
-    //     src_ptr: usize,
-    //     src_size: &[i64],
-    //     dst_tho_device_idx: usize,
-    //     kind: Kind,
-    // ) -> Result<Tensor, ThoError> {
-    //     if dst_tho_device_idx == 0 {
-    //         track_await(ipc_copy_d2h_from_ptr(
-    //             kind,
-    //             self.buf_size,
-    //             self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool"),
-    //             src_ptr,
-    //             src_size,
-    //         )).await
-    //     } else {
-    //         track_await(ipc_copy_h2d_from_ptr(
-    //             kind,
-    //             self.buf_size,
-    //             self.ipc_bufs_pool.as_ref().expect("no ipc_bufs_pool"),
-    //             dst_tho_device_idx,
-    //             src_ptr,
-    //             src_size,
-    //         )).await
-    //     }
-    // }
 
     pub fn buf_size(&self) -> usize {
         self.buf_size
