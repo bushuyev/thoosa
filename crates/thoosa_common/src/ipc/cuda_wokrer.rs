@@ -411,12 +411,14 @@ impl CudaWorker {
 
                         let stream = exec_stream_pool.acquire().await;
                         let producer_tx = chunks_tx.clone();
-                        let serialization_result = match tokio::task::spawn_blocking(move || {
+                        let serialization_result = tokio::task::spawn_blocking(move || {
                             let mut output = IpcChunkWriter::new(producer_tx);
                             panic_to_err!({
+
                                 let _guard = ThoStreamGuard::new(&stream)?;
                                 let response_result = response.write_to(&mut output);
                                 let sync_result = stream.synchronize();
+
                                 match (response_result, sync_result) {
                                     (Ok(()), Ok(())) => Ok(()),
                                     (Err(error), Ok(())) => Err(error),
@@ -425,10 +427,8 @@ impl CudaWorker {
                                     (Err(error), Err(_)) => Err(error),
                                 }
                             })
-                        }).await {
-                            Ok(result) => result,
-                            Err(error) => Err(ThoError::new(format!("worker binary response serializer task failed: {error}"))),
-                        };
+                        }).await.unwrap_or_else(|error| Err(ThoError::new(format!("worker binary response serializer task failed: {error}"))));
+
                         let serialization_succeeded = serialization_result.is_ok();
                         if let Err(error) = serialization_result {
                             let _ = chunks_tx.send(Err(error)).await;

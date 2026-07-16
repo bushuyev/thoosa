@@ -744,7 +744,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn heavy_test_run_all() -> Result<(), ThoError> {
+    async fn heavy_test_run_all__() -> Result<(), ThoError> {
         unsafe {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
@@ -753,6 +753,8 @@ mod tests {
         let global_ctx = GlobalCtx::init_devices(2);
         let result = run_heavy_test_run_all("heavy_test_run_all").await;
         global_ctx.shutdown().await;
+
+        info!("\n{}", format_perf_map(&PERF));
         result
     }
 

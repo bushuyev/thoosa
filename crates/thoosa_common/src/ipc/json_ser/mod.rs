@@ -31,6 +31,7 @@ impl SyncStageIpcStreamResponse {
         Self { write: Some(Box::new(write)) }
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcStreamResponse::write_to"))]
     pub(crate) fn write_to(mut self, output: &mut dyn Write) -> Result<(), ThoError> {
         self.write.take().ok_or_else(|| ThoError::new("IPC stream response writer already consumed"))?(output)
     }
