@@ -1720,9 +1720,9 @@ mod tests {
     use thoosa_common::tch_test_utils::resource_tensor;
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_common::dims::MotifSlices;
-    use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+    use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::my_tch::MotifInitModeFields;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -1883,17 +1883,10 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_motif_nets_ipc() -> Result<(), ThoError> {
-        debug!("test_train_motif_nets_ipc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            CudaWorker::run_worker(
-                sock_path,
-                train_motif_step_endpoint_inits(),
-                ThoDevice::from(Cuda(0)),
-            ).await?;
-        } else {
+    #[test]
+    fn test_train_motif_nets_ipc() -> Result<(), ThoError> {
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(async {
             let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
             let test_name = format!("{module}::test_train_motif_nets_ipc");
             GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
@@ -1902,32 +1895,17 @@ mod tests {
             let result = run_train_motif_nets().await;
             let shutdown_result = cuda_actor.shutdown().await;
             match (result, shutdown_result) {
-                (Ok(()), Ok(())) => (),
-                (Err(error), _) => return Err(error),
-                (Ok(()), Err(error)) => return Err(error),
+                (Ok(()), Ok(())) => Ok(()),
+                (Err(error), _) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
             }
-        }
-        Ok(())
+        }, async |sock_path| { CudaWorker::run_worker(sock_path, train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-    async fn test_train_step_ipc() -> Result<(), ThoError> {
-        debug!("test_train_step_ipc, IPC_SOCK_ENV={:?}", std::env::var_os(IPC_SOCK_ENV));
-
-        if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            CudaWorker::run_worker(
-                sock_path,
-                HashMap::from([
-                    (
-                        TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
-                        Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
-                    ),
-
-                ])
-                ,
-                ThoDevice::from(Cuda(0)),
-            ).await?;
-        } else {
+    #[test]
+    fn test_train_step_ipc() -> Result<(), ThoError> {
+        // Use the shared harness so the main and CUDA worker processes get identical runtime setup.
+        run_ipc_test(async {
             let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
             let test_name = format!("{module}::test_train_step_ipc");
             GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
@@ -1982,9 +1960,6 @@ mod tests {
                 TrainStepDynSyncStage::Local(_) => panic!("expected IPC TrainStep proxy"),
             };
 
-
-
-
             let input = TrainStepInput::<Slice, MotifProbability>::new(
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
                 None,
@@ -2005,8 +1980,21 @@ mod tests {
             shutdown_result?;
             assert_eq!(var_store.device(), tch::Device::Cpu);
             assert!(!var_store.is_empty());
-        }
-        Ok(())
+            Ok(())
+        }, async |sock_path| {
+            CudaWorker::run_worker(
+                sock_path,
+                HashMap::from([
+                    (
+                        TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
+                        Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                    ),
+
+                ])
+                ,
+                ThoDevice::from(Cuda(0)),
+            ).await
+        })
     }
 
     fn to_tho_tensor<D>(inner: ThoTensorInner, id: String) -> ThoTensor<D, SimpleId>
