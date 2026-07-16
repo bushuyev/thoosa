@@ -48,7 +48,7 @@ fn join_error_to_tho_error(error: JoinError) -> ThoError {
     }.into()
 }
 
-fn page_aligned_len(len: usize) -> Result<usize, ThoError> {
+fn host_page_size() -> Result<usize, ThoError> {
     let page_size = unsafe {
         // SAFETY: sysconf has no pointer arguments and does not retain process state.
         libc::sysconf(libc::_SC_PAGESIZE)
@@ -56,7 +56,11 @@ fn page_aligned_len(len: usize) -> Result<usize, ThoError> {
     if page_size <= 0 {
         return Err(io::Error::last_os_error().into());
     }
-    let page_size = page_size as usize;
+    Ok(page_size as usize)
+}
+
+fn page_aligned_len(len: usize) -> Result<usize, ThoError> {
+    let page_size = host_page_size()?;
     let len = len.max(1);
     len.checked_add(page_size - 1)
         .map(|len| len / page_size * page_size)
@@ -198,6 +202,19 @@ impl SharedMemfdBuffer {
     fn checked_mut_ptr(&mut self, offset: usize, byte_len: usize) -> Result<*mut u8, ThoError> {
         self.checked_ptr(offset, byte_len).map(|ptr| ptr.cast_mut())
     }
+
+    fn cuda_registration_range(&self, offset: usize, byte_len: usize) -> Result<(*const u8, usize), ThoError> {
+        if byte_len == 0 {
+            return Err(invalid("cannot register an empty shared buffer range"));
+        }
+        self.checked_ptr(offset, byte_len)?;
+        let page_size = host_page_size()?;
+        let requested_end = offset.checked_add(byte_len).ok_or_else(|| invalid("shared buffer registration range overflow"))?;
+        let registration_offset = offset / page_size * page_size;
+        let registration_end = requested_end.checked_add(page_size - 1).map(|end| end / page_size * page_size).ok_or_else(|| invalid("shared buffer registration alignment overflow"))?;
+        let registration_len = registration_end.checked_sub(registration_offset).ok_or_else(|| invalid("shared buffer registration range underflow"))?;
+        Ok((self.checked_ptr(registration_offset, registration_len)?, registration_len))
+    }
 }
 
 // The mapping and fd have stable ownership and may move between threads. Shared
@@ -231,12 +248,13 @@ pub struct CuMemHostRegistrationGuard<'a> {
 }
 
 impl<'a> CuMemHostRegistrationGuard<'a> {
-    pub fn new(buffer: &'a SharedMemfdBuffer) -> Result<Self, ThoError> {
-        let ptr = NonNull::new(buffer.as_ptr().cast_mut().cast::<c_void>()).ok_or_else(|| invalid("cannot register a null mmap pointer"))?;
+    pub fn new(buffer: &'a SharedMemfdBuffer, offset: usize, byte_len: usize) -> Result<Self, ThoError> {
+        // Register only the chunk range used by this transfer. Registering the full staging mapping for every small tensor made CUDA repeatedly page-lock hundreds of unused MiB.
+        let (registration_ptr, registration_len) = buffer.cuda_registration_range(offset, byte_len)?;
+        let ptr = NonNull::new(registration_ptr.cast_mut().cast::<c_void>()).ok_or_else(|| invalid("cannot register a null mmap pointer"))?;
         let result = unsafe {
-            // SAFETY: the mmap is live, writable, page-aligned, and remains alive
-            // through the guard lifetime. The current thread owns a current context.
-            tho_cu_mem_host_register(ptr.as_ptr(), buffer.len(), CU_MEMHOSTREGISTER_PORTABLE)
+            // SAFETY: cuda_registration_range returned the page-aligned mmap range covering the requested bytes, and the mapping remains alive through the guard lifetime. The current thread owns a current context.
+            tho_cu_mem_host_register(ptr.as_ptr(), registration_len, CU_MEMHOSTREGISTER_PORTABLE)
         };
         check_cuda_status(result, "cuMemHostRegister")?;
         Ok(Self { ptr, _buffer: PhantomData })
@@ -759,6 +777,20 @@ mod tests {
     const TEST_SOCKET_ENV: &str = "THOOSA_MEMFD_COPY_TEST_SOCKET";
     const TEST_MODE_ENV: &str = "THOOSA_MEMFD_COPY_TEST_MODE";
     const TEST_FRAME_MAX: usize = 16 * 1024 * 1024;
+
+    #[test]
+    fn test_cuda_registration_range_covers_only_requested_pages() -> Result<(), ThoError> {
+        let page_size = host_page_size()?;
+        let buffer = SharedMemfdBuffer::create(1, page_size * 3)?;
+        let (ptr, len) = buffer.cuda_registration_range(page_size - 8, 16)?;
+        assert_eq!(ptr, buffer.as_ptr());
+        assert_eq!(len, page_size * 2);
+
+        let (ptr, len) = buffer.cuda_registration_range(page_size + 17, 1)?;
+        assert_eq!(ptr as usize, buffer.as_ptr() as usize + page_size);
+        assert_eq!(len, page_size);
+        Ok(())
+    }
 
     async fn write_frame(stream: &mut UnixStream, payload: &[u8]) -> Result<(), ThoError> {
         if payload.len() > u32::MAX as usize {
