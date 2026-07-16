@@ -84,6 +84,7 @@ fn main() -> Result<(), ThoError> {
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .on_thread_start(|| {
+            //TODO enable if not in ipc mode
             //runs cuCtxSetCurrent
             // if let Err(err) = ThoCudaContext::new(0) {
             //     panic!("Failed to create context: {err:?}"); //TODO device

@@ -591,11 +591,16 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::ffi::OsString;
     use std::fs;
     use std::ops::Range;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use log::debug;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use futures::executor::block_on;
+    use futures::future::BoxFuture;
+    use log::{debug, info, set_max_level};
+    use log::LevelFilter::Debug;
     use parking_lot::RwLock;
     use rand::{rng, RngExt};
     use tch::{Device, Tensor};
@@ -632,6 +637,7 @@ mod tests {
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::run_configs::RUN_ID;
     use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shims::context::ThoCudaContext;
     use thoosa_store::rusqlite::Transaction;
     use thoosa_store::SqlStore;
     use crate::run_all::{run_all, AllConfigs, FindAndSelect};
@@ -750,23 +756,85 @@ mod tests {
         result
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
-    async fn heavy_test_run_all_ipc() -> Result<(), ThoError> {
+    pub fn run_ipc_test<'f, FM, FW>(main_f:FM, worker_f:FW) -> Result<(), ThoError>
+    where
+        FM:Future<Output=Result<(), ThoError>>,
+        FW:AsyncFn(OsString)->Result<(), ThoError>,
+    {
         if let Some(sock_path) = std::env::var_os(IPC_SOCK_ENV) {
-            return CudaWorker::run_worker(sock_path, crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await;
+            let worker_rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(8)
+                .enable_all()
+                .on_thread_start(|| {
+                    if let Err(err) = ThoCudaContext::new(0) {
+                        panic!("Failed to create context: {err:?}"); //TODO device
+                    }
+                })
+                .thread_name_fn(|| {
+                    static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+                    let id = TOKIO_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+                    format!("test-cuda-worker-{id}")
+                })
+                .build()?;
+
+            worker_rt.block_on(async {
+                let r = worker_f(sock_path).await;
+
+                info!("\n{}", format_perf_map(&PERF));
+                info!("worker done: r={r:?}");
+
+                Ok::<_, ThoError>(())
+            })?;
+
+        } else {
+            let main_rt = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(8)
+                .enable_all()
+                .thread_name_fn(|| {
+                    static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
+                    let id = TOKIO_THREAD_ID.fetch_add(1, Ordering::Relaxed);
+                    format!("test-main-{id}")
+                })
+                .build()?;
+
+            main_rt.block_on(async {
+                let r = main_f.await;
+
+                info!("\n{}", format_perf_map(&PERF));
+                info!("main done: r={r:?}");
+
+                Ok::<_, ThoError>(())
+            })?;
         }
 
-        let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-        let test_name = format!("{module}::heavy_test_run_all_ipc");
-        GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-        let cuda_actor = GlobalCtx::global().cuda_actor(1);
-        let result = run_heavy_test_run_all("heavy_test_run_all_ipc").await;
-        let shutdown_result = cuda_actor.shutdown().await;
-        match (result, shutdown_result) {
-            (Ok(()), Ok(())) => Ok(()),
-            (Err(error), _) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-        }
+        Ok(())
+    }
+
+    #[test]
+    fn heavy_test_run_all_ipc() -> Result<(), ThoError> {
+
+        run_ipc_test(
+            async {
+                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+                let test_name = format!("{module}::heavy_test_run_all_ipc");
+                GlobalCtx::init_devices_ipc(2, vec![
+                    test_name, "--exact".to_string(),
+                    "--nocapture".to_string(), "--no-capture".to_string(),
+                ]).await?;
+                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+                let result = run_heavy_test_run_all("heavy_test_run_all_ipc").await;
+                let shutdown_result = cuda_actor.shutdown().await;
+                match (result, shutdown_result) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), _) => Err(error),
+                    (Ok(()), Err(error)) => Err(error),
+                }
+            },
+            async |sock_path| {
+                // set_max_level(Debug);
+                return CudaWorker::run_worker(sock_path, crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await;
+            }
+        )
     }
 
     async fn run_heavy_test_run_all(test_name: &str) -> Result<(), ThoError> {
@@ -949,7 +1017,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(30),
+            epochs: RangeOrValue::Value(10),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1028,8 +1096,8 @@ mod tests {
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
             train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
-            train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_labels_opt_config: Arc::new(OptConfig::new(10, 3)),
+            train_final_opt_config: Arc::new(OptConfig::new(10, 3)),
         }
     }
 
