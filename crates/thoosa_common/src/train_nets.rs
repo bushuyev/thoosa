@@ -2031,6 +2031,7 @@ fn opt_param_alt_value<P: FieldName>(hp: &Hyperparameter<P>) -> Option<Val> {
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="opt_train"))]
 pub async fn opt_train<P, R, F, N: Debug + Default>(
     opt_config: Arc<OptConfig>, //N node parameters
     mut train: F,

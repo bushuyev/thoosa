@@ -64,7 +64,7 @@ pub(crate) const D2H_START_PAYLOAD_PREFIX: &str = "d2h-start:";
 pub(crate) const INSTALL_ENDPOINT_PREFIX: &str = "install_endpoint:";
 pub(crate) const INVOKE_ENDPOINT_PREFIX: &str = "invoke_endpoint:";
 pub(crate) const CONSUME_ENDPOINT_PREFIX: &str = "consume_endpoint:";
-const WORKER_COPY_STREAMS: usize = 16;
+const WORKER_COPY_STREAMS: usize = 32;
 pub(crate) const H2D_START_OK_PAYLOAD: &str = "h2d-start-ok";
 pub(crate) const DEFAULT_ENDPOINT_NAME: &str = "SyncClcTask";
 pub(crate) const ENDPOINT_OK_PAYLOAD: &str = "endpoint-ok";
@@ -72,7 +72,7 @@ pub(crate) const DROP_THO_TENSOR: &str = "drop_tho_tensor:";
 const ENDPOINT_BYTES_PAYLOAD_PREFIX: &str = "endpoint-bytes:";
 const BINARY_RESPONSE_CHUNK_PREFIX: &[u8] = b"binary-response-chunk:";
 const BINARY_RESPONSE_END_PAYLOAD: &[u8] = b"binary-response-end";
-const BINARY_RESPONSE_CHUNK_LEN: usize = 1024 * 1024;
+const BINARY_RESPONSE_CHUNK_LEN: usize = 10 * 1024 * 1024;
 
 pub(crate) fn encode_endpoint_payload(endpoint_name: &str, payload: &str) -> String {
     format!("{endpoint_name}\t{payload}")
@@ -546,16 +546,16 @@ pub(crate) fn prepare_worker_h2d_transfer(
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_worker_h2d_transfer_to_cuda"))]
-fn copy_worker_h2d_transfer_to_cuda(
+async fn copy_worker_h2d_transfer_to_cuda(
     mut transfer: PendingWorkerH2dTransfer,
-    stream: Guard<ThoCudaStream>,
+    resources: Arc<WorkerCudaResources>,
     with_digest: bool,
 ) -> Result<(u64, Tensor, Option<String>), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("H2D transfer {} has no metadata", transfer.request_id)))?.clone();
     let cuda_device = worker_cuda_device(&metadata)?;
-    if stream.device() != cuda_device as i32 {
-        return Err(ThoError::new(format!("worker copy stream device={} does not match cuda_device={cuda_device}", stream.device())));
-    }
+    // if stream.device() != cuda_device as i32 {
+    //     return Err(ThoError::new(format!("worker copy stream device={} does not match cuda_device={cuda_device}", stream.device())));
+    // }
 
     transfer.chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
     let mut expected_offset = 0usize;
@@ -569,7 +569,6 @@ fn copy_worker_h2d_transfer_to_cuda(
         return Err(ThoError::new(format!("H2D transfer {} copied {expected_offset} bytes but tensor has {} bytes", metadata.transfer_id, metadata.tensor_byte_len)));
     }
 
-    let _stream_guard = ThoStreamGuard::new(&stream)?;
     let destination = match transfer.destination.take() {
         Some(destination) => {
             if destination.kind() != metadata.tch_kind() || destination.size() != metadata.shape {
@@ -582,6 +581,9 @@ fn copy_worker_h2d_transfer_to_cuda(
     let dst_base = destination.data_ptr() as u64;
 
     for chunk in &transfer.chunks {
+        let stream = resources.stream_pool.acquire().await;
+        let _stream_guard = ThoStreamGuard::new(&stream)?;
+
         let source = unsafe {
             // SAFETY: metadata.validate_for_buffer was run before insertion and sort does not mutate buffer metadata.
             chunk.buffer.as_ptr().add(chunk.metadata.offset)
@@ -614,11 +616,7 @@ pub(crate) fn spawn_worker_h2d_copy_task(
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
-        let stream = resources.stream_pool.acquire().await;
-        let copy_result = tokio::task::spawn_blocking(move || copy_worker_h2d_transfer_to_cuda(transfer, stream, with_digest))
-            .await
-            .map_err(|e| ThoError::new(format!("worker H2D copy task join error: {e}")))
-            .and_then(|result| result);
+        let copy_result = copy_worker_h2d_transfer_to_cuda(transfer, resources, with_digest).await;
 
         let payload = match copy_result {
             Ok((transfer_id, tensor, tensor_digest_hex)) => {
@@ -638,17 +636,17 @@ pub(crate) fn spawn_worker_h2d_copy_task(
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_worker_d2h_transfer_to_memfd"))]
-fn copy_worker_d2h_transfer_to_memfd(
+async fn copy_worker_d2h_transfer_to_memfd(
     mut transfer: PendingWorkerD2hTransfer,
-    stream: Guard<ThoCudaStream>,
+    resources: Arc<WorkerCudaResources>,
     source: Tensor,
     with_digest: bool,
 ) -> Result<(u64, Option<String>), ThoError> {
     let metadata = transfer.metadata.as_ref().ok_or_else(|| ThoError::new(format!("D2H transfer {} has no metadata", transfer.request_id)))?.clone();
     let cuda_device = worker_d2h_cuda_device(&metadata)?;
-    if stream.device() != cuda_device as i32 {
-        return Err(ThoError::new(format!("worker D2H stream device={} does not match cuda_device={cuda_device}", stream.device())));
-    }
+    // if stream.device() != cuda_device as i32 {
+    //     return Err(ThoError::new(format!("worker D2H stream device={} does not match cuda_device={cuda_device}", stream.device())));
+    // }
     if source.kind() != metadata.tch_kind() {
         return Err(ThoError::new(format!("worker tensor key={} kind {:?} does not match D2H metadata {:?}", transfer.tensor_key, source.kind(), metadata.kind)));
     }
@@ -677,16 +675,20 @@ fn copy_worker_d2h_transfer_to_memfd(
         return Err(ThoError::new(format!("D2H transfer {} copied {expected_offset} bytes but tensor has {} bytes", metadata.transfer_id, metadata.tensor_byte_len)));
     }
 
-    let _stream_guard = ThoStreamGuard::new(&stream)?;
+
     let src_base = source.data_ptr() as u64;
     for chunk in &mut transfer.chunks {
+        let stream = resources.stream_pool.acquire().await;
+        let _stream_guard = ThoStreamGuard::new(&stream)?;
         let source_offset = src_base
             .checked_add(chunk.metadata.tensor_offset as u64)
             .ok_or_else(|| ThoError::new("D2H source pointer overflow"))?;
+
         let destination = unsafe {
             // SAFETY: validate_worker_d2h_chunk checked offset + byte_len against the live mmap before insertion.
             chunk.buffer.as_mut_ptr().add(chunk.metadata.offset)
         };
+
         let _registration = CuMemHostRegistrationGuard::new(&chunk.buffer)?;
         let result = unsafe {
             // SAFETY: source_offset points into the local CUDA tensor byte range checked by metadata tensor offsets, destination points into the registered live mmap, and the stream context is current on this OS thread.
@@ -720,11 +722,8 @@ pub(crate) fn spawn_worker_d2h_copy_task(
         };
         let copy_result = match source {
             Some(source) => {
-                let stream = resources.stream_pool.acquire().await;
-                tokio::task::spawn_blocking(move || copy_worker_d2h_transfer_to_memfd(transfer, stream, source, with_digest))
-                    .await
-                    .map_err(|e| ThoError::new(format!("worker D2H copy task join error: {e}")))
-                    .and_then(|result| result)
+
+                copy_worker_d2h_transfer_to_memfd(transfer, resources, source, with_digest).await
             }
             None => Err(ThoError::new(format!("worker tensor key={tensor_key} not found"))),
         };
@@ -1953,6 +1952,9 @@ impl HandleCtx for IPCHanldeCTx {
 
 #[async_trait]
 impl CudaActorHandle for CudaIPCActorHandle {
+
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
 
