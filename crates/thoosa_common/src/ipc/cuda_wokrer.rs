@@ -56,6 +56,9 @@ pub struct WorkerCli {
 
     #[arg(long, default_value = "INFO")]
     pub write_logger_level: LevelFilter,
+
+    #[arg(long, default_value_t = 0)]
+    pub cuda_device:usize
 }
 
 impl CudaWorker {
@@ -74,7 +77,6 @@ impl CudaWorker {
             let log_filename = ws_root.join("log")
                 .join(format!("thoosa_worker_{}.log", cdt).to_owned());
 
-
             let _logging_guards = init_tracing(
                 worker_cli.term_logger_level,
                 false,
@@ -85,10 +87,18 @@ impl CudaWorker {
                 None,
                 Some(([127, 0, 0, 1], 6667).into()),
             )?;
-            debug!("CudaWorker::run_if_sock: sock_path={sock_path:?}");
 
+            debug!("CudaWorker::run_if_sock: sock_path={sock_path:?}");
+            let exec_context = ThoCudaContext::new(0i32)?;//TODO device
             let rt = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
+                .on_thread_start(move || {
+
+                    if let Err(err) = exec_context.bind_to_thread() {
+                        panic!("Failed to create context: {err:?}");
+                    }
+
+                })
                 .thread_name_fn(|| {
                     static TOKIO_THREAD_ID: AtomicUsize = AtomicUsize::new(0);
                     let id = TOKIO_THREAD_ID.fetch_add(1, Ordering::Relaxed);
@@ -114,7 +124,7 @@ impl CudaWorker {
         let with_digest = false;//TODO config
 
         let cuda_device = tho_device.gpu_ordinal();
-        // let _exec_context = ThoCudaContext::new(cuda_device as i32)?;
+
         let exec_stream_pool = Arc::new(Pool::from_iter(
             (0..WORKER_EXEC_STREAMS)
                 .map(|_| ThoCudaStream::from_pool(cuda_device as i32, false))
@@ -353,7 +363,6 @@ impl CudaWorker {
                     match installed_endpoints.read().get(endpoint_name) {
                         Some(endpoint) => {
                             let r = panic_to_err!({
-                                let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
 
                                 let response = if consume {
@@ -405,7 +414,6 @@ impl CudaWorker {
                         let serialization_result = match tokio::task::spawn_blocking(move || {
                             let mut output = IpcChunkWriter::new(producer_tx);
                             panic_to_err!({
-                                let _thread_context = ThoCudaContext::new(stream.device())?;
                                 let _guard = ThoStreamGuard::new(&stream)?;
                                 let response_result = response.write_to(&mut output);
                                 let sync_result = stream.synchronize();
