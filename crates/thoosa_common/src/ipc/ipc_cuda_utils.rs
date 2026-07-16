@@ -4,10 +4,7 @@
 //! identity sent between processes. Mapped addresses and tensor data pointers are
 //! always process-local. The parent should retain an fd for every buffer that must
 //! survive worker restarts and send that fd to each new worker with [`send_fd`].
-//! GPU-to-GPU transfer through host is the composition of
-//! [`ipc_d2h_producer_copy_tensor`] and [`ipc_h2d_consumer_copy`] using metadata
-//! with [`IpcTransferDirection::GpuToGpuThroughHost`]. Concurrent bidirectional
-//! transfers should use distinct buffers so each direction has independent ownership.
+//! Concurrent bidirectional transfers should use distinct buffers so each direction has independent ownership.
 
 use std::ffi::{CString, c_void};
 use std::fmt::{Debug, Formatter};
@@ -572,80 +569,6 @@ impl IpcBufferOwnership {
     }
 }
 
-/// Same-process-shaped H2D entry point backed by cached memfd mappings.
-///
-/// The source pointer is process-local. Each chunk is first copied into a checked-out
-/// shared mapping, then transferred to the local CUDA tensor with the Driver API.
-pub async fn ipc_copy_h2d_from_ptr(
-    kind: Kind,
-    buf_size: usize,
-    ipc_bufs_pool: &Arc<Pool<(SharedMemfdBuffer, Arc<ThoCudaStream>)>>,
-    dst_tho_device_idx: usize,
-    src_ptr: usize,
-    size: &[i64],
-) -> Result<Tensor, ThoError> {
-    if dst_tho_device_idx == 0 {
-        return Err(invalid("ipc_copy_h2d_from_ptr requires a CUDA destination"));
-    }
-    let byte_len = tensor_mem_size(kind, size);
-    if byte_len != 0 && src_ptr == 0 {
-        return Err(invalid("ipc_copy_h2d_from_ptr source pointer is null"));
-    }
-    let chunks = copy_chunks(byte_len, buf_size, "ipc_copy_h2d_from_ptr")?;
-    let chunk_count = chunks.len();
-    let destination = Tensor::f_empty(size, (kind, Device::Cuda(dst_tho_device_idx - 1)))?;
-    let dst_ptr = destination.data_ptr() as u64;
-
-    track_await(collect_futures_with_progress(
-        chunks.into_iter().map(|chunk| {
-            let pool = Arc::clone(ipc_bufs_pool);
-            async move {
-                let mut buf_stream = track_await(pool.acquire()).await;
-                let result = track_await(spawn_blocking(move || {
-                    tracing::info_span!(
-                        "interprocess_cuda_copy::ipc_copy_h2d_from_ptr_chunk",
-                        kind = "spawn_blocking",
-                        file = file!(),
-                        line = line!(),
-                        chunk = chunk.index,
-                    ).in_scope(|| {
-                        if chunk.len > buf_stream.0.len() {
-                            return Err(invalid(format!("H2D chunk length={} exceeds pooled mmap length={}", chunk.len, buf_stream.0.len())));
-                        }
-                        let source = src_ptr.checked_add(chunk.offset).ok_or_else(|| invalid("H2D source pointer overflow"))?;
-                        let destination = dst_ptr.checked_add(chunk.offset as u64).ok_or_else(|| invalid("H2D destination pointer overflow"))?;
-                        let shared_ptr = buf_stream.0.as_mut_ptr();
-                        unsafe {
-                            // SAFETY: the caller's local source tensor remains alive for
-                            // the operation, copy_chunks bounds chunk.len to the tensor byte
-                            // range, and the checked-out mmap is at least chunk.len bytes.
-                            std::ptr::copy_nonoverlapping(source as *const u8, shared_ptr, chunk.len);
-                        }
-                        let stream = Arc::clone(&buf_stream.1);
-                        let _thread_context = ThoCudaContext::new(stream.device())?;
-                        let _stream_guard = ThoStreamGuard::new(stream.as_ref())?;
-                        let _registration = CuMemHostRegistrationGuard::new(&buf_stream.0)?;
-                        let result = unsafe {
-                            // SAFETY: destination is a process-local CUDA allocation,
-                            // shared_ptr is within the registered mmap, and the stream's
-                            // CUDA context is current on this OS thread.
-                            tho_cu_memcpy_htod_async(destination, shared_ptr.cast::<c_void>(), chunk.len, stream.as_mut_ptr())
-                        };
-                        check_cuda_status(result, "cuMemcpyHtoDAsync(memfd pool)")?;
-                        stream.synchronize()?;
-                        Ok::<(), ThoError>(())
-                    })
-                })).await.map_err(join_error_to_tho_error).and_then(|result| result);
-                Ok::<_, ThoError>(result)
-            }
-        }),
-        chunk_count,
-        FuturesOrdering::Unordered,
-        COPY_H2D,
-    )).await.into_iter().collect::<Result<(), ThoError>>()?;
-
-    Ok(destination)
-}
 
 
 
@@ -669,107 +592,6 @@ pub fn ipc_h2d_producer_write_bytes(
     }
     ownership.publish_ready()
 }
-
-/// Copies process-local source memory into a shared H2D staging buffer.
-///
-/// # Safety
-/// `source` must be valid for reads of `metadata.byte_len` bytes and must not
-/// overlap this buffer's mapped destination range.
-pub unsafe fn ipc_h2d_producer_write_from_ptr(
-    buffer: &mut SharedMemfdBuffer,
-    metadata: &IpcTensorTransferMetadata,
-    source: *const u8,
-    ownership: &mut IpcBufferOwnership,
-) -> Result<IpcBufferStateMessage, ThoError> {
-    if source.is_null() && metadata.byte_len != 0 {
-        return Err(invalid("H2D source pointer is null"));
-    }
-    let source = unsafe {
-        // SAFETY: upheld by the caller contract above; no pointer is retained.
-        std::slice::from_raw_parts(source, metadata.byte_len)
-    };
-    ipc_h2d_producer_write_bytes(buffer, metadata, source, ownership)
-}
-
-pub fn ipc_h2d_producer_write_tensor(
-    buffer: &mut SharedMemfdBuffer,
-    metadata: &IpcTensorTransferMetadata,
-    source: &Tensor,
-    ownership: &mut IpcBufferOwnership,
-) -> Result<IpcBufferStateMessage, ThoError> {
-    if source.device() != Device::Cpu {
-        return Err(invalid(format!("H2D producer tensor must be on CPU, got {:?}", source.device())));
-    }
-    metadata.validate_tensor(source)?;
-    unsafe {
-        // SAFETY: a contiguous CPU tensor owns at least metadata.byte_len readable
-        // bytes at data_ptr and remains borrowed for the entire copy.
-        ipc_h2d_producer_write_from_ptr(buffer, metadata, source.data_ptr().cast::<u8>(), ownership)
-    }
-}
-
-pub fn ipc_h2d_consumer_copy(
-    buffer: &SharedMemfdBuffer,
-    metadata: &IpcTensorTransferMetadata,
-    cuda_device: usize,
-    stream: &ThoCudaStream,
-    ownership: &mut IpcBufferOwnership,
-) -> Result<(Tensor, IpcBufferStateMessage), ThoError> {
-    require_h2d(metadata)?;
-    metadata.validate_for_buffer(buffer)?;
-    if stream.device() != cuda_device as i32 {
-        return Err(invalid(format!("CUDA stream device={} does not match destination device={cuda_device}", stream.device())));
-    }
-    ownership.begin_consuming(metadata)?;
-    let _stream_guard = ThoStreamGuard::new(stream)?;
-    let _registration = CuMemHostRegistrationGuard::new(buffer)?;
-    let destination = Tensor::f_empty(metadata.shape.as_slice(), (metadata.tch_kind(), Device::Cuda(cuda_device)))?;
-    let source = buffer.checked_ptr(metadata.offset, metadata.byte_len)?;
-    let result = unsafe {
-        // SAFETY: destination is a local CUDA tensor with exactly metadata.byte_len
-        // bytes, source is within the registered live mmap, and stream is local.
-        tho_cu_memcpy_htod_async(destination.data_ptr() as u64, source.cast::<c_void>(), metadata.byte_len, stream.as_mut_ptr())
-    };
-    check_cuda_status(result, "cuMemcpyHtoDAsync(memfd)")?;
-    synchronize_driver_stream(stream)?;
-    let consumed = ownership.finish_consuming()?;
-    Ok((destination, consumed))
-}
-
-pub fn ipc_d2h_producer_copy_tensor(
-    buffer: &mut SharedMemfdBuffer,
-    metadata: &IpcTensorTransferMetadata,
-    source: &Tensor,
-    stream: &ThoCudaStream,
-    ownership: &mut IpcBufferOwnership,
-) -> Result<IpcBufferStateMessage, ThoError> {
-    require_d2h(metadata)?;
-    metadata.validate_for_buffer(buffer)?;
-    metadata.validate_tensor(source)?;
-    let Device::Cuda(cuda_device) = source.device() else {
-        return Err(invalid(format!("D2H producer tensor must be on CUDA, got {:?}", source.device())));
-    };
-    if stream.device() != cuda_device as i32 {
-        return Err(invalid(format!("CUDA stream device={} does not match source device={cuda_device}", stream.device())));
-    }
-    ownership.begin_producing(metadata)?;
-    let destination = buffer.checked_mut_ptr(metadata.offset, metadata.byte_len)?;
-    let _stream_guard = ThoStreamGuard::new(stream)?;
-    let _registration = CuMemHostRegistrationGuard::new(buffer)?;
-    // The caller must pass the stream that produced `source`, or a stream that has
-    // already waited on the producer event. This synchronization makes all such
-    // preceding work complete before the D2H transfer reads the device allocation.
-    synchronize_driver_stream(stream)?;
-    let result = unsafe {
-        // SAFETY: source is a live local CUDA tensor, destination is within the
-        // registered mmap, and both ranges contain metadata.byte_len bytes.
-        tho_cu_memcpy_dtoh_async(destination.cast::<c_void>(), source.data_ptr() as u64, metadata.byte_len, stream.as_mut_ptr())
-    };
-    check_cuda_status(result, "cuMemcpyDtoHAsync(memfd)")?;
-    synchronize_driver_stream(stream)?;
-    ownership.publish_ready()
-}
-
 pub fn ipc_d2h_consumer_copy(
     buffer: &SharedMemfdBuffer,
     metadata: &IpcTensorTransferMetadata,
@@ -1031,46 +853,6 @@ mod tests {
         bytes
     }
 
-    async fn run_h2d_worker() -> Result<(), ThoError> {
-        let socket = PathBuf::from(std::env::var_os(TEST_SOCKET_ENV).ok_or_else(|| invalid("missing worker socket"))?);
-        let mut stream = UnixStream::connect(socket).await?;
-        let metadata: IpcTensorTransferMetadata = read_json(&mut stream).await?;
-        let ready: IpcBufferStateMessage = read_json(&mut stream).await?;
-        let fd = recv_fd(&stream).await?;
-        let buffer = SharedMemfdBuffer::from_received_fd(fd, metadata.mapped_len)?;
-        debug!("run_h2d_worker: local_mmap_ptr={:?}", buffer.as_ptr());
-        let _context = ThoCudaContext::new(0)?;
-        let cuda_stream = ThoCudaStream::from_pool(0, true)?;
-        let mut ownership = IpcBufferOwnership::from_ready(ready)?;
-        let (cuda_tensor, consumed) = ipc_h2d_consumer_copy(&buffer, &metadata, 0, &cuda_stream, &mut ownership)?;
-        let cpu_tensor = cuda_tensor.f_to_device(Cpu)?;
-        write_json(&mut stream, &consumed).await?;
-        write_frame(&mut stream, &tensor_bytes(&cpu_tensor, metadata.byte_len)).await?;
-        Ok(())
-    }
-
-    async fn run_d2h_worker() -> Result<(), ThoError> {
-        let socket = PathBuf::from(std::env::var_os(TEST_SOCKET_ENV).ok_or_else(|| invalid("missing worker socket"))?);
-        let mut stream = UnixStream::connect(socket).await?;
-        let metadata: IpcTensorTransferMetadata = read_json(&mut stream).await?;
-        let fd = recv_fd(&stream).await?;
-        let mut buffer = SharedMemfdBuffer::from_received_fd(fd, metadata.mapped_len)?;
-        debug!("run_d2h_worker: local_mmap_ptr={:?}", buffer.as_ptr());
-        let _context = ThoCudaContext::new(0)?;
-        let cuda_stream = ThoCudaStream::from_pool(0, true)?;
-        let element_count = metadata.byte_len / size_of::<f32>();
-        let source = {
-            let _stream_guard = ThoStreamGuard::new(&cuda_stream)?;
-            Tensor::f_arange(element_count as i64, (Kind::Float, Device::Cuda(0)))?
-        };
-        let mut ownership = IpcBufferOwnership::new(metadata.buffer_id);
-        let ready = ipc_d2h_producer_copy_tensor(&mut buffer, &metadata, &source, &cuda_stream, &mut ownership)?;
-        write_json(&mut stream, &ready).await?;
-        let consumed: IpcBufferStateMessage = read_json(&mut stream).await?;
-        ownership.acknowledge_consumed(consumed)?;
-        Ok(())
-    }
-
     async fn run_h2d_parent_once(
         buffer: &mut SharedMemfdBuffer,
         ownership: &mut IpcBufferOwnership,
@@ -1138,16 +920,6 @@ mod tests {
         wait_worker(child).await
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_interprocess_h2d_d2h_and_worker_restart() {
-        let result = match std::env::var(TEST_MODE_ENV).as_deref() {
-            Ok("h2d") => run_h2d_worker().await,
-            Ok("d2h") => run_d2h_worker().await,
-            Ok(mode) => Err(invalid(format!("unknown memfd copy test mode {mode}"))),
-            Err(_) => run_parent().await,
-        };
-        result.unwrap();
-    }
 
     #[tokio::test]
     async fn test_fd_passing_and_metadata_validation_without_cuda() -> Result<(), ThoError> {

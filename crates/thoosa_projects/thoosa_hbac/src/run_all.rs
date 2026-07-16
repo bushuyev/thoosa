@@ -743,7 +743,7 @@ mod tests {
             let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
         }
 
-        log::set_max_level(log::LevelFilter::Debug   );
+        // log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2);
         let result = run_heavy_test_run_all("heavy_test_run_all").await;
         global_ctx.shutdown().await;
@@ -949,7 +949,7 @@ mod tests {
             })),
         };
         let common_training_args_for_labels = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(30),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -962,7 +962,7 @@ mod tests {
             })),
         };
         let common_training_args_for_final = CommonTrainingRunConfigRangeOrValue {
-            epochs: RangeOrValue::Value(10),
+            epochs: RangeOrValue::Value(30),
             batch_size: RangeOrValue::Value(10),
             lr: RangeOrValue::Range{ range: Range { start: 0.00001, end: 0.001 }, step: None },
             patience: RangeOrValue::Value(10),
@@ -1028,8 +1028,8 @@ mod tests {
             train_label_nets_run_config_range_or_value,
             train_final_net_run_config_range_or_value,
             train_motifs_opt_config:Arc::new(OptConfig::new(10, 3)),
-            train_labels_opt_config: Arc::new(OptConfig::new(10, 3)),
-            train_final_opt_config: Arc::new(OptConfig::new(10, 3)),
+            train_labels_opt_config: Arc::new(OptConfig::new(30, 10)),
+            train_final_opt_config: Arc::new(OptConfig::new(30, 10)),
         }
     }
 
