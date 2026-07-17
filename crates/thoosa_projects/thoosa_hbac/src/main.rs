@@ -26,6 +26,7 @@ use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
 use thoosa_main::tasks::motif_stats::{motif_stats_consume_stage_endpoint_init, motif_stats_sync_stage_endpoint_init, MOTIF_STATS_CONSUME_ENDPOINT, MOTIF_STATS_SYNC_ENDPOINT};
+use thoosa_main::tasks::tensor_loader::{sync_raw_tensor_loader_endpoint_init, SYNC_RAW_TENSOR_LOADER_ENDPOINT};
 use thoosa_main::tasks::train_motif_nets::train_motif_step_endpoint_inits;
 use thoosa_main::tasks::transforms::freq_filter::{sync_freq_filter_endpoint_init, SYNC_FREQ_FILTER_ENDPOINT};
 use thoosa_shims::context::ThoCudaContext;
@@ -53,6 +54,10 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result
         (
             SYNC_FREQ_FILTER_ENDPOINT.to_string(),
             Box::new(sync_freq_filter_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        ),
+        (
+            SYNC_RAW_TENSOR_LOADER_ENDPOINT.to_string(),
+            Box::new(sync_raw_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
     ]);
     endpoints
