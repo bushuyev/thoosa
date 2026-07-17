@@ -30,6 +30,7 @@ use thoosa_store::Store;
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_common::runs::SavableResult;
 use async_trait::async_trait;
+use tokio::task::JoinSet;
 use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug, Clone, DummyData)]
@@ -142,16 +143,16 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     C: RunCtx + Adjustable + 'static,
 {
-    pub fn new(
+    pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
         run_configs: Vec<SeqScanRunConfig>,
     ) -> Result<Self, ThoError> {
-        Self::new_with_chunk_size(ws, store, loader, run_configs, DEFAULT_SEQ_SCAN_CHUNK_SIZE)
+        Self::new_with_chunk_size(ws, store, loader, run_configs, DEFAULT_SEQ_SCAN_CHUNK_SIZE).await
     }
 
-    pub fn new_with_chunk_size(
+    pub async fn new_with_chunk_size(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<L>,
@@ -165,14 +166,19 @@ where
         let run_config_stages = run_configs
             .into_iter()
             .map(|run_config| {
-                let configured_loader = config_to_stage(&loader, &run_config, ws)?;
+                let loader = Arc::clone(&loader);
+                let ws = Arc::clone(ws);
+                async move {
+                    let configured_loader = config_to_stage(&loader, &run_config, &ws).await?;
 
-                Ok::<_, ThoError>(SeqScanConfiguredStage {
-                    run_config: Arc::new(run_config),
-                    configured_loader,
-                })
+                    Ok::<_, ThoError>(SeqScanConfiguredStage {
+                        run_config: Arc::new(run_config),
+                        configured_loader,
+                    })
+                }
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<JoinSet<Result<_, _>>>().join_all().await//TODO try_join_all
+            .into_iter().collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             store: Arc::clone(store),
@@ -545,7 +551,7 @@ fn reduce_slice_scores(values: &Tensor) -> Result<Tensor, ThoError> {
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "seq_scan_config_to_stage"))]
-pub fn config_to_stage<L, C>(loader: &Arc<L>, run_config: &SeqScanRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
+pub async fn config_to_stage<L, C>(loader: &Arc<L>, run_config: &SeqScanRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C>,
@@ -558,7 +564,7 @@ where
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!(run_config_id, "seq_scan_ab_stage")]),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(freq_filter, ws, run_config_id)?),
+                Arc::new(FreqFilter::<C>::new(freq_filter, ws, run_config_id, 0).await?),
             ))))
         }
     };
@@ -771,7 +777,7 @@ mod tests {
                 buckets_count: 3,
             }],
             8,
-        )?);
+        ).await?);
 
         let out = stage
             .run(

@@ -24,7 +24,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
-use thoosa_common::transforms::filters::InputFilter;
+use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
 use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
 use thoosa_shared::{mono_key, CopyToDevice, ThoError};
@@ -61,10 +61,10 @@ impl Dims for BandPassDims {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct SyncFreqFilterIpcInit {
-    id: SynKey,
     filter_configs: Vec<InputFilter>,
     num_channels: i64,
     sample_rate: f64,
+    find_motifs_run_config_id: RunConfigId
 }
 
 impl<C> From<&FreqFilter<C>> for SyncFreqFilterIpcInit
@@ -73,22 +73,29 @@ where
 {
     fn from(freq_filter: &FreqFilter<C>) -> Self {
         Self {
-            id: freq_filter.id.clone(),
             filter_configs: freq_filter.filter_configs.clone(),
             num_channels: freq_filter.num_channels,
             sample_rate: freq_filter.sample_rate,
+            find_motifs_run_config_id: todo!()
         }
     }
 }
 
-#[derive(Debug, Proxy)]
+impl SyncFreqFilterIpcInit {
+    pub fn new(filter_configs: Vec<InputFilter>, num_channels: i64, sample_rate: f64, find_motifs_run_config_id: RunConfigId) -> Self {
+        //id: mono_key!(0, "").into(),
+        Self {  filter_configs, num_channels, sample_rate,find_motifs_run_config_id }
+    }
+}
+
+#[derive(Debug, Proxy)]//// fields = "id: SynKey = init.id.clone()",
 #[proxy(
     common = "thoosa_common",
     name = "ProxySyncFreqFilter",
     endpoint = "SYNC_FREQ_FILTER_ENDPOINT",
     new_args = "init: SyncFreqFilterIpcInit, tho_device_idx: usize",
     init = "init.clone()",
-    fields = "id: SynKey = init.id.clone()",
+    fields = "id: SynKey = (FREQ_FILTER, \"SyncFreqFilter\").into()",
     out_id = "&self.id + input_id",
     endpoint_init = "sync_freq_filter_endpoint_init",
     init_type = "SyncFreqFilterIpcInit",
@@ -103,125 +110,37 @@ pub struct SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    freq_filter: Arc<FreqFilter<C>>,
+    id: SynKey,
+    filters: Vec<PreparedFilter>,
+    num_channels:i64,
+    sample_rate:f64,
+    pd:PhantomData<C>
 }
 
 impl<C> SyncFreqFilter<C>
 where
     C: RunCtx + Adjustable + 'static,
 {
-    pub async fn new(freq_filter: Arc<FreqFilter<C>>, tho_device_idx: usize) -> Result<FreqFilterDynSyncStage<C>, ThoError> {
+
+
+    pub async fn new(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<FreqFilterDynSyncStage<C>, ThoError> {
+
         if GlobalCtx::global().is_ipc() {
-            Ok(FreqFilterDynSyncStage::Proxy(Arc::new(ProxySyncFreqFilter::new(SyncFreqFilterIpcInit::from(freq_filter.as_ref()), tho_device_idx).await?)))
+            Ok(FreqFilterDynSyncStage::Proxy(Arc::new(ProxySyncFreqFilter::new(SyncFreqFilterIpcInit::new(filter_configs.to_vec(), num_channels, sample_rate, find_motifs_run_config_id), tho_device_idx).await?)))
         } else {
-            Ok(FreqFilterDynSyncStage::Local(Arc::new(Self::new_local(freq_filter))))
+            Ok(FreqFilterDynSyncStage::Local(Arc::new(Self::new_local(filter_configs, num_channels, sample_rate, find_motifs_run_config_id)?)))
         }
     }
 
-    //TODO remove freq_filter: Arc<FreqFilter<C>> param: move apply_tho_tensor and out_id to SyncFreqFilter and keep AsyncStage->SyncStage
-    fn new_local(freq_filter: Arc<FreqFilter<C>>) -> Self {
-        Self { freq_filter }
-    }
-}
+    pub fn new_local(filter_configs: &[InputFilter], num_channels:i64, sample_rate:f64, find_motifs_run_config_id: RunConfigId) ->Result<Self, ThoError>{
 
-impl SyncFreqFilter<RunCtxImpl> {
-    pub(crate) fn new_for_ipc(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
-        Ok(Self::new_local(Arc::new(FreqFilter::from_ipc_init(init)?)))
-    }
-}
-
-impl<C> Adjustable for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-}
-
-impl<C> OutId for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        match self {
-            FreqFilterDynSyncStage::Local(local) => local.out_id(input_id),
-            FreqFilterDynSyncStage::Proxy(proxy) => proxy.out_id(input_id),
-        }
-    }
-}
-
-impl<C> Stage for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    type Ctx = C;
-    type In<'a> = ThoTensor<ChannelsData, SynKey>;
-    type Out = ThoTensor<ChannelsData, SynKey>;
-}
-
-impl<C> SyncStage for FreqFilterDynSyncStage<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        match self.as_ref() {
-            FreqFilterDynSyncStage::Local(local) => Arc::clone(local).do_run(input, ctx),
-            FreqFilterDynSyncStage::Proxy(proxy) => {
-                let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxySyncFreqFilter requires RunCtxImpl"))?;
-                Arc::clone(proxy).do_run(input, ctx)
+        let filters = SyncFreqFilter::<RunCtxImpl>::prepare_filters(filter_configs, num_channels, sample_rate)?;
+        let filters_have_config = filters.iter().any(|f|{
+            match f {
+                PreparedFilter::ZNorm { .. } => false,
+                _=> true,
             }
-        }
-    }
-}
-
-#[derive(Debug)]
-enum PreparedFilter {
-    NotchBand { low_hz: f64, high_hz: f64 },
-    BandPass {
-        kernel: ThoTensor<BandPassDims, SynKey>,
-        stride: u32,
-        padding: Padding,
-    },
-    SavGol {
-        weights: ThoTensor<BandPassDims, SynKey>,
-        window_len: i64,
-        stride: u32,
-        padding: Padding,
-    },
-    Median {
-        window: u32,
-    },
-    MovingAverage {
-        window: u32,
-        step: u32,
-    },
-    ZNorm {
-
-    }
-}
-
-#[derive(Debug, Cached, Named)]
-pub struct FreqFilter<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    id: SynKey,
-    filter_configs: Vec<InputFilter>,
-    filters: Vec<PreparedFilter>,
-    _ctx: PhantomData<C>,
-    num_channels:i64,
-    sample_rate:f64
-}
-
-impl<C> FreqFilter<C>
-where
-    C: RunCtx + Adjustable + 'static,
-{
-    pub fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunConfigId) -> Result<Self, ThoError> {
-        let (num_channels, sample_rate)  = {
-            let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
-            (guard.channels() as i64, guard.sample_rate() as f64)
-        };
-
-        let filters = Self::prepare_filters(filter_configs, num_channels, sample_rate)?;
+        });
 
         let filters_have_config = filters.iter().any(|f|{
             match f {
@@ -229,45 +148,25 @@ where
                 _=> true,
             }
         });
-        debug!("FreqFilter::new: filters_have_config={filters_have_config}");
+        let id = if filters_have_config {
+            SynKey::new([
+                mono_key!(FREQ_FILTER, "FreqFilter"),
+                //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
+                mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
+            ])
+        } else {
+            SynKey::new([
+                mono_key!(FREQ_FILTER, "FreqFilter"),
+            ])
+        };
 
-        Ok(Self {
-            //avoids caching each run_config separately when they have same filter
-            id: if filters_have_config {
-                SynKey::new([
-                    mono_key!(FREQ_FILTER, "FreqFilter"),
-                    //TODO compare filters' parameters - if there are no floats they can be used as is instead of find_motifs_run_config_id + precision for float params
-                    mono_key!(find_motifs_run_config_id, format!("find_motifs_run_config_id={find_motifs_run_config_id}")),
-                ])
-            } else {
-                SynKey::new([
-                    mono_key!(FREQ_FILTER, "FreqFilter"),
-                ])
-            },
-            filter_configs: filter_configs.to_vec(),
-            filters,
-            _ctx: PhantomData,
-            num_channels,
-            sample_rate
-        })
-    }
-
-    fn from_ipc_init(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
-        let SyncFreqFilterIpcInit {
-            id,
-            filter_configs,
-            num_channels,
-            sample_rate,
-        } = init;
-        let filters = Self::prepare_filters(&filter_configs, num_channels, sample_rate)?;
 
         Ok(Self {
             id,
-            filter_configs,
             filters,
-            _ctx: PhantomData,
             num_channels,
             sample_rate,
+            pd: Default::default(),
         })
     }
 
@@ -378,17 +277,6 @@ where
         Ok(filters)
     }
 
-    pub fn input_device(&self) -> Device {
-        self.filters
-            .iter()
-            .find_map(|filter| match filter {
-                PreparedFilter::BandPass { kernel, .. } => Some(kernel.as_ref().device()),
-                PreparedFilter::SavGol { weights, .. } => Some(weights.as_ref().device()),
-                _ => None,
-            })
-            .unwrap_or(Cpu)
-    }
-
     pub fn apply_tho_tensor(&self, input_tensor: &ThoTensor<ChannelsData, SynKey>) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
         debug!("FreqFilter::apply_tho_tensor: self.filters={:?}", self.filters);
 
@@ -475,13 +363,184 @@ where
         Ok(output_3d.f_view((self.num_channels, -1))?)
     }
 
-    fn effective_output_stride(&self) -> Result<i64, ThoError> {
-        self.filters.iter().try_fold(1_i64, |effective_stride, filter| {
-            let stage_stride = match filter {
-                PreparedFilter::BandPass { stride, .. } | PreparedFilter::SavGol { stride, .. } => *stride as i64,
-                PreparedFilter::MovingAverage { step, .. } => *step as i64,
-                PreparedFilter::NotchBand { .. } | PreparedFilter::Median { .. } => 1,
-                PreparedFilter::ZNorm {..} => {1}
+}
+
+impl <C> WithId for SyncFreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static
+{
+    type ID = SynKey;
+
+    fn id(&self) -> &Self::ID {
+        &self.id
+    }
+}
+
+impl SyncFreqFilter<RunCtxImpl> {
+    pub(crate) fn new_for_ipc(init: SyncFreqFilterIpcInit) -> Result<Self, ThoError> {
+        Ok(Self::new_local(
+            &init.filter_configs,
+            init.num_channels,
+            init.sample_rate,
+            init.find_motifs_run_config_id
+        )?)
+    }
+}
+
+impl<C> Adjustable for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+}
+
+impl<C> OutId for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        match self {
+            FreqFilterDynSyncStage::Local(local) => local.out_id(input_id),
+            FreqFilterDynSyncStage::Proxy(proxy) => proxy.out_id(input_id),
+        }
+    }
+}
+
+impl<C> Stage for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    type Ctx = C;
+    type In<'a> = ThoTensor<ChannelsData, SynKey>;
+    type Out = ThoTensor<ChannelsData, SynKey>;
+}
+
+impl<C> SyncStage for FreqFilterDynSyncStage<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            FreqFilterDynSyncStage::Local(local) => Arc::clone(local).do_run(input, ctx),
+            FreqFilterDynSyncStage::Proxy(proxy) => {
+                let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxySyncFreqFilter requires RunCtxImpl"))?;
+                Arc::clone(proxy).do_run(input, ctx)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+enum PreparedFilter {
+    NotchBand { low_hz: f64, high_hz: f64 },
+    BandPass {
+        kernel: ThoTensor<BandPassDims, SynKey>,
+        stride: u32,
+        padding: Padding,
+    },
+    SavGol {
+        weights: ThoTensor<BandPassDims, SynKey>,
+        window_len: i64,
+        stride: u32,
+        padding: Padding,
+    },
+    Median {
+        window: u32,
+    },
+    MovingAverage {
+        window: u32,
+        step: u32,
+    },
+    ZNorm {
+
+    }
+}
+
+#[derive(Debug, Cached, Named)]
+pub struct FreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+    id: SynKey,
+    filter_configs: Vec<InputFilter>,
+    _ctx: PhantomData<C>,
+    num_channels:i64,
+    sample_rate:f64,
+    sync_freq_filter: Arc<FreqFilterDynSyncStage<C>>,
+    effective_output_stride:i64,
+    min_input_split_len:i64
+}
+
+impl<C> FreqFilter<C>
+where
+    C: RunCtx + Adjustable + 'static,
+{
+
+
+    pub async fn new(filter_configs: &[InputFilter], ws: &Arc<RwLock<Box<dyn Workspace>>>, find_motifs_run_config_id: RunConfigId, tho_device_idx: usize) -> Result<Self, ThoError> {
+        let (num_channels, sample_rate)  = {
+            let guard = thoosa_shared::perf_log!(thoosa_shared::sync_read_lock!(ws));
+            (guard.channels() as i64, guard.sample_rate() as f64)
+        };
+
+
+        let effective_output_stride = Self::effective_output_stride(filter_configs)?;
+        let min_input_split_len = Self::min_input_split_len(filter_configs)?;
+
+        let sync_freq_filter= Arc::new(SyncFreqFilter::new(
+            filter_configs, num_channels, sample_rate, find_motifs_run_config_id, tho_device_idx
+        ).await?);
+
+        Ok(Self {
+            //avoids caching each run_config separately when they have same filter
+            id: mono_key!(0, "todo").into(),
+            filter_configs: filter_configs.to_vec(),
+            _ctx: PhantomData,
+            num_channels,
+            sample_rate,
+            sync_freq_filter,
+            effective_output_stride,
+            min_input_split_len
+        })
+    }
+
+
+
+    fn run_conv_with_padding(&self, stride: u32, padding: &Padding, kernel_t: &Tensor, input_t: &Tensor) -> Result<Tensor, ThoError> {
+        let t = input_t.size()[1];
+        let kernel_size = kernel_t.size()[2];
+        let pad = kernel_size / 2;
+        let stride_i64 = stride as i64;
+
+
+        let output_3d = match padding {
+            Padding::Zero(_) => input_t.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, pad, 1, self.num_channels)?,
+            Padding::Replicate(_) => {
+                let left = input_t.f_narrow(2, 0, 1)?.f_repeat([1, 1, pad])?;
+                let right = input_t.f_narrow(2, t - 1, 1)?.f_repeat([1, 1, pad])?;
+                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
+                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
+            }
+            Padding::Reflect(_) => {
+                if pad >= t {
+                    return Err(ThoError::new(format!("reflect padding requires pad < T, got pad={} T={}", pad, t)));
+                }
+                let left = input_t.f_narrow(2, 1, pad)?.f_flip([2])?;
+                let right = input_t.f_narrow(2, t - pad - 1, pad)?.f_flip([2])?;
+                let xpad = Tensor::f_cat(&[&left, input_t, &right], 2)?;
+                xpad.f_conv1d(&kernel_t, None::<Tensor>, stride_i64, 0, 1, self.num_channels)?
+            }
+        };
+
+        Ok(output_3d.f_view((self.num_channels, -1))?)
+    }
+
+    fn effective_output_stride(filter_configs: &[InputFilter]) -> Result<i64, ThoError> {
+        filter_configs.iter().try_fold(1_i64, |effective_stride, filter| {
+            let stage_stride = match &filter {
+                InputFilter::BandPassFilter(BandPassFilterParams { stride, .. }) | InputFilter::SavGolFilter(SavGolFilterParams { stride, .. }) => *stride as i64,
+                InputFilter::AverageFilter( AverageFilterParams{ step, .. }) => *step as i64,
+                InputFilter::NotchBandFilter (NotchBandFilterParams{ .. }) | InputFilter::MedianFilter(MedianFilterParams{..})  => 1,
+                InputFilter::ZNorm (ZNormFilterParams{..}) => {1}
             };
 
             effective_stride
@@ -490,20 +549,20 @@ where
         })
     }
 
-    fn min_input_split_len(&self) -> Result<i64, ThoError> {
-        self.filters.iter().rev().try_fold(1_i64, |required_len, filter| {
+    fn min_input_split_len(filter_configs: &[InputFilter]) -> Result<i64, ThoError> {
+        filter_configs.iter().rev().try_fold(1_i64, |required_len, filter| {
             match filter {
-                PreparedFilter::NotchBand { .. } | PreparedFilter::Median { .. } => Ok(required_len.max(1)),
-                PreparedFilter::MovingAverage { step, .. } => Self::expand_required_len(required_len, *step as i64, 1),
-                PreparedFilter::BandPass { kernel, stride, padding } => {
+                InputFilter::NotchBandFilter (NotchBandFilterParams{ .. }) | InputFilter::MedianFilter(MedianFilterParams{..}) => Ok(required_len.max(1)),
+                InputFilter::AverageFilter( AverageFilterParams{ step, .. }) =>Self::expand_required_len(required_len, *step as i64, 1),
+                InputFilter::BandPassFilter(BandPassFilterParams { stride, padding, kernel_size, .. }) => {
                     let local_min = match padding {
-                        Padding::Reflect(_) => (kernel.size()[2] / 2) + 1,
+                        Padding::Reflect(_) => (kernel_size / 2) + 1,
                         Padding::Zero(_) | Padding::Replicate(_) => 1,
                     };
-                    Self::expand_required_len(required_len, *stride as i64, local_min)
+                    Self::expand_required_len(required_len, *stride as i64, local_min as i64)
                 }
-                PreparedFilter::SavGol { window_len, stride, .. } => Self::expand_required_len(required_len, *stride as i64, *window_len),
-                PreparedFilter::ZNorm { .. } => { Ok(1) }
+                InputFilter::SavGolFilter(SavGolFilterParams { window_len, stride, .. }) => Self::expand_required_len(required_len, *stride as i64, *window_len as i64),
+                InputFilter::ZNorm (ZNormFilterParams{..}) => { Ok(1) }
             }
         })
     }
@@ -637,7 +696,7 @@ where
 
     fn degrade(&self, adjust_context: &mut AC) -> bool {
         let prev_len = adjust_context.split_len().dim::<1>();
-        (*adjust_context.split_len_mut()) /= 2;
+        *adjust_context.split_len_mut() /= 2;
         self.align_split_len(adjust_context.split_len_mut());
         let next_len = adjust_context.split_len().dim::<1>();
         let can_degrade = next_len >= self.min_split_len.dim::<1>() && next_len < prev_len;
@@ -659,7 +718,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
-        self.freq_filter.out_id(input_id)
+        &self.id + input_id
     }
 }
 
@@ -677,7 +736,7 @@ where
     C: RunCtx + Adjustable + 'static,
 {
     fn do_run<'f>(self: Arc<Self>, input_tensor: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        self.freq_filter.apply_tho_tensor(input_tensor)
+        self.apply_tho_tensor(input_tensor)
     }
 }
 
@@ -713,20 +772,20 @@ where
     ) -> Result<Self::Out, ThoError> {
         let out_id = self.out_id(input.id());
         let input_size = input.size().clone();
-        let min_split_len = [input_size.dim::<0>(), self.min_input_split_len()?].into();
+        let min_split_len = [input_size.dim::<0>(), self.min_input_split_len].into();
         let required_ids: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
-        let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self), ctx.tho_device_idx()).await?);
+        // let sync_freq_filter = Arc::new(SyncFreqFilter::new(Arc::clone(&self), ctx.tho_device_idx()).await?);
 
         let filtered = track_await(OOMHandler::<'_, '_, _, NoTaskAdjuster, _, ChannelsDataSelector>::new(
             vec![
                 Adjusters::RunContext(run_ctx_adjuster(MaxParallelAdjuster::new(MAX_PARALLEL, *MaxParallelStep::TWENTY))),
                 Adjusters::RunContext(run_ctx_adjuster(DumpToCpu::new("freq_filter"))),
-                Adjusters::Input(input_adjuster(FreqFilterSplitsAdjuster::new(min_split_len, self.effective_output_stride()?))),
+                Adjusters::Input(input_adjuster(FreqFilterSplitsAdjuster::new(min_split_len, self.effective_output_stride))),
             ],
             None,
         )
         .run(
-            &sync_freq_filter,
+            &self.sync_freq_filter,
             input,
             ctx.branch(true),
             Contexts::new(
@@ -812,14 +871,14 @@ mod tests {
         run_freq_filter(filter_configs).await
     }
 
-    #[test]
-    fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_apply_tho_tensor_with_median_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = Arc::new(FreqFilter::<RunCtxImpl>::new(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], &ws, 0)?);
+
         let input_t = Tensor::from_slice(&[1.0f32, 10.0, 2.0, 9.0, 3.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("median", "median")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::new_local(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(&[InputFilter::MedianFilter(MedianFilterParams { window: 5 })], 2, 100.0, 1)?).do_run(&input, &RunCtxImpl::new(0, "median_filter"))?;
         let expected = median(input.as_ref(), 5)?;
         let output_flat = output.as_ref().f_view([-1])?;
         let expected_flat = expected.f_view([-1])?;
@@ -829,14 +888,14 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_apply_tho_tensor_with_moving_average_filter() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
-        let freq_filter = Arc::new(FreqFilter::<RunCtxImpl>::new(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], &ws, 0)?);
+
         let input_t = Tensor::from_slice(&[1.0f32, 2.0, 3.0, 4.0, 5.0, 5.0, 4.0, 3.0, 2.0, 1.0]).f_view([2, 5])?;
         let input = ThoTensor::new(SynKey::new([mono_key!("moving_average", "moving_average")]), input_t)?;
 
-        let output = Arc::new(SyncFreqFilter::new_local(Arc::clone(&freq_filter))).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
+        let output = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(&[InputFilter::AverageFilter(AverageFilterParams { window: 4, step: 1 })], 2, 100.0, 0 )?).do_run(&input, &RunCtxImpl::new(0, "moving_average_filter"))?;
         let expected = moving_average(input.as_ref(), 4, 1)?;
 
         assert!(output.as_ref().allclose(&expected, 1e-5, 1e-5, false));
@@ -851,7 +910,7 @@ mod tests {
         
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 20, 100, 10000)));
 
-        let bf = FreqFilter::new(&filter_configs, &ws, 0)?;
+        let bf = FreqFilter::new(&filter_configs, &ws, 0, 0).await?;
 
         let mut ctx = RunCtxImpl::new(1, "test");
 
