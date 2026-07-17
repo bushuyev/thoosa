@@ -1,4 +1,7 @@
+use std::any::Any;
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
+use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::common::{OutId, RunCtx};
 
@@ -6,12 +9,13 @@ use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use parking_lot::RwLock;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use log::debug;
-use tch::Device;
+use tch::{Device, Tensor};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::tho_device::ThoDevice;
@@ -25,11 +29,31 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_proxy_derive::Proxy;
 use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
 // use crate::tasks::stages_seq::StagesSeq;
 
+pub const SYNC_RAW_TENSOR_LOADER_ENDPOINT: &str = "SyncRawTensorLoader";
+
 type LoadFn =
     dyn Fn(&Resource, &Device) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> + Sync + Send;
+
+#[derive(Clone)]
+struct DebugLoadFn(Arc<LoadFn>);
+
+impl Debug for DebugLoadFn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Loader closures are opaque, so expose only the stable field name in proxy debug output.
+        f.write_str("LoadFn")
+    }
+}
+
+fn raw_tensor_ref_from_copy(input: ThoTensor, id: SynKey) -> Result<ThoTensor<ChannelsData, SynKey>, ThoError> {
+    match input.inner {
+        thoosa_common::tho_tensor::ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => Ok(ThoTensor::new_ref(id, key, size, kind, selector, tho_device_idx)),
+        thoosa_common::tho_tensor::ThoTensorInner::Val { .. } => Err(ThoError::new("SyncRawTensorLoader IPC copy must return a worker tensor reference")),
+    }
+}
 
 #[derive(Debug)]
 struct RawTensorLoaderInputWrapper {
@@ -61,7 +85,51 @@ impl BorrowRef for RawTensorLoaderInputWrapper {
     }
 }
 
-struct SyncRawTensorLoader<C>
+#[derive(Debug)]
+enum RawTensorLoaderDynSyncStage<C>
+where
+    C: RunCtx + 'static,
+{
+    Local(Arc<SyncRawTensorLoader<C>>),
+    Proxy(Arc<ProxySyncRawTensorLoader>),
+}
+
+#[derive(Debug)]
+struct SyncRawTensorLoaderIpcWrapper {
+    // The derive initializes every wrapper with its target stage; this endpoint only validates
+    // and returns the worker reference created by the proxy before invoking the endpoint.
+    stage: Arc<SyncRawTensorLoader<RunCtxImpl>>,
+}
+
+impl SyncStageIpcWrapper for SyncRawTensorLoaderIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let input_ref = JsonIpcCodec::decode::<ThoTensor<ChannelsData, SynKey>>(input)?;
+        let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("SyncRawTensorLoader IPC input must be a worker tensor reference"))?;
+        if !all_cuda_tensors.lock().contains_key(&input_key) {
+            return Err(ThoError::new(format!("SyncRawTensorLoader IPC tensor key={input_key} was not found")));
+        }
+        JsonIpcCodec::encode(&input_ref)
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxySyncRawTensorLoader",
+    endpoint = "SYNC_RAW_TENSOR_LOADER_ENDPOINT",
+    new_args = "loader_fn: Arc<LoadFn>, device: ThoDevice, tho_device_idx: usize",
+    fields = "loader_fn: DebugLoadFn = DebugLoadFn(loader_fn), device: ThoDevice = device",
+    out_id = "SynKey::new([mono_key!(input_id.id(), format!(\"resource_id={}\", input_id.id()))])",
+    pre_run = "let loaded = (self.loader_fn.0)(input, &self.device)?; let input_id = loaded.id().clone(); let input: ThoTensor = ThoTensor::new((), loaded.t())?; let input = tokio::task::block_in_place(|| tokio::runtime::Handle::current().block_on(async { GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).copy(input, ctx.tho_device_idx().into()).await }))?; let input = raw_tensor_ref_from_copy(input, input_id)?;",
+    run_input = "input",
+    endpoint_init = "sync_raw_tensor_loader_endpoint_init",
+    wrapper = "SyncRawTensorLoaderIpcWrapper"
+)]
+struct SyncRawTensorLoaderProxyTarget {
+    base: SyncRawTensorLoader<RunCtxImpl>,
+}
+
+pub struct SyncRawTensorLoader<C>
 where
     C: RunCtx + 'static,
 {
@@ -83,8 +151,66 @@ impl<C> SyncRawTensorLoader<C>
 where
     C: RunCtx + 'static,
 {
-    fn new(loader_fn: Arc<LoadFn>, device: ThoDevice) -> Self {
+    async fn new(loader_fn: Arc<LoadFn>, device: ThoDevice, tho_device_idx: usize) -> Result<RawTensorLoaderDynSyncStage<C>, ThoError> {
+        // IPC execution must return a worker-owned tensor reference for downstream proxy stages.
+        if GlobalCtx::global().is_ipc() {
+            Ok(RawTensorLoaderDynSyncStage::Proxy(Arc::new(ProxySyncRawTensorLoader::new(loader_fn, device, tho_device_idx).await?)))
+        } else {
+            Ok(RawTensorLoaderDynSyncStage::Local(Arc::new(Self::new_local(loader_fn, device))))
+        }
+    }
+
+    fn new_local(loader_fn: Arc<LoadFn>, device: ThoDevice) -> Self {
         Self { device, loader_fn, pd: PhantomData }
+    }
+}
+
+impl SyncRawTensorLoaderProxyTarget {
+    fn new() -> SyncRawTensorLoader<RunCtxImpl> {
+        // The custom endpoint wrapper returns an already-copied worker reference, so its target
+        // stage is a derive-required placeholder and must never execute the loader closure.
+        SyncRawTensorLoader::new_local(
+            Arc::new(|_, _| Err(ThoError::new("SyncRawTensorLoader IPC placeholder stage must not run"))),
+            ThoDevice::from(Device::Cpu),
+        )
+    }
+}
+
+impl<C> Adjustable for RawTensorLoaderDynSyncStage<C> where C: RunCtx + 'static {}
+
+impl<C> OutId for RawTensorLoaderDynSyncStage<C>
+where
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        match self {
+            RawTensorLoaderDynSyncStage::Local(_) => SynKey::new([mono_key!(input_id.id(), format!("resource_id={}", input_id.id()))]),
+            RawTensorLoaderDynSyncStage::Proxy(proxy) => proxy.out_id(input_id),
+        }
+    }
+}
+
+impl<C> Stage for RawTensorLoaderDynSyncStage<C>
+where
+    C: RunCtx + 'static,
+{
+    type In<'a> = Resource;
+    type Out = ThoTensor<ChannelsData, SynKey>;
+    type Ctx = C;
+}
+
+impl<C> SyncStage for RawTensorLoaderDynSyncStage<C>
+where
+    C: RunCtx + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        match self.as_ref() {
+            RawTensorLoaderDynSyncStage::Local(local) => Arc::clone(local).do_run(input, ctx),
+            RawTensorLoaderDynSyncStage::Proxy(proxy) => {
+                let ctx = (ctx as &dyn Any).downcast_ref::<RunCtxImpl>().ok_or_else(|| ThoError::new("ProxySyncRawTensorLoader requires RunCtxImpl"))?;
+                Arc::clone(proxy).do_run(input, ctx)
+            }
+        }
     }
 }
 
@@ -154,7 +280,7 @@ where
         ctx: Self::Ctx,
     ) -> Result<Self::Out, ThoError> {
         // TODO(perf): add a shared raw-resource tensor cache/prefetch layer here; traced runs repeatedly reload tens of thousands of raw tensors through this stage.
-        let stage = Arc::new(SyncRawTensorLoader::<C>::new(Arc::clone(&self.loader_fn), self.device));
+        let stage = Arc::new(SyncRawTensorLoader::<C>::new(Arc::clone(&self.loader_fn), self.device, ctx.tho_device_idx()).await?);
         let input = Arc::new(RawTensorLoaderInputWrapper::new(input));
         let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
         let tensor = track_await(oom_handler.run(&stage, input, ctx, NoContexts)).await?;
