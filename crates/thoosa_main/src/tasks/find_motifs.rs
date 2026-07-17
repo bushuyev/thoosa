@@ -389,7 +389,7 @@ where
                     let ctx_id = ctx.id().clone();
                     debug!("FindMotifsStage::new: run_config={run_config:?} ctx.id={:?}", ctx.id());
                     let find_motifs_run_config_id = run_config.id.expect("find motif run config without id");
-                    let configured_loader = config_to_stage(&loader, &run_config, &ws)?;
+                    let configured_loader = config_to_stage(&loader, &run_config, &ws, ctx.tho_device_idx()).await?;
 
                      Ok(match &run_config.finder_kind {
                         FinderKind::Bucket(bucket_run_config) => {
@@ -594,7 +594,7 @@ where
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="config_to_stage"))]
-pub fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
+pub async fn config_to_stage<L, C>(loader: &Arc<L>, find_motifs_run_config: &FindMotifsRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>, tho_device_idx: usize) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
     C: 'static + RunCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C>,
@@ -610,7 +610,7 @@ where
             Arc::new(StageChainOption::<L, FilteredLoaderStage<L, C>>::Chained(Arc::new(ABStage::new(
                 SynKey::new([mono_key!(find_motifs_run_config.id.expect("find_motifs_run_config"), "ab_stage")]),
                 Arc::clone(loader),
-                Arc::new(FreqFilter::<C>::new(freq_filter, ws, find_motifs_run_config.id.expect("find_motifs_run_config"))?),
+                Arc::new(FreqFilter::<C>::new(freq_filter, ws, find_motifs_run_config.id.expect("find_motifs_run_config"), tho_device_idx).await?),
             ))))
         },
     };

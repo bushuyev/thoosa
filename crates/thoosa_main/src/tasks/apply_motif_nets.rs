@@ -363,14 +363,16 @@ where
             let freq_filter = if let Some(freq_filter) = freq_filters_by_find_motifs_run_config_id.get(&find_motifs_run_config_id) {
                 freq_filter.clone()
             } else {
-                let freq_filter = find_motifs_run_config
-                    .freq_filter
-                    .as_ref()
-                    .map(|freq_filter| FreqFilter::<C>::new(freq_filter.as_slice(), ws, find_motifs_run_config_id))
-                    .transpose()?
-                    .map(Arc::new);
-                freq_filters_by_find_motifs_run_config_id.insert(find_motifs_run_config_id, freq_filter.clone());
-                freq_filter
+
+                if let Some(filters) = find_motifs_run_config.freq_filter.as_ref() {
+
+                    let freq_filter =Arc::new(FreqFilter::<C>::new(filters.as_slice(), ws, find_motifs_run_config_id, stage_ctx.tho_device_idx()).await?);
+                    freq_filters_by_find_motifs_run_config_id.insert(find_motifs_run_config_id, Some(Arc::clone(&freq_filter)));
+                    Some(freq_filter)
+                } else {
+                    None
+                }
+               
             };
 
             let freq_filter_find_motifs_run_config_id = if freq_filter.is_some() { Some(find_motifs_run_config_id) } else { None };
