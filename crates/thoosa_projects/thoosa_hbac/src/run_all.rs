@@ -914,7 +914,7 @@ mod tests {
         //     ], 100, 10.0)
 
         let r = resource_tensor_two_easy_motifs(
-            rng().random_range(1000..2000),
+            2000, //rng().random_range(1000..2000),
             1,
             100,
             2,
@@ -1056,7 +1056,7 @@ mod tests {
         //     vec![(3, 100, MotifKind::Sin)],
         // ], 100, 10.)
         let r = resource_tensor_two_easy_motifs(
-            rng().random_range(1000..2000),
+            2000, //rng().random_range(1000..2000),
             1,
             100,
             2,

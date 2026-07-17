@@ -720,8 +720,12 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 mod tests {
     use std::io::Write;
     use std::path::Path;
-    use crate::cdt_for_dir;
-    use crate::perf_logging::init_perf_writer;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use log::info;
+    use tracing::Instrument;
+    use crate::{cdt_for_dir, ThoError};
+    use crate::perf_logging::{format_perf_map, init_perf_writer, PERF};
 
     #[test]
     fn test_init_perf_writer_none_uses_sink() {
@@ -736,6 +740,25 @@ mod tests {
         let _ = init_perf_writer(Some(perf_file.clone())).expect("init_perf_writer(Some(path)) should succeed");
         assert!(perf_file.exists());
         let _ = std::fs::remove_file(perf_file);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_in_spawned() -> Result<(), ThoError>{
+
+        let h = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }).instrument(tracing::debug_span!(
+            "label",
+            agg_perf="label",
+        ));
+
+        h.await?;
+
+        info!("\n{}", format_perf_map(&PERF));
+
+        assert!(PERF.get("label").unwrap().elapsed_ns.load(Ordering::Relaxed) > 3000);
+
+        Ok(())
     }
 }
 
