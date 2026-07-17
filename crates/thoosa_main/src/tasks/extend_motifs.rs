@@ -472,7 +472,7 @@ where
 
         for (i_0, resource_0) in resources.iter().enumerate() {
             debug!("SelectMotifsStage::run: on i_0={i_0} resource_0={resource_0:?} num_resources={num_resources}");
-            let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws)?;
+            let configured_loader = config_to_stage(&loader, &find_motifs_run_config, &ws, ctx.tho_device_idx()).await?;
 
             let t_0 = track_await(Arc::clone(&configured_loader)
                 .run_cached(Arc::new(resource_0.clone()), ctx.branch(false))).await?;

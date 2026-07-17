@@ -757,7 +757,7 @@ where
             acc
         });
         assert!(!resource_ids_slices.is_empty());
-        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
+        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws, ctx.tho_device_idx()).await?;
         let loaded_resources = track_await(load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
@@ -919,7 +919,7 @@ where
 
         debug!("RandomSlicesLoader::run: motif_id={motif_id} find_motifs_run_config={find_motifs_run_config:?} device_idx={}", ctx.tho_device_idx());
 
-        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws)?;
+        let configurable_loader = config_to_stage(&self.loader, &find_motifs_run_config, &self.ws, ctx.tho_device_idx()).await?;
         let loaded_resources = track_await(load_motif_resource_tensors(
             motif_id_value.clone(),
             channel,
@@ -1647,7 +1647,7 @@ where
 
     let tmp_cache = track_await(TmpCached::new(&format!("tmp_random_slices_{descr}"))).await;
 
-    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws)?;
+    let configurable_loader = config_to_stage(&loader, &find_motifs_run_config, ws, ctx.tho_device_idx()).await?;
     let sync_load_random_slices = Arc::new(SyncLoadRandomSlicesDynStage::new(ctx.tho_device_idx()).await?);
     let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
     for (resource_id, slices) in resource_ids_slices {
