@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::{JoinHandle, spawn_blocking};
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 use tub::{Guard, Pool};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::{mono_key, Cause, ThoError};
@@ -38,7 +39,7 @@ use thoosa_shims::cuda_result::check_cuda_status;
 use thoosa_shims::memcpy::{tho_cu_memcpy_dtoh_async, tho_cu_memcpy_htod_async};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use crate::copy_ctx::{CopyCtx, CudaActorHandle, HandleCtx};
-use crate::cuda_utils::{copy_chunks, tensor_mem_size};
+use crate::cuda_utils::{make_chunks, tensor_mem_size};
 use crate::dims::Dims;
 use crate::ipc::ipc_cuda_utils::{recv_fd, send_fd, CuMemHostRegistrationGuard, IpcProcessRole, IpcTensorKind, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
@@ -1185,11 +1186,12 @@ impl CudaIPCActor {
                 });
             }
             CudaIPCActorMessage::InvokeEndpoint { input, respond_to } => {
+
                 let self_tx = self.spawned_state.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
 
-                tokio::spawn(async move {
+                _= tokio::spawn(async move {
 
                     let response = send_request_and_wait(
                         self_tx,
@@ -1206,7 +1208,6 @@ impl CudaIPCActor {
                         }
                     });
                     let _ = respond_to.send(response);
-
                     Ok::<_, ThoError>(())
                 });
             }
@@ -1215,7 +1216,7 @@ impl CudaIPCActor {
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
 
-                tokio::spawn(async move {
+                _= tokio::spawn(async move {
                     let response = send_request_and_wait(
                         self_tx,
                         pending,
@@ -1254,6 +1255,7 @@ impl CudaIPCActor {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_ref_d2h_copy"))]
     fn handle_ref_d2h_copy(
         &mut self,
         tensor_key: u64,
@@ -1295,7 +1297,7 @@ impl CudaIPCActor {
                     return Err(ThoError::new(format!("worker described tensor key={} but requested key={tensor_key}", info.tensor_key)));
                 }
 
-                let chunks = copy_chunks(info.tensor_byte_len, buf_size, "worker IPC D2H copy")?;
+                let chunks = make_chunks(info.tensor_byte_len, buf_size, "worker IPC D2H copy")?;
                 validate_ipc_chunk_capacity(chunks.len(), "worker IPC D2H copy")?;
 
                 debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} chunks={chunks:?}");
@@ -1396,7 +1398,7 @@ impl CudaIPCActor {
         Ok(())
     }
 
-
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_h2d_copy"))]
     fn handle_h2d_copy(&mut self, src: ThoTensor, dst_device: ThoDevice, respond_to: oneshot::Sender<Result<ThoTensor, ThoError>>) -> Result<(), ThoError> {
         let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let preflight_id = self.next_id.fetch_add(1, Ordering::Relaxed);
@@ -1415,8 +1417,8 @@ impl CudaIPCActor {
         }
 
         // The parent side of H2D only stages CPU bytes into memfd-backed chunks; the worker owns the later CUDA copy.
-        let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
-        let chunk_count = chunk_groups.iter().map(Vec::len).sum::<usize>();
+        let chunks = make_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?;
+        let chunk_count = chunks.len();
         validate_ipc_chunk_capacity(chunk_count, "worker IPC H2D copy")?;
         let src_kind = src.t_ref().kind();
         let src_shape = src.t_ref().size();
@@ -1444,8 +1446,6 @@ impl CudaIPCActor {
                 ).await?;
                 parse_worker_h2d_start_preflight_reply(&preflight_reply)?;
 
-
-
                 {
                     let mut pending = pending.lock().await;
                     let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
@@ -1453,42 +1453,42 @@ impl CudaIPCActor {
                 }
 
                 let final_result = async {
-                    let mut held_buffers = Vec::new();
-                    for chunk_group in chunk_groups {
-                        for chunk in chunk_group {
-                            let mut buf = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
-                            let src_off_ptr = src_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("source tensor pointer offset overflow"))?;
-                            if chunk.len > buf.len() {
-                                return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
-                            }
-                            unsafe {
-                                // SAFETY: src_ptr is the data pointer of src, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
-                                std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf.as_mut_ptr(), chunk.len);
-                            }
-                            let metadata = IpcTensorTransferMetadata {
-                                transfer_id,
-                                buffer_id: buf.buffer_id(),
-                                byte_len: chunk.len,
-                                tensor_byte_len: tensor_mem_size,
-                                tensor_offset: chunk.offset,
-                                chunk_index: chunk.index,
-                                chunk_count,
-                                mapped_len: buf.len(),
-                                offset: 0,
-                                kind: src_kind.into(),
-                                shape: src_shape.clone(),
-                                direction: IpcTransferDirection::HostToDevice,
-                                producer: IpcProcessRole::Parent,
-                                consumer: IpcProcessRole::Worker { worker_id: dst_worker_id },
-                            };
-                            debug!("CudaIPCActor::handle_h2d_copy:, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
+                    let mut held_buffers = Vec::new();//TODO remove from held_buffers?
+                    for chunk in chunks {
 
-                            let fd = buf.try_clone_fd()?;
-                            if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await.is_err() {
-                                return Err(ThoError::new("worker IPC writer task is closed"));
-                            }
-                            held_buffers.push(buf);
+                        let mut buf = copy_ctx.read().await.ipc_bufs_pool.as_ref().unwrap().acquire().await;
+                        let src_off_ptr = src_ptr.checked_add(chunk.offset).ok_or_else(|| ThoError::new("source tensor pointer offset overflow"))?;
+                        if chunk.len > buf.len() {
+                            return Err(ThoError::new(format!("copy chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
                         }
+                        unsafe {
+                            // SAFETY: src_ptr is the data pointer of src, chunk comes from copy_chunks over the tensor byte size, and the destination mmap range was checked against the buffer length above.
+                            std::ptr::copy_nonoverlapping(src_off_ptr as *const u8, buf.as_mut_ptr(), chunk.len);
+                        }
+                        let metadata = IpcTensorTransferMetadata {
+                            transfer_id,
+                            buffer_id: buf.buffer_id(),
+                            byte_len: chunk.len,
+                            tensor_byte_len: tensor_mem_size,
+                            tensor_offset: chunk.offset,
+                            chunk_index: chunk.index,
+                            chunk_count,
+                            mapped_len: buf.len(),
+                            offset: 0,//TODO
+                            kind: src_kind.into(),
+                            shape: src_shape.clone(),
+                            direction: IpcTransferDirection::HostToDevice,
+                            producer: IpcProcessRole::Parent,
+                            consumer: IpcProcessRole::Worker { worker_id: dst_worker_id },
+                        };
+                        debug!("CudaIPCActor::handle_h2d_copy:, CudaIPCActor::Copy: copied tensor chunk to shared memfd: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
+
+                        let fd = buf.try_clone_fd()?;
+                        if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata, fd } }).await.is_err() {
+                            return Err(ThoError::new("worker IPC writer task is closed"));
+                        }
+                        held_buffers.push(buf);
+
                     }
 
                     let id = reply_rx
@@ -1929,7 +1929,10 @@ impl CudaIPCActorHandle {
                 init_msg,
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::install_endpoint_raw",
+            agg_perf="CudaIPCActorHandle::install_endpoint_raw",
+        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
@@ -1941,7 +1944,10 @@ impl CudaIPCActorHandle {
                 input,
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::invoke_endpoint_raw",
+            agg_perf="CudaIPCActorHandle::invoke_endpoint_raw",
+        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
@@ -1953,7 +1959,10 @@ impl CudaIPCActorHandle {
                 input,
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::consume_endpoint_raw",
+            agg_perf="CudaIPCActorHandle::consume_endpoint_raw",
+        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
@@ -1966,7 +1975,10 @@ impl CudaIPCActorHandle {
                 output,
                 respond_to,
             }
-        ).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
+        ).instrument(tracing::debug_span!(
+            "CudaIPCActorHandle::invoke_endpoint_to_file_raw",
+            agg_perf="CudaIPCActorHandle::invoke_endpoint_to_file_raw",
+        )).await.map_err(|e|ThoError::new(format!("e={e:?}")))?;
 
         recv.await.map_err(|e|ThoError::new(format!("e={e:?}")))?
     }
