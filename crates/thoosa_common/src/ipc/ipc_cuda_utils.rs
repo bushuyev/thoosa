@@ -34,7 +34,7 @@ use thoosa_shims::memcpy::{
 };
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 
-use crate::cuda_utils::{copy_chunks, tensor_mem_size};
+use crate::cuda_utils::{make_chunks, tensor_mem_size};
 
 
 fn invalid(message: impl Into<String>) -> ThoError {
@@ -884,74 +884,6 @@ mod tests {
         }
         bytes
     }
-
-    async fn run_h2d_parent_once(
-        buffer: &mut SharedMemfdBuffer,
-        ownership: &mut IpcBufferOwnership,
-        transfer_id: u64,
-        values: &[f32],
-    ) -> Result<(), ThoError> {
-        let metadata = IpcTensorTransferMetadata::new(
-            transfer_id,
-            7,
-            buffer.len(),
-            0,
-            Kind::Float,
-            vec![values.len() as i64],
-            IpcTransferDirection::HostToDevice,
-            IpcProcessRole::Parent,
-            IpcProcessRole::Worker { worker_id: transfer_id },
-        )?;
-        let ready = ipc_h2d_producer_write_bytes(buffer, &metadata, f32_bytes(values), ownership)?;
-        let (child, mut stream) = spawn_worker("h2d").await?;
-        write_json(&mut stream, &metadata).await?;
-        write_json(&mut stream, &ready).await?;
-        send_fd(&stream, buffer.fd()).await?;
-        let consumed: IpcBufferStateMessage = read_json(&mut stream).await?;
-        let copied = read_frame(&mut stream).await?;
-        ownership.acknowledge_consumed(consumed)?;
-        if copied != f32_bytes(values) {
-            return Err(invalid("interprocess H2D values did not round-trip"));
-        }
-        wait_worker(child).await
-    }
-
-    async fn run_parent() -> Result<(), ThoError> {
-        let values = (0..1024).map(|value| value as f32).collect::<Vec<_>>();
-        let mut buffer = SharedMemfdBuffer::create(7, std::mem::size_of_val(values.as_slice()))?;
-        let parent_ptr = buffer.as_ptr();
-        debug!("run_parent: local_mmap_ptr={parent_ptr:?}");
-        let mut ownership = IpcBufferOwnership::new(7);
-
-        run_h2d_parent_once(&mut buffer, &mut ownership, 1, &values).await?;
-        // The parent still owns the original fd after the first worker exits. Passing
-        // it again proves that a restarted worker can map the same anonymous memfd.
-        run_h2d_parent_once(&mut buffer, &mut ownership, 2, &values).await?;
-
-        let metadata = IpcTensorTransferMetadata::new(
-            3,
-            7,
-            buffer.len(),
-            0,
-            Kind::Float,
-            vec![values.len() as i64],
-            IpcTransferDirection::DeviceToHost,
-            IpcProcessRole::Worker { worker_id: 3 },
-            IpcProcessRole::Parent,
-        )?;
-        let (child, mut stream) = spawn_worker("d2h").await?;
-        write_json(&mut stream, &metadata).await?;
-        send_fd(&stream, buffer.fd()).await?;
-        let ready: IpcBufferStateMessage = read_json(&mut stream).await?;
-        let mut consumer_ownership = IpcBufferOwnership::from_ready(ready)?;
-        let (cpu_tensor, consumed) = ipc_d2h_consumer_copy(&buffer, &metadata, &mut consumer_ownership)?;
-        write_json(&mut stream, &consumed).await?;
-        if tensor_bytes(&cpu_tensor, metadata.byte_len) != f32_bytes(&values) {
-            return Err(invalid("interprocess D2H values did not match"));
-        }
-        wait_worker(child).await
-    }
-
 
     #[tokio::test]
     async fn test_fd_passing_and_metadata_validation_without_cuda() -> Result<(), ThoError> {

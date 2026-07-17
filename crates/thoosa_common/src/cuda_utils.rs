@@ -32,7 +32,7 @@ pub(crate) struct CopyChunk {
 }
 
 // Split a tensor byte range into chunks that fit in one pinned host buffer checkout.
-pub(crate) fn copy_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) -> Result<Vec<CopyChunk>, ThoError> {
+pub(crate) fn make_chunks(tensor_mem_size: usize, buf_size: usize, label: &str) -> Result<Vec<CopyChunk>, ThoError> {
     if tensor_mem_size == 0 {
         return Ok(Vec::new());
     }
@@ -254,19 +254,18 @@ pub async fn copy_d2h_from_ptr(
     // }
 
     // Keep one future per chunk so a limit increase can start more copy work immediately.
-    let chunk_groups = copy_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
-    let chunk_groups_len = chunk_groups.len();
-    let chunks = chunk_groups.iter().map(Vec::len).sum::<usize>();
+    let chunks = make_chunks(tensor_mem_size, buf_size_bytes, "copy_d2h_from_ptr")?;
+    let chunk_len = chunks.len();
 
     let dst_t = Tensor::f_empty(src_size, (init_type, Cpu))?;
 
-    debug!("copy_d2h_from_ptr: src_t.size={:?} chunks={chunks} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes} dst_t={dst_t:?}",src_size);
+    debug!("copy_d2h_from_ptr: src_t.size={:?} chunks={chunks:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size_bytes} dst_t={dst_t:?}",src_size);
 
     unsafe {
         let dst_ptr: usize = dst_t.data_ptr() as usize;
 
         track_await(collect_futures_with_progress(
-            chunk_groups.into_iter().map(|chunk_group| {
+            chunks.into_iter().map(|chunk| {
                 let pool = Arc::clone(&bufs_pool);
                 async move {
                     let buf_stream = track_await(pool.acquire()).await;
@@ -275,8 +274,10 @@ pub async fn copy_d2h_from_ptr(
                         let buf_ptr = buf_stream.0.as_mut_ptr() as usize;
                         let stream = Arc::clone(&buf_stream.1);
                         let _guard = ThoStreamGuard::new(stream.as_ref())?;
-
-                        for chunk in chunk_group {
+                        //chunk group was to group adjacent chunks so one blocking task can reuse the same pinned buffer and CUDA stream before returning them to the pool.
+                        // this way of grouping chunks doesn't work with dynamic parallel execution limit in collect_futures_with_progress.
+                        // TODO should still be possible to group chunks according to the current limit?
+                        // for chunk in chunk_group {
                             let src_off_ptr = src_ptr.add(chunk.offset) as thoosa_shims::memcpy::CuDevicePtr;
                             let dst_off_ptr: usize = dst_ptr.add(chunk.offset);
 
@@ -322,7 +323,7 @@ pub async fn copy_d2h_from_ptr(
                                     chunk.len,
                                 );
                             }
-                        }
+                        // }
 
                         drop(buf_stream);
                         Ok::<(), ThoError>(())
@@ -333,7 +334,7 @@ pub async fn copy_d2h_from_ptr(
                     Ok::<_, ThoError>(result)
                 }
             }),
-            chunk_groups_len,
+            chunk_len,
             FuturesOrdering::Unordered,
             COPY_D2H,
         )).await
@@ -419,8 +420,8 @@ pub async fn copy_h2d_from_ptr(
     debug!("copy_h2d_from_ptr: src_t.size={:?} tensor_mem_size={tensor_mem_size} buf_size={buf_size}",size);
 
     // Keep one future per chunk so a limit increase can start more copy work immediately.
-    let chunk_groups = copy_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?.into_iter().map(|chunk| vec![chunk]).collect::<Vec<_>>();
-    let chunk_groups_len = chunk_groups.len();
+    let chunks = make_chunks(tensor_mem_size, buf_size, "copy_h2d_from_ptr")?;
+    let chunks_len = chunks.len();
 
     // destination tensor lives on GPU 0
     let dst_t = Tensor::f_empty(size, (init_type, Device::Cuda(dst_tho_device_idx - 1)))?;
@@ -433,7 +434,7 @@ pub async fn copy_h2d_from_ptr(
         let dst_base = dst_ptr as thoosa_shims::memcpy::CuDevicePtr;
 
         track_await(collect_futures_with_progress(
-            chunk_groups.into_iter().map(|chunk_group| {
+            chunks.into_iter().map(|chunk| {
                 let pool = Arc::clone(bufs_pool);
 
                 async move {
@@ -445,7 +446,7 @@ pub async fn copy_h2d_from_ptr(
                             let stream = Arc::clone(&buf_stream.1);
                             let _guard = ThoStreamGuard::new(stream.as_ref())?;
 
-                        for chunk in chunk_group {
+                        // for chunk in chunk_group {
                             let src_off_ptr = src_ptr.add(chunk.offset);
                             let dst_off_ptr = dst_base + chunk.offset as u64;
 
@@ -485,7 +486,7 @@ pub async fn copy_h2d_from_ptr(
                             }
                             stream.synchronize()?;
                             debug!("copy_h2d_from_ptr: src_off_ptr={src_off_ptr} buf_ptr={buf_ptr} c_buf_size={} thread_name={:?} done", chunk.len, os_thread_id());
-                        }
+                        // }
 
                             drop(buf_stream); // return buffer/stream to pool
 
@@ -497,7 +498,7 @@ pub async fn copy_h2d_from_ptr(
                     Ok::<_, ThoError>(result)
                 }
             }),
-            chunk_groups_len,
+            chunks_len,
             FuturesOrdering::Unordered,
             COPY_H2D,
         )).await
@@ -792,7 +793,7 @@ mod tests {
 
     #[test]
     fn copy_chunks_rejects_zero_buffer_for_nonempty_copy() {
-        assert!(super::copy_chunks(1, 0, "test").is_err());
+        assert!(super::make_chunks(1, 0, "test").is_err());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 64)]
