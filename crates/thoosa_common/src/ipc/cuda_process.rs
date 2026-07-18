@@ -202,7 +202,7 @@ pub(crate) fn encode_worker_copy_error(error: &ThoError) -> String {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct WorkerTensorInfoPayload {
     tensor_key: u64,
     kind: IpcTensorKind,
@@ -233,7 +233,7 @@ pub(crate) struct WorkerCudaResources {
 
 fn validate_ipc_chunk_capacity(chunk_count: usize, label: &str) -> Result<(), ThoError> {
     if chunk_count > IPC_COPY_BUFFERS {
-        // The current protocol retains every buffer until the worker finishes, so waiting for more buffers here would deadlock instead of applying backpressure.
+        // H2D retains every buffer until the worker finishes the complete tensor, so waiting for more buffers here would deadlock instead of applying backpressure.
         return Err(ThoError::new(format!("{label} requires {chunk_count} chunks but the bounded IPC pool has {IPC_COPY_BUFFERS} buffers")));
     }
     Ok(())
@@ -365,7 +365,8 @@ impl PendingWorkerD2hTransfer {
     }
 
     pub(crate) fn is_complete(&self) -> bool {
-        self.metadata.as_ref().is_some_and(|metadata| self.received_bytes == metadata.tensor_byte_len && self.chunks.len() == metadata.chunk_count)
+        // D2H chunks are independent transfers so the parent can consume and release each shared buffer as soon as its worker copy completes.
+        self.metadata.as_ref().is_some_and(|metadata| self.chunks.len() == metadata.chunk_count)
     }
 }
 
@@ -696,15 +697,17 @@ fn copy_worker_d2h_transfer_to_memfd_blocking(
     }
 
     transfer.chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
-    let mut expected_offset = 0usize;
+    // A D2H transfer may cover only one range of the tensor; parallel parent chunk tasks no longer retain every range in one transfer.
+    let mut expected_offset = transfer.chunks.first().ok_or_else(|| ThoError::new(format!("D2H transfer {} has no chunks", metadata.transfer_id)))?.metadata.tensor_offset;
+    let first_offset = expected_offset;
     for chunk in &transfer.chunks {
         if chunk.metadata.tensor_offset != expected_offset {
             return Err(ThoError::new(format!("D2H transfer {} has gap or overlap at tensor offset {}; got chunk offset {}", metadata.transfer_id, expected_offset, chunk.metadata.tensor_offset)));
         }
         expected_offset = expected_offset.checked_add(chunk.metadata.byte_len).ok_or_else(|| ThoError::new("D2H expected tensor offset overflow"))?;
     }
-    if expected_offset != metadata.tensor_byte_len {
-        return Err(ThoError::new(format!("D2H transfer {} copied {expected_offset} bytes but tensor has {} bytes", metadata.transfer_id, metadata.tensor_byte_len)));
+    if expected_offset > metadata.tensor_byte_len || expected_offset - first_offset != transfer.received_bytes {
+        return Err(ThoError::new(format!("D2H transfer {} range [{first_offset}, {expected_offset}) is inconsistent with tensor byte length {} and received byte count {}", metadata.transfer_id, metadata.tensor_byte_len, transfer.received_bytes)));
     }
 
 
@@ -729,8 +732,13 @@ fn copy_worker_d2h_transfer_to_memfd_blocking(
     }
 
 
-    let source_cpu = source.f_to_device(Cpu)?;
-    let source_digest = with_digest.then(||tensor_digest(&source_cpu)).transpose()?;
+    // Independent chunk transfers must not each copy the full source tensor merely to skip a disabled diagnostic digest.
+    let source_digest = if with_digest {
+        let source_cpu = source.f_to_device(Cpu)?;
+        Some(tensor_digest(&source_cpu)?)
+    } else {
+        None
+    };
 
     debug!("copy_worker_d2h_transfer_to_memfd: source tensor digest={source_digest:?}");
     Ok((metadata.transfer_id, source_digest.map(|d|d.hex)))
@@ -1061,7 +1069,7 @@ impl CudaIPCActor {
 
                 return if let Some(tensor_key) = src.ref_key() {
                     assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
-                     self.handle_ref_d2h_copy(tensor_key, dst_device, respond_to)
+                     self.handle_ref_d2h_copy(tensor_key, dst_device, respond_to).await
                 } else {
                     assert_ne!(*dst_device, Cpu, "If source is concrete tensor it should be on CPU and can be copied only to GPU");
 
@@ -1258,7 +1266,7 @@ impl CudaIPCActor {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPActor::handle_ref_d2h_copy"))]
-    fn handle_ref_d2h_copy(
+    async fn handle_ref_d2h_copy(
         &mut self,
         tensor_key: u64,
         dst_device: ThoDevice,
@@ -1269,127 +1277,190 @@ impl CudaIPCActor {
         }
 
         let describe_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let pending = Arc::clone(&self.spawned_state.pending);
         let self_tx = self.spawned_state.tx.clone();
         let copy_ctx = Arc::clone(&self.copy_ctx);
         let buf_size = self.buf_size;
         let worker_id = self.tho_device_idx as u64;
 
-        debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} transfer_id={transfer_id} buf_size={buf_size}");
+        debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} buf_size={buf_size}");
+
+        let setup_result = async {
+            let info_reply = send_request_and_wait(
+                self_tx.clone(),
+                Arc::clone(&pending),
+                OutgoingRequest {
+                    id: describe_id,
+                    payload: OutgoingRequestPayload::Msg(format!("{DESCRIBE_REF_PAYLOAD_PREFIX}{tensor_key}")),
+                },
+            ).await?;
+
+            debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} info_reply={info_reply:?}");
+
+            let info = parse_worker_tensor_info_payload(&info_reply)?;
+
+            debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} info={info:?}");
+
+            if info.tensor_key != tensor_key {
+                return Err(ThoError::new(format!("worker described tensor key={} but requested key={tensor_key}", info.tensor_key)));
+            }
+
+            let chunks = make_chunks(info.tensor_byte_len, buf_size, "worker IPC D2H copy")?;
+
+            debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} chunks={chunks:?}");
+
+            let pool = {
+                let copy_ctx = copy_ctx.read().await;
+                Arc::clone(copy_ctx.ipc_bufs_pool.as_ref().ok_or_else(|| ThoError::new("missing ipc buffer pool"))?)
+            };
+            // The first completed chunk allocates this tensor; later chunk tasks copy into disjoint byte ranges before the coordinator returns it.
+            let destination = Arc::new(Mutex::new(None::<Tensor>));
+            let mut chunk_tasks = Vec::with_capacity(chunks.len());
+
+            debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} got pool");
+
+            for chunk in chunks {
+                let transfer_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                let pending = Arc::clone(&pending);
+                let self_tx = self_tx.clone();
+                let pool = Arc::clone(&pool);
+                let info = info.clone();
+                let destination = Arc::clone(&destination);
+
+                // Each chunk has its own acknowledged worker transfer so CUDA copies can use separate streams and pooled buffers can be released independently.
+                let chunk_task = tokio::spawn(async move {
+                    let result = async {
+                        let buf = pool.acquire().await;
+                        if chunk.len > buf.len() {
+                            return Err(ThoError::new(format!("D2H chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
+                        }
+
+                        let (reply_tx, reply_rx) = oneshot::channel();
+                        {
+                            let mut pending = pending.lock().await;
+                            let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
+                            debug_assert!(old.is_none());
+                        }
+
+                        let start_json = serde_json::to_string(&WorkerD2hStartPayload { transfer_id, tensor_key })
+                            .map_err(|e| ThoError::new(format!("failed to encode D2H start payload: {e}")))?;
+                        if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::Msg(format!("{D2H_START_PAYLOAD_PREFIX}{start_json}")) }).await.is_err() {
+                            return Err(ThoError::new("worker IPC writer task is closed"));
+                        }
+
+                        let metadata = IpcTensorTransferMetadata {
+                            transfer_id,
+                            buffer_id: buf.buffer_id(),
+                            byte_len: chunk.len,
+                            tensor_byte_len: info.tensor_byte_len,
+                            tensor_offset: chunk.offset,
+                            chunk_index: 0,
+                            chunk_count: 1,
+                            mapped_len: buf.len(),
+                            offset: 0,
+                            kind: info.kind,
+                            shape: info.shape.clone(),
+                            direction: IpcTransferDirection::DeviceToHost,
+                            producer: IpcProcessRole::Worker { worker_id },
+                            consumer: IpcProcessRole::Parent,
+                        };
+                        metadata.validate_for_buffer(&buf)?;
+                        debug!("CudaIPCActor::Copy D2H: sending shared memfd chunk to worker: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
+
+                        let fd = buf.try_clone_fd()?;
+                        if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata.clone(), fd } }).await.is_err() {
+                            return Err(ThoError::new("worker IPC writer task is closed"));
+                        }
+
+                        let reply = reply_rx
+                            .await
+                            .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??
+                            .into_msg()?;
+                        let done = parse_worker_copy_done_payload(&reply)?;
+                        if done.transfer_id != transfer_id {
+                            return Err(ThoError::new(format!("worker D2H response transfer_id={} but expected {transfer_id}", done.transfer_id)));
+                        }
+
+                        let destination_ptr = {
+                            let mut destination = destination.lock().await;
+                            if destination.is_none() {
+                                // Delay the full CPU allocation until a worker has actually completed the first chunk.
+                                *destination = Some(Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?);
+                            }
+                            destination.as_ref().ok_or_else(|| ThoError::new("parent D2H destination was not allocated"))?.data_ptr() as usize
+                        };
+
+                        let result = spawn_blocking(move || {
+                            copy_parent_d2h_chunk(metadata, buf, &info, destination_ptr)
+                        }).await??;
+
+                        Ok::<_, ThoError>(done.tensor_digest_hex)
+                    }.await;
+
+                    if result.is_err() {
+                        remove_pending_request(&pending, transfer_id).await;
+                    }
+                    result
+                });
+                chunk_tasks.push((transfer_id, chunk_task));
+            }
+
+            Ok::<_, ThoError>((info, destination, chunk_tasks))
+        }.await;
+
+        let (info, destination, chunk_tasks) = match setup_result {
+            Ok(setup) => setup,
+            Err(error) => {
+                let _ = respond_to.send(Err(error));
+                return Ok(());
+            }
+        };
 
         tokio::spawn(async move {
-            let result = async move {
-                let info_reply = send_request_and_wait(
-                    self_tx.clone(),
-                    Arc::clone(&pending),
-                    OutgoingRequest {
-                        id: describe_id,
-                        payload: OutgoingRequestPayload::Msg(format!("{DESCRIBE_REF_PAYLOAD_PREFIX}{tensor_key}")),
-                    },
-                ).await?;
-
-                debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} info_reply={info_reply:?}");
-
-                let info = parse_worker_tensor_info_payload(&info_reply)?;
-
-                debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} info={info:?}");
-
-                if info.tensor_key != tensor_key {
-                    return Err(ThoError::new(format!("worker described tensor key={} but requested key={tensor_key}", info.tensor_key)));
+            let result = async {
+                let mut first_error = None;
+                let mut worker_digest_hex = None;
+                for (transfer_id, chunk_task) in chunk_tasks {
+                    match chunk_task.await {
+                        Ok(Ok(Some(digest))) => {
+                            if worker_digest_hex.as_ref().is_some_and(|expected| expected != &digest) && first_error.is_none() {
+                                first_error = Some(ThoError::new(format!("worker D2H chunks returned inconsistent tensor digests for transfer {transfer_id}")));
+                            } else {
+                                worker_digest_hex = Some(digest);
+                            }
+                        }
+                        Ok(Ok(None)) => {}
+                        Ok(Err(error)) => {
+                            if first_error.is_none() {
+                                first_error = Some(error);
+                            }
+                        }
+                        Err(error) => {
+                            remove_pending_request(&pending, transfer_id).await;
+                            if first_error.is_none() {
+                                first_error = Some(ThoError::new(format!("parent D2H chunk task for transfer {transfer_id} failed: {error}")));
+                            }
+                        }
+                    }
+                }
+                if let Some(error) = first_error {
+                    return Err(error);
                 }
 
-                let chunks = make_chunks(info.tensor_byte_len, buf_size, "worker IPC D2H copy")?;
-                validate_ipc_chunk_capacity(chunks.len(), "worker IPC D2H copy")?;
-
-                debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} chunks={chunks:?}");
-
-                let chunk_count = chunks.len();
-                let pool = {
-                    let copy_ctx = copy_ctx.read().await;
-                    Arc::clone(copy_ctx.ipc_bufs_pool.as_ref().ok_or_else(|| ThoError::new("missing ipc buffer pool"))?)
+                let cpu_tensor = {
+                    let mut destination = destination.lock().await;
+                    match destination.take() {
+                        Some(destination) => destination,
+                        None => Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?,
+                    }
                 };
-
-                debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} got pool");
-
-                let (reply_tx, reply_rx) = oneshot::channel();
-                {
-                    let mut pending = pending.lock().await;
-                    let old = pending.insert(transfer_id, PendingResponse::Buffered(reply_tx));
-                    debug_assert!(old.is_none());
-                }
-
-
-
-                let start_json = serde_json::to_string(&WorkerD2hStartPayload { transfer_id, tensor_key })
-                    .map_err(|e| ThoError::new(format!("failed to encode D2H start payload: {e}")))?;
-
-                debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} start_json={start_json:?}");
-
-                if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::Msg(format!("{D2H_START_PAYLOAD_PREFIX}{start_json}")) }).await.is_err() {
-                    return Err(ThoError::new("worker IPC writer task is closed"));
-                }
-
-                let mut held_chunks = Vec::with_capacity(chunk_count);
-
-                debug!("CudaIPCActor::handle_ref_d2h_copy: describe_id={describe_id} held_chunks.len={}", held_chunks.len());
-
-                for chunk in chunks {
-                    let buf = pool.acquire().await;
-                    if chunk.len > buf.len() {
-                        return Err(ThoError::new(format!("D2H chunk len={} exceeds shared buffer len={}", chunk.len, buf.len())));
-                    }
-                    let metadata = IpcTensorTransferMetadata {
-                        transfer_id,
-                        buffer_id: buf.buffer_id(),
-                        byte_len: chunk.len,
-                        tensor_byte_len: info.tensor_byte_len,
-                        tensor_offset: chunk.offset,
-                        chunk_index: chunk.index,
-                        chunk_count,
-                        mapped_len: buf.len(),
-                        offset: 0,
-                        kind: info.kind,
-                        shape: info.shape.clone(),
-                        direction: IpcTransferDirection::DeviceToHost,
-                        producer: IpcProcessRole::Worker { worker_id },
-                        consumer: IpcProcessRole::Parent,
-                    };
-                    metadata.validate_for_buffer(&buf)?;
-                    debug!("CudaIPCActor::Copy D2H: sending shared memfd chunk to worker: chunk={chunk:?} metadata={metadata:?} local_mmap_ptr={:?}", buf.as_ptr());
-
-                    let fd = buf.try_clone_fd()?;
-                    if self_tx.send(OutgoingRequest { id: transfer_id, payload: OutgoingRequestPayload::SharedMemfdBuffer { meta: metadata.clone(), fd } }).await.is_err() {
-                        return Err(ThoError::new("worker IPC writer task is closed"));
-                    }
-                    held_chunks.push(ParentD2hChunk { metadata, buffer: buf });
-                }
-
-                let reply = reply_rx
-                    .await
-                    .map_err(|_| ThoError::new(format!("response channel for D2H request {transfer_id} was dropped")))??
-                    .into_msg()?;
-
-                 let final_result=   Ok::<_, ThoError>((reply, held_chunks));
-
-
-                if final_result.is_err() {
-                    remove_pending_request(&pending, transfer_id).await;
-                }
-                let (reply, held_chunks) = final_result?;
-                let done = parse_worker_copy_done_payload(&reply)?;
-                if done.transfer_id != transfer_id {
-                    return Err(ThoError::new(format!("worker D2H response transfer_id={} but expected {transfer_id}", done.transfer_id)));
-                }
-                let cpu_tensor = assemble_parent_d2h_chunks(held_chunks, &info)?;
-                if let Some(hex) = done.tensor_digest_hex.as_ref() {
+                if let Some(hex) = worker_digest_hex {
                     let cpu_digest = tensor_digest(&cpu_tensor)?;
-                    debug!("CudaIPCActor::Copy D2H: worker and parent tensor digests matched: transfer_id={transfer_id} digest={}", cpu_digest.hex);
-                    if cpu_digest.hex.ne(hex) {
-                        return Err(ThoError::new(format!("worker D2H digest mismatch for transfer {transfer_id}: worker={} parent={}", hex, cpu_digest.hex)));
+                    debug!("CudaIPCActor::Copy D2H: worker and parent tensor digests matched: digest={}", cpu_digest.hex);
+                    if cpu_digest.hex.ne(&hex) {
+                        return Err(ThoError::new(format!("worker D2H digest mismatch: worker={} parent={}", hex, cpu_digest.hex)));
                     }
                 }
-
 
                 ThoTensor::new((), cpu_tensor)
             }.await;
@@ -1759,48 +1830,29 @@ fn parse_worker_copy_error_payload(payload: &str) -> ThoError {
     }
 }
 
-struct ParentD2hChunk {
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_parent_d2h_chunk"))]
+fn copy_parent_d2h_chunk(
     metadata: IpcTensorTransferMetadata,
     buffer: Guard<SharedMemfdBuffer>,
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="assemble_parent_d2h_chunks"))]
-fn assemble_parent_d2h_chunks(
-    mut chunks: Vec<ParentD2hChunk>,
     info: &WorkerTensorInfoPayload,
-) -> Result<Tensor, ThoError> {
-    chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
-    let mut expected_offset = 0usize;
-    for chunk in &chunks {
-        chunk.metadata.validate_for_buffer(&chunk.buffer)?;
-        if chunk.metadata.kind != info.kind || chunk.metadata.shape != info.shape || chunk.metadata.tensor_byte_len != info.tensor_byte_len {
-            return Err(ThoError::new(format!("parent D2H chunk metadata does not match worker tensor info for transfer {}", chunk.metadata.transfer_id)));
-        }
-        if chunk.metadata.tensor_offset != expected_offset {
-            return Err(ThoError::new(format!("parent D2H chunks have gap or overlap at tensor offset {}; got chunk offset {}", expected_offset, chunk.metadata.tensor_offset)));
-        }
-        expected_offset = expected_offset.checked_add(chunk.metadata.byte_len).ok_or_else(|| ThoError::new("parent D2H expected tensor offset overflow"))?;
+    destination_ptr: usize,
+) -> Result<(), ThoError> {
+    metadata.validate_for_buffer(&buffer)?;
+    if metadata.kind != info.kind || metadata.shape != info.shape || metadata.tensor_byte_len != info.tensor_byte_len {
+        return Err(ThoError::new(format!("parent D2H chunk metadata does not match worker tensor info for transfer {}", metadata.transfer_id)));
     }
-    if expected_offset != info.tensor_byte_len {
-        return Err(ThoError::new(format!("parent D2H received {expected_offset} bytes but tensor has {} bytes", info.tensor_byte_len)));
+    let destination = destination_ptr
+        .checked_add(metadata.tensor_offset)
+        .ok_or_else(|| ThoError::new("parent D2H destination pointer overflow"))?;
+    let source = unsafe {
+        // SAFETY: validate_for_buffer checked offset + byte_len against the live mmap and the buffer is held until this copy finishes.
+        buffer.as_ptr().add(metadata.offset)
+    };
+    unsafe {
+        // SAFETY: source points into the validated live mmap chunk, destination points into the owned CPU tensor byte range checked by metadata, and parallel chunk tasks write disjoint generated ranges.
+        std::ptr::copy_nonoverlapping(source, destination as *mut u8, metadata.byte_len);
     }
-
-    let destination = Tensor::f_empty(info.shape.as_slice(), (info.kind.into(), Cpu))?;
-    let dst_base = destination.data_ptr() as usize;
-    for chunk in &chunks {
-        let destination = dst_base
-            .checked_add(chunk.metadata.tensor_offset)
-            .ok_or_else(|| ThoError::new("parent D2H destination pointer overflow"))?;
-        let source = unsafe {
-            // SAFETY: validate_for_buffer checked offset + byte_len against the live mmap and the buffer is held until this copy finishes.
-            chunk.buffer.as_ptr().add(chunk.metadata.offset)
-        };
-        unsafe {
-            // SAFETY: source points into the validated live mmap chunk, destination points into the owned CPU tensor byte range checked by tensor offsets, and the copy completes before pooled buffers are released.
-            std::ptr::copy_nonoverlapping(source, destination as *mut u8, chunk.metadata.byte_len);
-        }
-    }
-    Ok(destination)
+    Ok(())
 }
 
 async fn send_request_and_wait(
