@@ -691,7 +691,7 @@ pub fn split_padded_motif_scores( //TOOD move to utils.rs
     Ok((chunks, chunk_lengths))
 }
 
-#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores/copy"))]
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores/copy_chunk"))]
 fn copy_chunk(scores: &Tensor, chunks: &mut Vec<Tensor>, m: i64, chunk_idx: i64, start: i64, len: i64) -> Result<(), ThoError> {
     {
         // src shape: [1, len]

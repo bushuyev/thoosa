@@ -1127,7 +1127,7 @@ async fn save_run_configs<R: RunConfig + thoosa_properties_map::ToHashmap>(
     }
     Ok(run_config_ids)
 }
-
+#[tracing::instrument(level = "debug", skip_all, fields(agg_perf="hbac/import_resources"))]
 pub async fn import_resources<F, R, S>(
     ws: &Arc<RwLock<Box<dyn Workspace>>>,
     store: &Arc<Box<dyn Store>>,

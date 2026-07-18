@@ -71,7 +71,7 @@ where
         let tho_cuda_context = ThoCudaContext::new(0)?;
 
         let worker_rt = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(8)
+            .worker_threads(32)
             .enable_all()
             .on_thread_start(move || {
 
@@ -155,16 +155,19 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::atomic::Ordering::Acquire;
+    use std::time::Instant;
+    use futures_util::future::join_all;
     use log::{debug, info, LevelFilter};
     use serde::de::Unexpected::Option;
     use tch::{Device, Tensor};
     use tch::Device::Cuda;
     use tch::Kind::Float;
+    use tch::kind::FLOAT_CPU;
     use tokio::task::JoinSet;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::traits::{Adjustable, WithId};
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::{mono_key, ThoError};
+    use thoosa_shared::{mono_key, ThoError, os_thread_id};
     use thoosa_shared::test_utils::init_test_logging;
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
@@ -897,6 +900,74 @@ mod tests {
             }, async |sock_path| { CudaWorker::run_worker(sock_path, sync_ab_clc_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
         }
 
+    }
+
+
+
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 32)]
+    async fn test_concurrent_copy_local() -> Result<(), ThoError> {//heavy_
+        unsafe {
+            let _lib = libloading::Library::new("libtorch_cuda.so").expect("no libtorch_cuda.so");
+        }
+
+        // log::set_max_level(log::LevelFilter::Debug   );
+        let global_ctx = GlobalCtx::init_devices(2);
+        let result = heavy_test_concurrent_copy("heavy_test_run_all").await;
+        global_ctx.shutdown().await;
+
+        info!("\n{}", format_perf_map(&PERF));
+        result
+    }
+
+
+    #[test]
+    fn test_concurrent_copy_ipc() -> Result<(), ThoError> {//heavy_
+
+        run_ipc_test(
+            async {
+                let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+                let test_name = format!("{module}::test_concurrent_copy_ipc");
+                GlobalCtx::init_devices_ipc(2, vec![
+                    test_name, "--exact".to_string(),
+                    "--nocapture".to_string(), "--no-capture".to_string(),
+                ]).await?;
+                let cuda_actor = GlobalCtx::global().cuda_actor(1);
+                let result = heavy_test_concurrent_copy("heavy_test_run_all_ipc").await;
+                let shutdown_result = cuda_actor.shutdown().await;
+                match (result, shutdown_result) {
+                    (Ok(()), Ok(())) => Ok(()),
+                    (Err(error), _) => Err(error),
+                    (Ok(()), Err(error)) => Err(error),
+                }
+            },
+            async |sock_path| {
+                // set_max_level(Debug);
+                return CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Device::Cuda(0))).await;
+            }
+        )
+    }
+
+    async fn heavy_test_concurrent_copy(descr:&str)->Result<(), ThoError>{
+
+
+        for n in [10, 100, 1000, 10000] {
+            let t = Instant::now();
+            let x = (0..100).map(|i| {
+                async move {
+                    let t_cpu_0 = ThoTensor::new((), Tensor::rand(&[n, 10000], FLOAT_CPU))?;
+                    let t_cuda = GlobalCtx::global().cuda_actor(1).copy(t_cpu_0, 1.into()).await?;
+                    let t_cpu_1 = GlobalCtx::global().cuda_actor(1).copy(t_cuda, 0.into()).await?;
+                    debug!("i={i} os_thread_id={}",os_thread_id());
+
+                    Ok::<_, ThoError>(())
+                }
+            }).collect::<JoinSet<_>>().join_all().await;
+
+            info!("n={n} done in {} mls", t.elapsed().as_millis());
+        }
+
+        Ok(())
     }
 
 }

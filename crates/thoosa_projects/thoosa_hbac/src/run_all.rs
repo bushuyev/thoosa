@@ -817,7 +817,6 @@ mod tests {
         let PrepareRunAllDataOutput { import_hash, .. } = prepare_oom_handler.run(&prepare_stage, prepare_input, RunCtxImpl::new(0, "prepare_run_all_data"), NoContexts).await?;
 
 
-        let channels = 3;
         let tensors_path = ws.read().tensors_path().clone();
         let tensors_path_for_import = ws.read().tensors_path().clone();
 
