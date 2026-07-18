@@ -658,7 +658,7 @@ impl CopyCtx {
         }
     }
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores"))]
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="copy_from_ptr"))]
     pub async fn copy_from_ptr(
         &self,
         src_ptr: usize,

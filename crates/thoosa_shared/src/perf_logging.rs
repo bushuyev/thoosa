@@ -720,7 +720,9 @@ pub fn format_perf_map(map: &DashMap<String, PerfAgg>) -> String {
 mod tests {
     use std::io::Write;
     use std::path::Path;
+    use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    use std::thread;
     use std::time::Duration;
     use log::info;
     use tracing::Instrument;
@@ -759,6 +761,77 @@ mod tests {
         assert!(PERF.get("label").unwrap().elapsed_ns.load(Ordering::Relaxed) > 3000);
 
         Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_nested() {
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_1"))]
+        async fn inner_1(){
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_2"))]
+
+        async fn inner_2(){
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="inner_3"))]
+        async fn inner_3(){
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="outer"))]
+        async fn outer(){
+            inner_1().await;
+            inner_2().await;
+            inner_3().await;
+        }
+
+        outer().await;
+
+        info!("\n{}", format_perf_map(&PERF));
+
+        assert!(PERF.get("inner_1").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
+        assert!(PERF.get("inner_2").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
+        assert!(PERF.get("inner_3").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
+        assert!(PERF.get("outer").unwrap().elapsed_ns.load(Ordering::Relaxed) > 3000);
+    }
+
+    #[test]
+    fn test_impls() {
+
+        trait Runnable {
+            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="Runnable::do_run"))]
+            fn do_run(self:Arc<Self>){
+                thread::sleep(Duration::from_secs(1))
+            }
+        }
+
+        struct A;
+        impl Runnable for A {
+            #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="A::do_run"))]
+            fn do_run(self:Arc<Self>) {
+                thread::sleep(Duration::from_secs(1))
+            }
+        }
+
+        struct B;
+        impl Runnable for B {
+
+        }
+
+        let a = Arc::new(A);
+        a.do_run();
+
+        let b = Arc::new(B);
+        b.do_run();
+
+        info!("\n{}", format_perf_map(&PERF));
+
+        assert!(PERF.get("A::do_run").unwrap().elapsed_ns.load(Ordering::Relaxed) >= 1000);
+        assert!(PERF.get("Runnable::do_run").unwrap().elapsed_ns.load(Ordering::Relaxed) > 1000);
     }
 }
 

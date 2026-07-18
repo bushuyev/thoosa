@@ -736,7 +736,7 @@ where
         Ok((TrainStepDynSyncStage::Local(Arc::new(stage)), node_params))
     }
 
-    pub(crate) async fn new_local<NP, NB, NBF, OF, RC>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
+    pub(crate) async fn  new_local<NP, NB, NBF, OF, RC>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
     where
         NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
         NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
@@ -791,6 +791,7 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStepDynSyncStage::into_var_store"))]
     pub(crate) async fn into_var_store(self) -> Result<VarStore, ThoError> {
         match self {
             Self::Local(stage) => Arc::try_unwrap(stage).map_err(|_| ThoError::new("TrainStepDynSyncStage::into_var_store: local TrainStep still shared"))?.into_var_store(),
