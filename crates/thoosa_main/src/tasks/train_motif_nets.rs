@@ -194,7 +194,7 @@ fn new_train_motif_step_for_ipc(init: &TrainMotifStepIpcInit, all_cuda_tensors: 
     let learning_rate = init.learning_rate;
     let x_f: Arc<TrainStepXFn<Slice>> = Arc::new(Box::new(train_motif_x_f));
     let (train_step, ()) = futures::executor::block_on(TrainStep::new_local(
-        Cuda(0),
+        Cuda(0).into(),
         move |var_store| async move {//TODO use const like OPTMIZER_FN to make sure it's same as in local
             let net = params.motif_net(cosine_motif)?.build_tch_module::<thoosa_common::dims::Batch<Slice>, thoosa_common::dims::Batch<MotifProbability>>(&var_store.lock().root())?;
             Ok((net, ()))
@@ -1936,7 +1936,7 @@ mod tests {
             }) );
             let proxy_factory = Arc::new(TrainMotifStepProxyFactory::<RunCtxImpl>::new(motif, 100)) as Arc<dyn TrainStepProxyFactory<Slice, MotifProbability, RunCtxImpl, MotifNetParams, TrainMotifNetRunConfig>>;
             let (train_step, _node_params) = TrainStep::new(
-                Cuda(0),
+                Cuda(0).into(),
                 |vs|  {
                     async move {
                         unimplemented!()
@@ -1953,7 +1953,6 @@ mod tests {
                 },
                 Some(&proxy_factory),
                 &run_config,
-                1,
             ).await?;
             let step = match &train_step {
                 TrainStepDynSyncStage::Proxy { stage, .. } => Arc::clone(stage),
