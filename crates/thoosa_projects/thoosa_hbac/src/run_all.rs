@@ -894,7 +894,7 @@ mod tests {
                 debug!("ok");
             }
             Err(e) => {
-                debug!("e={e:?}");
+                info!("e={e:?}");
                 panic!("test failed")
             }
         };
