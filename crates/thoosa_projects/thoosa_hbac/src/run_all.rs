@@ -224,6 +224,7 @@ pub(crate) async fn run_all(
     };
 
 
+
     if run_all_args.with_plots {
         for select_motifs_run_config_id in &select_motifs_run_config_ids {
             track_await(run_plot(&ws, &store, &loader, &PlotDataArgs::new(DataBy::SelectedMotifs { select_motifs_run_config_ids: vec![*select_motifs_run_config_id] }), run_all_args.resolution, &Cpu, root_ctx.branch(false))).await?;
@@ -255,7 +256,7 @@ pub(crate) async fn run_all(
     )).await?;
 
     info!("train motif nets done: train_motif_nets_run_config_ids={train_motif_nets_run_config_ids:?}");
-
+    
     //gpt Pre-create context and shared handles for label-net stage construction.
     let mut init_ctx_train_labels = root_ctx.branch(true);
     let store_in_train_labels = Arc::clone(&store);
@@ -752,7 +753,7 @@ mod tests {
 
         // log::set_max_level(log::LevelFilter::Debug   );
         let global_ctx = GlobalCtx::init_devices(2);
-        let result = run_heavy_test_run_all("heavy_test_run_all").await;
+        let result = run_heavy_test_run_all("heavy_test_run_all_local").await;
         global_ctx.shutdown().await;
 
         info!("\n{}", format_perf_map(&PERF));

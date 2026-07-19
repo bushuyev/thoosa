@@ -16,7 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
-use log::{debug, error, trace};
+use log::{debug, error, info, trace};
 use rayon::iter::ParallelBridge;
 use serde::{Deserialize, Serialize};
 use tch::Device::{Cpu, Cuda};
@@ -1765,13 +1765,17 @@ pub(crate) fn parse_wire_msg(frame: &str) -> Result<(u64, String), ThoError> {
 
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="parse_wire_response"))]
 fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload), ThoError> {
+
     let separator = frame.iter().position(|byte| *byte == b'\t')
         .ok_or_else(|| ThoError::new("bad wire response without request id separator"))?;
+
     let id = std::str::from_utf8(&frame[..separator])
         .map_err(|e| ThoError::new(format!("bad utf8 request id in wire response: {e}")))?
         .parse::<u64>()
         .map_err(|e| ThoError::new(format!("bad request id in wire response: {e}")))?;
+
     let payload = &frame[separator + 1..];
+
     if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_CHUNK_PREFIX) {
         Ok((id, IncomingResponsePayload::BinaryChunk(payload.to_vec())))
     } else if payload == BINARY_RESPONSE_END_PAYLOAD {
