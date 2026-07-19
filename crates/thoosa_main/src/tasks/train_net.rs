@@ -256,22 +256,20 @@ where
     ) -> BoxFuture<'static, Result<(VarStore, f32, NP), ThoError>> {
         Box::pin(async move {
             debug!("TrainNet::run_inner: descr={descr} validation_step={validation_step}");
-            let local_ipc_train_step = GlobalCtx::global().is_ipc() && self.train_step_proxy_factory.is_none();
-            let train_device_idx = if local_ipc_train_step { 0 } else { tho_device_idx };
-            let device = Device::from(ThoDevice::from(train_device_idx));
+
+            let device = Device::from(ThoDevice::from(ctx.tho_device_idx()));
             let epochs = (self.epochs)(&run_config);
 
             let self_x_f = Arc::clone(&self);
             let x_f: Arc<TrainStepXFn<DX>> = Arc::new(Box::new(move |batch: ThoBatch<DX>| (self_x_f.x_f)(batch)));
             let (train_step, params) = track_await(TrainStep::new(
-                device,
+                ThoDevice::from(ctx.tho_device_idx()),
                 |var_store| (self.net)(ctx.branch(false), &run_config, var_store),
                 |run_config, var_store| (self.optimizer)(&run_config, var_store),
                 x_f,
                 self.loss_fn,
                 self.train_step_proxy_factory.as_ref(),
                 &run_config,
-                train_device_idx,
             )).await?;
             let train_step = Arc::new(train_step);
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
@@ -323,7 +321,7 @@ where
                 while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next())
                     .instrument(tracing::debug_span!("run_inner/batches.next", file = file!(),line = line!()))
                     .await {
-                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true), local_ipc_train_step.then_some(0)));
+                    let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, expected_y, true)));
 
                     debug!("TrainNet::run_inner, train: descr={descr}  before oom input.id={:?} tokio::task_id={:?}", input.id(), tokio::task::try_id());
 
@@ -358,7 +356,7 @@ where
                     while let Some(Ok((x_t_0, lengths, y_t))) = batches.next()
                         .instrument(tracing::debug_span!("run_inner/validation_step/batches.next", file = file!(),line = line!()))
                         .await {
-                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false), local_ipc_train_step.then_some(0)));
+                        let input = Arc::new(TrainStepInputWrapper::new(TrainStepInput::new(x_t_0, lengths, y_t, false)));
                         let output = oom_handler.run(
                             &train_step,
                             input,
@@ -622,12 +620,11 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInput<DI, DO> {
 #[derive(Debug)]
 struct TrainStepInputWrapper<DI: Dims, DO: Dims> {
     input: TrainStepInput<DI, DO>,
-    force_device_idx: Option<usize>,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInputWrapper<DI, DO> {
-    fn new(input: TrainStepInput<DI, DO>, force_device_idx: Option<usize>) -> Self {
-        Self { input, force_device_idx }
+    fn new(input: TrainStepInput<DI, DO>) -> Self {
+        Self { input }
     }
 }
 
@@ -646,7 +643,7 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStepInputWrapper<DI, DO> {
     where
         Self: 'a,
     {
-        self.input.borrow_to(self.force_device_idx.unwrap_or(to_tho_device_idx))
+        self.input.borrow_to(to_tho_device_idx)
     }
 }
 
@@ -673,7 +670,7 @@ impl WithId for TrainStepOutput {
 impl Output for TrainStepOutput {}
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
-    device: Device,
+    device: ThoDevice,
     net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
     opt: Mutex<Optimizer>,
     var_store: Arc<Mutex<VarStore>>,
@@ -714,7 +711,9 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    pub(crate) async fn new<NP, NB, NBF, OF, RC>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, proxy_factory: Option<&Arc<dyn TrainStepProxyFactory<DI, DO, C, NP, RC>>>, run_config: &RC, tho_device_idx: usize) -> Result<(TrainStepDynSyncStage<F, DI, DO, C>, NP), ThoError>
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep::new"))]
+    pub(crate) async fn new<NP, NB, NBF, OF, RC>(tho_device: ThoDevice, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, proxy_factory: Option<&Arc<dyn TrainStepProxyFactory<DI, DO, C, NP, RC>>>, run_config: &RC) -> Result<(TrainStepDynSyncStage<F, DI, DO, C>, NP), ThoError>
     where
         DI: 'static,
         DO: 'static,
@@ -728,21 +727,21 @@ where
         if GlobalCtx::global().is_ipc()
             && let Some(proxy_factory) = proxy_factory
         {
-            let TrainStepProxyParts { stage, weights_sync, node_params } = proxy_factory.new_proxy(run_config, tho_device_idx).await?;
+            let TrainStepProxyParts { stage, weights_sync, node_params } = proxy_factory.new_proxy(run_config, tho_device.tho_device_idx()).await?;
             return Ok((TrainStepDynSyncStage::Proxy { stage, weights_sync }, node_params));
         }
 
-        let (stage, node_params) = Self::new_local(device, net_builder, optimizer_builder, x_f, loss_fn, run_config).await?;
+        let (stage, node_params) = Self::new_local(tho_device, net_builder, optimizer_builder, x_f, loss_fn, run_config).await?;
         Ok((TrainStepDynSyncStage::Local(Arc::new(stage)), node_params))
     }
 
-    pub(crate) async fn  new_local<NP, NB, NBF, OF, RC>(device: Device, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
+    pub(crate) async fn  new_local<NP, NB, NBF, OF, RC>(device: ThoDevice, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
     where
         NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
         NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
         OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
     {
-        let var_store = Arc::new(Mutex::new(VarStore::new(device)));
+        let var_store = Arc::new(Mutex::new(VarStore::new(device.clone().into())));
         let (net, node_params) = net_builder(Arc::clone(&var_store)).await?;
         let opt = {
             let var_store = perf_log!(sync_mutex_lock!(var_store));
