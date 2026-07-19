@@ -302,6 +302,7 @@ impl ProxyTrainMotifStep {
     }
 }
 
+//TODO Proxies are made for concreate Ctx, Local stages take Ctx as type param
 #[derive(Debug)]
 struct TrainMotifStepProxyCtx<C>
 where

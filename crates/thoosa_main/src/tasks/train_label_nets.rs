@@ -12,15 +12,16 @@ use futures_util::stream::BoxStream;
 use log::{debug, error, info, trace, warn};
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use tch::nn::{AdamW, OptimizerConfig, VarStore};
-use tch::{Device, Reduction, Tensor};
+use tch::nn::{Optimizer, VarStore};
+use tch::Device::{Cpu, Cuda};
+use tch::{Reduction, Tensor};
 use cached_derive::Cached;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{WorkerStageOutput};
-use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::tho_tensor::{ThoTensor};
 use thoosa_shared::data_with_extra::DataWithExtra;
@@ -56,7 +57,7 @@ use thoosa_common::runner::adjusters::max_parallel::MAX_PARALLEL;
 use thoosa_dummy_data_derive::DummyData;
 use crate::tasks::apply_motif_nets::ApplyMotifNets;
 use thoosa_common::stages_seq::ABStage;
-use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput};
+use crate::tasks::train_net::{TrainNet, TrainNetInput, TrainNetOutput, TrainStep, TrainStepInput, TrainStepIpcRequest, TrainStepOutput, TrainStepProxyFactory, TrainStepProxyParts, TrainStepWeightsSync, TrainStepXFn};
 use crate::tasks::stft::SyncStftSelector;
 use thoosa_shared::comp_id::SynKey;
 use crate::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
@@ -65,6 +66,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_proxy_derive::Proxy;
 
 pub const SYNC_LABEL_BATCH_ENDPOINT: &str = "SyncLabelBatch";
+pub(crate) const TRAIN_LABEL_STEP_ENDPOINT: &str = "TrainLabelStep";
 
 type AppliedMotifOutput = DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>;
 
@@ -781,7 +783,9 @@ where
                         },
                         1,//TODO params
                         format!("label_{label}")
-                    ));
+                    )
+                        // In IPC mode the train step must own its CUDA module and optimizer inside the worker process.
+                        .with_train_step_proxy_factory(Arc::new(TrainLabelNetProxyFactory::new(num_nets))));
 
                     let result = track_await(train_net.run(
                         Arc::new(TrainNetInput::new(SynKey::new([mono_key!("", "empty")]))),
@@ -1014,6 +1018,237 @@ where
         futures.boxed()
     }
 
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TrainLabelStepIpcInit {
+    params: LabelNetParams,
+    training_config: CommonTrainingRunConfig,
+}
+
+type SyncTrainLabelStep = TrainStep<TrainStepXFn<MotifProbability>, MotifProbability, LabelProbability, RunCtxImpl>;
+
+fn train_label_step_params(run_config: &TrainLabelNetRunConfig, num_nets: u32) -> LabelNetParams {
+    match &run_config.net {
+        LabelNetTypeArgs::ConvNet(ConvNetArgs { num_conv_layers, hidden_conv_channels, num_head_layers, num_head_features, kernel, joint }) => {
+            LabelNetParams::new(num_nets, LabelNetTypeParams::ConvNetParams(ConvNetParams::new(*num_conv_layers, *hidden_conv_channels, *kernel, *num_head_layers, *num_head_features, joint.into())))
+        }
+        LabelNetTypeArgs::LinNet(LinNetArgs { num_layers, features }) => {
+            LabelNetParams::new(num_nets, LabelNetTypeParams::LinNetParams(LinLenNetParams::new(*features, *num_layers)))
+        }
+        LabelNetTypeArgs::SelfAttentionNet(SelfAttentionNetArgs { head_size, n_heads, ff_mult, dropout }) => {
+            LabelNetParams::new(num_nets, LabelNetTypeParams::SelfAttentionNetParams(SelfAttentionNetParams::new(*head_size, *n_heads, *ff_mult, *dropout)))
+        }
+    }
+}
+
+fn train_label_loss(pred_y: &Tensor, target: &Tensor) -> Result<Tensor, ThoError> {
+    pred_y.f_binary_cross_entropy_with_logits::<Tensor>(target, None, None, Reduction::Mean).map_err(ThoError::from)
+}
+
+const TRAIN_LABEL_OPTIMIZER_FN: fn(&CommonTrainingRunConfig, &VarStore) -> Result<Optimizer, ThoError> = |training_config, var_store| {
+    training_config.build_optimizer(var_store)
+};
+
+fn new_train_label_step_for_ipc(init: &TrainLabelStepIpcInit) -> Result<SyncTrainLabelStep, ThoError> {
+    let params = init.params.clone();
+    let x_f: Arc<TrainStepXFn<MotifProbability>> = Arc::new(Box::new(|batch| batch));
+    let (train_step, ()) = futures::executor::block_on(TrainStep::new_local(
+        Cuda(0).into(),
+        move |var_store| async move {
+            let net = params.label_net()?.build_tch_module::<Batch<MotifProbability>, Batch<LabelProbability>>(&var_store.lock().root())?;
+            Ok((net, ()))
+        },
+        TRAIN_LABEL_OPTIMIZER_FN,
+        x_f,
+        train_label_loss,
+        &init.training_config,
+    ))?;
+    Ok(train_step)
+}
+
+// The worker initializes the CUDA training state lazily so endpoint registration itself remains device-agnostic.
+#[derive(Debug)]
+struct TrainLabelStepIpcInitStage {
+    init: TrainLabelStepIpcInit,
+    stage: Mutex<Option<Arc<SyncTrainLabelStep>>>,
+}
+
+impl TrainLabelStepIpcInitStage {
+    fn new(init: TrainLabelStepIpcInit) -> Self {
+        Self { init, stage: Mutex::new(None) }
+    }
+
+    fn stage(&self) -> Result<Arc<SyncTrainLabelStep>, ThoError> {
+        let mut stage = self.stage.lock();
+        if stage.is_none() {
+            stage.replace(Arc::new(new_train_label_step_for_ipc(&self.init)?));
+        }
+        Ok(Arc::clone(stage.as_ref().ok_or_else(|| ThoError::new("TrainLabelStepIpcInitStage failed to initialize stage"))?))
+    }
+}
+
+#[derive(Debug)]
+struct TrainLabelStepIpcWrapper {
+    stage: Arc<TrainLabelStepIpcInitStage>,
+}
+
+impl SyncStageIpcWrapper for TrainLabelStepIpcWrapper {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        match JsonIpcCodec::decode::<TrainStepIpcRequest>(input)? {
+            TrainStepIpcRequest::Run { x, lengths, expected_y, train, max_other_parallel } => {
+                let stage = self.stage.stage()?;
+                let remove_x = x.remove_after_run.then_some(x.ref_key);
+                let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
+                let x = ThoTensor::ref_to_tensor(all_cuda_tensors, x.into_tensor::<MotifProbability>()?)?;
+                let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, expected_y.into_tensor::<LabelProbability>()?)?;
+                let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
+                let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), TRAIN_LABEL_STEP_ENDPOINT);
+                ctx.set_max_other_parallel(max_other_parallel);
+                let result = stage.do_run(&input, &ctx);
+                drop(input);
+                // Request-owned copies are removed only after the synchronous train step releases them.
+                if remove_x.is_some() || remove_expected_y.is_some() {
+                    let mut tensors = all_cuda_tensors.lock();
+                    if let Some(key) = remove_x {
+                        tensors.remove(&key);
+                    }
+                    if let Some(key) = remove_expected_y {
+                        tensors.remove(&key);
+                    }
+                }
+                JsonIpcCodec::encode(&result?)
+            }
+            TrainStepIpcRequest::ExportWeights => Err(ThoError::new("TrainLabelStep ExportWeights requires binary endpoint invocation")),
+        }
+    }
+
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        if matches!(JsonIpcCodec::decode::<TrainStepIpcRequest>(input)?, TrainStepIpcRequest::ExportWeights) {
+            let stage = self.stage.stage()?;
+            Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
+        } else {
+            self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+        }
+    }
+}
+
+#[derive(Debug, Proxy)]
+#[proxy(
+    common = "thoosa_common",
+    name = "ProxyTrainLabelStep",
+    endpoint = "TRAIN_LABEL_STEP_ENDPOINT",
+    new_args = "init: TrainLabelStepIpcInit, tho_device_idx: usize",
+    init = "init",
+    fields = "tho_device_idx: usize = tho_device_idx",
+    out_id = "()",
+    run_input = "thoosa_shared::tracked_await::track_await(TrainStepIpcRequest::run(input, ctx)).await?",
+    endpoint_init = "train_label_step_endpoint_init",
+    init_type = "TrainLabelStepIpcInit",
+    init_stage = "TrainLabelStepIpcInitStage::new(init)",
+    wrapper = "TrainLabelStepIpcWrapper"
+)]
+struct TrainLabelStepProxyTarget {
+    base: TrainStep<TrainStepXFn<MotifProbability>, MotifProbability, LabelProbability, RunCtxImpl>,
+}
+
+impl ProxyTrainLabelStep {
+    async fn export_weights(&self) -> Result<std::fs::File, ThoError> {
+        thoosa_common::ipc::codec::invoke_ipc_endpoint_to_file::<JsonIpcCodec, _>(
+            GlobalCtx::global().cuda_actor(self.tho_device_idx).as_ref(),
+            TRAIN_LABEL_STEP_ENDPOINT,
+            &TrainStepIpcRequest::ExportWeights,
+        ).await
+    }
+}
+
+// The adapter preserves the caller's concrete RunCtx while the generated proxy uses RunCtxImpl on the wire.
+#[derive(Debug)]
+struct TrainLabelStepProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    proxy: Arc<ProxyTrainLabelStep>,
+    pd: PhantomData<C>,
+}
+
+impl<C> Stage for TrainLabelStepProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
+    type In<'a> = TrainStepInput<MotifProbability, LabelProbability>;
+    type Out = TrainStepOutput;
+}
+
+impl<C> SyncStage for TrainLabelStepProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), TRAIN_LABEL_STEP_ENDPOINT);
+        proxy_ctx.set_max_other_parallel(ctx.max_other_parallel());
+        Arc::clone(&self.proxy).do_run(input, &proxy_ctx)
+    }
+}
+
+impl<C> OutId for TrainLabelStepProxyCtx<C>
+where
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, _input_id: &SynKey) -> () {
+        ()
+    }
+}
+
+impl<C> Adjustable for TrainLabelStepProxyCtx<C> where C: RunCtx + 'static {}
+
+#[derive(Debug)]
+struct TrainLabelStepWeightsSync {
+    proxy: Arc<ProxyTrainLabelStep>,
+}
+
+#[async_trait]
+impl TrainStepWeightsSync for TrainLabelStepWeightsSync {
+    async fn into_var_store(&self) -> Result<VarStore, ThoError> {
+        let weights = track_await(self.proxy.export_weights()).await?;
+        let named_tensors = Tensor::load_multi_from_stream_with_device(weights, Cpu)?;
+        let var_store = VarStore::new(Cpu);
+        var_store.variables_.lock().map_err(|_| ThoError::new("TrainLabelStepWeightsSync VarStore lock poisoned"))?.named_variables.extend(named_tensors);
+        Ok(var_store)
+    }
+}
+
+#[derive(Debug)]
+struct TrainLabelNetProxyFactory {
+    num_nets: u32,
+}
+
+impl TrainLabelNetProxyFactory {
+    fn new(num_nets: u32) -> Self {
+        Self { num_nets }
+    }
+}
+
+#[async_trait]
+impl<C> TrainStepProxyFactory<MotifProbability, LabelProbability, C, LabelNetParams, TrainLabelNetRunConfig> for TrainLabelNetProxyFactory
+where
+    C: RunCtx + 'static,
+{
+    async fn new_proxy(&self, run_config: &TrainLabelNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<MotifProbability, LabelProbability, C, LabelNetParams>, ThoError> {
+        let node_params = train_label_step_params(run_config, self.num_nets);
+        let init = TrainLabelStepIpcInit { params: node_params.clone(), training_config: run_config.common_training_args.clone() };
+        let proxy = Arc::new(ProxyTrainLabelStep::new(init, tho_device_idx).await?);
+        let stage = Arc::new(DynSyncStageBox::new(Arc::new(TrainLabelStepProxyCtx::<C> { proxy: Arc::clone(&proxy), pd: PhantomData })));
+        Ok(TrainStepProxyParts::new(stage, Arc::new(TrainLabelStepWeightsSync { proxy }), node_params))
+    }
+}
+
+pub fn train_label_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+    HashMap::from([(
+        TRAIN_LABEL_STEP_ENDPOINT.to_string(),
+        Box::new(train_label_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+    )])
 }
 
 #[cfg(test)]

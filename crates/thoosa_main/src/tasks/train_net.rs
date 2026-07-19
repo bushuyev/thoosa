@@ -56,6 +56,85 @@ use thoosa_shared::tracked_await::track_await;
 
 pub(crate) type TrainStepXFn<D> = Box<dyn Fn(ThoBatch<D>) -> ThoBatch<D> + Send + Sync + 'static>;
 
+// Train-step proxies pass worker tensor references instead of serializing batch tensors through JSON.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct TrainStepTensorRef {
+    pub(crate) ref_key: u64,
+    size: Vec<i64>,
+    kind: String,
+    tho_device_idx: usize,
+    pub(crate) remove_after_run: bool,
+}
+
+impl TrainStepTensorRef {
+    fn from_ref<D, Id>(tensor: &ThoTensor<D, Id>) -> Result<Self, ThoError>
+    where
+        D: Dims,
+        Id: thoosa_shared::traits::Named + Debug + Clone,
+    {
+        Ok(Self {
+            ref_key: tensor.ref_key().ok_or_else(|| ThoError::new(format!("TrainStep expected worker tensor ref, got {tensor:?}")))?,
+            size: tensor.size(),
+            kind: thoosa_common::ipc::json_ser::tho_tensor::kind_to_str(&tensor.kind()).map_err(ThoError::new)?.to_string(),
+            tho_device_idx: tensor.tho_device().tho_device_idx(),
+            remove_after_run: false,
+        })
+    }
+
+    async fn from_tensor<D>(tensor: &ThoBatch<D>, tho_device_idx: usize) -> Result<Self, ThoError>
+    where
+        D: Dims,
+    {
+        if tensor.ref_key().is_some() {
+            return Self::from_ref(tensor);
+        }
+
+        // CPU-built label/final batches must be copied into the worker before invoking the train step.
+        let cpu_tensor = tensor.t_ref().f_to_device(Device::Cpu)?;
+        let worker_ref = track_await(GlobalCtx::global().cuda_actor(tho_device_idx).copy(cpu_tensor.into(), ThoDevice::from(tho_device_idx))).await?;
+        let mut tensor_ref = Self::from_ref(&worker_ref)?;
+        tensor_ref.remove_after_run = true;
+        Ok(tensor_ref)
+    }
+
+    pub(crate) fn into_tensor<D>(self) -> Result<ThoBatch<D>, ThoError>
+    where
+        D: Dims,
+    {
+        let kind = thoosa_common::ipc::json_ser::tho_tensor::str_to_kind(&self.kind).ok_or_else(|| ThoError::new(format!("TrainStep received unsupported tensor kind {:?}", self.kind)))?;
+        Ok(ThoTensor::new_ref(thoosa_shared::simple_id!("train_step_ipc"), self.ref_key, self.size, kind, None, self.tho_device_idx))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum TrainStepIpcRequest {
+    Run {
+        x: TrainStepTensorRef,
+        lengths: Option<Vec<i64>>,
+        expected_y: TrainStepTensorRef,
+        train: bool,
+        max_other_parallel: u8,
+    },
+    ExportWeights,
+}
+
+impl TrainStepIpcRequest {
+    pub(crate) async fn run<DI, DO, C>(input: &TrainStepInput<DI, DO>, ctx: &C) -> Result<Self, ThoError>
+    where
+        DI: Dims,
+        DO: Dims,
+        C: RunCtx,
+    {
+        Ok(Self::Run {
+            x: track_await(TrainStepTensorRef::from_tensor(input.x_ref(), ctx.tho_device_idx())).await?,
+            lengths: input.lengths_ref().map(|lengths| lengths.as_slice().to_vec()),
+            expected_y: track_await(TrainStepTensorRef::from_tensor(input.expected_y_ref(), ctx.tho_device_idx())).await?,
+            train: input.train(),
+            max_other_parallel: ctx.max_other_parallel(),
+        })
+    }
+}
+
 #[async_trait]
 pub(crate) trait TrainStepWeightsSync: Debug + Send + Sync {
     async fn into_var_store(&self) -> Result<VarStore, ThoError>;
