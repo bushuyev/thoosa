@@ -462,10 +462,10 @@ impl ConsumeData for StackAppliedLabelNetsInputWrapper {
     {
         async move {
             let StackAppliedLabelNetsInputWrapper { id, tmp_cache } = self;
-            let target_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
-            match track_await(tmp_cache.take_all_recovering(target_device_idx)).await {
-                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, target_device_idx), ctx),
-                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, target_device_idx), error: err.error },
+
+            match track_await(tmp_cache.take_all_recovering(to_device_idx)).await {
+                Ok(label_outputs) => do_run(StackAppliedLabelNetsInput::new(id, label_outputs, to_device_idx), ctx),
+                Err(err) => ConsumeResult::Failed { input: StackAppliedLabelNetsInput::new(id, err.data, to_device_idx), error: err.error },
             }
         }
     }
@@ -635,9 +635,8 @@ impl BorrowRef for ApplyLabelNetInputWrapper {
         Self: 'a,
     {
         async move {
-            let target_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
-            let input = track_await(BorrowRef::borrow_to(&self.input, target_device_idx)).await?;
-            let net = track_await(BorrowRef::borrow_to(&self.net, target_device_idx)).await?;
+            let input = track_await(BorrowRef::borrow_to(&self.input, to_device_idx)).await?;
+            let net = track_await(BorrowRef::borrow_to(&self.net, to_device_idx)).await?;
             Ok(ApplyLabelNetInput { id: self.id.clone(), input, net })
         }
     }

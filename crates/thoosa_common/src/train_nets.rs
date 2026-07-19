@@ -2125,7 +2125,7 @@ where
             descr,
         );
         opt.enqueue_configs(reusable_configs);
-        info!("opt_train: wait on optimize ");
+        debug!("opt_train: wait on optimize ");
         let best_config = track_await(opt.optimize()).await;
 
         debug!("opt_train: best_config={:?}", best_config);
@@ -2135,9 +2135,9 @@ where
         collect_eta_record_completion(grids_eta_guard.id());
     }
     Arc::into_inner(min_var_store)
-        .unwrap()
+        .expect("min_var_store is used somewhere else")
         .into_inner()
-        .ok_or_else(|| ThoError::new("opt was not run"))
+        .ok_or_else(|| ThoError::new("no min_var_store"))
 }
 
 pub fn slices_in_all_resources<ResourceId>(slices: Vec<(ResourceId, Vec<Tensor>)>) -> Vec<Tensor> {

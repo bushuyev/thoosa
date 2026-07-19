@@ -1,37 +1,38 @@
-use crate::cuda_utils::{copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d, PinnedHostBuffer};
-use crate::ipc::ipc_cuda_utils::{SharedMemfdBuffer};
+use crate::cuda_utils::{PinnedHostBuffer, copy_d2h, copy_d2h_from_ptr, copy_h2d, copy_h2d_from_ptr, cuda_mem_for_device, move_d2h, move_h2d};
+use crate::dims::Dims;
+use crate::ipc::ipc_cuda_utils::SharedMemfdBuffer;
+use crate::runner::common::RunCtx;
+use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
+use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
+use crate::runner::global_ctx::GlobalCtx;
+use crate::tho_device::ThoDevice;
+use crate::tho_tensor::ThoTensor;
 use async_trait::async_trait;
-use thoosa_shims::context::ThoCudaContext;
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use log::{debug, info};
+use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
+use futures_util::future::BoxFuture;
+use log::{debug, info, trace};
 use std::any::Any;
+use std::backtrace::Backtrace;
 use std::borrow::Borrow;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::atomic::Ordering::{AcqRel, Acquire, Relaxed};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::time::Duration;
-use cust::sys::CU_MEMHOSTALLOC_WRITECOMBINED;
-use futures_util::future::BoxFuture;
 use tch::Kind::Int64;
 use tch::{Kind, Tensor};
-use tokio::sync::{mpsc, oneshot, RwLock};
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Named, ThoSelector};
+use thoosa_shared::{ThoError, cuda_activity_gate};
+use thoosa_shims::context::ThoCudaContext;
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tokio::sync::oneshot::Sender;
+use tokio::sync::{RwLock, mpsc, oneshot};
 use tokio::time::timeout;
 use tracing::error;
 use tub::{Guard, Pool};
-use thoosa_shared::{cuda_activity_gate, ThoError};
-use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Named, ThoSelector};
-use crate::dims::Dims;
-use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
-use crate::runner::common::RunCtx;
-use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
-use crate::runner::global_ctx::GlobalCtx;
-use crate::tho_device::ThoDevice;
-use crate::tho_tensor::ThoTensor;
 
 static NEXT_IPC_BUFFER_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -443,7 +444,10 @@ impl HandleCtx for LocalHandleCtx {
 
 #[async_trait]
 impl CudaActorHandle for CudaLocalActorHandle {
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaLocalActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+        trace!("CudaLocalActorHandle::copy: src={src:?} dst_device={dst_device:?} backtrace={}", Backtrace::capture().to_string());
+
         Ok(self.copy_tensor(src, dst_device).await?.into())
     }
 
