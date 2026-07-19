@@ -340,8 +340,8 @@ impl BorrowRef for SyncLogitsBatchInputWrapper {
         Self: 'a,
     {
         async move {
-            let target_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
-            let outputs = try_join_all(self.outputs.iter().map(|output| BorrowRef::borrow_to(output, target_device_idx))).await?;
+
+            let outputs = try_join_all(self.outputs.iter().map(|output| BorrowRef::borrow_to(output, to_device_idx))).await?;
             Ok(SyncLogitsBatchInput { id: self.id.clone(), outputs, labels: self.labels.clone(), labels_len: self.labels_len })
         }
     }

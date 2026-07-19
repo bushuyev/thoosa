@@ -24,7 +24,7 @@ use std::time::{Instant, SystemTime};
 use rand::random;
 use serde::{Deserialize, Serialize};
 use tch::nn::{Optimizer, VarStore};
-use tch::Device;
+use tch::{nn, Device};
 use tch::Kind::Float;
 use tokio::task::coop::cooperative;
 use tracing::Instrument;
@@ -325,6 +325,7 @@ where
         self
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainNet::run_inner"))]
     fn run_inner(
         self: Arc<Self>,
         mut ctx: C,
@@ -493,7 +494,7 @@ where
             }
 
             let train_step = Arc::try_unwrap(train_step).map_err(|_| ThoError::new("TrainNet::run_inner: TrainStep still shared after training"))?;
-            let var_store = track_await(train_step.into_var_store()).await?;
+            let var_store =  track_await(train_step.into_var_store()).await?;//nn::VarStore::new(device); //
 
             Ok((var_store, best_valid_loss, params))
         })
@@ -574,7 +575,6 @@ where
 
             info!("TrainNet::run: descr={:?} \x1b[38;5;208mmin_loss={loss} \x1b[0m run_config={run_config:?}", self.descr);
 
-            //TODO impl CopyToDevice for TrainNetOutput
             Ok(Arc::new(DevicesWrap::wrap_plain(TrainNetOutput::new(SynKey::new([mono_key!("TrainNetOutput", "stage")])/*TODO id*/, var_store, node_params, run_config, loss))))
         }
     }

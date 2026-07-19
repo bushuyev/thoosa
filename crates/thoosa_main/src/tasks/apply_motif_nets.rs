@@ -945,7 +945,6 @@ impl BorrowRef for ApplyMotifNetInputWrapper {
         Self: 'a,
     {
         async move {
-            let to_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
             let batch = track_await(BorrowRef::borrow_to(&self.batch, to_device_idx)).await?;
             let motif_net = track_await(self.motif_net.load_from_any_device_(to_device_idx)).await?;
             Ok(ApplyMotifNetInput::from_data_refs(batch, ThoDataRef::ReadLocked(motif_net)))
@@ -960,7 +959,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
         Self: 'a,
     {
         async move {
-            let to_device_idx = if GlobalCtx::global().is_ipc() { 0 } else { to_device_idx };
+            
             let Some(selector) = selector else {
                 return BorrowRef::borrow_to(self, to_device_idx).await;
             };
