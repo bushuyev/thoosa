@@ -402,7 +402,7 @@ where
         let (node_params, stft_config) = train_motif_step_params(run_config, self.motif_width)?;
         let motif = track_await(self.motif.borrow_to(tho_device_idx, None::<SyncStftSelector>)).await?;
         let motif = motif.as_ref().data();
-        let motif = ThoTensor::new_ref(
+        let motif = ThoTensor::new_ref(//TODO ref clone
             motif.id().clone(),
             motif.ref_key().ok_or_else(|| ThoError::new(format!("TrainMotifStepProxyFactory expected motif worker reference, got {motif:?}")))?,
             motif.size(),
