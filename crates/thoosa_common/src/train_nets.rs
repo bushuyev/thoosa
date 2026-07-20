@@ -494,7 +494,6 @@ DO: Dims + Send + 'static {
         let module = builder(&var_store.root())?;
 
         var_store.copy(&self.var_store)?;
-        // copy_vs(&self.var_store, &var_store).await?;
 
         var_store.freeze();
 
@@ -2094,7 +2093,7 @@ where
                 ); //motif_id ?train_net
 
                 let train_result = panic_to_err_async!(
-                    train_clone(
+                    train_clone(//TODO spawn
                         run_config.clone(),
                         &mut listener
                     )

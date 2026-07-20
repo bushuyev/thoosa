@@ -66,6 +66,7 @@ where
     C::encode(&IpcSyncStageRunInput::new(input.to_vec(), ctx))
 }
 
+//invoked form Proxy macro
 pub async fn install_ipc_endpoint<C, T>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
@@ -80,7 +81,7 @@ where
         .install_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &init_msg).into_bytes())
         .await
 }
-
+//invoked form Proxy macro
 pub async fn install_empty_ipc_endpoint(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
