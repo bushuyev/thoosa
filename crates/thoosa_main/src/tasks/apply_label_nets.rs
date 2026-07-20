@@ -719,7 +719,7 @@ where
     }
 }
 
-pub fn sigmoid(v: f64) -> f64 {
+pub fn sigmoid(v: f64) -> f64 {//TODO move to util
     1.0 / (1.0 + (-v).exp())
 }
 

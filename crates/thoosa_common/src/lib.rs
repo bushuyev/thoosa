@@ -37,3 +37,4 @@ pub mod audio;
 pub mod nodes;
 pub mod ipc;
 pub mod stages_seq;
+pub mod tho_varstore;
