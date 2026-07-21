@@ -131,133 +131,133 @@ void validate_adam_state_tensor(
 
 extern "C" ulong ato_adam_group_count(torch::optim::Optimizer* opt) {
 
-  auto& adam = checked_adam(opt);
-  return adam.param_groups().size();
+    tho_log(CppLogLevel::Debug, "ato_adam_group_count x");
+
+    auto& adam = checked_adam(opt);
+    return adam.param_groups().size();
 
 
-  return 0;
+    return 0;
 }
 
-void ato_adam_get_defaults( torch::optim::Optimizer* opt, ato_adam_options* out) {
+extern "C"  void ato_adam_get_defaults( torch::optim::Optimizer* opt, ato_adam_options* out) {
 
-      TORCH_CHECK(out != nullptr, "null Adam defaults output");
+    TORCH_CHECK(out != nullptr, "null Adam defaults output");
 
-      auto& adam = checked_adam(opt);
+    auto& adam = checked_adam(opt);
 
-      const auto& defaults =
-          checked_adam_options(adam.defaults());
+    const auto& defaults =
+        checked_adam_options(adam.defaults());
 
-      export_adam_options(defaults, out);
-
-}
-
-void ato_adam_get_group( torch::optim::Optimizer* opt, size_t group_index, ato_adam_group* out) {
-
-      TORCH_CHECK(out != nullptr, "null Adam group output");
-
-      *out = ato_adam_group{};
-
-      auto& adam = checked_adam(opt);
-      const auto& group =
-          adam.param_groups().at(group_index);
-
-      const auto& options =
-          checked_adam_options(group.options());
-
-      export_adam_options(options, &out->options);
-      out->parameter_count = group.params().size();
+    export_adam_options(defaults, out);
 
 }
 
-void ato_adam_get_param_state(
+extern "C"  void ato_adam_get_group( torch::optim::Optimizer* opt, size_t group_index, ato_adam_group* out) {
+
+    TORCH_CHECK(out != nullptr, "null Adam group output");
+
+    *out = ato_adam_group{};
+
+    auto& adam = checked_adam(opt);
+    const auto& group =
+        adam.param_groups().at(group_index);
+
+    const auto& options =
+        checked_adam_options(group.options());
+
+    export_adam_options(options, &out->options);
+    out->parameter_count = group.params().size();
+
+}
+
+extern "C"  void ato_adam_get_param_state(
     torch::optim::Optimizer* opt,
     size_t group_index,
     size_t parameter_index,
     ato_adam_param_state* out) {
+    tho_log(CppLogLevel::Debug, "ato_adam_get_param_state");
 
-      TORCH_CHECK(
-          out != nullptr,
-          "null Adam parameter-state output");
+    TORCH_CHECK(
+        out != nullptr,
+        "null Adam parameter-state output");
 
-      *out = ato_adam_param_state{};
+    *out = ato_adam_param_state{};
 
-      auto& adam = checked_adam(opt);
-      const auto& group =
-          adam.param_groups().at(group_index);
-      const auto& parameter =
-          group.params().at(parameter_index);
+    auto& adam = checked_adam(opt);
+    const auto& group =
+        adam.param_groups().at(group_index);
+    const auto& parameter =
+        group.params().at(parameter_index);
 
-      const auto state_it =
-          adam.state().find(
-              parameter.unsafeGetTensorImpl());
+    const auto state_it =
+        adam.state().find(
+            parameter.unsafeGetTensorImpl());
 
-      // Adam initializes state lazily. A parameter that has never
-      // participated in step() legitimately has no state.
-      if (state_it == adam.state().end()) {
+    // Adam initializes state lazily. A parameter that has never
+    // participated in step() legitimately has no state.
+    if (state_it == adam.state().end()) {
         out->has_state = 0;
         return;
-      }
+    }
 
-      auto* state =
+    auto* state =
           dynamic_cast<torch::optim::AdamParamState*>(
               state_it->second.get());
 
-      TORCH_CHECK(
-          state != nullptr,
-          "optimizer contains a non-Adam state for group ",
-          group_index,
-          ", parameter ",
-          parameter_index);
+    TORCH_CHECK(
+        state != nullptr,
+        "invalid Adam state type");
 
-      TORCH_CHECK(
-          state->exp_avg().defined(),
-          "Adam exp_avg is undefined");
+    auto exp_avg =
+        std::make_unique<torch::Tensor>(state->exp_avg());
 
-      TORCH_CHECK(
-          state->exp_avg_sq().defined(),
-          "Adam exp_avg_sq is undefined");
+    auto exp_avg_sq =
+        std::make_unique<torch::Tensor>(state->exp_avg_sq());
 
-      out->step = state->step();
-      out->has_state = 1;
+    std::unique_ptr<torch::Tensor> max_exp_avg_sq;
 
-      /*
-       * ato_adam_param_state owns Tensor values, so export shallow handle
-       * copies directly. An undefined max_exp_avg_sq represents non-AMSGrad
-       * state without requiring nullable heap-allocated Tensor wrappers.
-       */
-      out->exp_avg = state->exp_avg();
-      out->exp_avg_sq = state->exp_avg_sq();
-      out->max_exp_avg_sq = state->max_exp_avg_sq();
+    if (state->max_exp_avg_sq().defined()) {
+        max_exp_avg_sq =
+            std::make_unique<torch::Tensor>(
+                state->max_exp_avg_sq());
+    }
+
+    out->step = state->step();
+    out->has_state = 1;
+    out->exp_avg = exp_avg.release();
+    out->exp_avg_sq = exp_avg_sq.release();
+    out->max_exp_avg_sq = max_exp_avg_sq.release();
 
 }
 
-void ato_adam_set_defaults( torch::optim::Optimizer* opt, const ato_adam_options* options) {
+extern "C"  void ato_adam_set_defaults( torch::optim::Optimizer* opt, const ato_adam_options* options) {
 
-      TORCH_CHECK(options != nullptr, "null Adam defaults");
+    TORCH_CHECK(options != nullptr, "null Adam defaults");
 
-      auto& adam = checked_adam(opt);
-      auto& defaults =
-          checked_adam_options(adam.defaults());
+    auto& adam = checked_adam(opt);
+    auto& defaults =
+        checked_adam_options(adam.defaults());
 
-      import_adam_options(*options, defaults);
+    import_adam_options(*options, defaults);
 
 }
 
-void ato_adam_set_group_options(
+extern "C"  void ato_adam_set_group_options(
     torch::optim::Optimizer* opt,
     size_t group_index,
     const ato_adam_options* options) {
 
-      TORCH_CHECK(options != nullptr, "null Adam group options");
+    TORCH_CHECK(options != nullptr, "null Adam group options");
 
-      auto& adam = checked_adam(opt);
-      auto& group =
-          adam.param_groups().at(group_index);
+    auto& adam = checked_adam(opt);
+    auto& group =
+        adam.param_groups().at(group_index);
 
-      auto& group_options =
-          checked_adam_options(group.options());
+    auto& group_options =
+        checked_adam_options(group.options());
 
-      import_adam_options(*options, group_options);
+    import_adam_options(*options, group_options);
 
 }
 
@@ -271,67 +271,65 @@ void ato_adam_set_param_state(
     at::Tensor exp_avg_sq,
     at::Tensor max_exp_avg_sq) {
 
-      auto& adam = checked_adam(opt);
-      auto& group =
-          adam.param_groups().at(group_index);
-      auto& parameter =
-          group.params().at(parameter_index);
+    auto& adam = checked_adam(opt);
+    auto& group =
+        adam.param_groups().at(group_index);
+    auto& parameter =
+        group.params().at(parameter_index);
 
-      void* parameter_key =
-          parameter.unsafeGetTensorImpl();
+    void* parameter_key =
+        parameter.unsafeGetTensorImpl();
 
-      if (has_state == 0) {
+    if (has_state == 0) {
         adam.state().erase(parameter_key);
         return;
-      }
+    }
 
-      TORCH_CHECK(
-          step >= 0,
-          "negative Adam step: ",
-          step);
+    TORCH_CHECK(
+        step >= 0,
+        "negative Adam step: ",
+        step);
 
-      TORCH_CHECK(
-          exp_avg.defined(),
-          "Adam exp_avg is undefined");
+    TORCH_CHECK(
+        exp_avg.defined(),
+        "Adam exp_avg is undefined");
 
-      TORCH_CHECK(
-          exp_avg_sq.defined(),
-          "Adam exp_avg_sq is undefined");
+    TORCH_CHECK(
+        exp_avg_sq.defined(),
+        "Adam exp_avg_sq is undefined");
 
-      validate_adam_state_tensor(
-          exp_avg,
-          parameter,
-          "Adam exp_avg");
+    validate_adam_state_tensor(
+        exp_avg,
+        parameter,
+        "Adam exp_avg");
 
-      validate_adam_state_tensor(
-          exp_avg_sq,
-          parameter,
-          "Adam exp_avg_sq");
+    validate_adam_state_tensor(
+        exp_avg_sq,
+        parameter,
+        "Adam exp_avg_sq");
 
-      if (max_exp_avg_sq.defined()) {
+    if (max_exp_avg_sq.defined()) {
         validate_adam_state_tensor(
             max_exp_avg_sq,
             parameter,
             "Adam max_exp_avg_sq");
-      }
+    }
 
-      auto state =
-          std::make_unique<torch::optim::AdamParamState>();
+    auto state =
+        std::make_unique<torch::optim::AdamParamState>();
 
-      state->step(step);
-      state->exp_avg(exp_avg);
-      state->exp_avg_sq(exp_avg_sq);
+    state->step(step);
+    state->exp_avg(exp_avg);
+    state->exp_avg_sq(exp_avg_sq);
 
-      if (max_exp_avg_sq.defined()) {
+    if (max_exp_avg_sq.defined()) {
         state->max_exp_avg_sq(max_exp_avg_sq);
-      }
+    }
 
-      /*
-       * The torch::Tensor assignments above shallow-copy their intrusive
-       * handles, so Rust may drop its Tensor arguments after this function.
-       */
-      adam.state()[parameter_key] = std::move(state);
+    /*
+     * The torch::Tensor assignments above shallow-copy their intrusive
+     * handles, so Rust may drop its Tensor arguments after this function.
+     */
+    adam.state()[parameter_key] = std::move(state);
 
 }
-
-
