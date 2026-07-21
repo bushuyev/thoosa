@@ -1,33 +1,33 @@
-use std::borrow::Borrow;
-use crate::tho_device::ThoDevice;
 use crate::dims::{AnyDims, Dims};
-use thoosa_shared::{panic_to_err, simple_id};
+use crate::runner::common::RunCtx;
+use crate::runner::common::cachable::ThoDataRef;
+#[double]
+use crate::runner::global_ctx::GlobalCtx;
+use crate::tho_device::ThoDevice;
 use async_trait::async_trait;
+use log::{debug, info, trace, warn};
+use mockall_double::double;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Borrow;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Deref;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde::ser::SerializeStruct;
 use tch::{Device, Kind, Tensor};
-use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, ThoSelector, WithId};
-use torch_sys::IntList;
-use log::{debug, info, trace, warn};
-use mockall_double::double;
 use thoosa_shared::copy_mode::CpuOrGpu;
-#[double]
-use crate::runner::global_ctx::GlobalCtx;
 use thoosa_shared::tracked_await::track_await;
-use crate::runner::common::cachable::ThoDataRef;
-use crate::runner::common::RunCtx;
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MonoMetrics, Named, SimpleId, ThoSelector, WithId};
+use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::{panic_to_err, simple_id};
+use torch_sys::IntList;
 
 //TODO remove, it should be in DevicesWrap between async
 unsafe impl<D: Dims, Id: Named + Debug + Clone> Sync for ThoTensor<D, Id> {}
 
-impl<I:Named + Debug + Clone + Send + Sync, D: Dims> Input for ThoTensor<D, I> {}
-impl<I:Named + Debug + Clone + Send + Sync, D: Dims> Input for &ThoTensor<D, I> {}
+impl<I: Named + Debug + Clone + Send + Sync, D: Dims> Input for ThoTensor<D, I> {}
+impl<I: Named + Debug + Clone + Send + Sync, D: Dims> Input for &ThoTensor<D, I> {}
 
 impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
     type ID = SimpleId;
@@ -36,8 +36,6 @@ impl<D: Dims> WithId for &ThoTensor<D, SimpleId> {
         &self.id
     }
 }
-
-
 
 impl<D: Dims, Id: Named + Debug + Clone> AsRef<Tensor> for ThoTensor<D, Id> {
     fn as_ref(&self) -> &Tensor {
@@ -59,21 +57,17 @@ impl<D: Dims> ThoTensor<D, SimpleId> {
     pub fn drop(self) {
         drop(self.inner);
     }
-
-
 }
 
 impl<D, Id> ThoTensor<D, Id>
 where
-    D:Dims,
-    Id:Named + Debug + Clone
+    D: Dims,
+    Id: Named + Debug + Clone,
 {
-
-
     pub fn to_kind(&self, k: Kind) -> Result<ThoTensor<D, Id>, ThoError> {
         Ok(ThoTensor {
             id: self.id.clone(),
-            inner: ThoTensorInner::Val { t: self.t_ref().f_to_kind(k)? },//TODO ref
+            inner: ThoTensorInner::Val { t: self.t_ref().f_to_kind(k)? }, //TODO ref
             tracking: Default::default(),
             pd: PhantomData,
         })
@@ -81,16 +75,10 @@ where
 
     pub fn kind(&self) -> Kind {
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                t.kind()
-            }
-            ThoTensorInner::Ref { kind, .. } => {
-                kind.clone()
-            }
+            ThoTensorInner::Val { t } => t.kind(),
+            ThoTensorInner::Ref { kind, .. } => kind.clone(),
         }
     }
-
-
 }
 
 impl<D: Dims> Display for ThoTensor<D, SimpleId> {
@@ -99,37 +87,28 @@ impl<D: Dims> Display for ThoTensor<D, SimpleId> {
     }
 }
 
-
-
-pub/*TODO*/ enum ThoTensorInner {
+pub /*TODO*/ enum ThoTensorInner {
     Val { t: Tensor },
-    Ref { key: u64, size:Vec<i64>, kind:Kind, selector:Option<Box<dyn ThoSelector>>, tho_device_idx:usize },
+    Ref { key: u64, size: Vec<i64>, kind: Kind, selector: Option<Box<dyn ThoSelector>>, tho_device_idx: usize },
 }
 
 impl Debug for ThoTensorInner {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             ThoTensorInner::Val { t } => f.debug_struct("Val").field("t", t).finish(),
-            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => f
-                .debug_struct("Ref")
-                .field("key", key)
-                .field("size", size)
-                .field("kind", kind)
-                .field("selector", selector)
-                .field("tho_device_idx", tho_device_idx)
-                .finish(),
+            ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => f.debug_struct("Ref").field("key", key).field("size", size).field("kind", kind).field("selector", selector).field("tho_device_idx", tho_device_idx).finish(),
         }
     }
 }
 
 //D:Dims - is just a reminder of what dimensions a tensor has.
-pub struct  ThoTensor<D = AnyDims, Id = ()>
+pub struct ThoTensor<D = AnyDims, Id = ()>
 where
-    D:Dims,
-    Id:Named + Debug + Clone
+    D: Dims,
+    Id: Named + Debug + Clone,
 {
     pub id: Id,
-    pub inner: ThoTensorInner,//TODO pub
+    pub inner: ThoTensorInner, //TODO pub
 
     #[allow(dead_code)]
     tracking: parking_lot::RwLock<Vec<&'static str>>,
@@ -137,25 +116,18 @@ where
     pd: PhantomData<D>,
 }
 
-
-impl <'a, D, Id> Deref for ThoDataRef<'a, ThoTensor<D, Id>>
+impl<'a, D, Id> Deref for ThoDataRef<'a, ThoTensor<D, Id>>
 where
-    D:Dims,
-    Id: Named+Debug+Clone
+    D: Dims,
+    Id: Named + Debug + Clone,
 {
     type Target = ThoTensor<D, Id>;
 
     fn deref(&self) -> &Self::Target {
         match self {
-            ThoDataRef::Borrowed(v) => {
-                v
-            }
-            ThoDataRef::ReadLocked(v) => {
-                v
-            }
-            ThoDataRef::Owned(v) => {
-                v
-            }
+            ThoDataRef::Borrowed(v) => v,
+            ThoDataRef::ReadLocked(v) => v,
+            ThoDataRef::Owned(v) => v,
         }
     }
 }
@@ -188,7 +160,6 @@ impl From<Tensor> for ThoTensor {
     }
 }
 
-
 impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
     fn from(tensor: &Tensor) -> Self {
         Self {
@@ -200,53 +171,36 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
     }
 }
 
-impl <D:Dims, Id:Named  + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
+impl<D: Dims, Id: Named + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
 impl<D, Id> Data for ThoTensor<D, Id>
 where
     D: Dims,
-    Id: Named + Debug + Clone + Send + Sync
+    Id: Named + Debug + Clone + Send + Sync,
 {
     type Metrics = D::Metrics;
     type M = CpuOrGpu<ThoTensor<D, Id>>;
 
     fn size(&self) -> Self::Metrics {
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                t.size()
-                    .try_into()
-                    .map_err(|_| ThoError::new("tensor size metrics conversion failed"))
-                    .unwrap_or(Self::Metrics::default())
-            },
-            ThoTensorInner::Ref { size, .. } => {
-                Self::Metrics::try_from(size.clone()).unwrap_or_else(|e| {
-                    panic!("Tho tensor size metrics conversion failed")
-                })
-            }
+            ThoTensorInner::Val { t } => t.size().try_into().map_err(|_| ThoError::new("tensor size metrics conversion failed")).unwrap_or(Self::Metrics::default()),
+            ThoTensorInner::Ref { size, .. } => Self::Metrics::try_from(size.clone()).unwrap_or_else(|e| panic!("Tho tensor size metrics conversion failed")),
         }
-
     }
 
-    fn device(&self) -> usize {//TODO rename tho_device
+    fn device(&self) -> usize {
+        //TODO rename tho_device
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                ThoDevice::from(t.device()).tho_device_idx()
-            }
-            ThoTensorInner::Ref { tho_device_idx, .. } => {
-                *tho_device_idx
-            }
+            ThoTensorInner::Val { t } => ThoDevice::from(t.device()).tho_device_idx(),
+            ThoTensorInner::Ref { tho_device_idx, .. } => *tho_device_idx,
         }
     }
 
     fn mem_size(&self) -> u64 {
-
-
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                t.size().iter().fold(1u64, | a, v| a * (*v as u64)) * t.kind().elt_size_in_bytes() as u64
-            }
+            ThoTensorInner::Val { t } => t.size().iter().fold(1u64, |a, v| a * (*v as u64)) * t.kind().elt_size_in_bytes() as u64,
             ThoTensorInner::Ref { key, .. } => {
-                1000//TODO
+                1000 //TODO
             }
         }
     }
@@ -254,10 +208,7 @@ where
 
 impl<D: Dims, Id: Named + Debug + Clone> Debug for ThoTensor<D, Id> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("")
-            .field("id", &self.id)
-            .field("inner", &self.inner)
-            .finish()
+        f.debug_struct("").field("id", &self.id).field("inner", &self.inner).finish()
     }
 }
 
@@ -283,9 +234,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         }
     }
 
-
     pub fn new(id: Id, tensor: Tensor) -> Result<Self, ThoError> {
-
         let t = if tensor.is_contiguous() {
             tensor
         } else {
@@ -295,25 +244,16 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
 
         Ok(Self {
             id,
-            inner: ThoTensorInner::Val {
-                t
-            },
+            inner: ThoTensorInner::Val { t },
             tracking: Default::default(),
             pd: PhantomData,
         })
     }
 
-    pub fn new_ref(id: Id, key:u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, tho_device_idx: usize) -> Self {
-
+    pub fn new_ref(id: Id, key: u64, size: Vec<i64>, kind: tch::Kind, selector: Option<Box<dyn ThoSelector>>, tho_device_idx: usize) -> Self {
         Self {
             id,
-            inner: ThoTensorInner::Ref {
-                key,
-                size,
-                kind,
-                selector,
-                tho_device_idx,
-            },
+            inner: ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx },
             tracking: Default::default(),
             pd: PhantomData,
         }
@@ -326,26 +266,25 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         }
     }
 
-
     pub fn zeros(id: Id, size: impl IntList, options: (Kind, Device)) -> Result<Self, ThoError> {
         Ok(Self {
             id,
             /*                               at /rustc/b15a874aafe7eab9ea3ac2c1d59c7b03e1425027/library/core/src/panicking.rs:80:14
-  16:     0x650bc6172c06 - core::result::unwrap_failed::hb3955d4a33f491ad
-                               at /rustc/b15a874aafe7eab9ea3ac2c1d59c7b03e1425027/library/core/src/result.rs:1862:5
-  17:     0x650bc2986325 - core::result::Result<T,E>::unwrap::h084cb97a7d73525b
-                               at /home/bu/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1233:23
-  18:     0x650bc2986325 - tch::wrappers::tensor_generated::<impl tch::wrappers::tensor::Tensor>::zeros::h989c1bb7ff9d3639
-                               at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tch-0.20.0/src/wrappers/tensor_generated.rs:19386:40
-  19:     0x650bc2986325 - thoosa_common::tho_tensor::ThoTensor<D,Id>::zeros::hec7444fdf1238b68
-                               at /home/bu/dvl/rust/thoosa/crates/thoosa_common/src/tho_tensor.rs:233:16
-  20:     0x650bc2986325 - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::{{closure}}::ha04a296d1395eb8b
-                               at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:346:46
-  21:     0x650bc29851cc - <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll::h285e9afbf1ed55e9
-                               at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.43/src/instrument.rs:321:15
-  22:     0x650bc29851cc - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::hcda8bc73e874ad61
-                               at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:304:1
-*/
+              16:     0x650bc6172c06 - core::result::unwrap_failed::hb3955d4a33f491ad
+                                           at /rustc/b15a874aafe7eab9ea3ac2c1d59c7b03e1425027/library/core/src/result.rs:1862:5
+              17:     0x650bc2986325 - core::result::Result<T,E>::unwrap::h084cb97a7d73525b
+                                           at /home/bu/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/result.rs:1233:23
+              18:     0x650bc2986325 - tch::wrappers::tensor_generated::<impl tch::wrappers::tensor::Tensor>::zeros::h989c1bb7ff9d3639
+                                           at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tch-0.20.0/src/wrappers/tensor_generated.rs:19386:40
+              19:     0x650bc2986325 - thoosa_common::tho_tensor::ThoTensor<D,Id>::zeros::hec7444fdf1238b68
+                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_common/src/tho_tensor.rs:233:16
+              20:     0x650bc2986325 - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::{{closure}}::ha04a296d1395eb8b
+                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:346:46
+              21:     0x650bc29851cc - <tracing::instrument::Instrumented<T> as core::future::future::Future>::poll::h285e9afbf1ed55e9
+                                           at /home/bu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/tracing-0.1.43/src/instrument.rs:321:15
+              22:     0x650bc29851cc - thoosa_main::tasks::motif_loader::load_motif_slices::{{closure}}::hcda8bc73e874ad61
+                                           at /home/bu/dvl/rust/thoosa/crates/thoosa_main/src/tasks/motif_loader.rs:304:1
+            */
             inner: ThoTensorInner::Val { t: Tensor::f_zeros(size, options)? },
             tracking: Default::default(),
             pd: PhantomData,
@@ -356,17 +295,10 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
         self.t_ref().requires_grad()
     }
     pub fn size(&self) -> Vec<i64> {
-
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                t.size()
-
-            },
-            ThoTensorInner::Ref { size, .. } => {
-               size.clone()
-            }
+            ThoTensorInner::Val { t } => t.size(),
+            ThoTensorInner::Ref { size, .. } => size.clone(),
         }
-
     }
     pub fn numel(&self) -> usize {
         self.t_ref().numel()
@@ -389,7 +321,8 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     // #[cfg(test)]
-    pub fn t_ref(&self) -> &Tensor {//TODO remove
+    pub fn t_ref(&self) -> &Tensor {
+        //TODO remove
         self.inner_tensor_ref()
     }
 
@@ -400,8 +333,6 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     pub fn t(self) -> Tensor {
         self.into_inner_tensor()
     }
-
-
 
     // No-params variant: transform tensor with a function that only needs &Tensor
     pub fn run_inner<R, F>(&self, func: F) -> Result<R, ThoError>
@@ -421,11 +352,7 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Val { t } => t,
             ThoTensorInner::Ref { key, .. } => todo!("out-of-process ThoTensor ref is not mutable in this process, key={key}"),
         };
-        ThoTensorMut {
-            id,
-            t,
-            pd: Default::default(),
-        }
+        ThoTensorMut { id, t, pd: Default::default() }
     }
 
     pub fn double_value(&self, idx: &[i64]) -> f64 {
@@ -433,38 +360,34 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
     }
 
     pub fn tho_device_idx(&self) -> usize {
-
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                ThoDevice::from(self.t_ref().device()).tho_device_idx()
-            }
-            ThoTensorInner::Ref {  tho_device_idx, .. } => {
-                *tho_device_idx
-            }
+            ThoTensorInner::Val { t } => ThoDevice::from(self.t_ref().device()).tho_device_idx(),
+            ThoTensorInner::Ref { tho_device_idx, .. } => *tho_device_idx,
         }
     }
 
     pub fn tho_device(&self) -> ThoDevice {
         match &self.inner {
-            ThoTensorInner::Val { t } => {
-                ThoDevice::from(t.device())
-            }
-            ThoTensorInner::Ref {  tho_device_idx, .. } => {
-                <usize as Into<ThoDevice>>::into(*tho_device_idx)
-            }
+            ThoTensorInner::Val { t } => ThoDevice::from(t.device()),
+            ThoTensorInner::Ref { tho_device_idx, .. } => <usize as Into<ThoDevice>>::into(*tho_device_idx),
         }
-
     }
 
-
     //selector is used to fetch a chunk of data in a data-specific way when handling OOM. Here it's only to
-    pub fn selector(&self)->Option<Box<dyn ThoSelector>> {
+    pub fn selector(&self) -> Option<Box<dyn ThoSelector>> {
         match &self.inner {
-            ThoTensorInner::Val { .. } => {
-                None
-            }
-            ThoTensorInner::Ref { selector, .. } => {
-                selector.as_ref().map(|v|v.clone_box())
+            ThoTensorInner::Val { .. } => None,
+            ThoTensorInner::Ref { selector, .. } => selector.as_ref().map(|v| v.clone_box()),
+        }
+    }
+}
+
+impl From<ThoTensor> for Tensor {
+    fn from(value: ThoTensor) -> Self {
+        match value.inner {
+            ThoTensorInner::Val { t } => t,
+            ThoTensorInner::Ref { .. } => {
+                panic!("Can't obtain tensor from ref ThoTensor") //TODO
             }
         }
     }
@@ -500,34 +423,28 @@ where
         assert!(!dst_device.eq(&src_device));
         let id = self.id.clone();
 
-        let ctx_device = if dst_device.is_cuda() {
-            dst_device
-        }  else {
-            src_device
-        };
+        let ctx_device = if dst_device.is_cuda() { dst_device } else { src_device };
 
         let cuda_actor = GlobalCtx::global().cuda_actor(ctx_device);
         let copy = match &self.inner {
-            ThoTensorInner::Val { t: src_tensor } => {
-                let src = if src_tensor.is_contiguous() { None } else {
+            ThoTensorInner::Val { t: src } => {
+                let src = if src.is_contiguous() {
+                    src.shallow_clone()
+                } else {
                     warn!("CopyToDevice for ThoTensor: tensor was not contiguous, self.id={:?}", self.id);
-                    Some(src_tensor.f_contiguous()?)
+                    src.f_contiguous()?
                 };
-                let src_ref = src.as_ref().unwrap_or(src_tensor);
-                debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?} src_contiguous={}", self.id, dst_device.tho_device_idx(), src.is_none());
-                track_await(cuda_actor
-                    .copy(
-                        src_ref.shallow_clone().into(),
-                        dst_device,
-                    )).await?
+
+                debug!("CopyToDevice for ThoTensor: self.id={:?} copy copy_from_ptr, dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
+                track_await(cuda_actor.copy(src.into(), dst_device)).await?
             }
             ThoTensorInner::Ref { key, size, kind, selector, tho_device_idx } => {
                 debug!("CopyToDevice for ThoTensor: self.id={:?} copy out-of-process ref key={key} dst_device.ordinal={:?}", self.id, dst_device.tho_device_idx());
-                track_await(cuda_actor
-                    .copy(
-                        ThoTensor::new_ref((), *key, size.clone(), *kind, selector.as_ref().map(|v|v.clone_box()), *tho_device_idx),//TODO remove extra ThoTensor::new_ref
-                        dst_device,
-                    )).await?
+                track_await(cuda_actor.copy(
+                    ThoTensor::new_ref((), *key, size.clone(), *kind, selector.as_ref().map(|v| v.clone_box()), *tho_device_idx), //TODO remove extra ThoTensor::new_ref
+                    dst_device,
+                ))
+                .await?
             }
         };
 
@@ -543,11 +460,7 @@ where
     }
 }
 
-impl<D: Dims, Id> Output for ThoTensor<D, Id>
-where
-    Id: Named + Debug + Clone + Debug + Send + Sync + Eq + std::hash::Hash + 'static
-{}
-
+impl<D: Dims, Id> Output for ThoTensor<D, Id> where Id: Named + Debug + Clone + Debug + Send + Sync + Eq + std::hash::Hash + 'static {}
 
 pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
     id: &'a Id,
@@ -557,11 +470,7 @@ pub struct ThoTensorMut<'a, D: Dims, Id: Named + Debug + Clone> {
 
 impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
     pub fn new(id: &'a Id, t: &'a mut Tensor) -> Self {
-        Self {
-            id: id,
-            t,
-            pd: Default::default(),
-        }
+        Self { id: id, t, pd: Default::default() }
     }
 
     pub fn zero_(&mut self) {
@@ -576,13 +485,7 @@ impl<'a, D: Dims, Id: Named + Debug + Clone> ThoTensorMut<'a, D, Id> {
         self.t.copy_(rhs.t_ref());
     }
 
-    pub fn copy_partial_from_(
-        &mut self,
-        dim: i64,
-        start: i64,
-        length: i64,
-        rhs: &ThoTensor<D, Id>,
-    ) {
+    pub fn copy_partial_from_(&mut self, dim: i64, start: i64, length: i64, rhs: &ThoTensor<D, Id>) {
         self.t.narrow(dim, start, length).copy_(rhs.t_ref());
     }
 

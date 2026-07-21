@@ -56,6 +56,7 @@ use crate::my_tch::MotifInitModeRangeOrValue;
 use crate::my_tch::MotifInitModeFields;
 use crate::my_tch::MotifInitModeBuilder;
 use thoosa_shared::tracked_await::track_await;
+use crate::tho_varstore::clone_var_store_to;
 
 #[derive(Args, Debug, Clone)]
 pub struct TrainLabelNetsArgs {
@@ -484,18 +485,14 @@ DO: Dims + Send + 'static {
 
         debug!("ThoModuleWithStore::copy_to_device: has module_factory={}", self.module_factory.is_some());
 
+        let var_store = clone_var_store_to(&self.var_store, tho_dst_device.into()).await?;
+        // let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
         let builder = self
             .module_factory
             .as_ref()
             .unwrap_or_else(|| panic!("copy_to_device requires module_factory; construct modules via ThoModuleWithStore::load to enable copying"));
 
-        let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
-
         let module = builder(&var_store.root())?;
-
-        var_store.copy(&self.var_store)?;
-
-        var_store.freeze();
 
         Ok(Self::with_factory(self.id.clone(), module, var_store, Some(Arc::clone(builder))))
     }
