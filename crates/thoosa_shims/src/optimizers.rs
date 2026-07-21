@@ -152,7 +152,9 @@ fn owned_tensor_from_ptr(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::c_ulong;
     use std::mem::MaybeUninit;
+    use std::ptr;
     use log::debug;
     use tch::{nn, Device, Tensor, Kind};
     use tch::Device::Cuda;
@@ -160,15 +162,21 @@ mod tests {
     use torch_sys::{C_optimizer, C_tensor};
     use tracing::field::debug;
     use thoosa_shared::ThoError;
-    use crate::optimizers::{ato_adam_group_count, C_AdamOptions, ato_adam_get_defaults, AdamOptionsSnapshot, ato_adam_get_group, C_AdamGroup, C_AdamParamState, ato_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot};
+    use crate::optimizers::{ato_adam_group_count, C_AdamOptions, ato_adam_get_defaults, AdamOptionsSnapshot, ato_adam_get_group, C_AdamGroup, C_AdamParamState, ato_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot, ato_adam_set_defaults, ato_adam_set_group_options, ato_adam_set_param_state};
 
     #[test]
     fn test_tho_snapshot_adam_states()-> Result<(), ThoError>{
         let adam = initialized_adam(Cuda(0))?;
-        let c_optimizer= adam.1;
-        let snapshot = unsafe {adam_snapshot(c_optimizer)?};
+        let c_optimizer_0 = adam.1;
+        let snapshot_0 = unsafe {adam_snapshot(c_optimizer_0)?};
 
-        debug!("snapshot={snapshot:?}");
+        debug!("snapshot_0={snapshot_0:?}");
+
+        let c_optimizer_1 = initialized_adam(Cuda(0))?.1; //default_adam()?;//
+        unsafe {restore_adam_snapshot(&snapshot_0, c_optimizer_1)}?;
+
+        let snapshot_1 = unsafe {adam_snapshot(c_optimizer_1)?};
+        debug!("snapshot_1={snapshot_1:?}");
 
         Ok(())
     }
@@ -274,6 +282,119 @@ mod tests {
             defaults,
             groups,
         })
+    }
+
+    pub unsafe fn restore_adam_snapshot(
+        snapshot: &AdamOptimizerSnapshot,
+        c_optimizer: *mut C_optimizer
+    ) -> Result<(), ThoError> {
+        let destination_group_count = ato_adam_group_count(c_optimizer);
+
+        if destination_group_count != snapshot.groups.len() as u64 {
+            return Err(ThoError::new(format!(
+                "Adam group-count mismatch: destination has {}, \
+                 snapshot has {}",
+                destination_group_count,
+                snapshot.groups.len(),
+            )));
+        }
+
+        let raw_defaults = snapshot.defaults.to_ffi();
+
+        ato_adam_set_defaults(
+            c_optimizer,
+            &raw_defaults,
+        );
+
+        for (group_index, snapshot_group) in snapshot.groups.iter().enumerate() {
+            let mut destination_group =
+                MaybeUninit::<C_AdamGroup>::zeroed();
+
+
+            ato_adam_get_group(
+                c_optimizer,
+                group_index as c_ulong,
+                destination_group.as_mut_ptr(),
+            );
+
+            let destination_group =
+                unsafe { destination_group.assume_init() };
+
+            if destination_group.parameter_count != snapshot_group.states.len() as u64 {
+                return Err(ThoError::new(format!(
+                    "Adam parameter-count mismatch in group \
+                     {group_index}: destination has {}, snapshot has {}",
+                    destination_group.parameter_count,
+                    snapshot_group.states.len(),
+                )));
+            }
+
+            let raw_options = snapshot_group.options.to_ffi();
+
+
+            ato_adam_set_group_options(
+                c_optimizer,
+                group_index as c_ulong,
+                &raw_options,
+            );
+
+            for (parameter_index, state) in
+                snapshot_group.states.iter().enumerate()
+            {
+                match state {
+                    None => {
+
+                            ato_adam_set_param_state(
+                                c_optimizer,
+                                group_index as c_ulong,
+                                parameter_index as c_ulong,
+                                0,
+                                0,
+                                ptr::null_mut(),
+                                ptr::null_mut(),
+                                ptr::null_mut(),
+                            )
+                        ;
+                    }
+
+                    Some(state) => {
+                        let max_exp_avg_sq = state
+                            .max_exp_avg_sq
+                            .as_ref()
+                            .map_or(
+                                ptr::null_mut(),
+                                |tensor| {
+                                    tensor.as_ptr()
+                                        as *mut C_tensor
+                                },
+                            );
+
+
+                            ato_adam_set_param_state(
+                                c_optimizer,
+                                group_index as c_ulong,
+                                parameter_index as c_ulong,
+                                1,
+                                state.step,
+                                state.exp_avg.as_ptr()
+                                    as *mut C_tensor,
+                                state.exp_avg_sq.as_ptr()
+                                    as *mut C_tensor,
+                                max_exp_avg_sq,
+                            )
+;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn default_adam() -> Result<*mut C_optimizer, ThoError>{
+        let adam_config = nn::Adam::default();
+
+        Ok(unsafe { torch_sys::ato_adam(0.1, adam_config.beta1, adam_config.beta2, adam_config.wd, adam_config.eps, adam_config.amsgrad)})
     }
 
     pub fn initialized_adam(
