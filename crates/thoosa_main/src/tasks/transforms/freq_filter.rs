@@ -76,7 +76,7 @@ where
             filter_configs: freq_filter.filter_configs.clone(),
             num_channels: freq_filter.num_channels,
             sample_rate: freq_filter.sample_rate,
-            find_motifs_run_config_id: todo!()
+            find_motifs_run_config_id: 0, //TODO
         }
     }
 }

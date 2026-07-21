@@ -1,6 +1,5 @@
 #pragma once
 // logging.hpp
-#pragma once
 
 #include <cstddef>
 #include <string>
