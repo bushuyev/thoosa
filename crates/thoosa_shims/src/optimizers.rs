@@ -32,40 +32,40 @@ pub struct C_AdamParamState {
 }
 
 unsafe extern "C" {
-    pub fn ato_adam_group_count(
+    pub fn tho_adam_group_count(
         opt: *mut C_optimizer,
     ) -> c_ulong;
 
-    pub fn ato_adam_get_defaults(
+    pub fn tho_adam_get_defaults(
         opt: *mut C_optimizer,
         out: *mut C_AdamOptions,
     );
 
-    pub fn ato_adam_get_group(
+    pub fn tho_adam_get_group(
         opt: *mut C_optimizer,
         group_index: c_ulong,
         out: *mut C_AdamGroup,
     );
 
-    pub fn ato_adam_get_param_state(
+    pub fn tho_adam_get_param_state(
         opt: *mut C_optimizer,
         group_index: c_ulong,
         parameter_index: c_ulong,
         out: *mut C_AdamParamState,
     );
 
-    pub fn ato_adam_set_defaults(
+    pub fn tho_adam_set_defaults(
         opt: *mut C_optimizer,
         options: *const C_AdamOptions,
     );
 
-    pub fn ato_adam_set_group_options(
+    pub fn tho_adam_set_group_options(
         opt: *mut C_optimizer,
         group_index: c_ulong,
         options: *const C_AdamOptions,
     );
 
-    pub fn ato_adam_set_param_state(
+    pub fn tho_adam_set_param_state(
         opt: *mut C_optimizer,
         group_index: c_ulong,
         parameter_index: c_ulong,
@@ -95,7 +95,20 @@ pub struct AdamParamStateSnapshot {
     pub max_exp_avg_sq: Option<Tensor>,
 }
 
-#[derive(Debug)]
+impl PartialEq for AdamParamStateSnapshot {
+    fn eq(&self, other: &Self) -> bool {
+        self.step == other.step
+        && self.exp_avg.allclose(&other.exp_avg, 0.01, 0.01, true)
+        && self.exp_avg_sq.allclose(&other.exp_avg_sq, 0.01, 0.01, true)
+        && (
+            self.max_exp_avg_sq.is_none() && other.max_exp_avg_sq.is_none()
+            ||
+            self.max_exp_avg_sq.as_ref().map(|v|other.max_exp_avg_sq.as_ref().map(|other|other.allclose(&v, 0.01, 0.01, true)).unwrap_or(false)).unwrap_or(false)
+        )
+    }
+}
+
+#[derive(Debug, PartialEq)]
 pub struct AdamGroupSnapshot {
     pub options: AdamOptionsSnapshot,
 
@@ -105,7 +118,7 @@ pub struct AdamGroupSnapshot {
     pub states: Vec<Option<AdamParamStateSnapshot>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct AdamOptimizerSnapshot {
     pub defaults: AdamOptionsSnapshot,
     pub groups: Vec<AdamGroupSnapshot>,
@@ -162,36 +175,40 @@ mod tests {
     use torch_sys::{C_optimizer, C_tensor};
     use tracing::field::debug;
     use thoosa_shared::ThoError;
-    use crate::optimizers::{ato_adam_group_count, C_AdamOptions, ato_adam_get_defaults, AdamOptionsSnapshot, ato_adam_get_group, C_AdamGroup, C_AdamParamState, ato_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot, ato_adam_set_defaults, ato_adam_set_group_options, ato_adam_set_param_state};
+    use crate::optimizers::{tho_adam_group_count, C_AdamOptions, tho_adam_get_defaults, AdamOptionsSnapshot, tho_adam_get_group, C_AdamGroup, C_AdamParamState, tho_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot, tho_adam_set_defaults, tho_adam_set_group_options, tho_adam_set_param_state};
 
     #[test]
     fn test_tho_snapshot_adam_states()-> Result<(), ThoError>{
-        let adam = initialized_adam(Cuda(0))?;
-        let c_optimizer_0 = adam.1;
+        let (vs_0, c_optimizer_0) = initialized_adam(Cuda(0))?;
         let snapshot_0 = unsafe {adam_snapshot(c_optimizer_0)?};
 
         debug!("snapshot_0={snapshot_0:?}");
 
-        let c_optimizer_1 = initialized_adam(Cuda(0))?.1; //default_adam()?;//
+        let c_optimizer_1 = default_adam()?;//initialized_adam(Cuda(0))?.1; //
+        let v = vs_0.variables_.lock().unwrap();
+        for var in &v.trainable_variables {
+            unsafe {
+                torch_sys::ato_add_parameters(c_optimizer_1, var.tensor.as_ptr() as *mut C_tensor, var.group)
+            }
+        }
+        drop(v);
         unsafe {restore_adam_snapshot(&snapshot_0, c_optimizer_1)}?;
 
         let snapshot_1 = unsafe {adam_snapshot(c_optimizer_1)?};
         debug!("snapshot_1={snapshot_1:?}");
 
+        assert_eq!(snapshot_0, snapshot_1);
+
         Ok(())
     }
 
     unsafe fn adam_snapshot(c_optimizer: *mut C_optimizer) -> Result<AdamOptimizerSnapshot, ThoError> {
-        let group_count = ato_adam_group_count(
-            c_optimizer
-        );
+        let group_count = tho_adam_group_count(c_optimizer);
+
+        let mut raw_defaults = MaybeUninit::<C_AdamOptions>::zeroed();
 
 
-        let mut raw_defaults =
-            MaybeUninit::<C_AdamOptions>::zeroed();
-
-
-        ato_adam_get_defaults(c_optimizer, raw_defaults.as_mut_ptr());
+        tho_adam_get_defaults(c_optimizer, raw_defaults.as_mut_ptr());
 
 
         debug!("raw_defaults={raw_defaults:?}");
@@ -205,11 +222,10 @@ mod tests {
         let mut groups = Vec::with_capacity(group_count as usize);
 
         for group_index in 0..group_count {
-            let mut raw_group =
-                MaybeUninit::<C_AdamGroup>::zeroed();
+            let mut raw_group = MaybeUninit::<C_AdamGroup>::zeroed();
 
 
-            ato_adam_get_group(c_optimizer, group_index, raw_group.as_mut_ptr());
+            tho_adam_get_group(c_optimizer, group_index, raw_group.as_mut_ptr());
 
             let raw_group = unsafe { raw_group.assume_init() };
 
@@ -219,7 +235,7 @@ mod tests {
                 debug!("parameter_index={parameter_index}");
                 let mut raw_state = MaybeUninit::<C_AdamParamState>::zeroed();
 
-                ato_adam_get_param_state(
+                tho_adam_get_param_state(
                     c_optimizer,
                     group_index,
                     parameter_index,
@@ -288,7 +304,7 @@ mod tests {
         snapshot: &AdamOptimizerSnapshot,
         c_optimizer: *mut C_optimizer
     ) -> Result<(), ThoError> {
-        let destination_group_count = ato_adam_group_count(c_optimizer);
+        let destination_group_count = tho_adam_group_count(c_optimizer);
 
         if destination_group_count != snapshot.groups.len() as u64 {
             return Err(ThoError::new(format!(
@@ -301,7 +317,7 @@ mod tests {
 
         let raw_defaults = snapshot.defaults.to_ffi();
 
-        ato_adam_set_defaults(
+        tho_adam_set_defaults(
             c_optimizer,
             &raw_defaults,
         );
@@ -311,7 +327,7 @@ mod tests {
                 MaybeUninit::<C_AdamGroup>::zeroed();
 
 
-            ato_adam_get_group(
+            tho_adam_get_group(
                 c_optimizer,
                 group_index as c_ulong,
                 destination_group.as_mut_ptr(),
@@ -332,7 +348,7 @@ mod tests {
             let raw_options = snapshot_group.options.to_ffi();
 
 
-            ato_adam_set_group_options(
+            tho_adam_set_group_options(
                 c_optimizer,
                 group_index as c_ulong,
                 &raw_options,
@@ -344,7 +360,7 @@ mod tests {
                 match state {
                     None => {
 
-                            ato_adam_set_param_state(
+                            tho_adam_set_param_state(
                                 c_optimizer,
                                 group_index as c_ulong,
                                 parameter_index as c_ulong,
@@ -370,7 +386,7 @@ mod tests {
                             );
 
 
-                            ato_adam_set_param_state(
+                            tho_adam_set_param_state(
                                 c_optimizer,
                                 group_index as c_ulong,
                                 parameter_index as c_ulong,
