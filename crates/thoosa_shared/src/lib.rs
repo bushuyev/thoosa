@@ -3051,7 +3051,7 @@ pub fn replace_extension<'a>(path: &'a PathBuf, new_extension: &'a str) -> (&'a 
 #[delegatable_trait]
 #[automock]
 pub trait CopyToDevice {
-    async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> where Self:Sized;
+    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> where Self:Sized;
 }
 
 
