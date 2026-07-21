@@ -1,5 +1,7 @@
 use std::ffi::{c_int, c_ulong};
+use tch::Tensor;
 use torch_sys::{C_optimizer, C_tensor};
+use thoosa_shared::ThoError;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -74,26 +76,205 @@ unsafe extern "C" {
         max_exp_avg_sq: *mut C_tensor,
     );
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AdamOptionsSnapshot {
+    pub lr: f64,
+    pub beta1: f64,
+    pub beta2: f64,
+    pub eps: f64,
+    pub weight_decay: f64,
+    pub amsgrad: bool,
+}
+
+#[derive(Debug)]
+pub struct AdamParamStateSnapshot {
+    pub step: i64,
+    pub exp_avg: Tensor,
+    pub exp_avg_sq: Tensor,
+    pub max_exp_avg_sq: Option<Tensor>,
+}
+
+#[derive(Debug)]
+pub struct AdamGroupSnapshot {
+    pub options: AdamOptionsSnapshot,
+
+    // Parameter-index order within this group.
+    //
+    // None means Adam has not initialized state for this parameter yet.
+    pub states: Vec<Option<AdamParamStateSnapshot>>,
+}
+
+#[derive(Debug)]
+pub struct AdamOptimizerSnapshot {
+    pub defaults: AdamOptionsSnapshot,
+    pub groups: Vec<AdamGroupSnapshot>,
+}
+
+impl AdamOptionsSnapshot {
+    fn from_ffi(value: C_AdamOptions) -> Self {
+        Self {
+            lr: value.lr,
+            beta1: value.beta1,
+            beta2: value.beta2,
+            eps: value.eps,
+            weight_decay: value.weight_decay,
+            amsgrad: value.amsgrad != 0,
+        }
+    }
+
+    fn to_ffi(self) -> C_AdamOptions {
+        C_AdamOptions {
+            lr: self.lr,
+            beta1: self.beta1,
+            beta2: self.beta2,
+            eps: self.eps,
+            weight_decay: self.weight_decay,
+            amsgrad: i32::from(self.amsgrad),
+        }
+    }
+}
+
+fn owned_tensor_from_ptr(
+    ptr: *mut C_tensor,
+    description: &str,
+) -> Result<Tensor, ThoError> {
+    if ptr.is_null() {
+        return Err(ThoError::new(format!(
+            "C++ Adam shim returned a null {description}"
+        )));
+    }
+
+    // The C++ shim returned `new torch::Tensor(...)`.
+    // Tensor now owns that pointer and will eventually call at_free().
+    Ok(unsafe { Tensor::from_ptr(ptr) })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::mem::MaybeUninit;
+    use log::debug;
     use tch::{nn, Device, Tensor, Kind};
     use tch::Device::Cuda;
     use tch::nn::{Adam, Optimizer, OptimizerConfig};
     use torch_sys::{C_optimizer, C_tensor};
+    use tracing::field::debug;
     use thoosa_shared::ThoError;
-    use crate::optimizers::ato_adam_group_count;
+    use crate::optimizers::{ato_adam_group_count, C_AdamOptions, ato_adam_get_defaults, AdamOptionsSnapshot, ato_adam_get_group, C_AdamGroup, C_AdamParamState, ato_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot};
 
     #[test]
     fn test_tho_snapshot_adam_states()-> Result<(), ThoError>{
         let adam = initialized_adam(Cuda(0))?;
-        unsafe {
-            ato_adam_group_count(adam.1);
+        let c_optimizer= adam.1;
+        let snapshot = unsafe {adam_snapshot(c_optimizer)?};
 
-        }
+        debug!("snapshot={snapshot:?}");
 
         Ok(())
     }
 
+    unsafe fn adam_snapshot(c_optimizer: *mut C_optimizer) -> Result<AdamOptimizerSnapshot, ThoError> {
+        let group_count = ato_adam_group_count(
+            c_optimizer
+        );
+
+
+        let mut raw_defaults =
+            MaybeUninit::<C_AdamOptions>::zeroed();
+
+
+        ato_adam_get_defaults(c_optimizer, raw_defaults.as_mut_ptr());
+
+
+        debug!("raw_defaults={raw_defaults:?}");
+
+        let defaults = AdamOptionsSnapshot::from_ffi(
+            unsafe { raw_defaults.assume_init() },
+        );
+
+        debug!("defaults={defaults:?}");
+
+        let mut groups = Vec::with_capacity(group_count as usize);
+
+        for group_index in 0..group_count {
+            let mut raw_group =
+                MaybeUninit::<C_AdamGroup>::zeroed();
+
+
+            ato_adam_get_group(c_optimizer, group_index, raw_group.as_mut_ptr());
+
+            let raw_group = unsafe { raw_group.assume_init() };
+
+            let mut states = Vec::with_capacity(raw_group.parameter_count as usize);
+
+            for parameter_index in 0..raw_group.parameter_count {
+                debug!("parameter_index={parameter_index}");
+                let mut raw_state = MaybeUninit::<C_AdamParamState>::zeroed();
+
+                ato_adam_get_param_state(
+                    c_optimizer,
+                    group_index,
+                    parameter_index,
+                    raw_state.as_mut_ptr(),
+                );
+
+                let raw_state = unsafe { raw_state.assume_init() };
+
+                if raw_state.has_state == 0 {
+                    debug_assert!(raw_state.exp_avg.is_null());
+                    debug_assert!(raw_state.exp_avg_sq.is_null());
+                    debug_assert!(raw_state.max_exp_avg_sq.is_null());
+
+                    states.push(None);
+                    continue;
+                }
+
+                /*
+                 * Convert exp_avg first. If a subsequent conversion fails,
+                 * the already-created Tensor is dropped and its C++ pointer
+                 * is freed, so this does not leak partially returned state.
+                 */
+                let exp_avg = owned_tensor_from_ptr(
+                    raw_state.exp_avg,
+                    "Adam exp_avg",
+                )?;
+
+                let exp_avg_sq = owned_tensor_from_ptr(
+                    raw_state.exp_avg_sq,
+                    "Adam exp_avg_sq",
+                )?;
+
+                let max_exp_avg_sq =
+                    if raw_state.max_exp_avg_sq.is_null() {
+                        None
+                    } else {
+                        Some(owned_tensor_from_ptr(
+                            raw_state.max_exp_avg_sq,
+                            "Adam max_exp_avg_sq",
+                        )?)
+                    };
+
+                states.push(Some(AdamParamStateSnapshot {
+                    step: raw_state.step,
+                    exp_avg,
+                    exp_avg_sq,
+                    max_exp_avg_sq,
+                }));
+            }
+
+            groups.push(AdamGroupSnapshot {
+                options: AdamOptionsSnapshot::from_ffi(
+                    raw_group.options,
+                ),
+                states,
+            });
+        }
+
+        Ok(AdamOptimizerSnapshot {
+            defaults,
+            groups,
+        })
+    }
 
     pub fn initialized_adam(
         device: Device,
