@@ -43,7 +43,7 @@ torch::optim::AdamOptions& checked_adam_options(
 
 void export_adam_options(
     const torch::optim::AdamOptions& src,
-    ato_adam_options* dst) {
+    tho_adam_options* dst) {
   TORCH_CHECK(dst != nullptr, "null Adam options output");
 
   const auto [beta1, beta2] = src.betas();
@@ -57,7 +57,7 @@ void export_adam_options(
 }
 
 void validate_adam_options(
-    const ato_adam_options& options) {
+    const tho_adam_options& options) {
   TORCH_CHECK(
       options.lr >= 0.0,
       "invalid Adam learning rate: ",
@@ -85,7 +85,7 @@ void validate_adam_options(
 }
 
 void import_adam_options(
-    const ato_adam_options& src,
+    const tho_adam_options& src,
     torch::optim::AdamOptions& dst) {
   validate_adam_options(src);
 
@@ -129,9 +129,9 @@ void validate_adam_state_tensor(
 
 } // namespace
 
-extern "C" ulong ato_adam_group_count(torch::optim::Optimizer* opt) {
+extern "C" ulong tho_adam_group_count(torch::optim::Optimizer* opt) {
 
-    tho_log(CppLogLevel::Debug, "ato_adam_group_count x");
+    tho_log(CppLogLevel::Debug, "tho_adam_group_count x");
 
     auto& adam = checked_adam(opt);
     return adam.param_groups().size();
@@ -140,7 +140,7 @@ extern "C" ulong ato_adam_group_count(torch::optim::Optimizer* opt) {
     return 0;
 }
 
-extern "C"  void ato_adam_get_defaults( torch::optim::Optimizer* opt, ato_adam_options* out) {
+extern "C"  void tho_adam_get_defaults( torch::optim::Optimizer* opt, tho_adam_options* out) {
 
     TORCH_CHECK(out != nullptr, "null Adam defaults output");
 
@@ -153,11 +153,11 @@ extern "C"  void ato_adam_get_defaults( torch::optim::Optimizer* opt, ato_adam_o
 
 }
 
-extern "C"  void ato_adam_get_group( torch::optim::Optimizer* opt, size_t group_index, ato_adam_group* out) {
+extern "C"  void tho_adam_get_group( torch::optim::Optimizer* opt, size_t group_index, tho_adam_group* out) {
 
     TORCH_CHECK(out != nullptr, "null Adam group output");
 
-    *out = ato_adam_group{};
+    *out = tho_adam_group{};
 
     auto& adam = checked_adam(opt);
     const auto& group =
@@ -171,18 +171,18 @@ extern "C"  void ato_adam_get_group( torch::optim::Optimizer* opt, size_t group_
 
 }
 
-extern "C"  void ato_adam_get_param_state(
+extern "C"  void tho_adam_get_param_state(
     torch::optim::Optimizer* opt,
     size_t group_index,
     size_t parameter_index,
-    ato_adam_param_state* out) {
-    tho_log(CppLogLevel::Debug, "ato_adam_get_param_state");
+    tho_adam_param_state* out) {
+    tho_log(CppLogLevel::Debug, "tho_adam_get_param_state");
 
     TORCH_CHECK(
         out != nullptr,
         "null Adam parameter-state output");
 
-    *out = ato_adam_param_state{};
+    *out = tho_adam_param_state{};
 
     auto& adam = checked_adam(opt);
     const auto& group =
@@ -231,7 +231,7 @@ extern "C"  void ato_adam_get_param_state(
 
 }
 
-extern "C"  void ato_adam_set_defaults( torch::optim::Optimizer* opt, const ato_adam_options* options) {
+extern "C"  void tho_adam_set_defaults( torch::optim::Optimizer* opt, const tho_adam_options* options) {
 
     TORCH_CHECK(options != nullptr, "null Adam defaults");
 
@@ -243,10 +243,10 @@ extern "C"  void ato_adam_set_defaults( torch::optim::Optimizer* opt, const ato_
 
 }
 
-extern "C"  void ato_adam_set_group_options(
+extern "C"  void tho_adam_set_group_options(
     torch::optim::Optimizer* opt,
     size_t group_index,
-    const ato_adam_options* options) {
+    const tho_adam_options* options) {
 
     TORCH_CHECK(options != nullptr, "null Adam group options");
 
@@ -261,7 +261,7 @@ extern "C"  void ato_adam_set_group_options(
 
 }
 
-void ato_adam_set_param_state(
+void tho_adam_set_param_state(
     torch::optim::Optimizer* opt,
     size_t group_index,
     size_t parameter_index,
