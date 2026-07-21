@@ -217,37 +217,17 @@ void ato_adam_get_param_state(
           state->exp_avg_sq().defined(),
           "Adam exp_avg_sq is undefined");
 
-      /*
-       * Allocate all wrappers under unique_ptr first. If allocation or
-       * validation throws, no partially returned pointers are leaked.
-       *
-       * These are shallow torch::Tensor copies. Their storage remains shared
-       * with the optimizer until Rust performs its asynchronous device copy.
-       */
-      auto exp_avg =
-          std::make_unique<torch::Tensor>(
-              state->exp_avg());
-
-      auto exp_avg_sq =
-          std::make_unique<torch::Tensor>(
-              state->exp_avg_sq());
-
-      std::unique_ptr<torch::Tensor> max_exp_avg_sq;
-
-      if (state->max_exp_avg_sq().defined()) {
-        max_exp_avg_sq =
-            std::make_unique<torch::Tensor>(
-                state->max_exp_avg_sq());
-      }
-
       out->step = state->step();
       out->has_state = 1;
-      out->exp_avg = exp_avg.release();
-      out->exp_avg_sq = exp_avg_sq.release();
-      out->max_exp_avg_sq =
-          max_exp_avg_sq
-              ? max_exp_avg_sq.release()
-              : nullptr;
+
+      /*
+       * ato_adam_param_state owns Tensor values, so export shallow handle
+       * copies directly. An undefined max_exp_avg_sq represents non-AMSGrad
+       * state without requiring nullable heap-allocated Tensor wrappers.
+       */
+      out->exp_avg = state->exp_avg();
+      out->exp_avg_sq = state->exp_avg_sq();
+      out->max_exp_avg_sq = state->max_exp_avg_sq();
 
 }
 
@@ -311,26 +291,26 @@ void ato_adam_set_param_state(
           step);
 
       TORCH_CHECK(
-          exp_avg != nullptr,
-          "null Adam exp_avg");
+          exp_avg.defined(),
+          "Adam exp_avg is undefined");
 
       TORCH_CHECK(
-          exp_avg_sq != nullptr,
-          "null Adam exp_avg_sq");
+          exp_avg_sq.defined(),
+          "Adam exp_avg_sq is undefined");
 
       validate_adam_state_tensor(
-          *exp_avg,
+          exp_avg,
           parameter,
           "Adam exp_avg");
 
       validate_adam_state_tensor(
-          *exp_avg_sq,
+          exp_avg_sq,
           parameter,
           "Adam exp_avg_sq");
 
-      if (max_exp_avg_sq != nullptr) {
+      if (max_exp_avg_sq.defined()) {
         validate_adam_state_tensor(
-            *max_exp_avg_sq,
+            max_exp_avg_sq,
             parameter,
             "Adam max_exp_avg_sq");
       }
@@ -339,11 +319,11 @@ void ato_adam_set_param_state(
           std::make_unique<torch::optim::AdamParamState>();
 
       state->step(step);
-      state->exp_avg(*exp_avg);
-      state->exp_avg_sq(*exp_avg_sq);
+      state->exp_avg(exp_avg);
+      state->exp_avg_sq(exp_avg_sq);
 
-      if (max_exp_avg_sq != nullptr) {
-        state->max_exp_avg_sq(*max_exp_avg_sq);
+      if (max_exp_avg_sq.defined()) {
+        state->max_exp_avg_sq(max_exp_avg_sq);
       }
 
       /*
