@@ -129,7 +129,7 @@ void validate_adam_state_tensor(
 
 } // namespace
 
-size_t ato_adam_group_count(torch::optim::Optimizer* opt) {
+extern "C" ulong ato_adam_group_count(torch::optim::Optimizer* opt) {
 
   auto& adam = checked_adam(opt);
   return adam.param_groups().size();
@@ -334,8 +334,4 @@ void ato_adam_set_param_state(
 
 }
 
-extern "C" void tho_snapshot_adam_states(
-    // torch::optim::Optimizer& base
-) {
-    tho_log(CppLogLevel::Debug, "snapshot_adam_states");
-}
+

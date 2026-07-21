@@ -33,7 +33,7 @@ typedef struct ato_adam_param_state {
     at::Tensor max_exp_avg_sq;
 } ato_adam_param_state;
 
-size_t ato_adam_group_count(torch::optim::Adam opt);
+extern "C"  ulong ato_adam_group_count(torch::optim::Optimizer* opt);
 
 void ato_adam_get_defaults(
     torch::optim::Adam opt,
@@ -68,8 +68,3 @@ void ato_adam_set_param_state(
     at::Tensor exp_avg,
     at::Tensor exp_avg_sq,
     at::Tensor max_exp_avg_sq);
-
-// std::vector<AdamStateView>
-extern "C" void tho_snapshot_adam_states(
-    // torch::optim::Optimizer& base
-);
