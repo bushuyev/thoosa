@@ -105,7 +105,8 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(output)
     }
 
-    async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError> {
+    async fn drop_tho_tensor(&self, t:ThoTensor)-> Result<(), ThoError>
+    {
         Ok(())
     }
 

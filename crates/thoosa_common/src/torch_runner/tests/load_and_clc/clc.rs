@@ -82,7 +82,7 @@ impl SyncClcStage {
     {
         if GlobalCtx::global().is_ipc() {
             let k = k.to_f64().expect("SyncClcTask::new: IPC task multiplier must convert to f64");
-            let proxy = tokio::task::block_in_place(|| {
+            let proxy = tokio::task::block_in_place(|| {//TODO remove
                 tokio::runtime::Handle::current().block_on(ProxySyncClcStage::new(id, k, dim, fail_until, kind, device, use_matmul))
             }).expect("SyncClcTask::new: install IPC proxy sync task");
             ClcDynSyncStage::new(Arc::new(proxy))

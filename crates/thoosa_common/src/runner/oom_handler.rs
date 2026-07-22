@@ -885,8 +885,8 @@ where
                 debug!("OOMHandler::run: task={task:?} input={input:?} run_ctx={run_ctx:?} acquired_permits={}", run_ctx.max_other_parallel());
 
                 /*
-                SyncStage::do_run – executes operations on tensors synchronously, receive tensors or composite tensor types as references
-                OOMHandler::run //runs syn_stage.do_run until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-  specific adjusters as configured at call site
+                SyncStage::do_run – executes operations on tensors synchronously, receives tensors or composite tensor types as references
+                OOMHandler::run //runs syn_stage.do_run until it succeeds decreasing allowed number of stages executed in parallel and applying stage- and  stage input-specific adjusters as configured at call site
                 DynamicTaskExecutor::submit – ensures that no more than requested max_other_parallel sync stages are being executed at a given moment.
                 selector – when OOMHandler tries to process input in chunks used to select current chunk.
                 Then – input.with_data_ref/with_selected_data_ref calls

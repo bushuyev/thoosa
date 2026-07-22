@@ -57,8 +57,6 @@ impl<D: Data + CopyToDevice + WithId + Output + Debug + Send + Sync + 'static> T
 
     }
 
-
-
     #[cfg(test)]
     pub fn get(&self, id: &<D as WithId>::ID) -> Option<Arc<DevicesWrap<D>>> {
         self.map.get(id).map(|reff| Arc::clone(reff.value()))

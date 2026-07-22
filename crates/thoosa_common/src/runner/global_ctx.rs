@@ -205,7 +205,7 @@ impl GlobalCtx {
     }
 
 
-    pub fn register_cache(&self, cache: (&'static str, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {
+    pub fn register_cache(&self, cache: (&'static str, Arc<dyn FuturesRunnerMapPurger>)) -> RegisteredCacheHandle {//TODO rename DataPurger?
         debug!("GlobalCtx::register_cache: cache={}", cache.0);
 
         let gate = Arc::new(AsyncRwLock::new(()));
