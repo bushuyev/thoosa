@@ -975,7 +975,6 @@ impl<T: Any> ThoModuleDowncast for T {
 pub trait ThoModule<DI: Dims, DO: Dims>: Debug + /*Sync +*/ Send + ThoModuleDowncast {
     fn debug(&self) {}
 
-    //TODO should consume t: &ThoTensor<DI, SimpleId>?
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError>;
 
     fn quantize(&mut self) {

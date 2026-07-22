@@ -35,6 +35,7 @@ use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::cuda_mem;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
+use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{opt_train, CommonTrainingRunConfig, ConvNetParams, LabelNetTypeArgs, LabelNetTypeParams, LinNetArgs, OptConfig, TrainLabelNetRunConfig, TrainLabelNetRunConfigResult, TrainMotifNetRunConfig};
 use thoosa_common::utils::{optimizer_mem_size, TrainListener};
@@ -352,6 +353,7 @@ where
                 &run_config,
             )).await?;
             let train_step = Arc::new(train_step);
+            GlobalCtx::global().register_cache(("train_step", Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>));
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
@@ -586,7 +588,6 @@ pub struct TrainStepInput<DI: Dims, DO: Dims> {
     lengths: Option<BatchLengths>,
     expected_y: ThoBatch<DO>,
     train: bool,
-    cache_area: CacheArea,
 }
 
 impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
@@ -597,7 +598,6 @@ impl<DI: Dims, DO: Dims> TrainStepInput<DI, DO> {
             lengths,
             expected_y,
             train,
-            cache_area: CacheArea::default(),
         }
     }
 
@@ -673,7 +673,6 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStepInput<DI, DO> {
             lengths: self.lengths.clone(),
             expected_y: track_await(self.expected_y.copy_to_device(dst_device)).await?,
             train: self.train,
-            cache_area: self.cache_area.clone(),
         })
     }
 }
@@ -758,6 +757,46 @@ pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     pd: PhantomData<C>,
 }
 
+unsafe impl <F, DI, DO, C> Send for TrainStep<F, DI, DO, C>
+where
+    DI:Dims,
+    DO:Dims,
+    C:RunCtx
+{}
+
+unsafe impl <F, DI, DO, C> Sync for TrainStep<F, DI, DO, C>
+where
+    DI:Dims,
+    DO:Dims,
+    C:RunCtx
+{}
+
+
+#[async_trait]
+impl <F, DI, DO, C> FuturesRunnerMapPurger for TrainStep<F, DI, DO, C>
+where
+    DI:Dims,
+    DO:Dims,
+    C:RunCtx,
+    Self:Send + Sync
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        todo!()
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        todo!()
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        todo!()
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        todo!()
+    }
+}
+
 pub(crate) enum TrainStepDynSyncStage<F, DI: Dims + 'static, DO: Dims + 'static, C: RunCtx + 'static> {
     Local(Arc<TrainStep<F, DI, DO, C>>),
     Proxy {
@@ -765,6 +804,63 @@ pub(crate) enum TrainStepDynSyncStage<F, DI: Dims + 'static, DO: Dims + 'static,
         weights_sync: Arc<dyn TrainStepWeightsSync>,
     },
 }
+
+#[async_trait]
+impl <F, DI, DO, C> FuturesRunnerMapPurger for TrainStepDynSyncStage<F, DI, DO, C>
+where
+    DI:Dims,
+    DO:Dims,
+    C:RunCtx,
+    Self:Send + Sync
+{
+    async fn has_gpu_data(&self, device_idx: usize) -> bool {
+        match self {
+            TrainStepDynSyncStage::Local(local) => {
+                local.has_gpu_data(device_idx).await
+            }
+            TrainStepDynSyncStage::Proxy { .. } => {
+                false
+            }
+        }
+    }
+
+    async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self {
+            TrainStepDynSyncStage::Local(local) => {
+                local.purge_gpu(ids_to_keep, device_idx, name).await
+            }
+            TrainStepDynSyncStage::Proxy { .. } => {
+                Ok(())
+            }
+        }
+
+    }
+
+    async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        match self {
+            TrainStepDynSyncStage::Local(local) => {
+                local.drop_gpu(device_idx, name).await
+            }
+            TrainStepDynSyncStage::Proxy { .. } => {
+                Ok(())
+            }
+        }
+
+    }
+
+    async fn purge_cpu(&self, purge_until: u64) -> usize {
+        match self {
+            TrainStepDynSyncStage::Local(local) => {
+                local.purge_cpu(purge_until).await
+            }
+            TrainStepDynSyncStage::Proxy { .. } => {
+                0
+            }
+        }
+
+    }
+}
+
 
 impl<F, DI, DO, C> Debug for TrainStepDynSyncStage<F, DI, DO, C>
 where
@@ -842,12 +938,6 @@ where
         drop(net);
         drop(opt);
         Arc::try_unwrap(var_store).map(Mutex::into_inner).map_err(|_| ThoError::new("TrainStep::into_var_store: VarStore still shared after training"))
-    }
-
-    fn forward(&self, x_t: &ThoBatch<DI>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoBatch<DO>, ThoError> {
-        // TODO(perf): lock_net is taken for every forward call; if TrainStep is not shared concurrently, split ownership so the hot path can call the module without a mutex.
-        let net = perf_log!(sync_mutex_lock!(self.net));
-        net.tho_forward(x_t, lengths, train)
     }
 
     pub(crate) fn save_var_store_to_stream(&self, output: &mut dyn Write) -> Result<(), ThoError> {
@@ -959,10 +1049,17 @@ where
 
         let mut lengths = input.lengths.clone();
         let mut calculate_loss = || {
-            let predicted_y = self.forward(&x_t, lengths.as_mut(), input.train)?;
+
+
+            let net = perf_log!(sync_mutex_lock!(self.net));
+            let predicted_y = net.tho_forward(&x_t, lengths.as_mut(), input.train)?;
+            drop(net);
+
             debug!("TrainStep::do_run: predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
+
             let loss = (self.loss_fn)(predicted_y.as_ref(), &expected_y.as_ref())?;
             Ok::<_, ThoError>((predicted_y, loss))
+
         };
         let (predicted_y, loss) = if input.train { calculate_loss()? } else { tch::no_grad(calculate_loss)? };
         debug!("TrainStep::do_run: 1. cuda_mem={:?}",maybe_cuda_mem(&self.device));

@@ -67,17 +67,26 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     let run_call = match run_input.as_ref() {
         Some(run_input) => quote! {
             #common::ipc::codec::invoke_ipc_endpoint::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
+
                 #endpoint,
+
                 &#run_input,
+
             ).await
         },
         None => quote! {
             #common::ipc::codec::invoke_ipc_sync_stage::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+
                 #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
+
                 #endpoint,
+
                 input,
+
                 ctx,
+
             ).await
         },
     };

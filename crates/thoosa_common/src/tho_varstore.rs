@@ -38,25 +38,18 @@ impl<Id> CopyToDevice for ThoVarStore<Id>
 where
     Id: Named + Debug + Clone + Send + Sync,
 {
-    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> {
-        // let cuda_actor = GlobalCtx::global().cuda_actor(tho_dst_device);
-        // let copy = match &self.inner {
-        //     ThoVarStoreInner::Val { vs } => {
-        //         let mut var_store = VarStore::new(ThoDevice::from(tho_dst_device).into());
-        //         track_await(cuda_actor
-        //             .copy(
-        //                 var_store,
-        //                 tho_dst_device.into(),
-        //             )).await?
-        //
-        //     }
-        //     ThoVarStoreInner::Ref { .. } => {
-        //         todo!()
-        //     }
-        // };
-        //
-        // Ok(ThoVarStore::new(self.id.clone(), copy)?)
-        todo!()
+    async fn copy_to_device(&self, tho_dst_device_idx: usize) -> Result<Self, ThoError> {
+        
+        match &self.inner {
+            ThoVarStoreInner::Val { vs } => {
+                Ok(ThoVarStore{ id: self.id.clone(), inner: ThoVarStoreInner::Val { vs: clone_var_store_to(vs, tho_dst_device_idx.into()).await?}})
+
+            }
+            ThoVarStoreInner::Ref { .. } => {
+                todo!()
+            }
+        }
+
     }
 }
 struct VarSpec {
@@ -90,18 +83,7 @@ fn add_named_tensor(
     path.add(leaf, tensor, trainable)
 }
 
-/// Replace this implementation with the actual asynchronous device transfer.
-///
-/// For real overlap between CUDA transfers, the implementation must use
-/// non-blocking copies on suitable CUDA streams and avoid synchronizing each
-/// transfer before returning.
-async fn copy_tensor_to_device_async(
-    tensor: Tensor,
-    device: Device,
-) -> tch::Result<Tensor> {
-    // Temporary synchronous implementation:
-    Ok(tensor.to_device(device))
-}
+
 
 pub async fn clone_var_store_to(
     src: &VarStore,

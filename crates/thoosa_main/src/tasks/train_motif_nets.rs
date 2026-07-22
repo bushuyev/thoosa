@@ -169,7 +169,7 @@ const OPTMIZER_FN: fn(&TrainMotifNetRunConfig, &VarStore) -> Result<Optimizer, T
 };
 
 fn new_train_motif_step_for_ipc(init: &TrainMotifStepIpcInit, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<SyncTrainMotifStep, ThoError> {
-    let motif_ref = ThoTensor::new_ref(
+    let motif_ref = ThoTensor::new_ref(//TODO ref clone
         init.motif.id().clone(),
         init.motif.ref_key().ok_or_else(|| ThoError::new(format!("TrainMotifStepIpcInit expected motif worker reference, got {:?}", init.motif)))?,
         init.motif.size(),
@@ -239,9 +239,12 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
                 let stage = self.stage.stage(all_cuda_tensors)?;
                 let remove_x = x.remove_after_run.then_some(x.ref_key);
                 let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
+
                 let x = ThoTensor::ref_to_tensor(all_cuda_tensors, x.into_tensor::<Slice>()?)?;
                 let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, expected_y.into_tensor::<MotifProbability>()?)?;
+
                 let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
+
                 let mut ctx = RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT);
                 ctx.set_max_other_parallel(max_other_parallel);
                 let result = stage.do_run(&input, &ctx);
