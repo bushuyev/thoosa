@@ -326,15 +326,15 @@ unsafe impl<DI: Dims + Send, DO: Dims + Send> Sync for ThoModuleWithStore<DI, DO
 impl<DI: Dims + Send + 'static, DO: Dims + Send + 'static> ThoModule<DI, DO> for ThoModuleWithStore<DI, DO>
 {
     fn tho_forward(&self, t: &ThoTensor<DI, SimpleId>, lengths: Option<&mut BatchLengths>, train: bool) -> Result<ThoTensor<DO, SimpleId>, ThoError> {
-        let _guard = InferenceModeGuard::enabled();
-        let store_float_precision = var_store_float_precision(&self.var_store);
+        let _guard = InferenceModeGuard::new(!train);
 
+        //TODO move to ThoVarStore?
+        let store_float_precision = var_store_float_precision(&self.var_store);
         debug!("ThoModuleWithStore::tho_forward: t.id={:?} store_float_precision={:?} t.as_ref().kind={:?}", t.id(), store_float_precision, t.as_ref().kind());
 
         let float_precision = match store_float_precision {
             VarStoreFloatPrecision::NoFloatVars => {
                 warn!("ThoModuleWithStore::tho_forward: store_float_precision={store_float_precision:?}"); //dummy nets may have no tensors
-
                 Float
             }
             VarStoreFloatPrecision::Uniform(kind) => {

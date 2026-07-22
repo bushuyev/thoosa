@@ -5,7 +5,7 @@ use crate::runner::common::cachable::ThoDataRef;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use async_trait::async_trait;
-use log::{debug, info, trace, warn};
+use log::{debug, error, info, trace, warn};
 use mockall_double::double;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -14,6 +14,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Deref;
+use std::pin::Pin;
 use tch::{Device, Kind, Tensor};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::copy_mode::CpuOrGpu;
@@ -79,6 +80,15 @@ where
             ThoTensorInner::Ref { kind, .. } => kind.clone(),
         }
     }
+
+    pub fn to_default(self) -> ThoTensor {
+        ThoTensor {
+            id: (),
+            inner: self.inner,
+            tracking: Default::default(),
+            pd: Default::default(),
+        }
+    }
 }
 
 impl<D: Dims> Display for ThoTensor<D, SimpleId> {
@@ -115,6 +125,7 @@ where
 
     pd: PhantomData<D>,
 }
+
 
 impl<'a, D, Id> Deref for ThoDataRef<'a, ThoTensor<D, Id>>
 where
@@ -173,6 +184,7 @@ impl<D: Dims> From<&Tensor> for ThoTensor<D, SimpleId> {
 
 impl<D: Dims, Id: Named + Debug + Clone + Send + Sync> Adjustable for ThoTensor<D, Id> {}
 
+#[async_trait]
 impl<D, Id> Data for ThoTensor<D, Id>
 where
     D: Dims,
@@ -189,7 +201,7 @@ where
     }
 
     fn device(&self) -> usize {
-        //TODO rename tho_device
+
         match &self.inner {
             ThoTensorInner::Val { t } => ThoDevice::from(t.device()).tho_device_idx(),
             ThoTensorInner::Ref { tho_device_idx, .. } => *tho_device_idx,
@@ -201,6 +213,25 @@ where
             ThoTensorInner::Val { t } => t.size().iter().fold(1u64, |a, v| a * (*v as u64)) * t.kind().elt_size_in_bytes() as u64,
             ThoTensorInner::Ref { key, .. } => {
                 1000 //TODO
+            }
+        }
+    }
+
+    async fn adrop(self)
+    where
+        Self:Sized
+    {
+        let tensor = self.to_default();
+        let tho_device_idx_key = if let ThoTensorInner::Ref{ key, size, kind, selector, tho_device_idx } = &tensor.inner {
+            Some((*tho_device_idx, *key))
+
+        } else {
+            None
+        };
+
+        if let Some((tho_device_idx, key)) = tho_device_idx_key {
+            if let Err(e) = GlobalCtx::global().cuda_actor(tho_device_idx).drop_tho_tensor(tensor).await {
+                error!("Got error while dropping key={key} e={e:?} ");
             }
         }
     }
@@ -412,15 +443,12 @@ where
     async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError> {
         debug!("CopyToDevice for ThoTensor: self.id={:?} self={self:?} dst_device={dst_device}", self.id);
 
-        //should not copy device to itself
+
         let dst_device = ThoDevice::from(dst_device);
-
-        let src_device = match &self.inner {
-            ThoTensorInner::Val { t } => ThoDevice::from(t.device()),
-            ThoTensorInner::Ref { .. } => ThoDevice::from(self.device()),
-        };
-
+        let src_device = self.device().into();
+        //should not copy device to itself
         assert!(!dst_device.eq(&src_device));
+
         let id = self.id.clone();
 
         let ctx_device = if dst_device.is_cuda() { dst_device } else { src_device };

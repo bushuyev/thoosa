@@ -112,7 +112,7 @@ where
 }
 
 #[async_trait]
-pub trait FuturesRunnerMapPurger: Debug + Sync + Send {
+pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//
     async fn has_gpu_data(&self, device_idx: usize) -> bool;
 
     async fn purge_gpu(

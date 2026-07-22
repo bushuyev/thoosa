@@ -643,12 +643,17 @@ where
                 if let Some(data) = lock.as_ref() {
                     track_await(self.ensure_copied(0, data, false)).await?;
                 }
-                drop(lock.take());
+                if let Some(o) = lock.take() {
+                    o.adrop().await;
+                }
+
                 self.mark_not_resident_on_device(device_idx);
 
                 debug!("DataCacheWrapper::dump_to_cpu: 1.1. id={:?} copied to cpu done device_idx={device_idx}", self.id);
             } else {
-                drop(lock.take());
+                if let Some(o) = lock.take() {
+                    o.adrop().await;
+                }
                 self.mark_not_resident_on_device(device_idx);
             }
         } else {

@@ -324,7 +324,7 @@ impl CudaWorker {
                 continue;
             }
 
-            if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {
+            if let Some(init_msg) = payload.strip_prefix(INSTALL_ENDPOINT_PREFIX) {//TODO UNINSTALL_ENDPOINT on drop
                 let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload_bytes(init_msg)?;
                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg_len={} endpoint_inits.contains_key={}", init_msg.len(), endpoint_inits.contains_key(endpoint_name));
 

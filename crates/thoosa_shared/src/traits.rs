@@ -569,9 +569,15 @@ pub trait Data: Debug {
 
     fn track_used_in(&self, _token: &'static str) {}
 
-    fn device(&self) -> usize;
+    fn device(&self) -> usize;//TODO rename tho_device_idx
 
     fn mem_size(&self) -> u64;
+
+    async fn adrop(self)
+    where
+    Self:Sized{
+
+    }
 }
 
 impl WithId for MockData {
