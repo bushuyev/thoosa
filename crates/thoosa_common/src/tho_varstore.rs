@@ -12,46 +12,8 @@ use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
-struct ThoVarStore<Id=()>
-where
-    Id: Named + Debug + Clone + Send + Sync
-{
-    pub id: Id,
-    pub inner: ThoVarStoreInner,
-}
 
-impl <Id> ThoVarStore<Id>
-where
-    Id: Named + Debug + Clone + Send + Sync{
-    pub fn new(id: Id, vs: VarStore) -> Self {
-        Self { id, inner:ThoVarStoreInner::Val {vs} }
-    }
-}
 
-enum ThoVarStoreInner {
-    Val { vs: VarStore },
-    Ref { key: u64, size:Vec<i64>, kind:Kind,  tho_device_idx:usize },
-}
-
-#[async_trait]
-impl<Id> CopyToDevice for ThoVarStore<Id>
-where
-    Id: Named + Debug + Clone + Send + Sync,
-{
-    async fn copy_to_device(&self, tho_dst_device_idx: usize) -> Result<Self, ThoError> {
-        
-        match &self.inner {
-            ThoVarStoreInner::Val { vs } => {
-                Ok(ThoVarStore{ id: self.id.clone(), inner: ThoVarStoreInner::Val { vs: clone_var_store_to(vs, tho_dst_device_idx.into()).await?}})
-
-            }
-            ThoVarStoreInner::Ref { .. } => {
-                todo!()
-            }
-        }
-
-    }
-}
 struct VarSpec {
     name: String,
     tensor: Tensor,
