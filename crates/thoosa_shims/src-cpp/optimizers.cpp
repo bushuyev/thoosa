@@ -267,9 +267,9 @@ void tho_adam_set_param_state(
     size_t parameter_index,
     int32_t has_state,
     int64_t step,
-    at::Tensor exp_avg,
-    at::Tensor exp_avg_sq,
-    at::Tensor max_exp_avg_sq) {
+    at::Tensor* exp_avg,
+    at::Tensor* exp_avg_sq,
+    at::Tensor* max_exp_avg_sq) {
 
     auto& adam = checked_adam(opt);
     auto& group =
@@ -291,26 +291,26 @@ void tho_adam_set_param_state(
         step);
 
     TORCH_CHECK(
-        exp_avg.defined(),
+        exp_avg->defined(),
         "Adam exp_avg is undefined");
 
     TORCH_CHECK(
-        exp_avg_sq.defined(),
+        exp_avg_sq->defined(),
         "Adam exp_avg_sq is undefined");
 
     validate_adam_state_tensor(
-        exp_avg,
+        *exp_avg,
         parameter,
         "Adam exp_avg");
 
     validate_adam_state_tensor(
-        exp_avg_sq,
+        *exp_avg_sq,
         parameter,
         "Adam exp_avg_sq");
 
-    if (max_exp_avg_sq.defined()) {
+    if (max_exp_avg_sq != nullptr && max_exp_avg_sq->defined()) {
         validate_adam_state_tensor(
-            max_exp_avg_sq,
+            *max_exp_avg_sq,
             parameter,
             "Adam max_exp_avg_sq");
     }
@@ -319,11 +319,11 @@ void tho_adam_set_param_state(
         std::make_unique<torch::optim::AdamParamState>();
 
     state->step(step);
-    state->exp_avg(exp_avg);
-    state->exp_avg_sq(exp_avg_sq);
+    state->exp_avg(*exp_avg);
+    state->exp_avg_sq(*exp_avg_sq);
 
-    if (max_exp_avg_sq.defined()) {
-        state->max_exp_avg_sq(max_exp_avg_sq);
+    if (max_exp_avg_sq != nullptr && max_exp_avg_sq->defined()) {
+        state->max_exp_avg_sq(*max_exp_avg_sq);
     }
 
     /*

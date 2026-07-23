@@ -65,6 +65,6 @@ extern "C"  void tho_adam_set_param_state(
     size_t parameter_index,
     int32_t has_state,
     int64_t step,
-    at::Tensor exp_avg,
-    at::Tensor exp_avg_sq,
-    at::Tensor max_exp_avg_sq);
+    at::Tensor* exp_avg,
+    at::Tensor* exp_avg_sq,
+    at::Tensor* max_exp_avg_sq);
