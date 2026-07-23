@@ -5,12 +5,13 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
 use log::debug;
+use serde::{Deserialize, Serialize};
 use crate::runner::common::RunCtx;
 use tracing::Instrument;
 use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::track_await;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Carries the per-sample valid time lengths for a padded batch.
 pub struct BatchLengths {
     lengths: Vec<i64>,
