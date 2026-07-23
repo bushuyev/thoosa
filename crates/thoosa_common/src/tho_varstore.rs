@@ -7,6 +7,7 @@ use tokio::task::JoinSet;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
+use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot};
 use crate::dims::Dims;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
@@ -42,9 +43,52 @@ fn add_named_tensor(
         path = path.sub(component);
     }
 
+    // *path.entry(leaf).borrow_mut() = tensor;
+
     path.add(leaf, tensor, trainable)
 }
 
+pub async fn clone_adam_snapshot_to(
+    src: &AdamOptimizerSnapshot,
+    tho_device: ThoDevice,
+) -> Result<AdamOptimizerSnapshot, ThoError> {
+    let actor_device_idx = 1; //TODO add device to AdamOptimizerSnapshot?
+
+    let mut dst_groups = vec![];
+    for src_group in &src.groups {
+        let mut dst_states = vec![];
+        for state in &src_group.states {
+            match state {
+                None => {
+                    dst_states.push(None)
+                }
+                Some(src_state) => {
+                    dst_states.push(Some(AdamParamStateSnapshot{
+                        step: src_state.step,
+                        exp_avg: GlobalCtx::global().cuda_actor(actor_device_idx).copy(src_state.exp_avg.detach().into(), tho_device.into()).await?.into(),
+                        exp_avg_sq: GlobalCtx::global().cuda_actor(actor_device_idx).copy(src_state.exp_avg_sq.detach().into(), tho_device.into()).await?.into(),
+                        max_exp_avg_sq: match &src_state.max_exp_avg_sq {
+                            None => None,
+                            Some(v) => {
+                                Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.detach().into(), tho_device.into()).await?.into())
+                            }
+                        },
+                    }))
+                }
+            }
+        }
+
+        dst_groups.push(AdamGroupSnapshot{
+            options: src_group.options,
+            states: dst_states,
+        })
+    }
+
+    Ok(AdamOptimizerSnapshot{
+        defaults: src.defaults,
+        groups: dst_groups,
+    })
+}
 
 
 pub async fn clone_var_store_to(
@@ -181,6 +225,43 @@ pub async fn clone_var_store_to(
     Ok(dst)
 }
 
+
+pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> {
+    let mut dst_variables = dst.variables_.lock().unwrap();
+    let src_variables = src.variables_.lock().unwrap();
+
+    for name in dst_variables.named_variables.keys() {
+        if !src_variables.named_variables.contains_key(name) {
+            return Err(ThoError::new(format!("no {name} in src")));
+        }
+    }
+
+    for (name, dst_var) in dst_variables.named_variables.iter_mut() {
+        let src_var = &src_variables.named_variables[name];
+
+        if dst_var.device() != src_var.device() {
+            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.device(), src_var.device())));;
+        }
+
+        if dst_var.kind() != src_var.kind() {
+            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.kind(),  src_var.kind())));;
+        }
+
+        if dst_var.size() != src_var.size() {
+            return Err(ThoError::new(format!("dst size {:?} != {:?} src device", dst_var.size(),  src_var.size())));;
+        }
+
+        if dst_var.grad().defined() {
+
+            return Err(ThoError::new(format!("destination parameter {name} has a defined gradient")));;
+        }
+
+        no_grad(|| dst_var.f_set_data(src_var))?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -189,12 +270,13 @@ mod tests {
     use log::debug;
     use tch::Device::{Cpu, Cuda};
     use tch::kind::FLOAT_CPU;
-    use tch::nn::{Init, VarStore, Variables};
-    use tch::Tensor;
+    use tch::nn::{Init, Module, OptimizerConfig, VarStore, Variables};
+    use tch::{nn, Tensor, Kind, Device};
     use thoosa_shared::ThoError;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_varstore::clone_var_store_to;
+    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data};
+    use thoosa_shims::optimizers::*;
 
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");
@@ -247,4 +329,245 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_reset_adam() -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
+        const IMAGE_DIM: i64 = 128;
+        const TEACHER_HIDDEN: i64 = 64;
+        const HIDDEN_NODES: i64 = 128;
+        const LABELS: i64 = 10;
+
+        const TRAIN_SAMPLES: i64 = 2_048;
+        const TEST_SAMPLES: i64 = 512;
+        const BATCH_SIZE: i64 = 64;
+
+        // Only ten epochs after resetting the optimizer.
+        const EPOCHS: i64 = 60;
+        const RESET_EPOCH: i64 = 50;
+        const LEARNING_RATE: f64 = 1e-3;
+
+        fn net(vs: &nn::Path) -> impl Module + use<> {
+            nn::seq()
+                .add(nn::linear(
+                    vs / "layer1",
+                    IMAGE_DIM,
+                    HIDDEN_NODES,
+                    Default::default(),
+                ))
+                .add_fn(|xs| xs.relu())
+                .add(nn::linear(
+                    vs / "layer2",
+                    HIDDEN_NODES,
+                    LABELS,
+                    Default::default(),
+                ))
+        }
+
+        fn make_split(
+            samples: i64,
+            teacher_w1: &Tensor,
+            teacher_w2: &Tensor,
+            feature_scales: &Tensor,
+        ) -> (Tensor, Tensor) {
+            // The latent features have a well-conditioned distribution.
+            let latent = Tensor::randn(
+                [samples, IMAGE_DIM],
+                (Kind::Float, Device::Cuda(0)),
+            );
+
+            // The student sees an ill-conditioned version where feature scales
+            // range approximately from exp(-4) to exp(4).
+            let images = &latent * feature_scales;
+
+            // Labels are generated by a fixed nonlinear teacher network, so there
+            // is an actual relationship between images and labels.
+            let labels = latent
+                .matmul(teacher_w1)
+                .relu()
+                .matmul(teacher_w2)
+                .argmax(-1, false);
+
+            (images, labels)
+        }
+
+        async fn train_once(
+            reset_optimizer: bool,
+            train_images: &Tensor,
+            train_labels: &Tensor,
+            test_images: &Tensor,
+            test_labels: &Tensor,
+        ) -> Result<Vec<f64>, ThoError> {
+
+            // Makes both runs start from identical model parameters and use the
+            // same sequence of mini-batch permutations.
+            tch::manual_seed(1234);
+
+            let mut vs = nn::VarStore::new(Cuda(0));
+            let mut module = net(&vs.root());
+
+            // Long-running moving averages make losing Adam's state easier to see.
+            let adam = nn::Adam {
+                beta1: 0.99,
+                beta2: 0.9999,
+                ..Default::default()
+            };
+
+            let mut opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
+            let mut losses = Vec::with_capacity(EPOCHS as usize);
+
+            for epoch in 1..=EPOCHS {
+                if reset_optimizer && epoch == RESET_EPOCH {
+                    // Same model parameters, but fresh Adam state:
+                    // step counter, first moments and second moments are lost.
+                    opt.zero_grad();
+                    let cuda_snapshot = unsafe { adam_snapshot(opt.as_raw_c_optimizer())? };
+
+                    let cpu_snapshot = clone_adam_snapshot_to(&cuda_snapshot, Cpu.into()).await?;
+                    let cpu_var_store = clone_var_store_to(&vs, Cpu.into()).await?;
+
+                    drop(opt);
+                    drop(cuda_snapshot);
+                    drop(vs);
+                    drop(module);
+                    ///////////////
+                    vs = nn::VarStore::new(Cuda(0));
+                    module = net(&vs.root());
+
+                    let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
+                    replace_data(&mut vs, restored_vs)?;
+
+                    let cuda_snapshot = clone_adam_snapshot_to(&cpu_snapshot, Cuda(0).into()).await?;
+                    opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
+                    unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
+                }
+
+                let permutation = Tensor::randperm(
+                    TRAIN_SAMPLES,
+                    (Kind::Int64, Device::Cuda(0)),
+                );
+
+                let mut start = 0;
+
+                while start < TRAIN_SAMPLES {
+                    let len = BATCH_SIZE.min(TRAIN_SAMPLES - start);
+
+                    let indices = permutation.narrow(0, start, len);
+                    let batch_images = train_images.index_select(0, &indices);
+                    let batch_labels = train_labels.index_select(0, &indices);
+
+                    let loss = module
+                        .forward(&batch_images)
+                        .cross_entropy_for_logits(&batch_labels);
+
+                    opt.backward_step(&loss);
+
+                    start += len;
+                }
+
+                let train_loss = module
+                    .forward(train_images)
+                    .cross_entropy_for_logits(train_labels)
+                    .double_value(&[]);
+
+                let test_accuracy = module
+                    .forward(test_images)
+                    .accuracy_for_logits(test_labels)
+                    .double_value(&[]);
+
+                losses.push(train_loss);
+
+                if matches!(epoch, 49 | 50 | 51 | 52 | 55 | 60) {
+                    tracing::debug!(
+                    reset_optimizer,
+                    epoch,
+                    train_loss,
+                    test_accuracy = 100.0 * test_accuracy,
+                    "training progress",
+                );
+                }
+            }
+
+            Ok(losses)
+        }
+
+        tch::manual_seed(42);
+
+        let teacher_w1 = Tensor::randn(
+            [IMAGE_DIM, TEACHER_HIDDEN],
+            (Kind::Float, Device::Cuda(0)),
+        ) / (IMAGE_DIM as f64).sqrt();
+
+        let teacher_w2 = Tensor::randn(
+            [TEACHER_HIDDEN, LABELS],
+            (Kind::Float, Device::Cuda(0)),
+        ) / (TEACHER_HIDDEN as f64).sqrt();
+
+        let feature_positions = Tensor::arange(
+            IMAGE_DIM,
+            (Kind::Float, Device::Cuda(0)),
+        );
+
+        let feature_scales = (
+            feature_positions / ((IMAGE_DIM - 1) as f64) * 8.0 - 4.0
+        )
+            .exp();
+
+        let (train_images, train_labels) = make_split(
+            TRAIN_SAMPLES,
+            &teacher_w1,
+            &teacher_w2,
+            &feature_scales,
+        );
+
+        let (test_images, test_labels) = make_split(
+            TEST_SAMPLES,
+            &teacher_w1,
+            &teacher_w2,
+            &feature_scales,
+        );
+
+        let preserved_losses = train_once(
+            false,
+            &train_images,
+            &train_labels,
+            &test_images,
+            &test_labels,
+        ).await?;
+
+        let reset_losses = train_once(
+            true,
+            &train_images,
+            &train_labels,
+            &test_images,
+            &test_labels,
+        ).await?;
+
+        for epoch in 49..=60 {
+            let index = (epoch - 1) as usize;
+
+            debug!("epoch={epoch} preserved={} reset={} difference={}", preserved_losses[index],reset_losses[index], reset_losses[index] - preserved_losses[index]);
+        }
+
+        // Compare the first epoch affected by the replacement.
+        let first_affected_index = (RESET_EPOCH - 1) as usize;
+
+        let immediate_difference = (
+            reset_losses[first_affected_index]
+                - preserved_losses[first_affected_index]
+        ).abs();
+
+        assert!(
+            immediate_difference < 1e-3,
+            "Adam produced the diverging trajectory after reset : \
+            preserved={}, reset={}",
+            preserved_losses[first_affected_index],
+            reset_losses[first_affected_index],
+        );
+
+        Ok(())
+    }
+
 }

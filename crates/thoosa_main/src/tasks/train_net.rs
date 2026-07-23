@@ -752,6 +752,7 @@ pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
     opt: Mutex<Optimizer>,
     var_store: Arc<Mutex<VarStore>>,
+
     x_f: Arc<F>,
     loss_fn: LossFp,
     pd: PhantomData<C>,

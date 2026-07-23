@@ -1,4 +1,7 @@
 use std::ffi::{c_int, c_ulong};
+use std::mem::MaybeUninit;
+use std::ptr;
+use log::debug;
 use tch::Tensor;
 use torch_sys::{C_optimizer, C_tensor};
 use thoosa_shared::ThoError;
@@ -95,6 +98,8 @@ pub struct AdamParamStateSnapshot {
     pub max_exp_avg_sq: Option<Tensor>,
 }
 
+
+
 impl PartialEq for AdamParamStateSnapshot {
     fn eq(&self, other: &Self) -> bool {
         self.step == other.step
@@ -163,6 +168,213 @@ fn owned_tensor_from_ptr(
     Ok(unsafe { Tensor::from_ptr(ptr) })
 }
 
+pub unsafe fn adam_snapshot(c_optimizer: *const C_optimizer) -> Result<AdamOptimizerSnapshot, ThoError> {
+    let group_count = tho_adam_group_count(c_optimizer);
+
+    let mut raw_defaults = MaybeUninit::<C_AdamOptions>::zeroed();
+
+
+    tho_adam_get_defaults(c_optimizer, raw_defaults.as_mut_ptr());
+
+
+    debug!("raw_defaults={raw_defaults:?}");
+
+    let defaults = AdamOptionsSnapshot::from_ffi(
+        unsafe { raw_defaults.assume_init() },
+    );
+
+    debug!("defaults={defaults:?}");
+
+    let mut groups = Vec::with_capacity(group_count as usize);
+
+    for group_index in 0..group_count {
+        let mut raw_group = MaybeUninit::<C_AdamGroup>::zeroed();
+
+
+        tho_adam_get_group(c_optimizer, group_index, raw_group.as_mut_ptr());
+
+        let raw_group = unsafe { raw_group.assume_init() };
+
+        let mut states = Vec::with_capacity(raw_group.parameter_count as usize);
+
+        for parameter_index in 0..raw_group.parameter_count {
+            debug!("parameter_index={parameter_index}");
+            let mut raw_state = MaybeUninit::<C_AdamParamState>::zeroed();
+
+            tho_adam_get_param_state(
+                c_optimizer,
+                group_index,
+                parameter_index,
+                raw_state.as_mut_ptr(),
+            );
+
+            let raw_state = unsafe { raw_state.assume_init() };
+
+            if raw_state.has_state == 0 {
+                debug_assert!(raw_state.exp_avg.is_null());
+                debug_assert!(raw_state.exp_avg_sq.is_null());
+                debug_assert!(raw_state.max_exp_avg_sq.is_null());
+
+                states.push(None);
+                continue;
+            }
+
+            /*
+             * Convert exp_avg first. If a subsequent conversion fails,
+             * the already-created Tensor is dropped and its C++ pointer
+             * is freed, so this does not leak partially returned state.
+             */
+            let exp_avg = owned_tensor_from_ptr(
+                raw_state.exp_avg,
+                "Adam exp_avg",
+            )?;
+
+            let exp_avg_sq = owned_tensor_from_ptr(
+                raw_state.exp_avg_sq,
+                "Adam exp_avg_sq",
+            )?;
+
+            let max_exp_avg_sq =
+                if raw_state.max_exp_avg_sq.is_null() {
+                    None
+                } else {
+                    Some(owned_tensor_from_ptr(
+                        raw_state.max_exp_avg_sq,
+                        "Adam max_exp_avg_sq",
+                    )?)
+                };
+
+            states.push(Some(AdamParamStateSnapshot {
+                step: raw_state.step,
+                exp_avg,
+                exp_avg_sq,
+                max_exp_avg_sq,
+            }));
+        }
+
+        groups.push(AdamGroupSnapshot {
+            options: AdamOptionsSnapshot::from_ffi(
+                raw_group.options,
+            ),
+            states,
+        });
+    }
+
+    Ok(AdamOptimizerSnapshot {
+        defaults,
+        groups,
+    })
+}
+
+
+pub unsafe fn restore_adam_snapshot(
+    snapshot: &AdamOptimizerSnapshot,
+    c_optimizer: *mut C_optimizer
+) -> Result<(), ThoError> {
+    let destination_group_count = tho_adam_group_count(c_optimizer);
+
+    if destination_group_count != snapshot.groups.len() as u64 {
+        return Err(ThoError::new(format!(
+            "Adam group-count mismatch: destination has {}, \
+                 snapshot has {}",
+            destination_group_count,
+            snapshot.groups.len(),
+        )));
+    }
+
+    let raw_defaults = snapshot.defaults.to_ffi();
+
+    tho_adam_set_defaults(
+        c_optimizer,
+        &raw_defaults,
+    );
+
+    for (group_index, snapshot_group) in snapshot.groups.iter().enumerate() {
+        let mut destination_group =
+            MaybeUninit::<C_AdamGroup>::zeroed();
+
+
+        tho_adam_get_group(
+            c_optimizer,
+            group_index as c_ulong,
+            destination_group.as_mut_ptr(),
+        );
+
+        let destination_group =
+            unsafe { destination_group.assume_init() };
+
+        if destination_group.parameter_count != snapshot_group.states.len() as u64 {
+            return Err(ThoError::new(format!(
+                "Adam parameter-count mismatch in group \
+                     {group_index}: destination has {}, snapshot has {}",
+                destination_group.parameter_count,
+                snapshot_group.states.len(),
+            )));
+        }
+
+        let raw_options = snapshot_group.options.to_ffi();
+
+
+        tho_adam_set_group_options(
+            c_optimizer,
+            group_index as c_ulong,
+            &raw_options,
+        );
+
+        for (parameter_index, state) in
+            snapshot_group.states.iter().enumerate()
+        {
+            match state {
+                None => {
+
+                    tho_adam_set_param_state(
+                        c_optimizer,
+                        group_index as c_ulong,
+                        parameter_index as c_ulong,
+                        0,
+                        0,
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                        ptr::null_mut(),
+                    )
+                    ;
+                }
+
+                Some(state) => {
+                    let max_exp_avg_sq = state
+                        .max_exp_avg_sq
+                        .as_ref()
+                        .map_or(
+                            ptr::null_mut(),
+                            |tensor| {
+                                tensor.as_ptr()
+                                    as *mut C_tensor
+                            },
+                        );
+
+
+                    tho_adam_set_param_state(
+                        c_optimizer,
+                        group_index as c_ulong,
+                        parameter_index as c_ulong,
+                        1,
+                        state.step,
+                        state.exp_avg.as_ptr()
+                            as *mut C_tensor,
+                        state.exp_avg_sq.as_ptr()
+                            as *mut C_tensor,
+                        max_exp_avg_sq,
+                    )
+                    ;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+
 #[cfg(test)]
 mod tests {
     use std::ffi::c_ulong;
@@ -170,7 +382,7 @@ mod tests {
     use std::ptr;
     use log::debug;
     use tch::{nn, Device, Tensor, Kind};
-    use tch::Device::Cuda;
+    use tch::Device::{Cpu, Cuda};
     use tch::display::PrinterOptions;
     use tch::Kind::Float;
     use tch::kind::FLOAT_CPU;
@@ -178,228 +390,8 @@ mod tests {
     use torch_sys::{C_optimizer, C_tensor};
     use tracing::field::debug;
     use thoosa_shared::ThoError;
-    use crate::optimizers::{tho_adam_group_count, C_AdamOptions, tho_adam_get_defaults, AdamOptionsSnapshot, tho_adam_get_group, C_AdamGroup, C_AdamParamState, tho_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot, tho_adam_set_defaults, tho_adam_set_group_options, tho_adam_set_param_state};
+    use crate::optimizers::{tho_adam_group_count, C_AdamOptions, tho_adam_get_defaults, AdamOptionsSnapshot, tho_adam_get_group, C_AdamGroup, C_AdamParamState, tho_adam_get_param_state, AdamParamStateSnapshot, owned_tensor_from_ptr, AdamGroupSnapshot, AdamOptimizerSnapshot, tho_adam_set_defaults, tho_adam_set_group_options, tho_adam_set_param_state, restore_adam_snapshot, adam_snapshot};
 
-    #[test]
-    fn test_reset_adam() -> Result<(), ThoError> {
-        const IMAGE_DIM: i64 = 128;
-        const TEACHER_HIDDEN: i64 = 64;
-        const HIDDEN_NODES: i64 = 128;
-        const LABELS: i64 = 10;
-
-        const TRAIN_SAMPLES: i64 = 2_048;
-        const TEST_SAMPLES: i64 = 512;
-        const BATCH_SIZE: i64 = 64;
-
-        // Only ten epochs after resetting the optimizer.
-        const EPOCHS: i64 = 60;
-        const RESET_EPOCH: i64 = 50;
-        const LEARNING_RATE: f64 = 1e-3;
-
-        fn net(vs: &nn::Path) -> impl Module + use<> {
-            nn::seq()
-                .add(nn::linear(
-                    vs / "layer1",
-                    IMAGE_DIM,
-                    HIDDEN_NODES,
-                    Default::default(),
-                ))
-                .add_fn(|xs| xs.relu())
-                .add(nn::linear(
-                    vs / "layer2",
-                    HIDDEN_NODES,
-                    LABELS,
-                    Default::default(),
-                ))
-        }
-
-        fn make_split(
-            samples: i64,
-            teacher_w1: &Tensor,
-            teacher_w2: &Tensor,
-            feature_scales: &Tensor,
-        ) -> (Tensor, Tensor) {
-            // The latent features have a well-conditioned distribution.
-            let latent = Tensor::randn(
-                [samples, IMAGE_DIM],
-                (Kind::Float, Device::Cuda(0)),
-            );
-
-            // The student sees an ill-conditioned version where feature scales
-            // range approximately from exp(-4) to exp(4).
-            let images = &latent * feature_scales;
-
-            // Labels are generated by a fixed nonlinear teacher network, so there
-            // is an actual relationship between images and labels.
-            let labels = latent
-                .matmul(teacher_w1)
-                .relu()
-                .matmul(teacher_w2)
-                .argmax(-1, false);
-
-            (images, labels)
-        }
-
-        fn train_once(
-            reset_optimizer: bool,
-            train_images: &Tensor,
-            train_labels: &Tensor,
-            test_images: &Tensor,
-            test_labels: &Tensor,
-        ) -> Result<Vec<f64>, ThoError> {
-            // Makes both runs start from identical model parameters and use the
-            // same sequence of mini-batch permutations.
-            tch::manual_seed(1234);
-
-            let vs = nn::VarStore::new(Cuda(0));
-            let net = net(&vs.root());
-
-            // Long-running moving averages make losing Adam's state easier to see.
-            let adam = nn::Adam {
-                beta1: 0.99,
-                beta2: 0.9999,
-                ..Default::default()
-            };
-
-            let mut opt = adam./*amsgrad(true).*/build(&vs, LEARNING_RATE).unwrap();
-            let mut losses = Vec::with_capacity(EPOCHS as usize);
-
-            for epoch in 1..=EPOCHS {
-                if reset_optimizer && epoch == RESET_EPOCH {
-                    // Same model parameters, but fresh Adam state:
-                    // step counter, first moments and second moments are lost.
-
-                    let snapshot_0 = unsafe {adam_snapshot(opt.as_raw_c_optimizer())?};
-                    opt = adam./*amsgrad(true).*/build(&vs, LEARNING_RATE).unwrap();
-
-                    unsafe {restore_adam_snapshot(&snapshot_0, opt.as_raw_c_optimizer())}?;
-                }
-
-                let permutation = Tensor::randperm(
-                    TRAIN_SAMPLES,
-                    (Kind::Int64, Device::Cuda(0)),
-                );
-
-                let mut start = 0;
-
-                while start < TRAIN_SAMPLES {
-                    let len = BATCH_SIZE.min(TRAIN_SAMPLES - start);
-
-                    let indices = permutation.narrow(0, start, len);
-                    let batch_images = train_images.index_select(0, &indices);
-                    let batch_labels = train_labels.index_select(0, &indices);
-
-                    let loss = net
-                        .forward(&batch_images)
-                        .cross_entropy_for_logits(&batch_labels);
-
-                    opt.backward_step(&loss);
-
-                    start += len;
-                }
-
-                let train_loss = net
-                    .forward(train_images)
-                    .cross_entropy_for_logits(train_labels)
-                    .double_value(&[]);
-
-                let test_accuracy = net
-                    .forward(test_images)
-                    .accuracy_for_logits(test_labels)
-                    .double_value(&[]);
-
-                losses.push(train_loss);
-
-                if matches!(epoch, 49 | 50 | 51 | 52 | 55 | 60) {
-                    tracing::debug!(
-                    reset_optimizer,
-                    epoch,
-                    train_loss,
-                    test_accuracy = 100.0 * test_accuracy,
-                    "training progress",
-                );
-                }
-            }
-
-            Ok(losses)
-        }
-
-        tch::manual_seed(42);
-
-        let teacher_w1 = Tensor::randn(
-            [IMAGE_DIM, TEACHER_HIDDEN],
-            (Kind::Float, Device::Cuda(0)),
-        ) / (IMAGE_DIM as f64).sqrt();
-
-        let teacher_w2 = Tensor::randn(
-            [TEACHER_HIDDEN, LABELS],
-            (Kind::Float, Device::Cuda(0)),
-        ) / (TEACHER_HIDDEN as f64).sqrt();
-
-        let feature_positions = Tensor::arange(
-            IMAGE_DIM,
-            (Kind::Float, Device::Cuda(0)),
-        );
-
-        let feature_scales = (
-            feature_positions / ((IMAGE_DIM - 1) as f64) * 8.0 - 4.0
-        )
-            .exp();
-
-        let (train_images, train_labels) = make_split(
-            TRAIN_SAMPLES,
-            &teacher_w1,
-            &teacher_w2,
-            &feature_scales,
-        );
-
-        let (test_images, test_labels) = make_split(
-            TEST_SAMPLES,
-            &teacher_w1,
-            &teacher_w2,
-            &feature_scales,
-        );
-
-        let preserved_losses = train_once(
-            false,
-            &train_images,
-            &train_labels,
-            &test_images,
-            &test_labels,
-        )?;
-
-        let reset_losses = train_once(
-            true,
-            &train_images,
-            &train_labels,
-            &test_images,
-            &test_labels,
-        )?;
-
-        for epoch in 49..=60 {
-            let index = (epoch - 1) as usize;
-
-            debug!("epoch={epoch} preserved={} reset={} difference={}", preserved_losses[index],reset_losses[index], reset_losses[index] - preserved_losses[index]);
-        }
-
-        // Compare the first epoch affected by the replacement.
-        let first_affected_index = (RESET_EPOCH - 1) as usize;
-
-        let immediate_difference = (
-            reset_losses[first_affected_index]
-                - preserved_losses[first_affected_index]
-        ).abs();
-
-        assert!(
-            immediate_difference < 1e-5,
-            "Adam produced the diverging trajectory after reset : \
-            preserved={}, reset={}",
-            preserved_losses[first_affected_index],
-            reset_losses[first_affected_index],
-        );
-
-        Ok(())
-    }
 
     #[test]
     fn test_tho_snapshot_adam_states()-> Result<(), ThoError>{
@@ -428,210 +420,7 @@ mod tests {
         Ok(())
     }
 
-    unsafe fn adam_snapshot(c_optimizer: *const C_optimizer) -> Result<AdamOptimizerSnapshot, ThoError> {
-        let group_count = tho_adam_group_count(c_optimizer);
 
-        let mut raw_defaults = MaybeUninit::<C_AdamOptions>::zeroed();
-
-
-        tho_adam_get_defaults(c_optimizer, raw_defaults.as_mut_ptr());
-
-
-        debug!("raw_defaults={raw_defaults:?}");
-
-        let defaults = AdamOptionsSnapshot::from_ffi(
-            unsafe { raw_defaults.assume_init() },
-        );
-
-        debug!("defaults={defaults:?}");
-
-        let mut groups = Vec::with_capacity(group_count as usize);
-
-        for group_index in 0..group_count {
-            let mut raw_group = MaybeUninit::<C_AdamGroup>::zeroed();
-
-
-            tho_adam_get_group(c_optimizer, group_index, raw_group.as_mut_ptr());
-
-            let raw_group = unsafe { raw_group.assume_init() };
-
-            let mut states = Vec::with_capacity(raw_group.parameter_count as usize);
-
-            for parameter_index in 0..raw_group.parameter_count {
-                debug!("parameter_index={parameter_index}");
-                let mut raw_state = MaybeUninit::<C_AdamParamState>::zeroed();
-
-                tho_adam_get_param_state(
-                    c_optimizer,
-                    group_index,
-                    parameter_index,
-                    raw_state.as_mut_ptr(),
-                );
-
-                let raw_state = unsafe { raw_state.assume_init() };
-
-                if raw_state.has_state == 0 {
-                    debug_assert!(raw_state.exp_avg.is_null());
-                    debug_assert!(raw_state.exp_avg_sq.is_null());
-                    debug_assert!(raw_state.max_exp_avg_sq.is_null());
-
-                    states.push(None);
-                    continue;
-                }
-
-                /*
-                 * Convert exp_avg first. If a subsequent conversion fails,
-                 * the already-created Tensor is dropped and its C++ pointer
-                 * is freed, so this does not leak partially returned state.
-                 */
-                let exp_avg = owned_tensor_from_ptr(
-                    raw_state.exp_avg,
-                    "Adam exp_avg",
-                )?;
-
-                let exp_avg_sq = owned_tensor_from_ptr(
-                    raw_state.exp_avg_sq,
-                    "Adam exp_avg_sq",
-                )?;
-
-                let max_exp_avg_sq =
-                    if raw_state.max_exp_avg_sq.is_null() {
-                        None
-                    } else {
-                        Some(owned_tensor_from_ptr(
-                            raw_state.max_exp_avg_sq,
-                            "Adam max_exp_avg_sq",
-                        )?)
-                    };
-
-                states.push(Some(AdamParamStateSnapshot {
-                    step: raw_state.step,
-                    exp_avg,
-                    exp_avg_sq,
-                    max_exp_avg_sq,
-                }));
-            }
-
-            groups.push(AdamGroupSnapshot {
-                options: AdamOptionsSnapshot::from_ffi(
-                    raw_group.options,
-                ),
-                states,
-            });
-        }
-
-        Ok(AdamOptimizerSnapshot {
-            defaults,
-            groups,
-        })
-    }
-
-    pub unsafe fn restore_adam_snapshot(
-        snapshot: &AdamOptimizerSnapshot,
-        c_optimizer: *mut C_optimizer
-    ) -> Result<(), ThoError> {
-        let destination_group_count = tho_adam_group_count(c_optimizer);
-
-        if destination_group_count != snapshot.groups.len() as u64 {
-            return Err(ThoError::new(format!(
-                "Adam group-count mismatch: destination has {}, \
-                 snapshot has {}",
-                destination_group_count,
-                snapshot.groups.len(),
-            )));
-        }
-
-        let raw_defaults = snapshot.defaults.to_ffi();
-
-        tho_adam_set_defaults(
-            c_optimizer,
-            &raw_defaults,
-        );
-
-        for (group_index, snapshot_group) in snapshot.groups.iter().enumerate() {
-            let mut destination_group =
-                MaybeUninit::<C_AdamGroup>::zeroed();
-
-
-            tho_adam_get_group(
-                c_optimizer,
-                group_index as c_ulong,
-                destination_group.as_mut_ptr(),
-            );
-
-            let destination_group =
-                unsafe { destination_group.assume_init() };
-
-            if destination_group.parameter_count != snapshot_group.states.len() as u64 {
-                return Err(ThoError::new(format!(
-                    "Adam parameter-count mismatch in group \
-                     {group_index}: destination has {}, snapshot has {}",
-                    destination_group.parameter_count,
-                    snapshot_group.states.len(),
-                )));
-            }
-
-            let raw_options = snapshot_group.options.to_ffi();
-
-
-            tho_adam_set_group_options(
-                c_optimizer,
-                group_index as c_ulong,
-                &raw_options,
-            );
-
-            for (parameter_index, state) in
-                snapshot_group.states.iter().enumerate()
-            {
-                match state {
-                    None => {
-
-                            tho_adam_set_param_state(
-                                c_optimizer,
-                                group_index as c_ulong,
-                                parameter_index as c_ulong,
-                                0,
-                                0,
-                                ptr::null_mut(),
-                                ptr::null_mut(),
-                                ptr::null_mut(),
-                            )
-                        ;
-                    }
-
-                    Some(state) => {
-                        let max_exp_avg_sq = state
-                            .max_exp_avg_sq
-                            .as_ref()
-                            .map_or(
-                                ptr::null_mut(),
-                                |tensor| {
-                                    tensor.as_ptr()
-                                        as *mut C_tensor
-                                },
-                            );
-
-
-                            tho_adam_set_param_state(
-                                c_optimizer,
-                                group_index as c_ulong,
-                                parameter_index as c_ulong,
-                                1,
-                                state.step,
-                                state.exp_avg.as_ptr()
-                                    as *mut C_tensor,
-                                state.exp_avg_sq.as_ptr()
-                                    as *mut C_tensor,
-                                max_exp_avg_sq,
-                            )
-;
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
 
     pub fn default_adam() -> Result<*mut C_optimizer, ThoError>{
         let adam_config = nn::Adam::default();
