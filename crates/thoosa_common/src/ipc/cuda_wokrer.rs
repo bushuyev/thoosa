@@ -332,7 +332,7 @@ impl CudaWorker {
 
                     Some(init_endpoint) => {
 
-                            match init_endpoint(init_msg) {
+                        match init_endpoint(init_msg) {
                             Ok(endpoint_wrapper) => {
                                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
                                 installed_endpoints.write().insert(endpoint_name.to_string(), endpoint_wrapper);

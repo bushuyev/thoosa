@@ -582,11 +582,12 @@ where
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct TrainStepInput<DI: Dims, DO: Dims> {
     id: SynKey,
-    x: ThoBatch<DI>,
-    lengths: Option<BatchLengths>,
-    expected_y: ThoBatch<DO>,
+    pub x: ThoBatch<DI>,
+    pub lengths: Option<BatchLengths>,
+    pub expected_y: ThoBatch<DO>,
     train: bool,
 }
 

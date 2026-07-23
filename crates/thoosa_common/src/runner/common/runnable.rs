@@ -23,6 +23,14 @@ pub trait Stage: Debug {
 
 }
 
+impl <S> Stage for Arc<S>
+where
+S:Stage{
+    type Ctx = S::Ctx;
+    type In<'a> = S::In<'a>;
+    type Out = S::Out;
+}
+
 
 pub trait AsyncStage:Stage + Debug + Send + Sync + 'static 
 where
