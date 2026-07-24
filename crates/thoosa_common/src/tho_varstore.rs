@@ -11,42 +11,49 @@ use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shims::optimizers::{restore_adam_snapshot, AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot};
-use crate::dims::Dims;
+use crate::dims::{Batch, Dims};
+use crate::my_tch::ThoModule;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
 
-struct ModConfig<OC>
+struct ModConfig<OC, DI, DO>
 where
-    OC:OptimizerConfig + Clone
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
 {
     opt_config:OC,
-    net:Box<dyn Fn(&nn::Path)->Box<dyn Module>>,
+    net:Box<dyn Fn(&VarStore)->Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
     lr:f32,
 }
 
 
 
-struct ThoTrainModule<OC>
+struct ThoTrainModule<OC, DI, DO>
 where
-    OC:OptimizerConfig + Clone
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
 {
-    config:Arc<ModConfig<OC>>,
-    opt_state:OptSnapshot
+    config:Arc<ModConfig<OC, DI, DO>>,
+    opt_state:OptSnapshot<DI, DO>
 }
 
 #[derive(Debug)]
-enum OptSnapshot {
-    Opt{opt:Optimizer, vs:VarStore, module:Box<dyn Module>},
+enum OptSnapshot<DI, DO>
+where
+    DI: Dims, DO: Dims
+{
+    Opt{opt:Optimizer, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
     Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
 }
 
-impl <OC> ThoTrainModule<OC>
+impl <OC, DI, DO> ThoTrainModule<OC, DI, DO>
 where
-    OC:OptimizerConfig + Clone
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
 {
-    pub fn new(config: ModConfig<OC>) -> Result<Self, ThoError> {
+    pub fn new(config: ModConfig<OC, DI, DO>) -> Result<Self, ThoError> {
         let (module, var_store) = Self::init_opt(&config.net);
         let opt = config.opt_config.clone().build(&var_store, config.lr as f64)?;
         Ok(Self {
@@ -55,9 +62,9 @@ where
         })
     }
 
-    fn init_opt(net: &Box<dyn Fn(&Path) -> Box<dyn Module>>) -> (Box<dyn Module>, VarStore) {
+    fn init_opt(net: &Box<dyn Fn(&VarStore) -> Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>) -> (Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, VarStore) {
         let mut cuda_vs = nn::VarStore::new(Cuda(0));
-        let module = (net)(&cuda_vs.root());
+        let module = (net)(&cuda_vs);
         (module, cuda_vs)
     }
 
@@ -72,7 +79,7 @@ where
         }
     }
 
-    fn module(&mut self) ->&mut Box<dyn Module> {
+    fn module(&mut self) ->&mut Box<dyn ThoModule<Batch<DI>, Batch<DO>>> {
         match &mut self.opt_state {
             OptSnapshot::Opt { module, .. } => {
                 module
@@ -84,28 +91,37 @@ where
     }
 }
 
-unsafe impl Send for OptSnapshot {}
-unsafe impl <OC> Send for ThoTrainModule<OC> where
-    OC:OptimizerConfig + Clone
-{}
-unsafe impl <OC> Sync for ThoTrainModule<OC>
+unsafe impl <DI, DO> Send for OptSnapshot<DI, DO>
 where
-    OC:OptimizerConfig + Clone
+DI: Dims, DO: Dims
 {}
 
-unsafe impl <OC> Send for ModConfig<OC>
-where
-    OC:OptimizerConfig + Clone
+unsafe impl <OC, DI, DO> Send for ThoTrainModule<OC, DI, DO> where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
 {}
-unsafe impl <OC>Sync for ModConfig<OC>
+unsafe impl <OC, DI, DO> Sync for ThoTrainModule<OC, DI, DO>
 where
-    OC:OptimizerConfig + Clone
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{}
+
+unsafe impl <OC, DI, DO> Send for ModConfig<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{}
+unsafe impl <OC, DI, DO>Sync for ModConfig<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
 {}
 
 #[async_trait]
-impl <OC> CopyToDevice for ThoTrainModule<OC>
+impl <OC, DI, DO> CopyToDevice for ThoTrainModule<OC, DI, DO>
 where
-    OC:OptimizerConfig + Clone
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
 {
 
     async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
@@ -471,6 +487,9 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot};
     use thoosa_shims::optimizers::*;
+    use crate::batches::BatchLengths;
+    use crate::builder::{Node, SeqBuilder};
+    use crate::dims::{AnyDims, Batch};
 
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");
@@ -543,21 +562,40 @@ mod tests {
         const RESET_EPOCH: i64 = 50;
         const LEARNING_RATE: f64 = 1e-3;
 
-        fn net(vs: &nn::Path) -> impl Module + use<> {
-            nn::seq()
-                .add(nn::linear(
-                    vs / "layer1",
-                    IMAGE_DIM,
-                    HIDDEN_NODES,
-                    Default::default(),
-                ))
-                .add_fn(|xs| xs.relu())
-                .add(nn::linear(
-                    vs / "layer2",
-                    HIDDEN_NODES,
-                    LABELS,
-                    Default::default(),
-                ))
+        pub fn test_net() -> Result<Node, ThoError> {
+
+            let mut builder = SeqBuilder::new(2, None)?;
+            let mut net = builder
+                .closure(
+                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
+                        debug!("final_net: input={t:?}");
+                        Ok(t.shallow_clone())
+                    })),
+                    None,
+                )?
+                .linear_s(
+                    2 * 2,
+                    "final_net_first_layer".to_string(),
+                )?
+                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+
+            for i in 0..3 {
+                net = net
+                    .linear_s(
+                        3,
+                        format!("final_net_{i}th_layer"),
+                    )?
+                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
+            }
+
+            net
+                // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
+                .linear_s(
+                    1,
+                    "final_net_last_layer",
+                )?
+                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                .end_seq()
         }
 
         fn make_split(
@@ -607,7 +645,7 @@ mod tests {
                     beta2: 0.9999,
                     ..Default::default()
                 }.amsgrad(true),
-                net: Box::new(|path|Box::new(net(path))),
+                net: Box::new(|vs|Box::new(test_net().unwrap().build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()).unwrap())),
                 lr: LEARNING_RATE as f32,
             })?;
 
