@@ -235,13 +235,13 @@ where
             )).await?;
             let train_step = Arc::new(train_step);
             GlobalCtx::global().register_cache(("train_step", Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>));
+
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
 
             let mut bad_epochs = 0u32;
             let patience = run_config.as_ref().patience;
             let min_delta = run_config.as_ref().min_delta;
-
 
 
             let batch = (self.batch)(ctx.branch(false), &run_config)

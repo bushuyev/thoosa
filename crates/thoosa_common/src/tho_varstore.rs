@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tch::{no_grad, Kind, Tensor, Device, nn};
 use tch::Device::{Cpu, Cuda};
-use tch::nn::{Module, Optimizer, OptimizerConfig, VarStore};
+use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
 use tokio::task::JoinSet;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::tracked_await::track_await;
@@ -71,8 +71,25 @@ struct ThoTrainModule {
 
 #[derive(Debug)]
 enum OptSnapshot {
-    Opt{opt:Optimizer, vs:VarStore},
+    Opt{opt:Optimizer, vs:VarStore, module:Box<dyn Module>},
     Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
+}
+
+impl ThoTrainModule {
+    pub fn new(config: ModConfig) -> Result<Self, ThoError> {
+        let (module, var_store) = Self::init_opt(&config.net);
+        let opt = config.opt_config.build(&var_store, config.lr as f64)?;
+        Ok(Self {
+            config: Arc::new(config),
+            opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
+        })
+    }
+
+    fn init_opt(net: &Box<dyn Fn(&Path) -> Box<dyn Module>>) -> (Box<dyn Module>, VarStore) {
+        let mut cuda_vs = nn::VarStore::new(Cuda(0));
+        let module = (net)(&cuda_vs.root());
+        (module, cuda_vs)
+    }
 }
 
 unsafe impl Send for OptSnapshot {}
@@ -94,7 +111,7 @@ impl CopyToDevice for ThoTrainModule {
              * copies so the async future never carries an Optimizer reference.
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
-                OptSnapshot::Opt { opt, vs } => {
+                OptSnapshot::Opt { opt, vs, module } => {
                     (unsafe { adam_snapshot(opt.as_raw_c_optimizer())? }, vs)
                 }
                 _ => {
@@ -124,8 +141,8 @@ impl CopyToDevice for ThoTrainModule {
                 }
             };
 
-            let mut cuda_vs = nn::VarStore::new(Cuda(0));
-            let _module = (self.config.net)(&cuda_vs.root());
+            let (module, mut cuda_vs ) = Self::init_opt(&self.config.net);
+
 
             let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, Cuda(0).into()).await?;
             let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
@@ -142,7 +159,7 @@ impl CopyToDevice for ThoTrainModule {
                 ThoTrainModule{
                     config: Arc::clone(&self.config),
                     opt_state:
-                    OptSnapshot::Opt{opt, vs: cuda_vs },
+                    OptSnapshot::Opt{opt, vs: cuda_vs, module },
                 }
             )
         }
@@ -445,7 +462,7 @@ mod tests {
     use thoosa_shared::ThoError;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data};
+    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot};
     use thoosa_shims::optimizers::*;
 
     fn create_variables(vs: &VarStore) {
@@ -587,6 +604,12 @@ mod tests {
 
             let mut opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
             let mut losses = Vec::with_capacity(EPOCHS as usize);
+
+            let tho_train_mod = ThoTrainModule::new(ModConfig {
+                opt_config: adam,
+                net: Box::new(|path|Box::new(net(path))),
+                lr: LEARNING_RATE as f32,
+            });
 
             for epoch in 1..=EPOCHS {
                 if reset_optimizer && epoch == RESET_EPOCH {

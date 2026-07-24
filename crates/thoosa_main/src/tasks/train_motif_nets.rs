@@ -2134,7 +2134,7 @@ mod tests {
 
     }
 
-    fn to_tho_tensor<D>(inner: ThoTensorInner, id: String) -> ThoTensor<D, SimpleId>
+    pub fn to_tho_tensor<D>(inner: ThoTensorInner, id: String) -> ThoTensor<D, SimpleId>
     where
         D:Dims
     {
