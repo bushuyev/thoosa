@@ -35,3 +35,4 @@ pub mod find_motifs_run_config;
 pub mod extend_motifs;
 pub mod apply_cosine2d_motif_nets;
 pub mod train_step;
+pub mod train_step_2;
