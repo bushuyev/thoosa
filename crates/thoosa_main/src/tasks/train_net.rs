@@ -751,6 +751,7 @@ impl Output for TrainStepOutput {}
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
     net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
+
     opt: Mutex<Optimizer>,
     var_store: Arc<Mutex<VarStore>>,
 
@@ -783,19 +784,22 @@ where
     Self:Send + Sync
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
-        todo!()
+        true
     }
 
     async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("TrainStep::purge_gpu");
         todo!()
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+        debug!("TrainStep::drop_gpu");
         todo!()
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
-        todo!()
+        debug!("TrainStep::purge_cpu");
+        0
     }
 }
 
@@ -821,7 +825,7 @@ where
                 local.has_gpu_data(device_idx).await
             }
             TrainStepDynSyncStage::Proxy { .. } => {
-                false
+                true
             }
         }
     }
@@ -831,7 +835,7 @@ where
             TrainStepDynSyncStage::Local(local) => {
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
-            TrainStepDynSyncStage::Proxy { .. } => {
+            TrainStepDynSyncStage::Proxy {  .. } => {
                 Ok(())
             }
         }
