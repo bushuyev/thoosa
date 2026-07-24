@@ -10,7 +10,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
 use tch::Device;
-use tch::nn::{Optimizer, VarStore};
+use tch::nn::VarStore;
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
@@ -22,6 +22,7 @@ use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::tho_varstore::ThoTrainModule;
 use thoosa_common::utils::optimizer_mem_size;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
@@ -32,10 +33,9 @@ use thoosa_shared::{CopyToDevice, ThoError, mono_key, os_thread_id, panic_to_err
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
-    net: Mutex<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
-
-    opt: Mutex<Optimizer>,
-    var_store: Arc<Mutex<VarStore>>,
+    // Keep the module, optimizer, and their VarStore under one owner so their
+    // lifetimes cannot diverge while training state is copied or exported.
+    train_module: Mutex<ThoTrainModule<DI, DO>>,
 
     x_f: Arc<F>,
     loss_fn: LossFp,
@@ -99,16 +99,15 @@ where
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep2::new"))]
-    pub(crate) async fn new<NP, NB, NBF, OF, RC>(tho_device: ThoDevice, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, proxy_factory: Option<&Arc<dyn TrainStep2ProxyFactory<DI, DO, C, NP, RC>>>, run_config: &RC) -> Result<(TrainStep2DynSyncStage<F, DI, DO, C>, NP), ThoError>
+    pub(crate) async fn new<NP, TMB, TMBF, RC>(tho_device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, proxy_factory: Option<&Arc<dyn TrainStep2ProxyFactory<DI, DO, C, NP, RC>>>, run_config: &RC) -> Result<(TrainStep2DynSyncStage<F, DI, DO, C>, NP), ThoError>
     where
         DI: 'static,
         DO: 'static,
         C: 'static,
         NP: Debug + Send + Sync + 'static,
         RC: Debug + Send + Sync + 'static,
-        NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
-        NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
-        OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
+        TMB: FnOnce(&RC, ThoDevice) -> TMBF,
+        TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
     {
         if GlobalCtx::global().is_ipc()
             && let Some(proxy_factory) = proxy_factory
@@ -117,27 +116,19 @@ where
             return Ok((TrainStep2DynSyncStage::Proxy { stage, weights_sync }, node_params));
         }
 
-        let (stage, node_params) = Self::new_local(tho_device, net_builder, optimizer_builder, x_f, loss_fn, run_config).await?;
+        let (stage, node_params) = Self::new_local(tho_device, train_module_builder, x_f, loss_fn, run_config).await?;
         Ok((TrainStep2DynSyncStage::Local(Arc::new(stage)), node_params))
     }
 
-    pub(crate) async fn  new_local<NP, NB, NBF, OF, RC>(device: ThoDevice, net_builder: NB, optimizer_builder: OF, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
+    pub(crate) async fn new_local<NP, TMB, TMBF, RC>(device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
     where
-        NB: FnOnce(Arc<Mutex<VarStore>>) -> NBF,
-        NBF: Future<Output = Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, NP), ThoError>>,
-        OF: FnOnce(&RC, &VarStore) -> Result<Optimizer, ThoError>,
+        TMB: FnOnce(&RC, ThoDevice) -> TMBF,
+        TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
     {
-        let var_store = Arc::new(Mutex::new(VarStore::new(device.clone().into())));
-        let (net, node_params) = net_builder(Arc::clone(&var_store)).await?;
-        let opt = {
-            let var_store = perf_log!(sync_mutex_lock!(var_store));
-            optimizer_builder(run_config, &var_store)?
-        };
+        let (train_module, node_params) = train_module_builder(run_config, device).await?;
         Ok((Self {
             device,
-            net: Mutex::new(net),
-            opt: Mutex::new(opt),
-            var_store,
+            train_module: Mutex::new(train_module),
             x_f,
             loss_fn,
             pd: PhantomData,
@@ -145,21 +136,18 @@ where
     }
 
     pub fn into_var_store(self) -> Result<VarStore, ThoError> {
-        let Self { net, opt, var_store, .. } = self;
-        drop(net);
-        drop(opt);
-        Arc::try_unwrap(var_store).map(Mutex::into_inner).map_err(|_| ThoError::new("TrainStep2::into_var_store: VarStore still shared after training"))
+        let Self { train_module, .. } = self;
+        train_module.into_inner().into_var_store()
     }
 
     pub(crate) fn save_var_store_to_stream(&self, output: &mut dyn Write) -> Result<(), ThoError> {
-        let var_store = perf_log!(sync_mutex_lock!(self.var_store));
-        debug!("save_var_store_to_stream: var_store={var_store:?}");
-        var_store.save_to_stream(output).map_err(ThoError::from)
+        let train_module = perf_log!(sync_mutex_lock!(self.train_module));
+        train_module.save_var_store_to_stream(output)
     }
 
     fn set_lr(&self, lr: f64) {
-        let mut opt = perf_log!(sync_mutex_lock!(self.opt));
-        opt.set_lr(lr);
+        let mut train_module = perf_log!(sync_mutex_lock!(self.train_module));
+        train_module.set_lr(lr);
     }
 }
 
@@ -199,9 +187,9 @@ where
         let mut calculate_loss = || {
 
 
-            let net = perf_log!(sync_mutex_lock!(self.net));
-            let predicted_y = net.tho_forward(&x_t, lengths.as_mut(), input.train)?;
-            drop(net);
+            let mut train_module = perf_log!(sync_mutex_lock!(self.train_module));
+            let predicted_y = train_module.module().tho_forward(&x_t, lengths.as_mut(), input.train)?;
+            drop(train_module);
 
             debug!("TrainStep2::do_run: predicted_y={predicted_y:?} expected_y={expected_y:?} self.loss_fn={:?}", self.loss_fn);
 
@@ -218,7 +206,8 @@ where
 
         if input.train {
             // TODO(perf): lock_opt is per batch; keep optimizer ownership local to the training task or queue optimizer steps to avoid mutex traffic in TrainStep2::do_run.
-            let mut opt = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.opt));
+            let mut train_module = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(self.train_module));
+            let opt = train_module.opt();
             debug!("TrainStep2::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
             debug!("TrainStep2::do_run: loss={loss} cuda_mem={:?}", maybe_cuda_mem(&self.device));
@@ -718,6 +707,7 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
+    use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_proxy_derive::Proxy;
     use thoosa_shared::{simple_id, ThoError};
     use thoosa_shared::traits::{MonoMetrics, SimpleId};
@@ -804,16 +794,21 @@ mod tests {
 
                 let (train_step, params) : (TrainStep2<Box<dyn Fn<_, Output = _> + std::marker::Send + Sync>, _, _, _>, TestNetParams)=  futures::executor::block_on(TrainStep2::new_local(
                     Cuda(0).into(),
-                    |vs|  {
+                    |rc, device|  {
+                        let lr = rc.lr;
                         async move {
                             let params = TestNetParams { in_features: 100, layers: 2 };
-                            let net = test_net(&params)?.build_tch_module::<Batch<InDims>, Batch<OutDims>>(&vs.lock().root())?;
-
-                            Ok((net, params))
+                            /*
+                             * Recreate the same module topology for every
+                             * ThoTrainModule device restoration.
+                             */
+                            let config = ModConfig::new(
+                                AdamW::default(),
+                                |var_store| test_net(&TestNetParams { in_features: 100, layers: 2 })?.build_tch_module::<Batch<InDims>, Batch<OutDims>>(&var_store.root()),
+                                lr,
+                            );
+                            Ok((ThoTrainModule::new_on_device(config, device)?, params))
                         }
-                    },
-                    |rc, vs|  {
-                        AdamW::default().build(&vs, rc.lr).map_err(|e|e.into())
                     },
                     Arc::new(Box::new(|t|{
                         t
