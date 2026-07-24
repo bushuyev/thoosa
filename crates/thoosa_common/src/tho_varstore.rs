@@ -18,24 +18,41 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
 
 
-struct ModConfig<OC, DI, DO>
+pub struct ModConfig<DI, DO>
 where
-    OC:OptimizerConfig + Clone,
     DI: Dims, DO: Dims
 {
-    opt_config:OC,
-    net:Box<dyn Fn(&VarStore)->Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
-    lr:f32,
+    optimizer_builder: Box<dyn Fn(&VarStore) -> Result<Optimizer, ThoError> + Send + Sync>,
+    net: Box<dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync>,
+}
+
+impl<DI, DO> ModConfig<DI, DO>
+where
+    DI: Dims,
+    DO: Dims,
+{
+    /*
+     * Erase the concrete optimizer configuration so owners such as TrainStep2
+     * do not need to add the optimizer type to their public generic contract.
+     */
+    pub fn new<OC, NB>(opt_config: OC, net: NB, lr: f64) -> Self
+    where
+        OC: OptimizerConfig + Clone + Send + Sync + 'static,
+        NB: Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync + 'static,
+    {
+        Self {
+            optimizer_builder: Box::new(move |var_store| Ok(opt_config.clone().build(var_store, lr)?)),
+            net: Box::new(net),
+        }
+    }
 }
 
 
-
-struct ThoTrainModule<OC, DI, DO>
+pub struct ThoTrainModule<DI, DO>
 where
-    OC:OptimizerConfig + Clone,
     DI: Dims, DO: Dims
 {
-    config:Arc<ModConfig<OC, DI, DO>>,
+    config:Arc<ModConfig<DI, DO>>,
     opt_state:OptSnapshot<DI, DO>
 }
 
@@ -48,27 +65,30 @@ where
     Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
 }
 
-impl <OC, DI, DO> ThoTrainModule<OC, DI, DO>
+impl <DI, DO> ThoTrainModule<DI, DO>
 where
-    OC:OptimizerConfig + Clone,
     DI: Dims, DO: Dims
 {
-    pub fn new(config: ModConfig<OC, DI, DO>) -> Result<Self, ThoError> {
-        let (module, var_store) = Self::init_opt(&config.net);
-        let opt = config.opt_config.clone().build(&var_store, config.lr as f64)?;
+    pub fn new(config: ModConfig<DI, DO>) -> Result<Self, ThoError> {
+        Self::new_on_device(config, Cuda(0).into())
+    }
+
+    pub fn new_on_device(config: ModConfig<DI, DO>, device: ThoDevice) -> Result<Self, ThoError> {
+        let (module, var_store) = Self::init_opt(&config.net, device)?;
+        let opt = (config.optimizer_builder)(&var_store)?;
         Ok(Self {
             config: Arc::new(config),
             opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
         })
     }
 
-    fn init_opt(net: &Box<dyn Fn(&VarStore) -> Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>) -> (Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, VarStore) {
-        let mut cuda_vs = nn::VarStore::new(Cuda(0));
-        let module = (net)(&cuda_vs);
-        (module, cuda_vs)
+    fn init_opt(net: &dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError>, device: ThoDevice) -> Result<(Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, VarStore), ThoError> {
+        let var_store = nn::VarStore::new(device.into());
+        let module = net(&var_store)?;
+        Ok((module, var_store))
     }
 
-    fn opt(&mut self) ->&mut Optimizer {
+    pub fn opt(&mut self) ->&mut Optimizer {
         match &mut self.opt_state {
             OptSnapshot::Opt { opt, .. } => {
                 opt
@@ -79,7 +99,7 @@ where
         }
     }
 
-    fn module(&mut self) ->&mut Box<dyn ThoModule<Batch<DI>, Batch<DO>>> {
+    pub fn module(&mut self) ->&mut Box<dyn ThoModule<Batch<DI>, Batch<DO>>> {
         match &mut self.opt_state {
             OptSnapshot::Opt { module, .. } => {
                 module
@@ -89,6 +109,31 @@ where
             }
         }
     }
+
+    pub fn into_var_store(self) -> Result<VarStore, ThoError> {
+        match self.opt_state {
+            OptSnapshot::Opt { opt, vs, module } => {
+                /*
+                 * Drop all other owners of the optimizer variables before
+                 * returning the VarStore to the caller.
+                 */
+                drop(module);
+                drop(opt);
+                Ok(vs)
+            }
+            OptSnapshot::Snapshot { vs, .. } => Ok(vs),
+        }
+    }
+
+    pub fn save_var_store_to_stream(&self, output: &mut dyn std::io::Write) -> Result<(), ThoError> {
+        match &self.opt_state {
+            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => vs.save_to_stream(output).map_err(ThoError::from),
+        }
+    }
+
+    pub fn set_lr(&mut self, lr: f64) {
+        self.opt().set_lr(lr);
+    }
 }
 
 unsafe impl <DI, DO> Send for OptSnapshot<DI, DO>
@@ -96,31 +141,17 @@ where
 DI: Dims, DO: Dims
 {}
 
-unsafe impl <OC, DI, DO> Send for ThoTrainModule<OC, DI, DO> where
-    OC:OptimizerConfig + Clone,
+unsafe impl <DI, DO> Send for ThoTrainModule<DI, DO> where
     DI: Dims, DO: Dims
 {}
-unsafe impl <OC, DI, DO> Sync for ThoTrainModule<OC, DI, DO>
+unsafe impl <DI, DO> Sync for ThoTrainModule<DI, DO>
 where
-    OC:OptimizerConfig + Clone,
-    DI: Dims, DO: Dims
-{}
-
-unsafe impl <OC, DI, DO> Send for ModConfig<OC, DI, DO>
-where
-    OC:OptimizerConfig + Clone,
-    DI: Dims, DO: Dims
-{}
-unsafe impl <OC, DI, DO>Sync for ModConfig<OC, DI, DO>
-where
-    OC:OptimizerConfig + Clone,
     DI: Dims, DO: Dims
 {}
 
 #[async_trait]
-impl <OC, DI, DO> CopyToDevice for ThoTrainModule<OC, DI, DO>
+impl <DI, DO> CopyToDevice for ThoTrainModule<DI, DO>
 where
-    OC:OptimizerConfig + Clone,
     DI: Dims, DO: Dims
 {
 
@@ -164,7 +195,7 @@ where
                 }
             };
 
-            let (module, mut cuda_vs ) = Self::init_opt(&self.config.net);
+            let (module, mut cuda_vs ) = Self::init_opt(&self.config.net, tho_dst_device.into())?;
 
 
             let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, Cuda(0).into()).await?;
@@ -175,7 +206,7 @@ where
              * cuda_vs is the registered destination whose tensors received the
              * restored data, so both the optimizer and returned state must use it.
              */
-            let opt = self.config.opt_config.clone().build(&cuda_vs, self.config.lr as f64)?;
+            let opt = (self.config.optimizer_builder)(&cuda_vs)?;
             unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
             Ok(
@@ -621,8 +652,8 @@ mod tests {
 
             let mut losses = Vec::with_capacity(EPOCHS as usize);
 
-            let mut tho_train_mod = ThoTrainModule::new(ModConfig {
-                opt_config: nn::Adam {
+            let mut tho_train_mod = ThoTrainModule::new(ModConfig::new(
+                nn::Adam {
                     beta1: 0.99,
                     beta2: 0.9999,
                     ..Default::default()
@@ -631,9 +662,9 @@ mod tests {
                  * build_tch_module already returns the boxed ThoModule expected
                  * by ModConfig, so wrapping it again would create Box<Box<_>>.
                  */
-                net: Box::new(|vs|test_net().unwrap().build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()).unwrap()),
-                lr: LEARNING_RATE as f32,
-            })?;
+                |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
+                LEARNING_RATE,
+            ))?;
 
             for epoch in 1..=EPOCHS {
 
