@@ -5,84 +5,124 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tch::{no_grad, Kind, Tensor, Device, nn};
 use tch::Device::{Cpu, Cuda};
-use tch::nn::{Module, Optimizer, OptimizerConfig, VarStore};
+use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
 use tokio::task::JoinSet;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shims::optimizers::{restore_adam_snapshot, AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot};
-use crate::dims::Dims;
+use crate::dims::{Batch, Dims};
+use crate::my_tch::ThoModule;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
-/*
-#[derive(Debug)]
-pub struct ThoVarStore {//TODO remove? it's to avoid "Only traits defined in the current crate can be implemented for arbitrary types [E0117]" for CopyToDevice
-    vs:VarStore
-}
 
-impl Deref for ThoVarStore {
-    type Target = VarStore;
 
-    fn deref(&self) -> &Self::Target {
-        &self.vs
-    }
-}
-
-impl From<VarStore> for ThoVarStore {
-    fn from(vs: VarStore) -> Self {
-        Self {
-            vs
-        }
-    }
-}
-
-enum WithCpuCacheState<O> {
-    Cpu(O),
-    CpuAndGpu(O),
-    Gpu(O)
-}
-pub struct WithCpuCache<O> {
-    state:WithCpuCacheState<O>
-}
-
-#[async_trait]
-impl CopyToDevice for ThoVarStore {
-    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> where Self:Sized{
-        Ok(ThoVarStore {
-            vs: clone_var_store_to(&self.vs, tho_dst_device.into()).await?,
-        })
-    }
-}
-*/
-
-struct ModConfig {
-    opt_config:nn::Adam,
-    net:Box<dyn Fn(&nn::Path)->Box<dyn Module>>,
+struct ModConfig<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{
+    opt_config:OC,
+    net:Box<dyn Fn(&VarStore)->Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>,
     lr:f32,
 }
 
 
 
-struct ThoTrainModule {
-    config:Arc<ModConfig>,
-    opt_state:OptSnapshot
+struct ThoTrainModule<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{
+    config:Arc<ModConfig<OC, DI, DO>>,
+    opt_state:OptSnapshot<DI, DO>
 }
 
 #[derive(Debug)]
-enum OptSnapshot {
-    Opt{opt:Optimizer, vs:VarStore},
+enum OptSnapshot<DI, DO>
+where
+    DI: Dims, DO: Dims
+{
+    Opt{opt:Optimizer, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
     Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
 }
 
-unsafe impl Send for OptSnapshot {}
-unsafe impl Send for ThoTrainModule {}
-unsafe impl Sync for ThoTrainModule {}
+impl <OC, DI, DO> ThoTrainModule<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{
+    pub fn new(config: ModConfig<OC, DI, DO>) -> Result<Self, ThoError> {
+        let (module, var_store) = Self::init_opt(&config.net);
+        let opt = config.opt_config.clone().build(&var_store, config.lr as f64)?;
+        Ok(Self {
+            config: Arc::new(config),
+            opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
+        })
+    }
 
-unsafe impl Send for ModConfig {}
-unsafe impl Sync for ModConfig {}
+    fn init_opt(net: &Box<dyn Fn(&VarStore) -> Box<dyn ThoModule<Batch<DI>, Batch<DO>>>>) -> (Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, VarStore) {
+        let mut cuda_vs = nn::VarStore::new(Cuda(0));
+        let module = (net)(&cuda_vs);
+        (module, cuda_vs)
+    }
+
+    fn opt(&mut self) ->&mut Optimizer {
+        match &mut self.opt_state {
+            OptSnapshot::Opt { opt, .. } => {
+                opt
+            }
+            OptSnapshot::Snapshot { .. } => {
+                panic!("wrong state")
+            }
+        }
+    }
+
+    fn module(&mut self) ->&mut Box<dyn ThoModule<Batch<DI>, Batch<DO>>> {
+        match &mut self.opt_state {
+            OptSnapshot::Opt { module, .. } => {
+                module
+            }
+            OptSnapshot::Snapshot { .. } => {
+                panic!("wrong state")
+            }
+        }
+    }
+}
+
+unsafe impl <DI, DO> Send for OptSnapshot<DI, DO>
+where
+DI: Dims, DO: Dims
+{}
+
+unsafe impl <OC, DI, DO> Send for ThoTrainModule<OC, DI, DO> where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{}
+unsafe impl <OC, DI, DO> Sync for ThoTrainModule<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{}
+
+unsafe impl <OC, DI, DO> Send for ModConfig<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{}
+unsafe impl <OC, DI, DO>Sync for ModConfig<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{}
+
 #[async_trait]
-impl CopyToDevice for ThoTrainModule {
+impl <OC, DI, DO> CopyToDevice for ThoTrainModule<OC, DI, DO>
+where
+    OC:OptimizerConfig + Clone,
+    DI: Dims, DO: Dims
+{
 
     async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
     where
@@ -94,7 +134,7 @@ impl CopyToDevice for ThoTrainModule {
              * copies so the async future never carries an Optimizer reference.
              */
             let (cuda_snapshot, vs) = match &self.opt_state {
-                OptSnapshot::Opt { opt, vs } => {
+                OptSnapshot::Opt { opt, vs, module } => {
                     (unsafe { adam_snapshot(opt.as_raw_c_optimizer())? }, vs)
                 }
                 _ => {
@@ -124,8 +164,8 @@ impl CopyToDevice for ThoTrainModule {
                 }
             };
 
-            let mut cuda_vs = nn::VarStore::new(Cuda(0));
-            let _module = (self.config.net)(&cuda_vs.root());
+            let (module, mut cuda_vs ) = Self::init_opt(&self.config.net);
+
 
             let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, Cuda(0).into()).await?;
             let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
@@ -135,14 +175,14 @@ impl CopyToDevice for ThoTrainModule {
              * cuda_vs is the registered destination whose tensors received the
              * restored data, so both the optimizer and returned state must use it.
              */
-            let opt = self.config.opt_config.amsgrad(true).build(&cuda_vs, self.config.lr as f64)?;
+            let opt = self.config.opt_config.clone().build(&cuda_vs, self.config.lr as f64)?;
             unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
             Ok(
                 ThoTrainModule{
                     config: Arc::clone(&self.config),
                     opt_state:
-                    OptSnapshot::Opt{opt, vs: cuda_vs },
+                    OptSnapshot::Opt{opt, vs: cuda_vs, module },
                 }
             )
         }
@@ -442,11 +482,14 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::{Init, Module, OptimizerConfig, VarStore, Variables};
     use tch::{nn, Tensor, Kind, Device};
-    use thoosa_shared::ThoError;
+    use thoosa_shared::{CopyToDevice, ThoError};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data};
+    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot};
     use thoosa_shims::optimizers::*;
+    use crate::builder::{Node, SeqBuilder};
+    use crate::dims::{AnyDims, Batch};
+    use crate::tho_tensor::ThoTensor;
 
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");
@@ -519,21 +562,22 @@ mod tests {
         const RESET_EPOCH: i64 = 50;
         const LEARNING_RATE: f64 = 1e-3;
 
-        fn net(vs: &nn::Path) -> impl Module + use<> {
-            nn::seq()
-                .add(nn::linear(
-                    vs / "layer1",
-                    IMAGE_DIM,
-                    HIDDEN_NODES,
-                    Default::default(),
-                ))
-                .add_fn(|xs| xs.relu())
-                .add(nn::linear(
-                    vs / "layer2",
-                    HIDDEN_NODES,
-                    LABELS,
-                    Default::default(),
-                ))
+        pub fn test_net() -> Result<Node, ThoError> {
+            /*
+             * Keep the same classifier topology that this optimizer-state test
+             * used before ModConfig switched from Module to ThoModule.
+             */
+            SeqBuilder::new(IMAGE_DIM as u32, None)?
+                .linear_s(
+                    HIDDEN_NODES as u32,
+                    "layer1",
+                )?
+                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                .linear_s(
+                    LABELS as u32,
+                    "layer2",
+                )?
+                .end_seq()
         }
 
         fn make_split(
@@ -575,43 +619,32 @@ mod tests {
             // same sequence of mini-batch permutations.
             tch::manual_seed(1234);
 
-            let mut vs = nn::VarStore::new(Cuda(0));
-            let mut module = net(&vs.root());
-
-            // Long-running moving averages make losing Adam's state easier to see.
-            let adam = nn::Adam {
-                beta1: 0.99,
-                beta2: 0.9999,
-                ..Default::default()
-            };
-
-            let mut opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
             let mut losses = Vec::with_capacity(EPOCHS as usize);
 
+            let mut tho_train_mod = ThoTrainModule::new(ModConfig {
+                opt_config: nn::Adam {
+                    beta1: 0.99,
+                    beta2: 0.9999,
+                    ..Default::default()
+                }.amsgrad(true),
+                /*
+                 * build_tch_module already returns the boxed ThoModule expected
+                 * by ModConfig, so wrapping it again would create Box<Box<_>>.
+                 */
+                net: Box::new(|vs|test_net().unwrap().build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()).unwrap()),
+                lr: LEARNING_RATE as f32,
+            })?;
+
             for epoch in 1..=EPOCHS {
+
                 if reset_optimizer && epoch == RESET_EPOCH {
-                    // Same model parameters, but fresh Adam state:
-                    // step counter, first moments and second moments are lost.
-                    opt.zero_grad();
-                    let cuda_snapshot = unsafe { adam_snapshot(opt.as_raw_c_optimizer())? };
 
-                    let cpu_snapshot = clone_adam_snapshot_to(&cuda_snapshot, Cpu.into()).await?;
-                    let cpu_var_store = clone_var_store_to(&vs, Cpu.into()).await?;
+                    tho_train_mod.opt().zero_grad();
 
-                    drop(opt);
-                    drop(cuda_snapshot);
-                    drop(vs);
-                    drop(module);
-                    ///////////////
-                    vs = nn::VarStore::new(Cuda(0));
-                    module = net(&vs.root());
+                    let snap = tho_train_mod.copy_to_device(0).await?;
+                    // ///////////////
+                    tho_train_mod = snap.copy_to_device(1).await?;
 
-                    let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
-                    replace_data(&mut vs, restored_vs)?;
-
-                    let cuda_snapshot = clone_adam_snapshot_to(&cpu_snapshot, Cuda(0).into()).await?;
-                    opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
-                    unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
                 }
 
                 let permutation = Tensor::randperm(
@@ -628,24 +661,26 @@ mod tests {
                     let batch_images = train_images.index_select(0, &indices);
                     let batch_labels = train_labels.index_select(0, &indices);
 
-                    let loss = module
-                        .forward(&batch_images)
-                        .cross_entropy_for_logits(&batch_labels);
+                    /*
+                     * ThoModule receives typed ThoTensor inputs and returns typed
+                     * logits; unwrap only to Tensor for the libtorch loss API.
+                     */
+                    let batch_images: ThoTensor<Batch<AnyDims>, _> = batch_images.into();
+                    let logits = tho_train_mod.module().tho_forward(&batch_images, None, true)?;
+                    let loss = logits.as_ref().f_cross_entropy_loss::<&Tensor>(&batch_labels, None, tch::Reduction::Mean, -100, 0.0)?;
 
-                    opt.backward_step(&loss);
+                    tho_train_mod.opt().backward_step(&loss);
 
                     start += len;
                 }
 
-                let train_loss = module
-                    .forward(train_images)
-                    .cross_entropy_for_logits(train_labels)
-                    .double_value(&[]);
+                let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.into();
+                let train_logits = tho_train_mod.module().tho_forward(&train_images, None, false)?;
+                let train_loss = train_logits.as_ref().f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
 
-                let test_accuracy = module
-                    .forward(test_images)
-                    .accuracy_for_logits(test_labels)
-                    .double_value(&[]);
+                let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.into();
+                let test_logits = tho_train_mod.module().tho_forward(&test_images, None, false)?;
+                let test_accuracy = test_logits.as_ref().f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
 
                 losses.push(train_loss);
 
