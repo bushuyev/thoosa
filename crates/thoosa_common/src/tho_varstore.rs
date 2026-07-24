@@ -90,6 +90,28 @@ impl ThoTrainModule {
         let module = (net)(&cuda_vs.root());
         (module, cuda_vs)
     }
+
+    fn opt(&mut self) ->&mut Optimizer {
+        match &mut self.opt_state {
+            OptSnapshot::Opt { opt, .. } => {
+                opt
+            }
+            OptSnapshot::Snapshot { .. } => {
+                panic!("wrong state")
+            }
+        }
+    }
+
+    fn module(&mut self) ->&mut Box<dyn Module> {
+        match &mut self.opt_state {
+            OptSnapshot::Opt { module, .. } => {
+                module
+            }
+            OptSnapshot::Snapshot { .. } => {
+                panic!("wrong state")
+            }
+        }
+    }
 }
 
 unsafe impl Send for OptSnapshot {}
@@ -459,7 +481,7 @@ mod tests {
     use tch::kind::FLOAT_CPU;
     use tch::nn::{Init, Module, OptimizerConfig, VarStore, Variables};
     use tch::{nn, Tensor, Kind, Device};
-    use thoosa_shared::ThoError;
+    use thoosa_shared::{CopyToDevice, ThoError};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot};
@@ -592,49 +614,28 @@ mod tests {
             // same sequence of mini-batch permutations.
             tch::manual_seed(1234);
 
-            let mut vs = nn::VarStore::new(Cuda(0));
-            let mut module = net(&vs.root());
-
-            // Long-running moving averages make losing Adam's state easier to see.
-            let adam = nn::Adam {
-                beta1: 0.99,
-                beta2: 0.9999,
-                ..Default::default()
-            };
-
-            let mut opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
             let mut losses = Vec::with_capacity(EPOCHS as usize);
 
-            let tho_train_mod = ThoTrainModule::new(ModConfig {
-                opt_config: adam,
+            let mut tho_train_mod = ThoTrainModule::new(ModConfig {
+                opt_config: nn::Adam {
+                    beta1: 0.99,
+                    beta2: 0.9999,
+                    ..Default::default()
+                },
                 net: Box::new(|path|Box::new(net(path))),
                 lr: LEARNING_RATE as f32,
-            });
+            })?;
 
             for epoch in 1..=EPOCHS {
+
                 if reset_optimizer && epoch == RESET_EPOCH {
-                    // Same model parameters, but fresh Adam state:
-                    // step counter, first moments and second moments are lost.
-                    opt.zero_grad();
-                    let cuda_snapshot = unsafe { adam_snapshot(opt.as_raw_c_optimizer())? };
 
-                    let cpu_snapshot = clone_adam_snapshot_to(&cuda_snapshot, Cpu.into()).await?;
-                    let cpu_var_store = clone_var_store_to(&vs, Cpu.into()).await?;
+                    tho_train_mod.opt().zero_grad();
 
-                    drop(opt);
-                    drop(cuda_snapshot);
-                    drop(vs);
-                    drop(module);
-                    ///////////////
-                    vs = nn::VarStore::new(Cuda(0));
-                    module = net(&vs.root());
+                    let snap = tho_train_mod.copy_to_device(0).await?;
+                    // ///////////////
+                    tho_train_mod = snap.copy_to_device(1).await?;
 
-                    let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
-                    replace_data(&mut vs, restored_vs)?;
-
-                    let cuda_snapshot = clone_adam_snapshot_to(&cpu_snapshot, Cuda(0).into()).await?;
-                    opt = adam.amsgrad(true).build(&vs, LEARNING_RATE).unwrap();
-                    unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
                 }
 
                 let permutation = Tensor::randperm(
@@ -651,21 +652,21 @@ mod tests {
                     let batch_images = train_images.index_select(0, &indices);
                     let batch_labels = train_labels.index_select(0, &indices);
 
-                    let loss = module
+                    let loss = tho_train_mod.module()
                         .forward(&batch_images)
                         .cross_entropy_for_logits(&batch_labels);
 
-                    opt.backward_step(&loss);
+                    tho_train_mod.opt().backward_step(&loss);
 
                     start += len;
                 }
 
-                let train_loss = module
+                let train_loss = tho_train_mod.module()
                     .forward(train_images)
                     .cross_entropy_for_logits(train_labels)
                     .double_value(&[]);
 
-                let test_accuracy = module
+                let test_accuracy = tho_train_mod.module()
                     .forward(test_images)
                     .accuracy_for_logits(test_labels)
                     .double_value(&[]);
