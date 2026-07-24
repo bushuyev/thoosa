@@ -88,46 +88,64 @@ impl CopyToDevice for ThoTrainModule {
     where
         Self:Sized
     {
+        if tho_dst_device == 0 {
+            /*
+             * Finish reading the non-Sync Optimizer before awaiting tensor
+             * copies so the async future never carries an Optimizer reference.
+             */
+            let (cuda_snapshot, vs) = match &self.opt_state {
+                OptSnapshot::Opt { opt, vs } => {
+                    (unsafe { adam_snapshot(opt.as_raw_c_optimizer())? }, vs)
+                }
+                _ => {
+                    return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                }
+            };
 
-        match &self.opt_state {
-            OptSnapshot::Opt{opt, vs} if tho_dst_device == 0 => {
-                let cuda_snapshot = unsafe { adam_snapshot(opt.as_raw_c_optimizer())? };
-                Ok(
-                    ThoTrainModule{
-                        config: Arc::clone(&self.config),
-                        opt_state:
-                        OptSnapshot::Snapshot {
-                            cpu_snap:clone_adam_snapshot_to(&cuda_snapshot, Cpu.into()).await?,
-                            vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
-                        },
-                    }
-                )
-            }
-            OptSnapshot::Snapshot { cpu_snap, vs: cpu_var_store } if tho_dst_device != 0 => {
-                let mut cuda_vs = nn::VarStore::new(Cuda(0));
-                let module = (self.config.net)(&cuda_vs.root());
+            Ok(
+                ThoTrainModule{
+                    config: Arc::clone(&self.config),
+                    opt_state:
+                    OptSnapshot::Snapshot {
+                        cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
+                        vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
+                    },
+                }
+            )
+        } else {
+            let (cpu_snap, cpu_var_store) = match &self.opt_state {
+                /*
+                 * Detach owned tensor handles while this is still synchronous;
+                 * only those Send handles are carried into the async copies.
+                 */
+                OptSnapshot::Snapshot { cpu_snap, vs } => (detach_adam_snapshot(cpu_snap), vs),
+                _ => {
+                    return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                }
+            };
 
-                let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
-                replace_data(&mut cuda_vs, restored_vs)?;
+            let mut cuda_vs = nn::VarStore::new(Cuda(0));
+            let _module = (self.config.net)(&cuda_vs.root());
 
-                let cuda_snapshot = clone_adam_snapshot_to(&cpu_snap, Cuda(0).into()).await?;
-                let opt = self.config.opt_config.amsgrad(true).build(&cpu_var_store, self.config.lr as f64)?;
-                unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
+            let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, Cuda(0).into()).await?;
+            let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
+            replace_data(&mut cuda_vs, restored_vs)?;
 
-                Ok(
-                    ThoTrainModule{
-                        config: Arc::clone(&self.config),
-                        opt_state:
-                        OptSnapshot::Opt{opt, vs: restored_vs },
-                    }
-                )
-            }
+            /*
+             * cuda_vs is the registered destination whose tensors received the
+             * restored data, so both the optimizer and returned state must use it.
+             */
+            let opt = self.config.opt_config.amsgrad(true).build(&cuda_vs, self.config.lr as f64)?;
+            unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
-            _=> {
-                Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)))
-            }
+            Ok(
+                ThoTrainModule{
+                    config: Arc::clone(&self.config),
+                    opt_state:
+                    OptSnapshot::Opt{opt, vs: cuda_vs },
+                }
+            )
         }
-
     }
 
 }
@@ -167,25 +185,60 @@ pub async fn clone_adam_snapshot_to(
     src: &AdamOptimizerSnapshot,
     tho_device: ThoDevice,
 ) -> Result<AdamOptimizerSnapshot, ThoError> {
+    /*
+     * Own every tensor handle before the first await. Tensor is Send but not
+     * Sync, so borrowing snapshot states across an await makes this future
+     * non-Send even though the copy actor only needs owned tensor handles.
+     */
+    clone_owned_adam_snapshot_to(detach_adam_snapshot(src), tho_device).await
+}
+
+fn detach_adam_snapshot(src: &AdamOptimizerSnapshot) -> AdamOptimizerSnapshot {
+    AdamOptimizerSnapshot {
+        defaults: src.defaults,
+        groups: src.groups.iter().map(|src_group| {
+            AdamGroupSnapshot {
+                options: src_group.options,
+                states: src_group.states.iter().map(|src_state| {
+                    src_state.as_ref().map(|src_state| {
+                        AdamParamStateSnapshot {
+                            step: src_state.step,
+                            exp_avg: src_state.exp_avg.detach(),
+                            exp_avg_sq: src_state.exp_avg_sq.detach(),
+                            max_exp_avg_sq: src_state.max_exp_avg_sq.as_ref().map(Tensor::detach),
+                        }
+                    })
+                }).collect(),
+            }
+        }).collect(),
+    }
+}
+
+async fn clone_owned_adam_snapshot_to(
+    src: AdamOptimizerSnapshot,
+    tho_device: ThoDevice,
+) -> Result<AdamOptimizerSnapshot, ThoError> {
     let actor_device_idx = 1; //TODO add device to AdamOptimizerSnapshot?
 
     let mut dst_groups = vec![];
-    for src_group in &src.groups {
+    for src_group in src.groups {
+        let AdamGroupSnapshot { options, states } = src_group;
         let mut dst_states = vec![];
-        for state in &src_group.states {
+        for state in states {
             match state {
                 None => {
                     dst_states.push(None)
                 }
                 Some(src_state) => {
+                    let AdamParamStateSnapshot { step, exp_avg, exp_avg_sq, max_exp_avg_sq } = src_state;
                     dst_states.push(Some(AdamParamStateSnapshot{
-                        step: src_state.step,
-                        exp_avg: GlobalCtx::global().cuda_actor(actor_device_idx).copy(src_state.exp_avg.detach().into(), tho_device.into()).await?.into(),
-                        exp_avg_sq: GlobalCtx::global().cuda_actor(actor_device_idx).copy(src_state.exp_avg_sq.detach().into(), tho_device.into()).await?.into(),
-                        max_exp_avg_sq: match &src_state.max_exp_avg_sq {
+                        step,
+                        exp_avg: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg.into(), tho_device.into()).await?.into(),
+                        exp_avg_sq: GlobalCtx::global().cuda_actor(actor_device_idx).copy(exp_avg_sq.into(), tho_device.into()).await?.into(),
+                        max_exp_avg_sq: match max_exp_avg_sq {
                             None => None,
                             Some(v) => {
-                                Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.detach().into(), tho_device.into()).await?.into())
+                                Some(GlobalCtx::global().cuda_actor(actor_device_idx).copy(v.into(), tho_device.into()).await?.into())
                             }
                         },
                     }))
@@ -194,7 +247,7 @@ pub async fn clone_adam_snapshot_to(
         }
 
         dst_groups.push(AdamGroupSnapshot{
-            options: src_group.options,
+            options,
             states: dst_states,
         })
     }
