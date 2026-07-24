@@ -25,7 +25,7 @@ where
 }
 
 #[derive(Debug)]
-pub struct CpuOrGpu<O>//TODO rename to PolyDevice - can be copied between devices
+pub struct CpuOrGpu<O>//TODO remove
 {
     pd:PhantomData<O>
 }

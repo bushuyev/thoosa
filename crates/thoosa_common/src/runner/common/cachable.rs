@@ -280,7 +280,7 @@ where
 {
     id: <O as WithId>::ID,
 
-    cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,
+    cached_data: Box<[tokio::sync::RwLock<Option<O>>]>,//cached data never changes
     inflights: Box<[Mutex<Option<Arc<Notify>>>]>,
     size: O::Metrics,
     mem_size: u64,

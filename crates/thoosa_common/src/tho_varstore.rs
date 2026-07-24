@@ -1,19 +1,136 @@
 use std::fmt::Debug;
+use std::ops::Deref;
+use std::pin::Pin;
+use std::sync::Arc;
 use async_trait::async_trait;
-use tch::{no_grad, Kind, Tensor, Device};
-use tch::Device::Cpu;
-use tch::nn::VarStore;
+use tch::{no_grad, Kind, Tensor, Device, nn};
+use tch::Device::{Cpu, Cuda};
+use tch::nn::{Module, Optimizer, OptimizerConfig, VarStore};
 use tokio::task::JoinSet;
 use thoosa_shared::{CopyToDevice, ThoError};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
-use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot};
+use thoosa_shims::optimizers::{restore_adam_snapshot, AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot};
 use crate::dims::Dims;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+/*
+#[derive(Debug)]
+pub struct ThoVarStore {//TODO remove? it's to avoid "Only traits defined in the current crate can be implemented for arbitrary types [E0117]" for CopyToDevice
+    vs:VarStore
+}
+
+impl Deref for ThoVarStore {
+    type Target = VarStore;
+
+    fn deref(&self) -> &Self::Target {
+        &self.vs
+    }
+}
+
+impl From<VarStore> for ThoVarStore {
+    fn from(vs: VarStore) -> Self {
+        Self {
+            vs
+        }
+    }
+}
+
+enum WithCpuCacheState<O> {
+    Cpu(O),
+    CpuAndGpu(O),
+    Gpu(O)
+}
+pub struct WithCpuCache<O> {
+    state:WithCpuCacheState<O>
+}
+
+#[async_trait]
+impl CopyToDevice for ThoVarStore {
+    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> where Self:Sized{
+        Ok(ThoVarStore {
+            vs: clone_var_store_to(&self.vs, tho_dst_device.into()).await?,
+        })
+    }
+}
+*/
+
+struct ModConfig {
+    opt_config:nn::Adam,
+    net:Box<dyn Fn(&nn::Path)->Box<dyn Module>>,
+    lr:f32,
+}
 
 
+
+struct ThoTrainModule {
+    config:Arc<ModConfig>,
+    opt_state:OptSnapshot
+}
+
+#[derive(Debug)]
+enum OptSnapshot {
+    Opt{opt:Optimizer, vs:VarStore},
+    Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
+}
+
+unsafe impl Send for OptSnapshot {}
+unsafe impl Send for ThoTrainModule {}
+unsafe impl Sync for ThoTrainModule {}
+
+unsafe impl Send for ModConfig {}
+unsafe impl Sync for ModConfig {}
+#[async_trait]
+impl CopyToDevice for ThoTrainModule {
+
+    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
+    where
+        Self:Sized
+    {
+
+        match &self.opt_state {
+            OptSnapshot::Opt{opt, vs} if tho_dst_device == 0 => {
+                let cuda_snapshot = unsafe { adam_snapshot(opt.as_raw_c_optimizer())? };
+                Ok(
+                    ThoTrainModule{
+                        config: Arc::clone(&self.config),
+                        opt_state:
+                        OptSnapshot::Snapshot {
+                            cpu_snap:clone_adam_snapshot_to(&cuda_snapshot, Cpu.into()).await?,
+                            vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
+                        },
+                    }
+                )
+            }
+            OptSnapshot::Snapshot { cpu_snap, vs: cpu_var_store } if tho_dst_device != 0 => {
+                let mut cuda_vs = nn::VarStore::new(Cuda(0));
+                let module = (self.config.net)(&cuda_vs.root());
+
+                let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
+                replace_data(&mut cuda_vs, restored_vs)?;
+
+                let cuda_snapshot = clone_adam_snapshot_to(&cpu_snap, Cuda(0).into()).await?;
+                let opt = self.config.opt_config.amsgrad(true).build(&cpu_var_store, self.config.lr as f64)?;
+                unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
+
+                Ok(
+                    ThoTrainModule{
+                        config: Arc::clone(&self.config),
+                        opt_state:
+                        OptSnapshot::Opt{opt, vs: restored_vs },
+                    }
+                )
+            }
+
+            _=> {
+                Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)))
+            }
+        }
+
+    }
+
+}
 
 struct VarSpec {
     name: String,
@@ -42,8 +159,6 @@ fn add_named_tensor(
     for component in parent.split('.').filter(|part| !part.is_empty()) {
         path = path.sub(component);
     }
-
-    // *path.entry(leaf).borrow_mut() = tensor;
 
     path.add(leaf, tensor, trainable)
 }
@@ -95,6 +210,7 @@ pub async fn clone_var_store_to(
     src: &VarStore,
     tho_device: ThoDevice,
 ) -> Result<VarStore, ThoError> {
+
     let actor_device_idx = if tho_device.is_cuda() {
         assert_eq!(src.device(), Cpu);
         tho_device.tho_device_idx()
@@ -102,6 +218,7 @@ pub async fn clone_var_store_to(
         assert_ne!(src.device(), Cpu);
         Into::<ThoDevice>::into(src.device()).tho_device_idx()
     };
+
     /*
      * Snapshot all Rust-side VarStore metadata before the first await.
      *
