@@ -15,57 +15,24 @@ use crate::dims::Dims;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
-/*
-#[derive(Debug)]
-pub struct ThoVarStore {//TODO remove? it's to avoid "Only traits defined in the current crate can be implemented for arbitrary types [E0117]" for CopyToDevice
-    vs:VarStore
-}
 
-impl Deref for ThoVarStore {
-    type Target = VarStore;
 
-    fn deref(&self) -> &Self::Target {
-        &self.vs
-    }
-}
-
-impl From<VarStore> for ThoVarStore {
-    fn from(vs: VarStore) -> Self {
-        Self {
-            vs
-        }
-    }
-}
-
-enum WithCpuCacheState<O> {
-    Cpu(O),
-    CpuAndGpu(O),
-    Gpu(O)
-}
-pub struct WithCpuCache<O> {
-    state:WithCpuCacheState<O>
-}
-
-#[async_trait]
-impl CopyToDevice for ThoVarStore {
-    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError> where Self:Sized{
-        Ok(ThoVarStore {
-            vs: clone_var_store_to(&self.vs, tho_dst_device.into()).await?,
-        })
-    }
-}
-*/
-
-struct ModConfig {
-    opt_config:nn::Adam,
+struct ModConfig<OC>
+where
+    OC:OptimizerConfig + Clone
+{
+    opt_config:OC,
     net:Box<dyn Fn(&nn::Path)->Box<dyn Module>>,
     lr:f32,
 }
 
 
 
-struct ThoTrainModule {
-    config:Arc<ModConfig>,
+struct ThoTrainModule<OC>
+where
+    OC:OptimizerConfig + Clone
+{
+    config:Arc<ModConfig<OC>>,
     opt_state:OptSnapshot
 }
 
@@ -75,10 +42,13 @@ enum OptSnapshot {
     Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
 }
 
-impl ThoTrainModule {
-    pub fn new(config: ModConfig) -> Result<Self, ThoError> {
+impl <OC> ThoTrainModule<OC>
+where
+    OC:OptimizerConfig + Clone
+{
+    pub fn new(config: ModConfig<OC>) -> Result<Self, ThoError> {
         let (module, var_store) = Self::init_opt(&config.net);
-        let opt = config.opt_config.build(&var_store, config.lr as f64)?;
+        let opt = config.opt_config.clone().build(&var_store, config.lr as f64)?;
         Ok(Self {
             config: Arc::new(config),
             opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
@@ -115,13 +85,28 @@ impl ThoTrainModule {
 }
 
 unsafe impl Send for OptSnapshot {}
-unsafe impl Send for ThoTrainModule {}
-unsafe impl Sync for ThoTrainModule {}
+unsafe impl <OC> Send for ThoTrainModule<OC> where
+    OC:OptimizerConfig + Clone
+{}
+unsafe impl <OC> Sync for ThoTrainModule<OC>
+where
+    OC:OptimizerConfig + Clone
+{}
 
-unsafe impl Send for ModConfig {}
-unsafe impl Sync for ModConfig {}
+unsafe impl <OC> Send for ModConfig<OC>
+where
+    OC:OptimizerConfig + Clone
+{}
+unsafe impl <OC>Sync for ModConfig<OC>
+where
+    OC:OptimizerConfig + Clone
+{}
+
 #[async_trait]
-impl CopyToDevice for ThoTrainModule {
+impl <OC> CopyToDevice for ThoTrainModule<OC>
+where
+    OC:OptimizerConfig + Clone
+{
 
     async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
     where
@@ -174,7 +159,7 @@ impl CopyToDevice for ThoTrainModule {
              * cuda_vs is the registered destination whose tensors received the
              * restored data, so both the optimizer and returned state must use it.
              */
-            let opt = self.config.opt_config.amsgrad(true).build(&cuda_vs, self.config.lr as f64)?;
+            let opt = self.config.opt_config.clone().build(&cuda_vs, self.config.lr as f64)?;
             unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
             Ok(
@@ -621,7 +606,7 @@ mod tests {
                     beta1: 0.99,
                     beta2: 0.9999,
                     ..Default::default()
-                },
+                }.amsgrad(true),
                 net: Box::new(|path|Box::new(net(path))),
                 lr: LEARNING_RATE as f32,
             })?;
