@@ -487,9 +487,9 @@ mod tests {
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot};
     use thoosa_shims::optimizers::*;
-    use crate::batches::BatchLengths;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{AnyDims, Batch};
+    use crate::tho_tensor::ThoTensor;
 
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");
@@ -563,38 +563,20 @@ mod tests {
         const LEARNING_RATE: f64 = 1e-3;
 
         pub fn test_net() -> Result<Node, ThoError> {
-
-            let mut builder = SeqBuilder::new(2, None)?;
-            let mut net = builder
-                .closure(
-                    Arc::new(Box::new(move |t: &Tensor, _lengths: Option<&BatchLengths>| {
-                        debug!("final_net: input={t:?}");
-                        Ok(t.shallow_clone())
-                    })),
-                    None,
-                )?
+            /*
+             * Keep the same classifier topology that this optimizer-state test
+             * used before ModConfig switched from Module to ThoModule.
+             */
+            SeqBuilder::new(IMAGE_DIM as u32, None)?
                 .linear_s(
-                    2 * 2,
-                    "final_net_first_layer".to_string(),
-                )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
-
-            for i in 0..3 {
-                net = net
-                    .linear_s(
-                        3,
-                        format!("final_net_{i}th_layer"),
-                    )?
-                    .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?;
-            }
-
-            net
-                // .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))
-                .linear_s(
-                    1,
-                    "final_net_last_layer",
+                    HIDDEN_NODES as u32,
+                    "layer1",
                 )?
                 .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+                .linear_s(
+                    LABELS as u32,
+                    "layer2",
+                )?
                 .end_seq()
         }
 
@@ -645,7 +627,11 @@ mod tests {
                     beta2: 0.9999,
                     ..Default::default()
                 }.amsgrad(true),
-                net: Box::new(|vs|Box::new(test_net().unwrap().build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()).unwrap())),
+                /*
+                 * build_tch_module already returns the boxed ThoModule expected
+                 * by ModConfig, so wrapping it again would create Box<Box<_>>.
+                 */
+                net: Box::new(|vs|test_net().unwrap().build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()).unwrap()),
                 lr: LEARNING_RATE as f32,
             })?;
 
@@ -675,24 +661,26 @@ mod tests {
                     let batch_images = train_images.index_select(0, &indices);
                     let batch_labels = train_labels.index_select(0, &indices);
 
-                    let loss = tho_train_mod.module()
-                        .forward(&batch_images)
-                        .cross_entropy_for_logits(&batch_labels);
+                    /*
+                     * ThoModule receives typed ThoTensor inputs and returns typed
+                     * logits; unwrap only to Tensor for the libtorch loss API.
+                     */
+                    let batch_images: ThoTensor<Batch<AnyDims>, _> = batch_images.into();
+                    let logits = tho_train_mod.module().tho_forward(&batch_images, None, true)?;
+                    let loss = logits.as_ref().f_cross_entropy_loss::<&Tensor>(&batch_labels, None, tch::Reduction::Mean, -100, 0.0)?;
 
                     tho_train_mod.opt().backward_step(&loss);
 
                     start += len;
                 }
 
-                let train_loss = tho_train_mod.module()
-                    .forward(train_images)
-                    .cross_entropy_for_logits(train_labels)
-                    .double_value(&[]);
+                let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.into();
+                let train_logits = tho_train_mod.module().tho_forward(&train_images, None, false)?;
+                let train_loss = train_logits.as_ref().f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
 
-                let test_accuracy = tho_train_mod.module()
-                    .forward(test_images)
-                    .accuracy_for_logits(test_labels)
-                    .double_value(&[]);
+                let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.into();
+                let test_logits = tho_train_mod.module().tho_forward(&test_images, None, false)?;
+                let test_accuracy = test_logits.as_ref().f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
 
                 losses.push(train_loss);
 
