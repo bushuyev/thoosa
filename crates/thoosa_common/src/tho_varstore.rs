@@ -4,16 +4,18 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use async_trait::async_trait;
+use log::debug;
 use tch::{no_grad, Kind, Tensor, Device, nn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
 use tokio::task::JoinSet;
-use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shims::optimizers::{restore_adam_snapshot, AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot};
-use crate::dims::{Batch, Dims};
+use crate::builder::{Node, SeqBuilder};
+use crate::dims::{AnyDims, Batch, Dims};
 use crate::my_tch::ThoModule;
 use crate::runner::common::RunCtx;
 use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
@@ -26,7 +28,7 @@ pub struct ModConfig<DI, DO>
 where
     DI: Dims, DO: Dims
 {
-    optimizer_builder: Box<dyn Fn(&VarStore) -> Result<Optimizer, ThoError> + Send + Sync>,
+    optimizer_builder: Box<dyn Fn(&VarStore) -> Result<Pin<Box<Optimizer>>, ThoError> + Send + Sync>,
     net: Box<dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync>,
 }
 
@@ -55,7 +57,7 @@ where
         NB: Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync + 'static,
     {
         Self {
-            optimizer_builder: Box::new(move |var_store| Ok(opt_config.clone().build(var_store, lr)?)),
+            optimizer_builder: Box::new(move |var_store| Ok(Box::pin(opt_config.clone().build(var_store, lr)?))),
             net: Box::new(net),
         }
     }
@@ -66,7 +68,7 @@ pub struct ThoTrainModule<DI, DO>
 where
     DI: Dims, DO: Dims
 {
-    config:Arc<ModConfig<DI, DO>>,
+    config:ModConfig<DI, DO>,
     opt_state:OptSnapshot<DI, DO>
 }
 
@@ -75,7 +77,7 @@ enum OptSnapshot<DI, DO>
 where
     DI: Dims, DO: Dims
 {
-    Opt{opt:Optimizer, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
+    Opt{opt:Pin<Box<Optimizer>>, vs:VarStore, module:Box<dyn ThoModule<Batch<DI>, Batch<DO>>>},
     Snapshot{ cpu_snap: AdamOptimizerSnapshot, vs:VarStore}
 }
 
@@ -87,7 +89,7 @@ where
         let (module, var_store) = Self::init_opt(&config.net, device)?;
         let opt = (config.optimizer_builder)(&var_store)?;
         Ok(Self {
-            config: Arc::new(config),
+            config,
             opt_state: OptSnapshot::Opt { opt, vs: var_store, module },
         })
     }
@@ -160,12 +162,12 @@ where
 {}
 
 #[async_trait]
-impl <DI, DO> CopyToDevice for ThoTrainModule<DI, DO>
+impl <DI, DO> MoveToDevice for ThoTrainModule<DI, DO>
 where
     DI: Dims, DO: Dims
 {
 
-    async fn copy_to_device(&self, tho_dst_device: usize) -> Result<Self, ThoError>
+    async fn move_to_device(&mut self, tho_dst_device: usize) -> Result<(), ThoError>
     where
         Self:Sized
     {
@@ -179,20 +181,26 @@ where
                     (unsafe { adam_snapshot(opt.as_raw_c_optimizer())? }, vs)
                 }
                 _ => {
-                    return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                    // return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                    return Ok(())
                 }
             };
 
-            Ok(
-                ThoTrainModule{
-                    config: Arc::clone(&self.config),
-                    opt_state:
-                    OptSnapshot::Snapshot {
-                        cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
-                        vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
-                    },
-                }
-            )
+            self.opt_state = OptSnapshot::Snapshot {
+                cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
+                vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
+            };
+            // Ok(
+            //     ThoTrainModule{
+            //         config: Arc::clone(&self.config),
+            //         opt_state:
+            //         OptSnapshot::Snapshot {
+            //             cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
+            //             vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
+            //         },
+            //     }
+            // )
+            Ok(())
         } else {
             let (cpu_snap, cpu_var_store) = match &self.opt_state {
                 /*
@@ -201,7 +209,8 @@ where
                  */
                 OptSnapshot::Snapshot { cpu_snap, vs } => (detach_adam_snapshot(cpu_snap), vs),
                 _ => {
-                    return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                    // return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                    return Ok(())
                 }
             };
 
@@ -219,13 +228,15 @@ where
             let opt = (self.config.optimizer_builder)(&cuda_vs)?;
             unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
-            Ok(
-                ThoTrainModule{
-                    config: Arc::clone(&self.config),
-                    opt_state:
-                    OptSnapshot::Opt{opt, vs: cuda_vs, module },
-                }
-            )
+            self.opt_state = OptSnapshot::Opt{opt, vs: cuda_vs, module };
+            // Ok(
+            //     ThoTrainModule{
+            //         config: Arc::clone(&self.config),
+            //         opt_state:
+            //         OptSnapshot::Opt{opt, vs: cuda_vs, module },
+            //     }
+            // )
+            Ok(())
         }
     }
 
@@ -513,84 +524,233 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> 
     Ok(())
 }
 
+//TODO change it to run with TrainStep
+pub async fn do_test_reset_adam() -> Result<(), ThoError>{
+    const IMAGE_DIM: i64 = 128;
+    const TEACHER_HIDDEN: i64 = 64;
+    const HIDDEN_NODES: i64 = 128;
+    const LABELS: i64 = 10;
 
-#[derive(Debug)]
-struct ThoTrainModuleKeeper<C, DI, DO>
-where
-    C: RunCtx,
-    DI: Dims + 'static, DO: Dims + 'static
-{
+    const TRAIN_SAMPLES: i64 = 2_048;
+    const TEST_SAMPLES: i64 = 512;
+    const BATCH_SIZE: i64 = 64;
 
-    pd:PhantomData<(C, DI, DO)>
-}
+    // Only ten epochs after resetting the optimizer.
+    const EPOCHS: i64 = 60;
+    const RESET_EPOCH: i64 = 50;
+    const LEARNING_RATE: f64 = 1e-3;
 
-#[derive(Debug)]
-struct ThoTrainModuleKeeperInput<DI, DO>
-where
-    DI: Dims + 'static, DO: Dims + 'static
-{
-    mod_config:ModConfig<DI, DO>
-}
-impl <DI, DO> Input for ThoTrainModuleKeeperInput<DI, DO>
-where
-    DI: Dims + 'static, DO: Dims + 'static
-{}
-
-
-#[derive(Debug)]
-struct ThoTrainModuleKeeperOutput {
-
-}
-impl Output for ThoTrainModuleKeeperOutput {}
-
-impl <C, DI, DO> Stage for ThoTrainModuleKeeper<C, DI, DO>
-where
-    C: RunCtx + 'static,
-    DI: Dims + 'static, DO: Dims + 'static
-{
-    type Ctx = C;
-    type In<'a> = ThoTrainModuleKeeperInput<DI, DO>;
-    type Out = ThoTrainModuleKeeperOutput;
-}
-
-impl <C, DI, DO> AsyncStage for ThoTrainModuleKeeper<C, DI, DO>
-where
-    C: RunCtx + 'static,
-    DI: Dims + 'static, DO: Dims + 'static
-{
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ThoTrainModuleKeeper::run"))]
-    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
-        todo!()
+    pub fn test_net() -> Result<Node, ThoError> {
+        /*
+         * Keep the same classifier topology that this optimizer-state test
+         * used before ModConfig switched from Module to ThoModule.
+         */
+        SeqBuilder::new(IMAGE_DIM as u32, None)?
+            .linear_s(
+                HIDDEN_NODES as u32,
+                "layer1",
+            )?
+            .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
+            .linear_s(
+                LABELS as u32,
+                "layer2",
+            )?
+            .end_seq()
     }
-}
 
-#[derive(Debug)]
-struct  SyncThoTrainModuleKeeper<C, DI, DO>
-where
-    C: RunCtx + 'static,
-    DI: Dims + 'static, DO: Dims + 'static
-{
-    pd:PhantomData<(C, DI, DO)>
-}
+    fn make_split(
+        samples: i64,
+        teacher_w1: &Tensor,
+        teacher_w2: &Tensor,
+        feature_scales: &Tensor,
+    ) -> (Tensor, Tensor) {
+        // The latent features have a well-conditioned distribution.
+        let latent = Tensor::randn(
+            [samples, IMAGE_DIM],
+            (Kind::Float, Device::Cuda(0)),
+        );
 
-impl <C, DI, DO> Stage for SyncThoTrainModuleKeeper<C, DI, DO>
-where
-    C: RunCtx + 'static,
-    DI: Dims + 'static, DO: Dims + 'static
-{
-    type Ctx = C;
-    type In<'a> = ThoTrainModuleKeeperInput<DI, DO>;
-    type Out = ThoTrainModuleKeeperOutput;
-}
+        // The student sees an ill-conditioned version where feature scales
+        // range approximately from exp(-4) to exp(4).
+        let images = &latent * feature_scales;
 
-impl <C, DI, DO> SyncStage for SyncThoTrainModuleKeeper<C, DI, DO>
-where
-    C: RunCtx + 'static,
-    DI: Dims + 'static, DO: Dims + 'static
-{
-    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
-        todo!()
+        // Labels are generated by a fixed nonlinear teacher network, so there
+        // is an actual relationship between images and labels.
+        let labels = latent
+            .matmul(teacher_w1)
+            .relu()
+            .matmul(teacher_w2)
+            .argmax(-1, false);
+
+        (images, labels)
     }
+
+    async fn train_once(
+        reset_optimizer: bool,
+        train_images: &Tensor,
+        train_labels: &Tensor,
+        test_images: &Tensor,
+        test_labels: &Tensor,
+    ) -> Result<Vec<f64>, ThoError> {
+
+        // Makes both runs start from identical model parameters and use the
+        // same sequence of mini-batch permutations.
+        tch::manual_seed(1234);
+
+        let mut losses = Vec::with_capacity(EPOCHS as usize);
+
+        let mut tho_train_mod = ThoTrainModule::new_on_device(ModConfig::new(
+            nn::Adam {
+                beta1: 0.99,
+                beta2: 0.9999,
+                ..Default::default()
+            }.amsgrad(true),
+            /*
+             * build_tch_module already returns the boxed ThoModule expected
+             * by ModConfig, so wrapping it again would create Box<Box<_>>.
+             */
+            |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
+            LEARNING_RATE,
+        ), Cuda(0).into())?;
+
+        for epoch in 1..=EPOCHS {
+
+            if reset_optimizer && epoch == RESET_EPOCH {
+
+                tho_train_mod.opt().zero_grad();
+
+                 tho_train_mod.move_to_device(0).await?;
+                // ///////////////
+                tho_train_mod.move_to_device(1).await?;
+
+            }
+
+            let permutation = Tensor::randperm(
+                TRAIN_SAMPLES,
+                (Kind::Int64, Device::Cuda(0)),
+            );
+
+            let mut start = 0;
+
+            while start < TRAIN_SAMPLES {
+                let len = BATCH_SIZE.min(TRAIN_SAMPLES - start);
+
+                let indices = permutation.narrow(0, start, len);
+                let batch_images = train_images.index_select(0, &indices);
+                let batch_labels = train_labels.index_select(0, &indices);
+
+                /*
+                 * ThoModule receives typed ThoTensor inputs and returns typed
+                 * logits; unwrap only to Tensor for the libtorch loss API.
+                 */
+                let batch_images: ThoTensor<Batch<AnyDims>, _> = batch_images.into();
+                let logits = tho_train_mod.module().tho_forward(&batch_images, None, true)?;
+                let loss = logits.as_ref().f_cross_entropy_loss::<&Tensor>(&batch_labels, None, tch::Reduction::Mean, -100, 0.0)?;
+
+                tho_train_mod.opt().backward_step(&loss);
+
+                start += len;
+            }
+
+            let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.into();
+            let train_logits = tho_train_mod.module().tho_forward(&train_images, None, false)?;
+            let train_loss = train_logits.as_ref().f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
+
+            let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.into();
+            let test_logits = tho_train_mod.module().tho_forward(&test_images, None, false)?;
+            let test_accuracy = test_logits.as_ref().f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
+
+            losses.push(train_loss);
+
+            if matches!(epoch, 49 | 50 | 51 | 52 | 55 | 60) {
+                tracing::debug!(
+                    reset_optimizer,
+                    epoch,
+                    train_loss,
+                    test_accuracy = 100.0 * test_accuracy,
+                    "training progress",
+                );
+            }
+        }
+
+        Ok(losses)
+    }
+
+    tch::manual_seed(42);
+
+    let teacher_w1 = Tensor::randn(
+        [IMAGE_DIM, TEACHER_HIDDEN],
+        (Kind::Float, Device::Cuda(0)),
+    ) / (IMAGE_DIM as f64).sqrt();
+
+    let teacher_w2 = Tensor::randn(
+        [TEACHER_HIDDEN, LABELS],
+        (Kind::Float, Device::Cuda(0)),
+    ) / (TEACHER_HIDDEN as f64).sqrt();
+
+    let feature_positions = Tensor::arange(
+        IMAGE_DIM,
+        (Kind::Float, Device::Cuda(0)),
+    );
+
+    let feature_scales = (
+        feature_positions / ((IMAGE_DIM - 1) as f64) * 8.0 - 4.0
+    )
+        .exp();
+
+    let (train_images, train_labels) = make_split(
+        TRAIN_SAMPLES,
+        &teacher_w1,
+        &teacher_w2,
+        &feature_scales,
+    );
+
+    let (test_images, test_labels) = make_split(
+        TEST_SAMPLES,
+        &teacher_w1,
+        &teacher_w2,
+        &feature_scales,
+    );
+
+    let preserved_losses = train_once(
+        false,
+        &train_images,
+        &train_labels,
+        &test_images,
+        &test_labels,
+    ).await?;
+
+    let reset_losses = train_once(
+        true,
+        &train_images,
+        &train_labels,
+        &test_images,
+        &test_labels,
+    ).await?;
+
+    for epoch in 49..=60 {
+        let index = (epoch - 1) as usize;
+
+        debug!("epoch={epoch} preserved={} reset={} difference={}", preserved_losses[index],reset_losses[index], reset_losses[index] - preserved_losses[index]);
+    }
+
+    // Compare the first epoch affected by the replacement.
+    let first_affected_index = (RESET_EPOCH - 1) as usize;
+
+    let immediate_difference = (
+        reset_losses[first_affected_index]
+            - preserved_losses[first_affected_index]
+    ).abs();
+
+    assert!(
+        immediate_difference < 1e-3,
+        "Adam produced the diverging trajectory after reset : \
+            preserved={}, reset={}",
+        preserved_losses[first_affected_index],
+        reset_losses[first_affected_index],
+    );
+
+    Ok(())
 }
 
 
@@ -607,7 +767,7 @@ mod tests {
     use thoosa_shared::{CopyToDevice, ThoError};
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot};
+    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot, do_test_reset_adam};
     use thoosa_shims::optimizers::*;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{AnyDims, Batch};
@@ -669,27 +829,6 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_reset_adam_ipc() -> Result<(), ThoError> {
-        run_ipc_test(async {
-            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
-            let test_name = format!("{module}::test_reset_adam_ipc");
-            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
-            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
-            let cuda_actor = GlobalCtx::global().cuda_actor(1);
-
-            do_test_reset_adam().await?;
-
-            Ok(())
-        }, async |sock_path| {
-            CudaWorker::run_worker(
-                sock_path,
-                HashMap::new(),
-                ThoDevice::from(Cuda(0)),
-            ).await
-        })
-
-    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_reset_adam_local() -> Result<(), ThoError> {
@@ -700,232 +839,5 @@ mod tests {
         do_test_reset_adam().await
     }
 
-    async fn do_test_reset_adam() -> Result<(), ThoError>{
-        const IMAGE_DIM: i64 = 128;
-        const TEACHER_HIDDEN: i64 = 64;
-        const HIDDEN_NODES: i64 = 128;
-        const LABELS: i64 = 10;
-
-        const TRAIN_SAMPLES: i64 = 2_048;
-        const TEST_SAMPLES: i64 = 512;
-        const BATCH_SIZE: i64 = 64;
-
-        // Only ten epochs after resetting the optimizer.
-        const EPOCHS: i64 = 60;
-        const RESET_EPOCH: i64 = 50;
-        const LEARNING_RATE: f64 = 1e-3;
-
-        pub fn test_net() -> Result<Node, ThoError> {
-            /*
-             * Keep the same classifier topology that this optimizer-state test
-             * used before ModConfig switched from Module to ThoModule.
-             */
-            SeqBuilder::new(IMAGE_DIM as u32, None)?
-                .linear_s(
-                    HIDDEN_NODES as u32,
-                    "layer1",
-                )?
-                .func(|t|Tensor::f_relu(t).map_err(|e|e.into()))?
-                .linear_s(
-                    LABELS as u32,
-                    "layer2",
-                )?
-                .end_seq()
-        }
-
-        fn make_split(
-            samples: i64,
-            teacher_w1: &Tensor,
-            teacher_w2: &Tensor,
-            feature_scales: &Tensor,
-        ) -> (Tensor, Tensor) {
-            // The latent features have a well-conditioned distribution.
-            let latent = Tensor::randn(
-                [samples, IMAGE_DIM],
-                (Kind::Float, Device::Cuda(0)),
-            );
-
-            // The student sees an ill-conditioned version where feature scales
-            // range approximately from exp(-4) to exp(4).
-            let images = &latent * feature_scales;
-
-            // Labels are generated by a fixed nonlinear teacher network, so there
-            // is an actual relationship between images and labels.
-            let labels = latent
-                .matmul(teacher_w1)
-                .relu()
-                .matmul(teacher_w2)
-                .argmax(-1, false);
-
-            (images, labels)
-        }
-
-        async fn train_once(
-            reset_optimizer: bool,
-            train_images: &Tensor,
-            train_labels: &Tensor,
-            test_images: &Tensor,
-            test_labels: &Tensor,
-        ) -> Result<Vec<f64>, ThoError> {
-
-            // Makes both runs start from identical model parameters and use the
-            // same sequence of mini-batch permutations.
-            tch::manual_seed(1234);
-
-            let mut losses = Vec::with_capacity(EPOCHS as usize);
-
-            let mut tho_train_mod = ThoTrainModule::new_on_device(ModConfig::new(
-                nn::Adam {
-                    beta1: 0.99,
-                    beta2: 0.9999,
-                    ..Default::default()
-                }.amsgrad(true),
-                /*
-                 * build_tch_module already returns the boxed ThoModule expected
-                 * by ModConfig, so wrapping it again would create Box<Box<_>>.
-                 */
-                |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
-                LEARNING_RATE,
-            ), Cuda(0).into())?;
-
-            for epoch in 1..=EPOCHS {
-
-                if reset_optimizer && epoch == RESET_EPOCH {
-
-                    tho_train_mod.opt().zero_grad();
-
-                    let snap = tho_train_mod.copy_to_device(0).await?;
-                    // ///////////////
-                    tho_train_mod = snap.copy_to_device(1).await?;
-
-                }
-
-                let permutation = Tensor::randperm(
-                    TRAIN_SAMPLES,
-                    (Kind::Int64, Device::Cuda(0)),
-                );
-
-                let mut start = 0;
-
-                while start < TRAIN_SAMPLES {
-                    let len = BATCH_SIZE.min(TRAIN_SAMPLES - start);
-
-                    let indices = permutation.narrow(0, start, len);
-                    let batch_images = train_images.index_select(0, &indices);
-                    let batch_labels = train_labels.index_select(0, &indices);
-
-                    /*
-                     * ThoModule receives typed ThoTensor inputs and returns typed
-                     * logits; unwrap only to Tensor for the libtorch loss API.
-                     */
-                    let batch_images: ThoTensor<Batch<AnyDims>, _> = batch_images.into();
-                    let logits = tho_train_mod.module().tho_forward(&batch_images, None, true)?;
-                    let loss = logits.as_ref().f_cross_entropy_loss::<&Tensor>(&batch_labels, None, tch::Reduction::Mean, -100, 0.0)?;
-
-                    tho_train_mod.opt().backward_step(&loss);
-
-                    start += len;
-                }
-
-                let train_images: ThoTensor<Batch<AnyDims>, _> = train_images.into();
-                let train_logits = tho_train_mod.module().tho_forward(&train_images, None, false)?;
-                let train_loss = train_logits.as_ref().f_cross_entropy_loss::<&Tensor>(train_labels, None, tch::Reduction::Mean, -100, 0.0)?.double_value(&[]);
-
-                let test_images: ThoTensor<Batch<AnyDims>, _> = test_images.into();
-                let test_logits = tho_train_mod.module().tho_forward(&test_images, None, false)?;
-                let test_accuracy = test_logits.as_ref().f_argmax(-1, false)?.f_eq_tensor(test_labels)?.f_to_kind(Kind::Float)?.f_mean(Kind::Float)?.double_value(&[]);
-
-                losses.push(train_loss);
-
-                if matches!(epoch, 49 | 50 | 51 | 52 | 55 | 60) {
-                    tracing::debug!(
-                    reset_optimizer,
-                    epoch,
-                    train_loss,
-                    test_accuracy = 100.0 * test_accuracy,
-                    "training progress",
-                );
-                }
-            }
-
-            Ok(losses)
-        }
-
-        tch::manual_seed(42);
-
-        let teacher_w1 = Tensor::randn(
-            [IMAGE_DIM, TEACHER_HIDDEN],
-            (Kind::Float, Device::Cuda(0)),
-        ) / (IMAGE_DIM as f64).sqrt();
-
-        let teacher_w2 = Tensor::randn(
-            [TEACHER_HIDDEN, LABELS],
-            (Kind::Float, Device::Cuda(0)),
-        ) / (TEACHER_HIDDEN as f64).sqrt();
-
-        let feature_positions = Tensor::arange(
-            IMAGE_DIM,
-            (Kind::Float, Device::Cuda(0)),
-        );
-
-        let feature_scales = (
-            feature_positions / ((IMAGE_DIM - 1) as f64) * 8.0 - 4.0
-        )
-            .exp();
-
-        let (train_images, train_labels) = make_split(
-            TRAIN_SAMPLES,
-            &teacher_w1,
-            &teacher_w2,
-            &feature_scales,
-        );
-
-        let (test_images, test_labels) = make_split(
-            TEST_SAMPLES,
-            &teacher_w1,
-            &teacher_w2,
-            &feature_scales,
-        );
-
-        let preserved_losses = train_once(
-            false,
-            &train_images,
-            &train_labels,
-            &test_images,
-            &test_labels,
-        ).await?;
-
-        let reset_losses = train_once(
-            true,
-            &train_images,
-            &train_labels,
-            &test_images,
-            &test_labels,
-        ).await?;
-
-        for epoch in 49..=60 {
-            let index = (epoch - 1) as usize;
-
-            debug!("epoch={epoch} preserved={} reset={} difference={}", preserved_losses[index],reset_losses[index], reset_losses[index] - preserved_losses[index]);
-        }
-
-        // Compare the first epoch affected by the replacement.
-        let first_affected_index = (RESET_EPOCH - 1) as usize;
-
-        let immediate_difference = (
-            reset_losses[first_affected_index]
-                - preserved_losses[first_affected_index]
-        ).abs();
-
-        assert!(
-            immediate_difference < 1e-3,
-            "Adam produced the diverging trajectory after reset : \
-            preserved={}, reset={}",
-            preserved_losses[first_affected_index],
-            reset_losses[first_affected_index],
-        );
-
-        Ok(())
-    }
 
 }

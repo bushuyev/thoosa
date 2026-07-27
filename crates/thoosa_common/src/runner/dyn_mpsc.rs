@@ -453,7 +453,7 @@ impl DynamicTaskExecutor {
         job_id_to_rerun: Option<JobId>,//Some when invoked from OOMHandler on oom error and  max_other_parallel==0
     ) -> Result<T, ThoError>
     where
-        F: Future<Output = Result<T, ThoError>> + Send + 'static,
+        F: Future<Output = Result<T, ThoError>> + Send + 'static,//TODO change to closure taking ticket to let function a way to ensure they're running in Executor
         T: Send + Debug + 'static,
     {
         //currently jobs can only be submitted from OOMHandler::run and ::consume and are never nested (i.e. parent is always None)
