@@ -2,6 +2,7 @@ use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::sync::Arc;
+use tokio::sync::{MutexGuard, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::ThoError;
@@ -58,6 +59,20 @@ pub enum ConsumeResult<I, O> {
 }
 
 pub trait SyncStage: Stage + Debug {
+    type S:Send + Sync = ();
+    fn pre_run(&self) -> impl Future<Output=Result<Option<MutexGuard<'_, Self::S>>, ThoError>> + Send
+     {//for train step etc
+
+        async {
+            Ok::<_, ThoError>(None)
+        }
+
+    }
+
+    fn do_run_with_state<'f, S>(self: Arc<Self>, _input: &Self::In<'f>, mut state:MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
+        unimplemented!()
+    }
+
     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
         unimplemented!()
     }

@@ -83,6 +83,7 @@ pub trait CudaActorHandle: Debug + Send + Sync {
         Ok(())
     }
 
+    //TODO remove from train
     async fn install_endpoint_bytes(&self, init_msg: Vec<u8>)-> Result<(), ThoError> {
         self.install_endpoint(String::from_utf8(init_msg).map_err(|e| ThoError::new(format!("endpoint init payload is not utf8: {e}")))?).await
     }
@@ -134,6 +135,7 @@ impl dyn CudaActorHandle + '_ {
     }
 
 
+    /// invoked from oom_executor, dump_to_cpu can't happen between pre_run, borrow_to and do_run  awaits
     pub async fn run_stage<S, W>(
         &self,
         stage: Arc<S>,
@@ -149,13 +151,23 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
 
+        let state = stage.pre_run().await?;
+
         let borrowed = BorrowRef::borrow_to(&input, to_device_idx).await?;
 
         let mut handle_ctx = self.init_handle_ctx().await?;
 
         let sync_ctx = handle_ctx.sync_ctx()?;
 
-        let out = stage.do_run(borrowed.borrow(), ctx);
+        let out =  match state {
+            None => {
+                Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
+            }
+            Some(state) => {
+                Arc::clone(&stage).do_run_with_state::<S::S>(borrowed.borrow(), state, ctx)
+            }
+        };
+
 
         handle_ctx.on_after_run()?;
 
@@ -178,6 +190,8 @@ impl dyn CudaActorHandle + '_ {
         for<'a> <W as BorrowRef>::Out<'a>: Borrow<S::In<'a>>,
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
+
+        stage.pre_run().await?;
 
         let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
 

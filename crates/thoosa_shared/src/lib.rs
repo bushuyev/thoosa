@@ -3055,6 +3055,12 @@ pub trait CopyToDevice {
 }
 
 
+#[async_trait]//TODO it doesn't need to be dyn compatible, remove async_trait and change dst_device form usize to D:Into<ThoDevice> ?
+#[delegatable_trait]
+#[automock]
+pub trait MoveToDevice {
+    async fn move_to_device(&mut self, tho_dst_device: usize) -> Result<(), ThoError> where Self:Sized;
+}
 
 #[macro_export]
 macro_rules! panic_to_err_async {

@@ -2057,6 +2057,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
+        debug!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?}");
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
         match &dst_device.into() {
             Cpu => {
@@ -2064,7 +2065,7 @@ impl CudaActorHandle for CudaIPCActorHandle {
                 assert!(src.is_ref(), "In IPC mode, src must be a reference when copying to CPU.")
             }
             Cuda(_)=>{
-                assert_ne!(src.tho_device(), Cpu.into(), "src device shoul be CPU when copying to GPU");
+                assert_eq!(src.tho_device(), Cpu.into(), "src device should be CPU when copying to GPU");
                 assert!(!src.is_ref(), "IPC mode, src must be value when copying to GPU")
             }
             _ => {
