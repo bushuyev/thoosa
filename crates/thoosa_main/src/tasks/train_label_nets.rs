@@ -176,6 +176,7 @@ impl Output for SyncLabelBatchOutput {}
 impl WorkerStageOutput for SyncLabelBatchOutput {
     fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
         let Self { id, x, lengths, y } = self;
+        //TODO fix encode/decode/encode
         let x = C::decode::<ThoTensor<Batch<MotifProbability>, SynKey>>(&<ThoTensor<Batch<MotifProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(x, all_cuda_tensors, tho_device)?)?;
         let y = C::decode::<ThoTensor<Batch<LabelProbability>, SynKey>>(&<ThoTensor<Batch<LabelProbability>, SynKey> as WorkerStageOutput>::encode_from_worker::<C>(y, all_cuda_tensors, tho_device)?)?;
         C::encode(&Self { id, x, lengths, y })

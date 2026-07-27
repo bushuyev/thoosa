@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
 use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
-use tch::Tensor;
+use tch::{Device, Tensor};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::process::{Child, Command};
@@ -1071,6 +1071,7 @@ impl CudaIPCActor {
                     assert_eq!(*dst_device, Cpu, "If source is tensor ref and thus live on device it can be copied only to CPU");
                      self.handle_ref_d2h_copy(tensor_key, dst_device, respond_to).await
                 } else {
+                    debug!("handle_message: src={src:?} dst_device={dst_device:?}");
                     assert_ne!(*dst_device, Cpu, "If source is concrete tensor it should be on CPU and can be copied only to GPU");
 
                     self.handle_h2d_copy(src, dst_device, respond_to)
@@ -2057,6 +2058,19 @@ impl CudaActorHandle for CudaIPCActorHandle {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="CudaIPCActorHandle::copy"))]
     async fn copy(&self, src:ThoTensor, dst_device:ThoDevice) -> Result<ThoTensor, ThoError> {
         assert_ne!(src.tho_device(), dst_device, "should not copy to same device");
+        match &dst_device.into() {
+            Cpu => {
+                assert_ne!(src.tho_device(), Cpu.into(), "src device should not be CPU when copying to CPU");
+                assert!(src.is_ref(), "In IPC mode, src must be a reference when copying to CPU.")
+            }
+            Cuda(_)=>{
+                assert_ne!(src.tho_device(), Cpu.into(), "src device shoul be CPU when copying to GPU");
+                assert!(!src.is_ref(), "IPC mode, src must be value when copying to GPU")
+            }
+            _ => {
+                panic!("not supported")
+            }
+        }
 
         trace!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?} backtrace={}", Backtrace::capture().to_string());
         debug!("CudaIPCActorHandle::copy: src={src:?} dst_device={dst_device:?}");
