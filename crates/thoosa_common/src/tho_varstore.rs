@@ -1,4 +1,5 @@
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -8,11 +9,14 @@ use tch::Device::{Cpu, Cuda};
 use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
 use tokio::task::JoinSet;
 use thoosa_shared::{CopyToDevice, ThoError};
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
 use thoosa_shims::optimizers::{restore_adam_snapshot, AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot};
 use crate::dims::{Batch, Dims};
 use crate::my_tch::ThoModule;
+use crate::runner::common::RunCtx;
+use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::{ThoTensor, ThoTensorInner};
@@ -24,6 +28,16 @@ where
 {
     optimizer_builder: Box<dyn Fn(&VarStore) -> Result<Optimizer, ThoError> + Send + Sync>,
     net: Box<dyn Fn(&VarStore) -> Result<Box<dyn ThoModule<Batch<DI>, Batch<DO>>>, ThoError> + Send + Sync>,
+}
+
+impl <DI, DO> Debug for ModConfig<DI, DO>
+where
+    DI: Dims, DO: Dims
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModConfig")
+            .finish()
+    }
 }
 
 impl<DI, DO> ModConfig<DI, DO>
@@ -69,10 +83,6 @@ impl <DI, DO> ThoTrainModule<DI, DO>
 where
     DI: Dims, DO: Dims
 {
-    pub fn new(config: ModConfig<DI, DO>) -> Result<Self, ThoError> {
-        Self::new_on_device(config, Cuda(0).into())
-    }
-
     pub fn new_on_device(config: ModConfig<DI, DO>, device: ThoDevice) -> Result<Self, ThoError> {
         let (module, var_store) = Self::init_opt(&config.net, device)?;
         let opt = (config.optimizer_builder)(&var_store)?;
@@ -198,8 +208,8 @@ where
             let (module, mut cuda_vs ) = Self::init_opt(&self.config.net, tho_dst_device.into())?;
 
 
-            let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, Cuda(0).into()).await?;
-            let restored_vs = clone_var_store_to(&cpu_var_store, Cuda(0).into()).await?;
+            let cuda_snapshot = clone_owned_adam_snapshot_to(cpu_snap, tho_dst_device.into()).await?;
+            let restored_vs = clone_var_store_to(&cpu_var_store, tho_dst_device.into()).await?;
             replace_data(&mut cuda_vs, restored_vs)?;
 
             /*
@@ -503,6 +513,87 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> 
     Ok(())
 }
 
+
+#[derive(Debug)]
+struct ThoTrainModuleKeeper<C, DI, DO>
+where
+    C: RunCtx,
+    DI: Dims + 'static, DO: Dims + 'static
+{
+
+    pd:PhantomData<(C, DI, DO)>
+}
+
+#[derive(Debug)]
+struct ThoTrainModuleKeeperInput<DI, DO>
+where
+    DI: Dims + 'static, DO: Dims + 'static
+{
+    mod_config:ModConfig<DI, DO>
+}
+impl <DI, DO> Input for ThoTrainModuleKeeperInput<DI, DO>
+where
+    DI: Dims + 'static, DO: Dims + 'static
+{}
+
+
+#[derive(Debug)]
+struct ThoTrainModuleKeeperOutput {
+
+}
+impl Output for ThoTrainModuleKeeperOutput {}
+
+impl <C, DI, DO> Stage for ThoTrainModuleKeeper<C, DI, DO>
+where
+    C: RunCtx + 'static,
+    DI: Dims + 'static, DO: Dims + 'static
+{
+    type Ctx = C;
+    type In<'a> = ThoTrainModuleKeeperInput<DI, DO>;
+    type Out = ThoTrainModuleKeeperOutput;
+}
+
+impl <C, DI, DO> AsyncStage for ThoTrainModuleKeeper<C, DI, DO>
+where
+    C: RunCtx + 'static,
+    DI: Dims + 'static, DO: Dims + 'static
+{
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ThoTrainModuleKeeper::run"))]
+    async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
+        todo!()
+    }
+}
+
+#[derive(Debug)]
+struct  SyncThoTrainModuleKeeper<C, DI, DO>
+where
+    C: RunCtx + 'static,
+    DI: Dims + 'static, DO: Dims + 'static
+{
+    pd:PhantomData<(C, DI, DO)>
+}
+
+impl <C, DI, DO> Stage for SyncThoTrainModuleKeeper<C, DI, DO>
+where
+    C: RunCtx + 'static,
+    DI: Dims + 'static, DO: Dims + 'static
+{
+    type Ctx = C;
+    type In<'a> = ThoTrainModuleKeeperInput<DI, DO>;
+    type Out = ThoTrainModuleKeeperOutput;
+}
+
+impl <C, DI, DO> SyncStage for SyncThoTrainModuleKeeper<C, DI, DO>
+where
+    C: RunCtx + 'static,
+    DI: Dims + 'static, DO: Dims + 'static
+{
+    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        todo!()
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -520,6 +611,10 @@ mod tests {
     use thoosa_shims::optimizers::*;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{AnyDims, Batch};
+    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::json_ser::SyncStageIpcWrapper;
+    use crate::ipc::tests::run_ipc_test;
+    use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
 
     fn create_variables(vs: &VarStore) {
@@ -542,7 +637,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_0() -> Result<(), ThoError> {
+    async fn test_clone_var_store_to() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
@@ -574,11 +669,38 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_reset_adam_ipc() -> Result<(), ThoError> {
+        run_ipc_test(async {
+            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+            let test_name = format!("{module}::test_reset_adam_ipc");
+            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+            do_test_reset_adam().await?;
+
+            Ok(())
+        }, async |sock_path| {
+            CudaWorker::run_worker(
+                sock_path,
+                HashMap::new(),
+                ThoDevice::from(Cuda(0)),
+            ).await
+        })
+
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_reset_adam() -> Result<(), ThoError> {
+    async fn test_reset_adam_local() -> Result<(), ThoError> {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
+
+        do_test_reset_adam().await
+    }
+
+    async fn do_test_reset_adam() -> Result<(), ThoError>{
         const IMAGE_DIM: i64 = 128;
         const TEACHER_HIDDEN: i64 = 64;
         const HIDDEN_NODES: i64 = 128;
@@ -652,7 +774,7 @@ mod tests {
 
             let mut losses = Vec::with_capacity(EPOCHS as usize);
 
-            let mut tho_train_mod = ThoTrainModule::new(ModConfig::new(
+            let mut tho_train_mod = ThoTrainModule::new_on_device(ModConfig::new(
                 nn::Adam {
                     beta1: 0.99,
                     beta2: 0.9999,
@@ -664,7 +786,7 @@ mod tests {
                  */
                 |vs| test_net()?.build_tch_module::<Batch<AnyDims>, Batch<AnyDims>>(&vs.root()),
                 LEARNING_RATE,
-            ))?;
+            ), Cuda(0).into())?;
 
             for epoch in 1..=EPOCHS {
 

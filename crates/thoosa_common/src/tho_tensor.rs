@@ -411,6 +411,15 @@ impl<D: Dims, Id: Named + Debug + Clone> ThoTensor<D, Id> {
             ThoTensorInner::Ref { selector, .. } => selector.as_ref().map(|v| v.clone_box()),
         }
     }
+
+
+    ///for asserts only
+    pub(crate) fn is_ref(&self) ->bool {
+        match &self.inner {
+            ThoTensorInner::Val { .. } => false,
+            ThoTensorInner::Ref { .. } => true
+        }
+    }
 }
 
 impl From<ThoTensor> for Tensor {
