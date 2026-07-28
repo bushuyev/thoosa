@@ -831,6 +831,10 @@ pub enum CudaIPCActorMessage {
         output: std::fs::File,
         respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
     },
+    // TODO
+    // PurgeEndpoint {
+    //     input: String, respond_to: oneshot::Sender<Result<String, ThoError>>
+    // },
 }
 
 struct OutgoingRequest {
