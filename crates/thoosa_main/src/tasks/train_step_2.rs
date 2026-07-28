@@ -37,7 +37,7 @@ use thoosa_shared::{mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_l
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
-
+use crate::tasks::train_step_2::tests::TRAIN_TEST_STEP2_ENDPOINT;
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
@@ -479,11 +479,18 @@ where
             TrainStep2DynSyncStage::Local(local) => {
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
-            TrainStep2DynSyncStage::Proxy {  .. } => {
+            TrainStep2DynSyncStage::Proxy { stage,  .. } => {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async move {
+                        thoosa_common::ipc::codec::purge_ipc_sync_stage::<thoosa_common::ipc::codec::JsonIpcCodec>(
+                            GlobalCtx::global().cuda_actor(device_idx).as_ref(),
+                            TRAIN_TEST_STEP2_ENDPOINT,
+                        ).await
+                    })
+                })?;
                 Ok(())
             }
         }
-
     }
 
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
@@ -930,16 +937,14 @@ mod tests {
                     Ok(JsonIpcCodec::encode(&Arc::clone(&stage).do_run_with_state::<ThoTrainModule<InDimsX, OutDimsX>>(&input, state.unwrap(), &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
                 })
             })
-
         }
 
-        // fn do_run_with_state(&self, input: Vec<u8>, all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: ThoDevice) -> BoxFuture<Result<SyncStageIpcResponse, ThoError>>{
-        //     async {
-        //         let arc = Arc::clone(&self.stage.base);
-        //         let state = arc.pre_run().await?;
-        //         todo!()
-        //     }.boxed()
-        // }
+        fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+        where
+            Self: Sync
+        {
+            self.stage.base.drop_gpu(tho_device.into(), "zzz")
+        }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
