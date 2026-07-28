@@ -31,6 +31,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayloa
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::common::runnable::SyncStage;
+use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 
@@ -121,6 +122,7 @@ impl CudaWorker {
         endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
+        GlobalCtx::init_devices(2);
 
         let with_digest = false;//TODO config
 
@@ -474,7 +476,7 @@ impl CudaWorker {
 
             if let Some(input) = payload.strip_prefix(PURGE_ENDPOINT_PREFIX) {
                 let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
-                debug!("run_worker: purge endpointr: endpoint_name={endpoint_name} input={input:?}");
+                debug!("run_worker: purge endpoint: endpoint_name={endpoint_name} input={input:?}");
                 match installed_endpoints.read().get(endpoint_name) {
                     Some(endpoint) => {
                         endpoint.purge(1.into()).await?;//TODO device

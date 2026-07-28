@@ -194,7 +194,9 @@ where
     debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name}");
 
 
-    let response = actor.purge_endpoint_bytes().await?;
+    let response = actor.purge_endpoint_bytes(
+        encode_endpoint_payload_bytes(endpoint_name, b"purge")
+    ).await?;
 
     debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}");
 

@@ -171,6 +171,7 @@ where
     where
         Self:Sized
     {
+        debug!("ThoTrainModule::move_to_device: tho_dst_device={tho_dst_device}");
         if tho_dst_device == 0 {
             /*
              * Finish reading the non-Sync Optimizer before awaiting tensor
@@ -310,6 +311,7 @@ async fn clone_owned_adam_snapshot_to(
     src: AdamOptimizerSnapshot,
     tho_device: ThoDevice,
 ) -> Result<AdamOptimizerSnapshot, ThoError> {
+    debug!("clone_owned_adam_snapshot_to: src={src:?} tho_device={tho_device:?}");
     let actor_device_idx = 1; //TODO add device to AdamOptimizerSnapshot?
 
     let mut dst_groups = vec![];
