@@ -21,6 +21,8 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 use std::time::{Instant, SystemTime};
 use tch::Kind::Float;
 use tch::nn::{Optimizer, VarStore};
@@ -234,7 +236,9 @@ where
                 &run_config,
             )).await?;
             let train_step = Arc::new(train_step);
-            GlobalCtx::global().register_cache(("train_step", Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>));
+            static STEP_COUNT:AtomicU32 = AtomicU32::new(0);//TODO
+            let step_id = format!("train_step_{}", STEP_COUNT.fetch_add(1, Relaxed)).leak();
+            GlobalCtx::global().register_cache((step_id, Arc::clone(&train_step) as Arc<dyn FuturesRunnerMapPurger>));
 
             let dump_to_cpu_exclude: HashMap<&'static str, &HashSet<&dyn CachableIdTr>> = HashMap::new();
             let out_id = Arc::new(()) as Arc<dyn CachableIdTr>;
@@ -368,6 +372,7 @@ where
 
                 collect_eta_record_completion(epochs_eta_guard.id());
             }
+            GlobalCtx::global().remove_cache(step_id);
             if saved_best {
                 // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO
                 // vs_guard.load(&best_checkpoint_path)?;
