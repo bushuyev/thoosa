@@ -57,7 +57,7 @@ impl SyncStageIpcConsumeResponse {
     }
 }
 
-pub trait SyncStageIpcWrapper:Debug {
+pub trait SyncStageIpcWrapper:Sync + Debug {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run"))]
     fn do_run(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError> {
         Err(ThoError::new("IPC endpoint does not support do_run"))
@@ -73,8 +73,7 @@ pub trait SyncStageIpcWrapper:Debug {
         Err(ThoError::new("IPC endpoint does not support consume"))
     }
 
-    fn purge(&self, input: Vec<u8>, all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
-    where Self: Sync
+    fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
     {
         async move {
             Ok(())

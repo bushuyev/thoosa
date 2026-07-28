@@ -174,8 +174,6 @@ where
     let input = C::encode(input)?;
     let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
 
-
-
     let response = actor.invoke_endpoint_bytes(
         encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
     ).await?;
@@ -184,6 +182,23 @@ where
     debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} response={r:?}");
 
     r
+}
+
+pub async fn purge_ipc_sync_stage<C>(
+    actor: &dyn CudaActorHandle,
+    endpoint_name: &str,
+) -> Result<(), ThoError>
+where
+    C: IpcCodec,
+{
+    debug!("purge_ipc_sync_stage: endpoint_name={endpoint_name}");
+
+
+    let response = actor.purge_endpoint_bytes().await?;
+
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}");
+
+    Ok(())
 }
 
 pub async fn consume_ipc_sync_stage<C, I, O>(
