@@ -2562,6 +2562,7 @@ mod train_tests {
     use rand_distr::{Distribution, Normal};
     use thoosa_shared::test_utils::MotifKind;
     use thoosa_shims::inference_mode::InferenceModeGuard;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tch_test_utils::motifs_tensor;
     use crate::train_nets::LabelNetTypeParams::LinNetParams;
 
@@ -2680,6 +2681,9 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_conv_label_node() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         _test_save_load_conv_label_node(
             3, 19, &[2000, 12030, 17000], 11i64,
             ConvNetParams::new(3, 64, 10, 10, 256, ConvNetJoint::MinMax)
@@ -2695,6 +2699,9 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_conv_label_node_1() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         _test_save_load_conv_label_node(
             360, 1541, &[1541], 101i64,
             ConvNetParams::new(7, 64, 100, 10, 256, ConvNetJoint::MinMax)
@@ -2710,6 +2717,9 @@ mod train_tests {
 
     #[tokio::test]
     async fn test_save_load_self_attention_label_node() -> Result<(), ThoError> {
+        crate::runner::global_ctx::GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         _test_save_load_self_attention_label_node(
             19,
             &[128, 256, 384],
@@ -3252,7 +3262,11 @@ mod train_tests {
                             motif_nets as i64,
                             *slices as i64,
                         ],
-                        FLOAT_CUDA,
+                        if half {
+                            (Half, Cuda(0))
+                        } else {
+                            FLOAT_CUDA
+                        }
                     ).into(),
                     Some(&mut lengths),
                     false,
