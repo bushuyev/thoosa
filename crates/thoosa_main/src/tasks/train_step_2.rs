@@ -37,7 +37,10 @@ use thoosa_shared::{mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_l
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
-use crate::tasks::train_step_2::tests::TRAIN_TEST_STEP2_ENDPOINT;
+
+// The proxy purge path and the test worker registration must use the same
+// endpoint name in both normal and cfg(test) builds.
+pub(crate) const TRAIN_TEST_STEP2_ENDPOINT: &str = "TrainTestStep2";
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
@@ -743,7 +746,7 @@ mod tests {
     use thoosa_shared::traits::{MonoMetrics, SimpleId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
-    use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2WeightsSync, TrainStep2XFn};
+    use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2WeightsSync, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT};
     use futures_util::FutureExt;
 
 
@@ -907,8 +910,6 @@ mod tests {
     }
 
 
-    pub(crate) const TRAIN_TEST_STEP2_ENDPOINT: &str = "TrainTestStep2";
-
     #[derive(Debug, Serialize, Deserialize)]
     struct TrainTestStep2Init {
 
@@ -943,7 +944,8 @@ mod tests {
         where
             Self: Sync
         {
-            self.stage.base.drop_gpu(tho_device.into(), "zzz")
+            // Purge uses the application's CPU-first device index, not tch::Device.
+            self.stage.base.drop_gpu(tho_device.tho_device_idx(), "zzz")
         }
     }
 

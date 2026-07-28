@@ -108,7 +108,9 @@ pub fn encode_json_sync_stage_run_input(input: String, ctx: &RunCtxImpl) -> Resu
 impl<C, S, I, O> SyncStageIpcWrapper for IpcSyncStageWrapper<C, S, I, O>
 where
     C: IpcCodec,
-    S: SyncStage + Debug + 'static,
+    // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+    // must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
@@ -159,7 +161,7 @@ where
 pub fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
 where
     C: IpcCodec,
-    S: SyncStage + Debug + 'static,
+    S: SyncStage + Debug + Send + Sync + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
@@ -169,7 +171,7 @@ where
 
 pub fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
 where
-    S: SyncStage + Debug + 'static,
+    S: SyncStage + Debug + Send + Sync + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
