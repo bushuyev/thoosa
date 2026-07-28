@@ -201,7 +201,7 @@ mod tests {
     use crate::ipc::tests::init_ipc_test;
     use crate::torch_runner::tests::load_and_clc::clc::{ClcStage, ClcStageOutput};
     use crate::torch_runner::tests::load_and_clc::{mul_check, mul_check_with_exp_f, sync_clc_endpoint_init, sync_test_tensor_loader_endpoint_init, LoadAndClcStage, LoadAndClcStageId, SYNC_CLC_ENDPOINT, SYNC_TEST_TENSOR_LOADER_ENDPOINT};
-    use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
+    use crate::torch_runner::tests::load_and_clc::loader::{LoadedTensor, SyncTestTensorLoader};
     use crate::torch_runner::tests::model_test::{run_model_test_pipeline, sync_model_test_endpoint_inits};
     use crate::torch_runner::tests::model_test::common::ModelTestId;
 

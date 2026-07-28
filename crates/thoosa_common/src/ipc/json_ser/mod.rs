@@ -104,12 +104,20 @@ where
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
 {
-    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(_input) {
+    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        debug!("IpcSyncStageWrapper::do_run: input.len={}", input.len());
+
+        let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(input) {
             Ok(input) => input.into_parts(),
-            Err(_) => (_input.to_vec(), None),
+            Err(e) => {
+                debug!("IpcSyncStageWrapper::do_run: e={e:?}");
+
+                (input.to_vec(), None)
+            },
         };
         let input = I::decode_for_worker::<C>(&input, all_cuda_tensors)?;
+        debug!("IpcSyncStageWrapper::do_run: input={input:?}");
+
         let mut ctx = RunCtxImpl::new(1, self.endpoint_name);
         if let Some(max_other_parallel) = max_other_parallel {
             ctx.set_max_other_parallel(max_other_parallel);

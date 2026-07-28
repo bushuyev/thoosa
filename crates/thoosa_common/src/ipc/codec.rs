@@ -172,7 +172,7 @@ where
     debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}  input={input:?}");
 
     let input = C::encode(input)?;
-    // let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
+    let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
 
 
 
