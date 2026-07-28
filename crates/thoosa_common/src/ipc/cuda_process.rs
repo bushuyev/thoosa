@@ -409,12 +409,12 @@ where
 {
     while let Some(reply) = reply_rx.recv().await {
         let write_result = match reply.payload {
-            OutgoingRequestPayload::BinaryStream { chunks, completed } => {
-                let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
-                let completion = result.as_ref().map(|_| ()).map_err(|error| ThoError::new(error.to_string()));
-                let _ = completed.send(completion);
-                result
-            }
+            // OutgoingRequestPayload::BinaryStream { chunks, completed } => {
+            //     let result = write_binary_stream_response(&mut writer, reply.id, chunks).await;
+            //     let completion = result.as_ref().map(|_| ()).map_err(|error| ThoError::new(error.to_string()));
+            //     let _ = completed.send(completion);
+            //     result
+            // }
             payload => {
                 let frame = encode_wire_frame(reply.id, &payload)?;
                 write_frame(&mut writer, &frame, "worker").await
@@ -840,10 +840,10 @@ struct OutgoingRequest {
 
 pub enum OutgoingRequestPayload {
     Msg(String),//action:data
-    BinaryStream {
-        chunks: mpsc::Receiver<Result<Vec<u8>, ThoError>>,
-        completed: oneshot::Sender<Result<(), ThoError>>,
-    },
+    // BinaryStream {
+    //     chunks: mpsc::Receiver<Result<Vec<u8>, ThoError>>,
+    //     completed: oneshot::Sender<Result<(), ThoError>>,
+    // },
     SharedMemfdBuffer{
         meta: IpcTensorTransferMetadata,
         fd:OwnedFd,
@@ -853,15 +853,15 @@ pub enum OutgoingRequestPayload {
 #[derive(Debug)]
 enum IncomingResponsePayload {
     Msg(String),
-    BinaryChunk(Vec<u8>),
-    BinaryEnd,
+    // BinaryChunk(Vec<u8>),
+    // BinaryEnd,
 }
 
 impl IncomingResponsePayload {
     fn into_msg(self) -> Result<String, ThoError> {
         match self {
             Self::Msg(response) => Ok(response),
-            Self::BinaryChunk(_) | Self::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
+            // Self::BinaryChunk(_) | Self::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
         }
     }
 }
@@ -1713,27 +1713,27 @@ async fn reader_loop<R>(
             }
             Some(PendingResponse::File { mut output, respond_to, mut error }) => {
                 match payload {
-                    IncomingResponsePayload::BinaryChunk(chunk) => {
-                        if error.is_none()
-                            && let Err(write_error) = output.write_all(&chunk).await
-                        {
-                            error = Some(ThoError::from(write_error));
-                        }
-                        let mut pending = pending.lock().await;
-                        let old = pending.insert(id, PendingResponse::File { output, respond_to, error });
-                        debug_assert!(old.is_none());
-                    }
-                    IncomingResponsePayload::BinaryEnd => {
-                        let result = async {
-                            if let Some(error) = error {
-                                return Err(error);
-                            }
-                            output.flush().await?;
-                            output.seek(std::io::SeekFrom::Start(0)).await?;
-                            Ok(output.into_std().await)
-                        }.await;
-                        let _ = respond_to.send(result);
-                    }
+                    // IncomingResponsePayload::BinaryChunk(chunk) => {
+                    //     if error.is_none()
+                    //         && let Err(write_error) = output.write_all(&chunk).await
+                    //     {
+                    //         error = Some(ThoError::from(write_error));
+                    //     }
+                    //     let mut pending = pending.lock().await;
+                    //     let old = pending.insert(id, PendingResponse::File { output, respond_to, error });
+                    //     debug_assert!(old.is_none());
+                    // }
+                    // IncomingResponsePayload::BinaryEnd => {
+                    //     let result = async {
+                    //         if let Some(error) = error {
+                    //             return Err(error);
+                    //         }
+                    //         output.flush().await?;
+                    //         output.seek(std::io::SeekFrom::Start(0)).await?;
+                    //         Ok(output.into_std().await)
+                    //     }.await;
+                    //     let _ = respond_to.send(result);
+                    // }
                     IncomingResponsePayload::Msg(response) => {
                         let error = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX)
                             .map(parse_worker_copy_error_payload)
@@ -1777,15 +1777,15 @@ fn parse_wire_response(frame: Vec<u8>) -> Result<(u64, IncomingResponsePayload),
 
     let payload = &frame[separator + 1..];
 
-    if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_CHUNK_PREFIX) {
-        Ok((id, IncomingResponsePayload::BinaryChunk(payload.to_vec())))
-    } else if payload == BINARY_RESPONSE_END_PAYLOAD {
-        Ok((id, IncomingResponsePayload::BinaryEnd))
-    } else {
+    // if let Some(payload) = payload.strip_prefix(BINARY_RESPONSE_CHUNK_PREFIX) {
+    //     Ok((id, IncomingResponsePayload::BinaryChunk(payload.to_vec())))
+    // } else if payload == BINARY_RESPONSE_END_PAYLOAD {
+    //     Ok((id, IncomingResponsePayload::BinaryEnd))
+    // } else {
         let payload = String::from_utf8(payload.to_vec())
             .map_err(|e| ThoError::new(format!("received non-utf8 message response: {e}")))?;
         Ok((id, IncomingResponsePayload::Msg(payload)))
-    }
+    // }
 }
 
 
@@ -1867,7 +1867,7 @@ async fn send_request_and_wait(
 ) -> Result<String, ThoError> {
     match send_request_and_wait_payload(tx, pending, request).await? {
         IncomingResponsePayload::Msg(response) => Ok(response),
-        IncomingResponsePayload::BinaryChunk(_) | IncomingResponsePayload::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
+        // IncomingResponsePayload::BinaryChunk(_) | IncomingResponsePayload::BinaryEnd => Err(ThoError::new("unexpected streaming worker response")),
     }
 }
 
@@ -1950,7 +1950,7 @@ fn encode_wire_frame(id: u64, payload: &OutgoingRequestPayload) -> Result<Vec<u8
     let mut frame = format!("{id}\t").into_bytes();
     match payload {
         OutgoingRequestPayload::Msg(msg) => frame.extend_from_slice(msg.as_bytes()),
-        OutgoingRequestPayload::BinaryStream { .. } => return Err(ThoError::new("binary stream payload must be written by worker_response_writer_loop")),
+        // OutgoingRequestPayload::BinaryStream { .. } => return Err(ThoError::new("binary stream payload must be written by worker_response_writer_loop")),
         OutgoingRequestPayload::SharedMemfdBuffer{ meta, .. } => {
             let metadata_json = serde_json::to_string(meta)
                 .map_err(|e| ThoError::new(format!("failed to encode shared memfd metadata: {e}")))?;

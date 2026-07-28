@@ -1126,12 +1126,12 @@ impl SyncStageIpcWrapper for TrainLabelStepIpcWrapper {
     }
 
     fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
-        if matches!(JsonIpcCodec::decode::<TrainStepIpcRequest>(input)?, TrainStepIpcRequest::ExportWeights) {
-            let stage = self.stage.stage()?;
-            Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
-        } else {
+        // if matches!(JsonIpcCodec::decode::<TrainStepIpcRequest>(input)?, TrainStepIpcRequest::ExportWeights) {
+        //     let stage = self.stage.stage()?;
+        //     Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
+        // } else {
             self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
-        }
+        // }
     }
 }
 

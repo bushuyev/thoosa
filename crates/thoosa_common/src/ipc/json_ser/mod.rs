@@ -40,7 +40,7 @@ impl SyncStageIpcStreamResponse {
 #[derive(Debug)]
 pub enum SyncStageIpcResponse {
     Encoded(Vec<u8>),
-    Stream(SyncStageIpcStreamResponse),
+    // Stream(SyncStageIpcStreamResponse),
 }
 
 #[derive(Debug)]
