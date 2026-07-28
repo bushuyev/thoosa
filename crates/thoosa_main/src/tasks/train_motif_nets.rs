@@ -268,12 +268,12 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
     }
 
     fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
-        if matches!(JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)?, TrainMotifStepIpcRequest::ExportWeights) {
-            let stage = self.stage.stage(all_cuda_tensors)?;
-            Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
-        } else {
+        // if matches!(JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)?, TrainMotifStepIpcRequest::ExportWeights) {
+        //     let stage = self.stage.stage(all_cuda_tensors)?;
+        //     Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
+        // } else {
             self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
-        }
+        // }
     }
 }
 

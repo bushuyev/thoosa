@@ -387,7 +387,7 @@ impl CudaWorker {
                             } else if let Ok(response) = &r {
                                 let (response_is_binary, response_len) = match &response.0 {
                                     SyncStageIpcResponse::Encoded(response) => (false, response.len()),
-                                    SyncStageIpcResponse::Stream(_) => (true, 0),
+                                    // SyncStageIpcResponse::Stream(_) => (true, 0),
                                 };
                                 debug!("run_worker: invoke endpoint endpoint_name={endpoint_name:?} consume={consume} response_is_binary={response_is_binary} response_len={response_len}");
                             }
@@ -405,45 +405,45 @@ impl CudaWorker {
                         }
                         OutgoingRequestPayload::Msg(cuda_process::encode_endpoint_response_bytes(&response))
                     }
-                    Ok((SyncStageIpcResponse::Stream(response), consumed_tensor_keys)) => {
-                        let (chunks_tx, chunks_rx) = mpsc::channel(2);
-                        let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
-                        reply_tx.send(WorkerReply { id, payload: OutgoingRequestPayload::BinaryStream { chunks: chunks_rx, completed: completed_tx } }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
-
-                        let stream = exec_stream_pool.acquire().await;
-                        let producer_tx = chunks_tx.clone();
-                        let serialization_result = tokio::task::spawn_blocking(move || {
-                            let mut output = IpcChunkWriter::new(producer_tx);
-                            panic_to_err!({
-
-                                let _guard = ThoStreamGuard::new(&stream)?;
-                                let response_result = response.write_to(&mut output);
-                                let sync_result = stream.synchronize();
-
-                                match (response_result, sync_result) {
-                                    (Ok(()), Ok(())) => Ok(()),
-                                    (Err(error), Ok(())) => Err(error),
-                                    (Ok(()), Err(error)) => Err(error),
-                                    (Err(error), Err(sync_error)) if sync_error.is_oom() || sync_error.needs_cuda_ctx_reset() => Err(sync_error),
-                                    (Err(error), Err(_)) => Err(error),
-                                }
-                            })
-                        }).await.unwrap_or_else(|error| Err(ThoError::new(format!("worker binary response serializer task failed: {error}"))));
-
-                        let serialization_succeeded = serialization_result.is_ok();
-                        if let Err(error) = serialization_result {
-                            let _ = chunks_tx.send(Err(error)).await;
-                        }
-                        drop(chunks_tx);
-                        completed_rx.await.map_err(|_| ThoError::new("worker binary response completion channel was dropped"))??;
-                        if serialization_succeeded {
-                            let mut tensors = all_cuda_tensors.lock();
-                            for key in consumed_tensor_keys {
-                                tensors.remove(&key);
-                            }
-                        }
-                        continue;
-                    }
+                    // Ok((SyncStageIpcResponse::Stream(response), consumed_tensor_keys)) => {
+                    //     let (chunks_tx, chunks_rx) = mpsc::channel(2);
+                    //     let (completed_tx, completed_rx) = tokio::sync::oneshot::channel();
+                    //     reply_tx.send(WorkerReply { id, payload: OutgoingRequestPayload::BinaryStream { chunks: chunks_rx, completed: completed_tx } }).await.map_err(|_| ThoError::new("worker response writer is closed"))?;
+                    //
+                    //     let stream = exec_stream_pool.acquire().await;
+                    //     let producer_tx = chunks_tx.clone();
+                    //     let serialization_result = tokio::task::spawn_blocking(move || {
+                    //         let mut output = IpcChunkWriter::new(producer_tx);
+                    //         panic_to_err!({
+                    //
+                    //             let _guard = ThoStreamGuard::new(&stream)?;
+                    //             let response_result = response.write_to(&mut output);
+                    //             let sync_result = stream.synchronize();
+                    //
+                    //             match (response_result, sync_result) {
+                    //                 (Ok(()), Ok(())) => Ok(()),
+                    //                 (Err(error), Ok(())) => Err(error),
+                    //                 (Ok(()), Err(error)) => Err(error),
+                    //                 (Err(error), Err(sync_error)) if sync_error.is_oom() || sync_error.needs_cuda_ctx_reset() => Err(sync_error),
+                    //                 (Err(error), Err(_)) => Err(error),
+                    //             }
+                    //         })
+                    //     }).await.unwrap_or_else(|error| Err(ThoError::new(format!("worker binary response serializer task failed: {error}"))));
+                    //
+                    //     let serialization_succeeded = serialization_result.is_ok();
+                    //     if let Err(error) = serialization_result {
+                    //         let _ = chunks_tx.send(Err(error)).await;
+                    //     }
+                    //     drop(chunks_tx);
+                    //     completed_rx.await.map_err(|_| ThoError::new("worker binary response completion channel was dropped"))??;
+                    //     if serialization_succeeded {
+                    //         let mut tensors = all_cuda_tensors.lock();
+                    //         for key in consumed_tensor_keys {
+                    //             tensors.remove(&key);
+                    //         }
+                    //     }
+                    //     continue;
+                    // }
                     Err(error) => OutgoingRequestPayload::Msg(cuda_process::encode_worker_copy_error(&error)),
                 };
                 reply_tx
