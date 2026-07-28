@@ -131,9 +131,12 @@ void validate_adam_state_tensor(
 
 extern "C" ulong tho_adam_group_count(torch::optim::Optimizer* opt) {
 
-    tho_log(CppLogLevel::Debug, "tho_adam_group_count x");
+    tho_log(CppLogLevel::Debug, "tho_adam_group_count");
 
     auto& adam = checked_adam(opt);
+
+    tho_log(CppLogLevel::Debug, "tho_adam_group_count checked_adam ok");
+
     return adam.param_groups().size();
 
 

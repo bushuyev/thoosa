@@ -30,6 +30,7 @@ use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::task::{JoinHandle, spawn_blocking};
 use tokio_util::sync::CancellationToken;
+use tracing::field::debug;
 use tracing::Instrument;
 use tub::{Guard, Pool};
 use thoosa_shared::comp_id::SynKey;
@@ -833,6 +834,7 @@ pub enum CudaIPCActorMessage {
         respond_to: oneshot::Sender<Result<std::fs::File, ThoError>>,
     },
     PurgeEndpoint {
+        input: String,
         respond_to: oneshot::Sender<Result<(), ThoError>>
     },
 }
@@ -1265,7 +1267,8 @@ impl CudaIPCActor {
                 }
             }
 
-            CudaIPCActorMessage::PurgeEndpoint { respond_to } => {
+            CudaIPCActorMessage::PurgeEndpoint { input, respond_to } => {
+                debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: input={}", &input);
                 let self_tx = self.spawned_state.tx.clone();
                 let next_id = self.next_id.fetch_add(1, Ordering::Relaxed);
                 let pending = Arc::clone(&self.spawned_state.pending);
@@ -1277,7 +1280,7 @@ impl CudaIPCActor {
                         pending,
                         OutgoingRequest {
                             id: next_id,
-                            payload: OutgoingRequestPayload::Msg(format!("{PURGE_ENDPOINT_PREFIX}purge")),
+                            payload: OutgoingRequestPayload::Msg(format!("{PURGE_ENDPOINT_PREFIX}{input}")),
                         },
                     ).await.and_then(|response| {
                         if let Some(error) = response.strip_prefix(COPY_ERROR_PAYLOAD_PREFIX) {
@@ -1285,7 +1288,10 @@ impl CudaIPCActor {
                         } else {
                             Ok(response)
                         }
-                    });
+                    })?;
+
+                    debug!("CudaIPCActor::handle_message/CudaIPCActorMessage::PurgeEndpoint: response={response:?}");
+
                     let _ = respond_to.send(Ok(()));
                     Ok::<_, ThoError>(())
                 });
@@ -2197,10 +2203,11 @@ impl CudaActorHandle for CudaIPCActorHandle {
         Ok(Box::new(IPCHanldeCTx{}))
     }
 
-    async fn purge_endpoint_bytes(&self) -> Result<(), ThoError> {
+    async fn purge_endpoint_bytes(&self, input: String) -> Result<(), ThoError> {
         let (respond_to, recv) = oneshot::channel();
         self.sender.send(
             CudaIPCActorMessage::PurgeEndpoint {
+                input,
                 respond_to,
             }
         ).instrument(tracing::debug_span!(
