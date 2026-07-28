@@ -27,7 +27,7 @@ use crate::cuda_utils::cuda_mem_for_device;
 use crate::dims::Dims;
 use crate::ipc::codec::IpcCodec;
 use crate::ipc::cuda_process;
-use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX};
+use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::common::runnable::SyncStage;
@@ -466,6 +466,25 @@ impl CudaWorker {
 
                 reply_tx
                     .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg(msg.to_string()) })
+                    .await
+                    .map_err(|_| ThoError::new("worker response writer is closed"))?;
+
+                continue;
+            }
+
+            if let Some(input) = payload.strip_prefix(PURGE_ENDPOINT_PREFIX) {
+                let (endpoint_name, input) = cuda_process::split_endpoint_payload(input)?;
+                debug!("run_worker: purge endpointr: endpoint_name={endpoint_name} input={input:?}");
+                match installed_endpoints.read().get(endpoint_name) {
+                    Some(endpoint) => {
+                        endpoint.purge(1.into()).await?;//TODO device
+                    }
+                    None => {
+                        error!("no endpoint found"); //TODO handle
+                    }
+                };
+                reply_tx
+                    .send(WorkerReply { id, payload: OutgoingRequestPayload::Msg("ok".to_string()) })
                     .await
                     .map_err(|_| ThoError::new("worker response writer is closed"))?;
 
