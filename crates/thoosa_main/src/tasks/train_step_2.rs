@@ -5,6 +5,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
+use std::future::ready;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::mem;
@@ -33,6 +34,10 @@ use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
 use thoosa_shared::{mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_lock, CopyToDevice, MoveToDevice, ThoError};
+use futures::FutureExt;
+use futures_util::future::BoxFuture;
+use futures_util::StreamExt;
+
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
@@ -163,13 +168,13 @@ where
 {
     type S = ThoTrainModule<DI, DO>;
 
-    fn pre_run(&self) -> impl Future<Output=Result<Option<MutexGuard<Self::S>>, ThoError>> + Send
+    fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>>
     {
         async {
             let mut guard = self.train_module.lock().await;
             guard.move_to_device(1).await?;
             Ok(Some(guard))
-        }
+        }.boxed()
     }
 
 
@@ -538,11 +543,13 @@ where
 {
     type S = <TrainStep2<F, DI, DO, C> as SyncStage>::S;
 
-    fn pre_run(&self) -> impl Future<Output=Result<Option<MutexGuard<'_, Self::S>>, ThoError>> + Send {
+    fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>> {
         match &self {
             Self::Local(stage) => stage.pre_run(),
             Self::Proxy { stage, .. } => {
-                todo!()
+                async {
+                    Ok(None)
+                }.boxed()
             },
         }
     }
@@ -557,9 +564,7 @@ where
     fn do_run_with_state<'f, S>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run_with_state::<Self::S>(input, state, ctx),
-            Self::Proxy { stage, .. } => {
-                todo!()
-            },
+            Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
         }
     }
 
@@ -698,6 +703,7 @@ mod tests {
     use futures_util::future::BoxFuture;
     use futures_util::StreamExt;
     use log::debug;
+    use mockall::PredicateBoxExt;
     use parking_lot::Mutex;
     use serde::{Deserialize, Serialize};
     use tch::Device::Cuda;
@@ -713,7 +719,7 @@ mod tests {
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
-    use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
+    use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::runner::common::RunCtx;
     use thoosa_common::runner::common::runnable::{DynSyncStage, DynSyncStageBox, Stage, SyncStage};
@@ -731,6 +737,7 @@ mod tests {
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
     use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2WeightsSync, TrainStep2XFn};
+    use futures_util::FutureExt;
 
 
 
@@ -905,16 +912,34 @@ mod tests {
     }
     impl SyncStageIpcWrapper for TrainTestStep2IpcWrapper {
         fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-            debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
-            let input_dec = JsonIpcCodec::decode::<TrainStep2Input<InDimsX, OutDimsX>>(input)?;
 
-            let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
-            let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.expected_y)?;
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
+                    let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
+                    let input_dec = JsonIpcCodec::decode::<TrainStep2Input<InDimsX, OutDimsX>>(&input.into_parts().0)?;
 
-            let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true);
+                    let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
+                    let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.expected_y)?;
 
-            Ok(JsonIpcCodec::encode(&Arc::clone(&self.stage.base).do_run(&input, &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
+                    let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true);
+                    let stage = Arc::clone(&self.stage.base);
+                    let state = stage.pre_run().await?;
+
+
+                    Ok(JsonIpcCodec::encode(&Arc::clone(&stage).do_run_with_state::<ThoTrainModule<InDimsX, OutDimsX>>(&input, state.unwrap(), &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
+                })
+            })
+
         }
+
+        // fn do_run_with_state(&self, input: Vec<u8>, all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: ThoDevice) -> BoxFuture<Result<SyncStageIpcResponse, ThoError>>{
+        //     async {
+        //         let arc = Arc::clone(&self.stage.base);
+        //         let state = arc.pre_run().await?;
+        //         todo!()
+        //     }.boxed()
+        // }
     }
 
     #[derive(Debug, Serialize, Deserialize)]
@@ -983,7 +1008,7 @@ mod tests {
         }
     }
 
-    // #[test]
+    #[test]
     fn test_train_step_2_ipc() -> Result<(), ThoError> {
 
 
