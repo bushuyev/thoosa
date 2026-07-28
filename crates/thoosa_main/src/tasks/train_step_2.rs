@@ -228,6 +228,7 @@ where
 
             panic_to_err!({
                 opt.backward_step(&loss.set_requires_grad(true));
+                opt.zero_grad();
                 Ok::<_, ThoError>(())
             })?;
 
@@ -945,7 +946,7 @@ mod tests {
             Self: Sync
         {
             // Purge uses the application's CPU-first device index, not tch::Device.
-            self.stage.base.drop_gpu(tho_device.tho_device_idx(), "zzz")
+            self.stage.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz")
         }
     }
 
@@ -993,7 +994,7 @@ mod tests {
                          * ThoTrainModule device restoration.
                          */
                         let config = ModConfig::new(
-                            AdamW::default(),
+                            Adam::default(),
                             |var_store| test_net(&TestNetXParams { in_features: 100, layers: 2 })?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
                             lr,
                         );
