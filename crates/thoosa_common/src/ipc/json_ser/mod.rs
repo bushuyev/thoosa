@@ -5,7 +5,9 @@ use std::fmt::Debug;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use futures_util::future::BoxFuture;
+use futures_util::FutureExt;
+use tokio::sync::{Mutex, MutexGuard};
 use tch::Tensor;
 use tracing::debug;
 use thoosa_shared::ThoError;
@@ -69,6 +71,14 @@ pub trait SyncStageIpcWrapper:Debug {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::consume_response"))]
     fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         Err(ThoError::new("IPC endpoint does not support consume"))
+    }
+
+    fn purge(&self, input: Vec<u8>, all_cuda_tensors: Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+    where Self: Sync
+    {
+        async move {
+            Ok(())
+        }.boxed()
     }
 }
 

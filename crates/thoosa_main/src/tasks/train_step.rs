@@ -484,7 +484,7 @@ where
             TrainStepDynSyncStage::Local(local) => {
                 local.purge_gpu(ids_to_keep, device_idx, name).await
             }
-            TrainStepDynSyncStage::Proxy {  .. } => {
+            TrainStepDynSyncStage::Proxy {  stage, .. } => {
                 Ok(())
             }
         }

@@ -2,10 +2,13 @@ use crate::runner::common::cachable::{DevicesWrap};
 use crate::runner::common::{OutId, RunCtx};
 use std::fmt::Debug;
 use std::sync::Arc;
+use futures_util::future::BoxFuture;
+use mockall::PredicateBoxExt;
 use tokio::sync::{MutexGuard, RwLockReadGuard};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{Adjustable, Data, WithId};
 use thoosa_shared::ThoError;
+use futures::FutureExt;
 //some operation on data - pattern search, dnn train, whatever what takes input and produces output
 
 pub type WrappedStageRunInput<S> = Arc<DevicesWrap<<S as Stage>::In<'static>>>;
@@ -60,12 +63,12 @@ pub enum ConsumeResult<I, O> {
 
 pub trait SyncStage: Stage + Debug {
     type S:Send + Sync = ();
-    fn pre_run(&self) -> impl Future<Output=Result<Option<MutexGuard<'_, Self::S>>, ThoError>> + Send
+    fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>>
      {//for train step etc
 
         async {
             Ok::<_, ThoError>(None)
-        }
+        }.boxed()
 
     }
 
