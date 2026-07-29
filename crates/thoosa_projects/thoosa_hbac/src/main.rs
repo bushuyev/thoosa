@@ -38,7 +38,7 @@ use thoosa_store::{SqlStore, Store};
 use crate::run_all::{run_all, run_all_config_0};
 use thoosa_shared::tracked_await::track_await;
 
-fn cuda_worker_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>> {
+fn cuda_worker_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
     let mut endpoints = train_motif_step_endpoint_inits();
     // Label and final training now execute through the same worker-owned proxy lifecycle as motif training.
     endpoints.extend(train_label_step_endpoint_inits());
@@ -46,23 +46,23 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result
     endpoints.extend([
         (
             CROSS_UNFOLD_CLC_ENDPOINT.to_string(),
-            Box::new(sync_cross_unfold_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+            Box::new(sync_cross_unfold_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
             MOTIF_STATS_SYNC_ENDPOINT.to_string(),
-            Box::new(motif_stats_sync_stage_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+            Box::new(motif_stats_sync_stage_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
             MOTIF_STATS_CONSUME_ENDPOINT.to_string(),
-            Box::new(motif_stats_consume_stage_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+            Box::new(motif_stats_consume_stage_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
             SYNC_FREQ_FILTER_ENDPOINT.to_string(),
-            Box::new(sync_freq_filter_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+            Box::new(sync_freq_filter_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
         (
             SYNC_RAW_TENSOR_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_raw_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+            Box::new(sync_raw_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         ),
     ]);
     endpoints

@@ -63,16 +63,20 @@ pub enum ConsumeResult<I, O> {
 
 pub trait SyncStage: Stage + Debug {
     type S:Debug + Send + Sync = ();
+
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
     fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>>
      {//for train step etc
 
         async {
             Ok::<_, ThoError>(None)
         }.boxed()
-    }
-
-    fn do_run_with_state<'f, S>(self: Arc<Self>, _input: &Self::In<'f>, mut state:MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
-        unimplemented!()
     }
 
     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
@@ -85,6 +89,28 @@ pub trait SyncStage: Stage + Debug {
         _ctx: Self::Ctx,
     ) -> ConsumeResult<Self::In<'f>, Self::Out> {
         unimplemented!()
+    }
+}
+
+pub trait StageWithState: SyncStage {
+    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        unimplemented!()
+    }
+}
+
+pub trait ErasedStageWithState<S>
+where
+    S: SyncStage,
+{
+    fn do_run_with_state<'f>(&self, stage: Arc<S>, input: &S::In<'f>, state: MutexGuard<'_, S::S>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
+}
+
+impl<S> ErasedStageWithState<S> for S
+where
+    S: StageWithState,
+{
+    fn do_run_with_state<'f>(&self, stage: Arc<S>, input: &S::In<'f>, state: MutexGuard<'_, S::S>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
+        StageWithState::do_run_with_state(stage, input, state, ctx)
     }
 }
 
