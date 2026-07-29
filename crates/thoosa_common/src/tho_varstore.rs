@@ -504,20 +504,20 @@ pub fn replace_data(dst: &mut  VarStore, src: VarStore) -> Result<(), ThoError> 
         let src_var = &src_variables.named_variables[name];
 
         if dst_var.device() != src_var.device() {
-            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.device(), src_var.device())));;
+            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.device(), src_var.device())));
         }
 
         if dst_var.kind() != src_var.kind() {
-            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.kind(),  src_var.kind())));;
+            return Err(ThoError::new(format!("dst device {:?} != {:?} src device", dst_var.kind(),  src_var.kind())));
         }
 
         if dst_var.size() != src_var.size() {
-            return Err(ThoError::new(format!("dst size {:?} != {:?} src device", dst_var.size(),  src_var.size())));;
+            return Err(ThoError::new(format!("dst size {:?} != {:?} src device", dst_var.size(),  src_var.size())));
         }
 
         if dst_var.grad().defined() {
 
-            return Err(ThoError::new(format!("destination parameter {name} has a defined gradient")));;
+            return Err(ThoError::new(format!("destination parameter {name} has a defined gradient")));
         }
 
         no_grad(|| dst_var.f_set_data(src_var))?;

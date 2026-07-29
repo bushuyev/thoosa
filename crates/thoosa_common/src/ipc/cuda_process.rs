@@ -16,7 +16,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::BoxFuture;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use rayon::iter::ParallelBridge;
 use serde::{Deserialize, Serialize};
 use tch::Device::{Cpu, Cuda};
@@ -999,11 +999,6 @@ impl CudaIPCActor {
         })
     }
 
-    #[cfg(test)]
-    async fn spawn_worker(args: &Vec<String>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
-        Self::spawn_worker_for_cuda_device(0, args).await
-    }
-
     async fn spawn_worker_for_cuda_device(cuda_device: usize, args: &Vec<String>) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
         let exe = std::env::current_exe()?;
 
@@ -1136,43 +1131,46 @@ impl CudaIPCActor {
                 let _ = respond_to.send(Ok(()));
             }
             CudaIPCActorMessage::Shutdown { respond_to } => {
-                let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-                let (reply_tx, reply_rx) = oneshot::channel();
-                let pending = Arc::clone(&self.spawned_state.pending);
-                let self_tx = self.spawned_state.tx.clone();
-
-                tokio::spawn(async move {
-                    {
-                        let mut pending = pending.lock().await;
-                        let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
-                        debug_assert!(old.is_none());
-                    }
-
-                    if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()) }).await.is_err() {
-                        let mut pending = pending.lock().await;
-                        pending.remove(&id);
-                        let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
-                        return;
-                    }
-
-                    let reply = reply_rx
-                        .await
-                        .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
-                        .and_then(|reply| reply)
-                        .and_then(IncomingResponsePayload::into_msg);
-
-                    match reply {
-                        Ok(reply) if reply == "shutdown-ok" => {
-                            let _ = respond_to.send(Ok(()));
-                        }
-                        Ok(reply) => {
-                            let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
-                        }
-                        Err(error) => {
-                            let _ = respond_to.send(Err(error));
-                        }
-                    }
-                });
+                self.spawned_state.child.kill().await?;
+                // TODO - shutdow does nothing in the worker, remove?
+                // let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                // let (reply_tx, reply_rx) = oneshot::channel();
+                // let pending = Arc::clone(&self.spawned_state.pending);
+                // let self_tx = self.spawned_state.tx.clone();
+                //
+                //
+                // tokio::spawn(async move {
+                //     {
+                //         let mut pending = pending.lock().await;
+                //         let old = pending.insert(id, PendingResponse::Buffered(reply_tx));
+                //         debug_assert!(old.is_none());
+                //     }
+                //
+                //     if self_tx.send(OutgoingRequest { id, payload: OutgoingRequestPayload::Msg("shutdown".to_string()) }).await.is_err() {
+                //         let mut pending = pending.lock().await;
+                //         pending.remove(&id);
+                //         let _ = respond_to.send(Err(ThoError::new("worker IPC writer task is closed")));
+                //         return;
+                //     }
+                //
+                //     let reply = reply_rx
+                //         .await
+                //         .map_err(|_| ThoError::new(format!("response channel for shutdown request {id} was dropped")))
+                //         .and_then(|reply| reply)
+                //         .and_then(IncomingResponsePayload::into_msg);
+                //
+                //     match reply {
+                //         Ok(reply) if reply == "shutdown-ok" => {
+                //             let _ = respond_to.send(Ok(()));
+                //         }
+                //         Ok(reply) => {
+                //             let _ = respond_to.send(Err(ThoError::new(format!("unexpected shutdown response: {reply:?}"))));
+                //         }
+                //         Err(error) => {
+                //             let _ = respond_to.send(Err(error));
+                //         }
+                //     }
+                // });
             }
             CudaIPCActorMessage::InstallEndpoint { init_msg, respond_to } => {
                 let self_tx = self.spawned_state.tx.clone();
@@ -2382,21 +2380,6 @@ mod tests {
         }};
     }
 
-    async fn spawn_test_worker(test_name: &str) -> Result<(Child, UnixStream, DeviceInfo), ThoError> {
-
-        let module = pure_module_path!();
-
-        let test_name = if module.is_empty() {
-            test_name.to_string()
-        } else {
-            format!("{module}::{test_name}")
-        };
-        let args:Vec<String> = vec![test_name, "--exact".to_string(), "--nocapture".to_string()];
-
-        CudaIPCActor::spawn_worker(&args).await
-    }
-
-
     async fn run_ipc_copy_perf(cuda_actor: &'static Box<dyn CudaActorHandle>, threads: u8, runs: u8) -> Result<(f64, f64), ThoError> {
         let (free_mem, _total_mem) = cuda_mem();
         let init_type = Float;
@@ -2492,7 +2475,7 @@ mod tests {
                 track_await(cuda_actor.copy(too_large_tensor.into(), tho_device_idx.into())),
             ).await.map_err(|_| ThoError::new("timed out waiting for worker IPC oversized H2D copy to fail"))?;
 
-            let shutdown_result = cuda_actor.shutdown().await;
+
 
             let error = match copy_result {
                 Ok(_) => return Err(ThoError::new("worker IPC copy unexpectedly succeeded for oversized tensor")),
@@ -2512,7 +2495,6 @@ mod tests {
             assert!(error.is_oom(), "ThoError::is_oom should delegate to Cause::CudaWoker: {error:?}");
             assert!(error.is_retryable_oom(), "ThoError::is_retryable_oom should delegate to Cause::CudaWoker: {error:?}");
 
-            shutdown_result?;
 
             debug!("All ok");
 
@@ -2599,7 +2581,6 @@ mod tests {
 
             info!("\n IPC worker copy d2h speed: {d2h:#2} GB/s, h2d speed {h2d:#2} GB/s");
 
-            cuda_actor.shutdown().await?;
 
             Ok(())
         }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
@@ -2655,7 +2636,6 @@ mod tests {
             assert_eq!("ThoError: Unknown error, cause=worker tensor key=1 not found", what_msg);//TODO err code
 
 
-            cuda_actor.shutdown().await?;
 
             info!("main: \n{}", format_perf_map(&PERF));
 
