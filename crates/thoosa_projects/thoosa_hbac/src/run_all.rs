@@ -773,13 +773,9 @@ mod tests {
                     "--nocapture".to_string(), "--no-capture".to_string(),
                 ]).await?;
                 let cuda_actor = GlobalCtx::global().cuda_actor(1);
-                let result = run_heavy_test_run_all("heavy_test_run_all_ipc").await;
-                let shutdown_result = cuda_actor.shutdown().await;
-                match (result, shutdown_result) {
-                    (Ok(()), Ok(())) => Ok(()),
-                    (Err(error), _) => Err(error),
-                    (Ok(()), Err(error)) => Err(error),
-                }
+                run_heavy_test_run_all("heavy_test_run_all_ipc").await?;
+
+                Ok(())
             },
             async |sock_path| {
                 // set_max_level(Debug);

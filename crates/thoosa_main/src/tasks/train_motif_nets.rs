@@ -1908,7 +1908,6 @@ mod tests {
             let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(false, true);
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
             let result = run_train_motif_nets().await?;
-            _ = cuda_actor.shutdown().await;
 
             Ok(())
 

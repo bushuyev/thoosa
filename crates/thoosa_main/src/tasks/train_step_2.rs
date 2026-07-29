@@ -224,7 +224,6 @@ where
         let loss_value = panic_to_err!(Ok::<_, ThoError>(loss.double_value(&[])))? as f32;
 
         if input.train {
-            // TODO(perf): lock_opt is per batch; keep optimizer ownership local to the training task or queue optimizer steps to avoid mutex traffic in TrainStep2::do_run.
             let opt = train_module.opt();
             debug!("TrainStep2::do_run: opt={opt:?} optimizer_size={}", optimizer_mem_size(&opt));
 
@@ -239,7 +238,7 @@ where
 
             panic_to_err!({
                 opt.backward_step(&loss.set_requires_grad(true));
-                opt.zero_grad();
+                opt.zero_grad();//to let
                 Ok::<_, ThoError>(())
             })?;
 
