@@ -62,14 +62,13 @@ pub enum ConsumeResult<I, O> {
 }
 
 pub trait SyncStage: Stage + Debug {
-    type S:Send + Sync = ();
+    type S:Debug + Send + Sync = ();
     fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>>
      {//for train step etc
 
         async {
             Ok::<_, ThoError>(None)
         }.boxed()
-
     }
 
     fn do_run_with_state<'f, S>(self: Arc<Self>, _input: &Self::In<'f>, mut state:MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests

@@ -2577,8 +2577,8 @@ mod tests {
                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
                                 Box::new(|_s|{
                                     debug!("test_copy_ipc_cuda_worker_propagates_oom: installing _SyncStageJsonWrapper");
-                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper>)
-                                }) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                                    Ok(Box::new(_SyncStageJsonWrapper{}) as Box<dyn SyncStageIpcWrapper<S=()>>)
+                                }) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
                             )
                 ]),
                 ThoDevice::from(Cuda(0)),
