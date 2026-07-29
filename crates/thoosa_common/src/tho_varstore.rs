@@ -191,16 +191,7 @@ where
                 cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
                 vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
             };
-            // Ok(
-            //     ThoTrainModule{
-            //         config: Arc::clone(&self.config),
-            //         opt_state:
-            //         OptSnapshot::Snapshot {
-            //             cpu_snap:clone_owned_adam_snapshot_to(cuda_snapshot, Cpu.into()).await?,
-            //             vs:clone_var_store_to(&vs, tho_dst_device.into()).await?,
-            //         },
-            //     }
-            // )
+
             Ok(())
         } else {
             let (cpu_snap, cpu_var_store) = match &self.opt_state {
@@ -230,13 +221,7 @@ where
             unsafe {restore_adam_snapshot(&cuda_snapshot, opt.as_raw_c_optimizer())}?;
 
             self.opt_state = OptSnapshot::Opt{opt, vs: cuda_vs, module };
-            // Ok(
-            //     ThoTrainModule{
-            //         config: Arc::clone(&self.config),
-            //         opt_state:
-            //         OptSnapshot::Opt{opt, vs: cuda_vs, module },
-            //     }
-            // )
+
             Ok(())
         }
     }

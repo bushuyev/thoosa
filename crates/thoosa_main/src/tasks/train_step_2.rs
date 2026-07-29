@@ -122,11 +122,10 @@ where
         TMB: FnOnce(&RC, ThoDevice) -> TMBF,
         TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
     {
-        if GlobalCtx::global().is_ipc()
-            && let Some(proxy_factory) = proxy_factory
+        if GlobalCtx::global().is_ipc() && let Some(proxy_factory) = proxy_factory
         {
             let TrainStep2ProxyParts { stage, weights_sync, node_params } = proxy_factory.new_proxy(run_config, tho_device.tho_device_idx()).await?;
-            return Ok((TrainStep2DynSyncStage::Proxy { stage, weights_sync }, node_params));
+            return Ok((TrainStep2DynSyncStage::Proxy { stage }, node_params));
         }
 
         let (stage, node_params) = Self::new_local(tho_device, train_module_builder, x_f, loss_fn, run_config).await?;
@@ -442,12 +441,11 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStep2InputWrapper<DI, DO> {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TrainStep2Output {
     pub loss: f32,
-    pub vs_ref: String,
 }
 
 impl TrainStep2Output {
     fn new(loss: f32) -> Self {
-        Self { loss, vs_ref: "todo".to_string() }
+        Self { loss}
     }
 }
 
@@ -465,7 +463,6 @@ pub(crate) enum TrainStep2DynSyncStage<F, DI: Dims + 'static, DO: Dims + 'static
     Local(Arc<TrainStep2<F, DI, DO, C>>),
     Proxy {
         stage: Arc<DynSyncStageBox<TrainStep2Input<DI, DO>, TrainStep2Output, C>>,
-        weights_sync: Arc<dyn TrainStep2WeightsSync>,
     },
 }
 
@@ -1067,29 +1064,16 @@ mod tests {
                 panic!("should be ref")
             };
 
-            let proxy = Arc::new(ProxyTrainTestStep2::new(
-                TrainTestStep2Init{},
-                1
-            ).await?);
 
-            debug!("test_train_step_2_ipc: proxy={proxy:?}");
-
-            #[derive(Debug)]
-            struct TestWeightSync{}
-            #[async_trait]
-            impl TrainStep2WeightsSync for TestWeightSync {
-                async fn into_var_store(&self) -> Result<VarStore, ThoError> {
-                    Ok(VarStore::new(Cuda(0)))
-                }
-            }
             let (train_step, params): (TrainStep2DynSyncStage<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>, TestNetXParams) = (
                 TrainStep2DynSyncStage::Proxy {
-                    stage: Arc::new(DynSyncStageBox::new(proxy as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
-                    weights_sync: Arc::new(TestWeightSync{}) as Arc<dyn TrainStep2WeightsSync>
+                    stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
+                        TrainTestStep2Init{},
+                        1
+                    ).await?) as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
                 },
                 TestNetXParams { in_features: 100, layers: 2 }
             );
-
 
             do_test_train_step_2(train_step, async ||Ok(TrainStep2Input::<InDimsX, OutDimsX>::new(
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
@@ -1108,8 +1092,7 @@ mod tests {
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
                         Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
                     ),
-                ])
-                ,
+                ]),
                 ThoDevice::from(Cuda(0)),
             ).await
         })
