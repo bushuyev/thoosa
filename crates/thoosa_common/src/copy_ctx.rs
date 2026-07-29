@@ -171,7 +171,11 @@ impl dyn CudaActorHandle + '_ {
                 Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
             }
             Some(state) => {
-                Arc::clone(&stage).do_run_with_state::<S::S>(borrowed.borrow(), state, ctx)
+                // Dispatch through the optional capability so this common runner supports any concrete state type.
+                stage
+                    .as_with_state()
+                    .ok_or_else(|| ThoError::new(format!("stage {stage:?} returned state without implementing StageWithState")))?
+                    .do_run_with_state(Arc::clone(&stage), borrowed.borrow(), state, ctx)
             }
         };
 

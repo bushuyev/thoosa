@@ -10,9 +10,9 @@ use clap::Parser;
 use dashmap::DashMap;
 use log::{debug, error, LevelFilter};
 use parking_lot::RwLock;
-use thoosa_shared::{panic_to_err, ThoError};
+use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
 use tokio::net::UnixStream;
-use tokio::sync::{mpsc, Mutex, MutexGuard};
+use tokio::sync::mpsc;
 use tch::{Device, Tensor};
 use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
@@ -30,7 +30,6 @@ use crate::ipc::cuda_process;
 use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayload, PendingWorkerD2hTransfer, PendingWorkerH2dTransfer, WorkerCudaResources, WorkerD2hChunk, WorkerD2hStartPayload, WorkerH2dChunk, WorkerH2dStartPayload, WorkerReply, CONSUME_ENDPOINT_PREFIX, D2H_START_PAYLOAD_PREFIX, DESCRIBE_REF_PAYLOAD_PREFIX, DROP_THO_TENSOR, ENDPOINT_OK_PAYLOAD, H2D_START_OK_PAYLOAD, H2D_START_PAYLOAD_PREFIX, INSTALL_ENDPOINT_PREFIX, INVOKE_ENDPOINT_PREFIX, IPC_SOCK_ENV, SHARED_MEMFD_PAYLOAD_PREFIX, TENSOR_INFO_PAYLOAD_PREFIX, PURGE_ENDPOINT_PREFIX};
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
-use crate::runner::common::runnable::SyncStage;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
@@ -43,7 +42,7 @@ pub struct CudaWorker;
 
 
 pub trait Init {
-    fn init() -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>;
+    fn init() -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>;
 }
 
 
@@ -65,7 +64,7 @@ pub struct WorkerCli {
 
 impl CudaWorker {
 
-    pub fn run_if_sock(cdt:&str, init_map: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>>) -> Result<(), ThoError>{
+    pub fn run_if_sock(cdt:&str, init_map: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>>) -> Result<(), ThoError>{
 
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
@@ -119,22 +118,10 @@ impl CudaWorker {
 
     pub async fn run_worker(
         sock_path:OsString,
-        endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>  >>,
+        endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
-        Self::run_worker_with_state(sock_path, endpoint_inits, tho_device).await
-    }
-
-    pub async fn run_worker_with_state<S>(
-        sock_path:OsString,
-        endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=S>>, ThoError>  >>,
-        tho_device: ThoDevice
-    ) -> Result<(), ThoError>
-    where
-        S: Debug + Send + Sync + 'static,
-    {
-        // Keep the original unit-state entry point while allowing a worker
-        // invocation whose endpoints share a concrete state guard type.
+        // Stateful capability is erased per endpoint so one worker can host unrelated state types.
         GlobalCtx::init_devices(2);
 
         let with_digest = false;//TODO config
@@ -173,7 +160,7 @@ impl CudaWorker {
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
-        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper<S=S>>>::new()));
+        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper>>::new()));
 
         loop {
             let frame = match cuda_process::read_text_frame(&mut reader, "run_worker").await {
@@ -378,38 +365,27 @@ impl CudaWorker {
                     let stream = exec_stream_pool.acquire().await;
                     match installed_endpoints.read().get(endpoint_name) {
                         Some(endpoint) => {
-                            let state = endpoint.pre_run(&tho_device).await?;//synchronized with copy streams
-
-
-                            let r = panic_to_err!({
-
-                                let _guard = ThoStreamGuard::new(&stream)?;
-
-                                match state {
-                                    Some(state_guard) => {
-
-                                        endpoint.do_run_with_state(&input, &all_cuda_tensors, state_guard, &tho_device).map(|response| (response, Vec::new()))
+                            let r = if let Some(with_state) = endpoint.as_with_state() {
+                                // The erased endpoint performs its own typed pre_run before entering the CUDA stream.
+                                panic_to_err_async!(with_state.do_run_with_state(&input, &all_cuda_tensors, &tho_device, &stream)).map(|response| (response, Vec::new()))
+                            } else {
+                                panic_to_err!({
+                                    let _guard = ThoStreamGuard::new(&stream)?;
+                                    let response = if consume {
+                                        endpoint.consume_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response.response, response.consumed_tensor_keys))
+                                    } else {
+                                        endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response, Vec::new()))
+                                    };
+                                    let sync_result = stream.synchronize();
+                                    match (response, sync_result) {
+                                        (Ok(response), Ok(())) => Ok(response),
+                                        (Err(error), Ok(())) => Err(error),
+                                        (Ok(_), Err(error)) => Err(error),
+                                        (Err(error), Err(sync_error)) if sync_error.is_oom() || sync_error.needs_cuda_ctx_reset() => Err(sync_error),
+                                        (Err(error), Err(_)) => Err(error),
                                     }
-                                    None => {
-                                        let response = if consume {
-                                            endpoint.consume_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response.response, response.consumed_tensor_keys))
-                                        } else {
-                                            endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response, Vec::new()))
-                                        };
-                                        let sync_result = stream.synchronize();
-                                        match (response, sync_result) {
-                                            (Ok(response), Ok(())) => Ok(response),
-                                            (Err(error), Ok(())) => Err(error),
-                                            (Ok(_), Err(error)) => Err(error),
-                                            (Err(error), Err(sync_error)) if sync_error.is_oom() || sync_error.needs_cuda_ctx_reset() => Err(sync_error),
-                                            (Err(error), Err(_)) => Err(error),
-                                        }
-                                    }
-
-                                }
-
-
-                            });
+                                })
+                            };
 
                             if let  Err(e) = &r {
 

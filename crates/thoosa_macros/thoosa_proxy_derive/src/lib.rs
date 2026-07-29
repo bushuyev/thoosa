@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
-use syn::{Attribute, Data, DeriveInput, Expr, Fields, FnArg, GenericArgument, Ident, Pat, Path, PathArguments, Result as SynResult, Token, Type, parse_macro_input};
+use syn::{Attribute, Data, DeriveInput, Expr, Fields, FnArg, Ident, Pat, Path, Result as SynResult, Token, Type, parse_macro_input};
 
 #[proc_macro_derive(Proxy, attributes(proxy))]
 pub fn derive_proxy(input: TokenStream) -> TokenStream {
@@ -15,7 +15,6 @@ pub fn derive_proxy(input: TokenStream) -> TokenStream {
 
 fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     let base_ty = proxy_base_type(&input)?;
-    let sync_stage_ty = proxy_sync_stage_type(&base_ty);
     let base_ident = input.ident;
     let attrs = ProxyAttrs::from_attrs(&input.attrs)?;
     let proxy_ident = attrs.proxy_name.ok_or_else(|| syn::Error::new_spanned(&base_ident, "missing `name = \"ProxyType\"` in `proxy` attribute"))?;
@@ -130,7 +129,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
             match wrapper_name {
                 Some(wrapper_name) => quote! {
-                    pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper<S=<#sync_stage_ty as #common::runner::common::runnable::SyncStage>::S>>, thoosa_shared::ThoError> {
+                    pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                         #stage_init
                         Ok(Box::new(#wrapper_name {
                             stage: std::sync::Arc::new(stage),
@@ -142,7 +141,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                     let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `wrapper` requires `init_stage = \"...\"`"))?;
                     let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
                     quote! {
-                        pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper<S=<#sync_stage_ty as #common::runner::common::runnable::SyncStage>::S>>, thoosa_shared::ThoError> {
+                        pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                             let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
                             Ok(#common::ipc::json_ser::make_ipc_sync_stage_wrapper::<
                                 #codec,
@@ -338,21 +337,6 @@ fn proxy_base_type(input: &DeriveInput) -> SynResult<Type> {
     Ok(syn::parse_quote!(#ident))
 }
 
-fn proxy_sync_stage_type(base_ty: &Type) -> Type {
-    // Proxy targets may retain their runnable stage in Arc so worker wrappers
-    // can call SyncStage methods whose receiver is Arc<Self>.
-    if let Type::Path(type_path) = base_ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Arc"
-        && let PathArguments::AngleBracketed(arguments) = &segment.arguments
-        && let Some(GenericArgument::Type(inner_ty)) = arguments.args.first()
-    {
-        return inner_ty.clone();
-    }
-
-    base_ty.clone()
-}
-
 struct ProxyField {
     name: Ident,
     ty: Type,
@@ -430,12 +414,4 @@ mod tests {
         assert!(error.to_string().contains("unparameterized struct"));
     }
 
-    #[test]
-    fn test_proxy_sync_stage_type_uses_stage_inside_arc() {
-        let base_ty: Type = syn::parse_quote!(std::sync::Arc<GenericStage<ConcreteCtx>>);
-
-        let sync_stage_ty = proxy_sync_stage_type(&base_ty);
-
-        assert_eq!(quote!(#sync_stage_ty).to_string(), "GenericStage < ConcreteCtx >");
-    }
 }

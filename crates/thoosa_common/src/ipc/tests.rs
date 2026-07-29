@@ -215,15 +215,15 @@ mod tests {
         assert!(ok);
     }
 
-    fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>> {
+    fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
         HashMap::from([
             (
                 SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
-                Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+                Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
             ),
             (
                 SYNC_CLC_ENDPOINT.to_string(),
-                Box::new(sync_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+                Box::new(sync_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
             )
         ])
     }
@@ -319,10 +319,10 @@ mod tests {
         }
     }
 
-    fn sync_consume_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>> {
+    fn sync_consume_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
         HashMap::from([(
             SYNC_CONSUME_TEST_ENDPOINT.to_string(),
-            Box::new(sync_consume_test_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+            Box::new(sync_consume_test_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
         )])
     }
 
@@ -848,11 +848,11 @@ mod tests {
         use crate::torch_runner::tests::composite_input::ab_clc::{sync_ab_clc_endpoint_init, ABClcStage, ProxyABClcSyncStage, SYNC_AB_CLC_ENDPOINT};
         use crate::torch_runner::tests::composite_input::{ab_clc_sync_with_selector, run_ab_clc_with_stage};
 
-        fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>> {
+        fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
             HashMap::from([
                 (
                     SYNC_AB_CLC_ENDPOINT.to_string(),
-                    Box::new(sync_ab_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+                    Box::new(sync_ab_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
                 )
             ])
         }
