@@ -39,10 +39,10 @@ fn init_devices_once() {
     });
 }
 
-pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>> {
+pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
     HashMap::from([(
         SYNC_CLASSIFIER_ENDPOINT.to_string(),
-        Box::new(sync_classifier_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+        Box::new(sync_classifier_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
     )])
 }
 

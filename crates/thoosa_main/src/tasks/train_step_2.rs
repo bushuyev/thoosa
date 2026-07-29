@@ -20,7 +20,7 @@ use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
 use thoosa_common::runner::common::cachable::{BorrowRef, ThoDataRef};
-use thoosa_common::runner::common::runnable::{DynSyncStageBox, Stage, SyncStage};
+use thoosa_common::runner::common::runnable::{DynSyncStageBox, ErasedStageWithState, Stage, StageWithState, SyncStage};
 use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -180,9 +180,21 @@ where
         }.boxed()
     }
 
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        // Advertise typed state execution without exposing ThoTrainModule to the common runner.
+        Some(self)
+    }
+}
 
+impl<F, DI, DO, C> StageWithState for TrainStep2<F, DI, DO, C>
+where
+    DI: Dims,
+    DO: Dims,
+    C: RunCtx,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep2::do_run_with_state"))]
-    fn do_run_with_state<'f, S>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
         debug!("TrainStep2::do_run: os_thread_id={}", os_thread_id());
         let x_t_0 = input.x();
@@ -565,6 +577,11 @@ where
         }
     }
 
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+        // Only the local variant returns state, but the erased hook lets the shared actor dispatch either variant.
+        Some(self)
+    }
+
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
@@ -572,14 +589,21 @@ where
         }
     }
 
-    fn do_run_with_state<'f, S>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+}
+
+impl<F, DI, DO, C> StageWithState for TrainStep2DynSyncStage<F, DI, DO, C>
+where
+    DI: Dims + 'static,
+    DO: Dims + 'static,
+    C: RunCtx + 'static,
+    F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
+{
+    fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
-            Self::Local(stage) => Arc::clone(stage).do_run_with_state::<Self::S>(input, state, ctx),
+            Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
             Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
         }
     }
-
-
 }
 
 impl<F, DI, DO, C> OutId for TrainStep2DynSyncStage<F, DI, DO, C>
@@ -730,10 +754,10 @@ mod tests {
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
-    use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
+    use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::runner::common::RunCtx;
-    use thoosa_common::runner::common::runnable::{DynSyncStage, DynSyncStageBox, Stage, SyncStage};
+    use thoosa_common::runner::common::runnable::{DynSyncStage, DynSyncStageBox, Stage, StageWithState, SyncStage};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -921,13 +945,28 @@ mod tests {
     }
 
     impl SyncStageIpcWrapper for TrainTestStep2IpcWrapper {
-        type S = ThoTrainModule<InDimsX, OutDimsX>;
-
-
-        fn pre_run(&self, _tho_device: &ThoDevice) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>> {
-            self.stage.base.pre_run()
+        fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
+            // Keep this endpoint's concrete training-module state behind the erased worker capability.
+            Some(self)
         }
 
+        fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+        where
+            Self: Sync
+        {
+            // Purge uses the application's CPU-first device index, not tch::Device.
+            self.stage.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz")
+        }
+    }
+
+    impl SyncStageIpcWrapperWithState for TrainTestStep2IpcWrapper {
+        type S = ThoTrainModule<InDimsX, OutDimsX>;
+
+        fn pre_run<'a>(&'a self, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
+            async move {
+                self.stage.base.pre_run().await?.ok_or_else(|| ThoError::new("TrainTestStep2 state was not initialized"))
+            }.boxed()
+        }
 
         fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
             tokio::task::block_in_place(|| {
@@ -942,17 +981,9 @@ mod tests {
                     let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true);
                     let stage = Arc::clone(&self.stage.base);
 
-                    Ok(JsonIpcCodec::encode(&Arc::clone(&stage).do_run_with_state::<ThoTrainModule<InDimsX, OutDimsX>>(&input, state, &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
+                    Ok(JsonIpcCodec::encode(&StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
                 })
             }).map(SyncStageIpcResponse::Encoded)
-        }
-
-        fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
-        where
-            Self: Sync
-        {
-            // Purge uses the application's CPU-first device index, not tch::Device.
-            self.stage.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz")
         }
     }
 
@@ -1073,12 +1104,12 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {
-            CudaWorker::run_worker_with_state(
+            CudaWorker::run_worker(
                 sock_path,
                 HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
-                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=ThoTrainModule<InDimsX, OutDimsX>>>, ThoError>>,
+                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
                     ),
                 ])
                 ,
