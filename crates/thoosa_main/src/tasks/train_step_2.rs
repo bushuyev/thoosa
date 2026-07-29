@@ -896,7 +896,8 @@ mod tests {
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
-        type Ctx = RunCtxImpl;
+        // Use the factory context here so the stage, train step, and batch stream share one context type.
+        type Ctx = SF::C;
         type In<'a> = TrainNet2Input;
         type Out = ();
     }
@@ -955,7 +956,9 @@ mod tests {
                         // let input = Arc::new(TrainStep2InputWrapper::new(TrainStep2Input::new(x_t_0, lengths, expected_y, true)));
                         let input = TrainStep2Input::new(x_t_0, lengths, expected_y, true);
 
-                        let r = Arc::clone(&train_step).do_run(&input, &ctx.branch(false))?;
+                        // TrainStep2 owns mutable module state, so use its stateful execution contract.
+                        let state = StageWithState::pre_run(train_step.as_ref()).await?;
+                        let r = StageWithState::do_run_with_state(Arc::clone(&train_step), &input, state, &ctx.branch(false))?;
                         best_output.replace(r);
 
 
@@ -1191,7 +1194,7 @@ mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (step_stage, np) = TrainStepXFactory::new(Box::new(||TestRunConfig{ lr: 0.1 })).await?;
+        let (step_stage, np) = TrainStepXFactory::new(&TestRunConfig{ lr: 0.1 }).await?;
         let train_step =TrainStep2DynSyncStage::Local (Arc::new(step_stage));
 
 
@@ -1259,7 +1262,8 @@ mod tests {
 
 
     fn dummy_batch() -> (ThoBatch<InDimsX>, ThoBatch<OutDimsX>) {
-        let x = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
+        // Match the test network's 100 input features so this fixture exercises the training path.
+        let x = Tensor::zeros([1, 1, 100], FLOAT_CUDA);
         let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
         (x.into(), y.into())
     }
