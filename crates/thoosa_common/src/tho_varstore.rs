@@ -63,7 +63,7 @@ where
     }
 }
 
-
+#[derive(Debug)]
 pub struct ThoTrainModule<DI, DO>
 where
     DI: Dims, DO: Dims

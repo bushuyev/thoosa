@@ -158,6 +158,8 @@ impl dyn CudaActorHandle + '_ {
 
         let state = stage.pre_run().await?;
 
+        debug!("CudaActorHandle::run_stage: stage={stage:?} state={state:?}");
+
         let borrowed = BorrowRef::borrow_to(&input, to_device_idx).await?;
 
         let mut handle_ctx = self.init_handle_ctx().await?;
