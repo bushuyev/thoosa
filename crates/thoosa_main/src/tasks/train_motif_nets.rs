@@ -873,13 +873,13 @@ where
 
                     },
                     move |mut ctx:C, rc:&TrainMotifNetRunConfig, vs: Arc<Mutex<VarStore>>| {
-                        // let mut ctx = ctx_net.branch(Some(&format!("train_motif_nets_task_{}_3", motif_id_rate.0)), false);
+
                         let motif = Arc::clone(&motif);
 
 
                         async move {
                             let motif = Arc::clone(&motif);
-                            // let mut ctx = ctx_net.branch(Some(&format!("train_motif_nets_task_{}_3", motif_id_rate.0)), false);
+
 
                             match &rc.net {
                                 MotifNetTypeArgs::ConvNet(net) => {
