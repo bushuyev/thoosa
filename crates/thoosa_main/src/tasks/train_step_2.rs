@@ -169,17 +169,6 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    type S = ThoTrainModule<DI, DO>;
-
-    fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>>
-    {
-        async {
-            let mut guard = self.train_module.lock().await;
-            guard.move_to_device(1).await?;
-            Ok(Some(guard))
-        }.boxed()
-    }
-
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
         // Advertise typed state execution without exposing ThoTrainModule to the common runner.
         Some(self)
@@ -193,6 +182,16 @@ where
     C: RunCtx,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
+    type S = ThoTrainModule<DI, DO>;
+
+    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        async {
+            let mut guard = self.train_module.lock().await;
+            guard.move_to_device(1).await?;
+            Ok(guard)
+        }.boxed()
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep2::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
 
@@ -564,22 +563,12 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
-    type S = <TrainStep2<F, DI, DO, C> as SyncStage>::S;
-
-    fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>> {
-        match &self {
-            Self::Local(stage) => stage.pre_run(),
-            Self::Proxy { stage, .. } => {
-                async {
-                    Ok(None)
-                }.boxed()
-            },
-        }
-    }
-
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
-        // Only the local variant returns state, but the erased hook lets the shared actor dispatch either variant.
-        Some(self)
+        // Proxy execution is stateless locally; only the local variant owns a training-module guard.
+        match self {
+            Self::Local(_) => Some(self),
+            Self::Proxy { .. } => None,
+        }
     }
 
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
@@ -598,6 +587,17 @@ where
     C: RunCtx + 'static,
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
+    type S = <TrainStep2<F, DI, DO, C> as StageWithState>::S;
+
+    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+        match self {
+            Self::Local(stage) => StageWithState::pre_run(stage.as_ref()),
+            Self::Proxy { .. } => async {
+                Err(ThoError::new("proxy TrainStep2 does not have local state"))
+            }.boxed(),
+        }
+    }
+
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
             Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
@@ -963,9 +963,7 @@ mod tests {
         type S = ThoTrainModule<InDimsX, OutDimsX>;
 
         fn pre_run<'a>(&'a self, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
-            async move {
-                self.stage.base.pre_run().await?.ok_or_else(|| ThoError::new("TrainTestStep2 state was not initialized"))
-            }.boxed()
+            StageWithState::pre_run(self.stage.base.as_ref())
         }
 
         fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {

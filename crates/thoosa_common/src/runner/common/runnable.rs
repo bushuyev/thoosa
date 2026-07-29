@@ -62,21 +62,11 @@ pub enum ConsumeResult<I, O> {
 }
 
 pub trait SyncStage: Stage + Debug {
-    type S:Debug + Send + Sync = ();
-
     fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
     where
         Self: Sized,
     {
         None
-    }
-
-    fn pre_run(&self) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>>
-     {//for train step etc
-
-        async {
-            Ok::<_, ThoError>(None)
-        }.boxed()
     }
 
     fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
@@ -92,7 +82,11 @@ pub trait SyncStage: Stage + Debug {
     }
 }
 
-pub trait StageWithState: SyncStage {
+pub trait StageWithState: SyncStage + Sync {
+    type S: Debug + Send + Sync;
+
+    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
+
     fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         unimplemented!()
     }
@@ -102,14 +96,42 @@ pub trait ErasedStageWithState<S>
 where
     S: SyncStage,
 {
-    fn do_run_with_state<'f>(&self, stage: Arc<S>, input: &S::In<'f>, state: MutexGuard<'_, S::S>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
+    fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
+}
+
+pub trait ErasedStageState<S>: Send
+where
+    S: SyncStage,
+{
+    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
+}
+
+struct StageStateGuard<'a, S>
+where
+    S: StageWithState,
+{
+    state: MutexGuard<'a, S::S>,
 }
 
 impl<S> ErasedStageWithState<S> for S
 where
     S: StageWithState,
 {
-    fn do_run_with_state<'f>(&self, stage: Arc<S>, input: &S::In<'f>, state: MutexGuard<'_, S::S>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
+    fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>> {
+        async move {
+            let state = StageWithState::pre_run(self).await?;
+            // Keep the concrete guard type inside the erased value while it spans later async preparation.
+            Ok(Box::new(StageStateGuard::<S> { state }) as Box<dyn ErasedStageState<S>>)
+        }.boxed()
+    }
+}
+
+impl<S> ErasedStageState<S> for StageStateGuard<'_, S>
+where
+    S: StageWithState,
+{
+    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
+        let Self { state } = *self;
         StageWithState::do_run_with_state(stage, input, state, ctx)
     }
 }
