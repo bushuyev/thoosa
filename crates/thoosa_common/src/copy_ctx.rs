@@ -156,9 +156,14 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage: to_device_idx={to_device_idx} input={input:?}");
 
-        let state = stage.pre_run().await?;
+        let state = if let Some(with_state) = stage.as_with_state() {
+            // Select stateful execution before preparation so only stateful stages run pre_run.
+            Some(with_state.pre_run().await?)
+        } else {
+            None
+        };
 
-        debug!("CudaActorHandle::run_stage: stage={stage:?} state={state:?}");
+        debug!("CudaActorHandle::run_stage: stage={stage:?} with_state={}", state.is_some());
 
         let borrowed = BorrowRef::borrow_to(&input, to_device_idx).await?;
 
@@ -171,11 +176,7 @@ impl dyn CudaActorHandle + '_ {
                 Arc::clone(&stage).do_run(borrowed.borrow(), ctx)
             }
             Some(state) => {
-                // Dispatch through the optional capability so this common runner supports any concrete state type.
-                stage
-                    .as_with_state()
-                    .ok_or_else(|| ThoError::new(format!("stage {stage:?} returned state without implementing StageWithState")))?
-                    .do_run_with_state(Arc::clone(&stage), borrowed.borrow(), state, ctx)
+                state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx)
             }
         };
 
@@ -202,7 +203,12 @@ impl dyn CudaActorHandle + '_ {
     {
         debug!("CudaActorHandle::run_stage_with_select: to_device_idx={to_device_idx} input={input:?} selector={selector:?}");
 
-        stage.pre_run().await?;
+        let state = if let Some(with_state) = stage.as_with_state() {
+            // Keep selector-based execution consistent with the primary stateful runner path.
+            Some(with_state.pre_run().await?)
+        } else {
+            None
+        };
 
         let borrowed = SelectRef::borrow_to(&input, to_device_idx, selector).await?;
 
@@ -210,7 +216,10 @@ impl dyn CudaActorHandle + '_ {
 
         let sync_ctx = handle_ctx.sync_ctx()?;
 
-        let out = stage.do_run(borrowed.borrow(), ctx);
+        let out = match state {
+            Some(state) => state.do_run_with_state(Arc::clone(&stage), borrowed.borrow(), ctx),
+            None => Arc::clone(&stage).do_run(borrowed.borrow(), ctx),
+        };
 
         handle_ctx.on_after_run()?;
 
