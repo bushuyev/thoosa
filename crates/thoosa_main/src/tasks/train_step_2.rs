@@ -1073,12 +1073,12 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {
-            CudaWorker::run_worker(
+            CudaWorker::run_worker_with_state(
                 sock_path,
                 HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
-                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
+                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=ThoTrainModule<InDimsX, OutDimsX>>>, ThoError>>,
                     ),
                 ])
                 ,

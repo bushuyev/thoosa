@@ -129,6 +129,12 @@ where
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
 {
+    type S = <S as SyncStage>::S;
+
+    fn pre_run(&self, _tho_device: &ThoDevice) -> BoxFuture<'_, Result<Option<MutexGuard<'_, Self::S>>, ThoError>> {
+        self.sync_stage.pre_run()
+    }
+
     fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
         debug!("IpcSyncStageWrapper::do_run: input.len={}", input.len());
 
@@ -152,6 +158,25 @@ where
         out.encode_from_worker::<C>(all_cuda_tensors, tho_device)
     }
 
+    fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        // Stateful stages use the same worker decoding and output encoding as
+        // the existing stateless path while retaining their typed lock guard.
+        let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(input) {
+            Ok(input) => input.into_parts(),
+            Err(error) => {
+                debug!("IpcSyncStageWrapper::do_run_with_state: error={error:?}");
+                (input.to_vec(), None)
+            },
+        };
+        let input = I::decode_for_worker::<C>(&input, all_cuda_tensors)?;
+        let mut ctx = RunCtxImpl::new(1, self.endpoint_name);
+        if let Some(max_other_parallel) = max_other_parallel {
+            ctx.set_max_other_parallel(max_other_parallel);
+        }
+        let out = Arc::clone(&self.sync_stage).do_run_with_state::<<S as SyncStage>::S>(&input, state, &ctx)?;
+        Ok(SyncStageIpcResponse::Encoded(out.encode_from_worker::<C>(all_cuda_tensors, tho_device)?))
+    }
+
     fn consume_response(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         let (input, max_other_parallel) = match C::decode::<IpcSyncStageRunInput>(_input) {
             Ok(input) => input.into_parts(),
@@ -172,7 +197,7 @@ where
     }
 }
 
-pub fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper<S=()>>
+pub fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper<S=<S as SyncStage>::S>>
 where
     C: IpcCodec,
     S: SyncStage + Debug + Send + Sync + 'static,
@@ -183,7 +208,7 @@ where
     Box::new(IpcSyncStageWrapper::<C, S, I, O>::new(endpoint_name, sync_stage))
 }
 
-pub fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper<S=()>>
+pub fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper<S=<S as SyncStage>::S>>
 where
     S: SyncStage + Debug + Send + Sync + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,
