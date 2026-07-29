@@ -470,7 +470,7 @@ where
 
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     #![allow(unused_assignments)]
     use futures::stream::{self, BoxStream};
     use futures_util::StreamExt;
