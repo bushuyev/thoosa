@@ -122,6 +122,19 @@ impl CudaWorker {
         endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>  >>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
+        Self::run_worker_with_state(sock_path, endpoint_inits, tho_device).await
+    }
+
+    pub async fn run_worker_with_state<S>(
+        sock_path:OsString,
+        endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=S>>, ThoError>  >>,
+        tho_device: ThoDevice
+    ) -> Result<(), ThoError>
+    where
+        S: Debug + Send + Sync + 'static,
+    {
+        // Keep the original unit-state entry point while allowing a worker
+        // invocation whose endpoints share a concrete state guard type.
         GlobalCtx::init_devices(2);
 
         let with_digest = false;//TODO config
@@ -160,7 +173,7 @@ impl CudaWorker {
         let mut pending_h2d_transfers = HashMap::<u64, PendingWorkerH2dTransfer>::new();
         let mut pending_d2h_transfers = HashMap::<u64, PendingWorkerD2hTransfer>::new();
         let mut cuda_resources = HashMap::<usize, Arc<WorkerCudaResources>>::new();
-        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper<S=()>>>::new()));
+        let installed_endpoints = Arc::new(RwLock::new(HashMap::<String, Box<dyn SyncStageIpcWrapper<S=S>>>::new()));
 
         loop {
             let frame = match cuda_process::read_text_frame(&mut reader, "run_worker").await {
