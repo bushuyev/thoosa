@@ -421,35 +421,35 @@ where
     }
 }
 
-pub fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+pub fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>> {
     HashMap::from([
         (
             TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
-            Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
         (
             SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
-            Box::new(sync_motif_bastch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_motif_bastch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
         (
             SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT.to_string(),
-            Box::new(split_motif_into_train_valid_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(split_motif_into_train_valid_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
         (
             SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT.to_string(),
-            Box::new(sync_load_motif_resources_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_load_motif_resources_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
         (
             SYNC_LOAD_RANDOM_SLICES_ENDPOINT.to_string(),
-            Box::new(sync_load_random_slices_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_load_random_slices_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
         (
             SYNC_MOTIF_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_motif_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_motif_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_label_batch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
         ),
     ])
 }
@@ -2128,7 +2128,7 @@ mod tests {
                 HashMap::from([
                     (
                         TRAIN_TEST_STEP_ENDPOINT.to_string(),
-                        Box::new(train_test_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                        Box::new(train_test_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
                     ),
 
                 ])

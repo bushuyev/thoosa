@@ -58,8 +58,22 @@ impl SyncStageIpcConsumeResponse {
 }
 
 pub trait SyncStageIpcWrapper:Sync + Debug {
+    type S:Debug + Send + Sync = ();
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::pre_run"))]
+    fn pre_run(&self, _tho_device: &ThoDevice) ->BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>> {
+        async {
+            Ok::<_, ThoError>(None)
+        }.boxed()
+    }
+
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run"))]
     fn do_run(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError> {
+        Err(ThoError::new("IPC endpoint does not support do_run"))
+    }
+
+    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run"))]
+    fn do_run_with_state(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, mut state:MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) ->Result<SyncStageIpcResponse, ThoError> {
         Err(ThoError::new("IPC endpoint does not support do_run"))
     }
 
@@ -158,7 +172,7 @@ where
     }
 }
 
-pub fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
+pub fn make_ipc_sync_stage_wrapper<C, S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper<S=()>>
 where
     C: IpcCodec,
     S: SyncStage + Debug + Send + Sync + 'static,
@@ -169,7 +183,7 @@ where
     Box::new(IpcSyncStageWrapper::<C, S, I, O>::new(endpoint_name, sync_stage))
 }
 
-pub fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper>
+pub fn make_json_sync_stage_wrapper<S, I, O>(endpoint_name: &'static str, sync_stage: S) -> Box<dyn SyncStageIpcWrapper<S=()>>
 where
     S: SyncStage + Debug + Send + Sync + 'static,
     for<'a> S: Stage<In<'a> = I, Out = O, Ctx = RunCtxImpl>,

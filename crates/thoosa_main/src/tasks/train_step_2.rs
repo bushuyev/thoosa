@@ -749,8 +749,7 @@ mod tests {
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
     use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2WeightsSync, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT};
     use futures_util::FutureExt;
-
-
+    use tokio::sync::MutexGuard;
 
     ////
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -915,13 +914,22 @@ mod tests {
     struct TrainTestStep2Init {
 
     }
+
     #[derive(Debug)]
     struct TrainTestStep2IpcWrapper {
         stage: Arc<TrainTestStep2ProxyTarget>,
     }
-    impl SyncStageIpcWrapper for TrainTestStep2IpcWrapper {
-        fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
 
+    impl SyncStageIpcWrapper for TrainTestStep2IpcWrapper {
+        type S = ThoTrainModule<InDimsX, OutDimsX>;
+
+
+        fn pre_run(&self, _tho_device: &ThoDevice) -> BoxFuture<Result<Option<MutexGuard<'_, Self::S>>, ThoError>> {
+            self.stage.base.pre_run()
+        }
+
+
+        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
                     debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
@@ -933,12 +941,10 @@ mod tests {
 
                     let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true);
                     let stage = Arc::clone(&self.stage.base);
-                    let state = stage.pre_run().await?;
 
-
-                    Ok(JsonIpcCodec::encode(&Arc::clone(&stage).do_run_with_state::<ThoTrainModule<InDimsX, OutDimsX>>(&input, state.unwrap(), &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
+                    Ok(JsonIpcCodec::encode(&Arc::clone(&stage).do_run_with_state::<ThoTrainModule<InDimsX, OutDimsX>>(&input, state, &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
                 })
-            })
+            }).map(SyncStageIpcResponse::Encoded)
         }
 
         fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
@@ -1072,7 +1078,7 @@ mod tests {
                 HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
-                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper<S=()>>, ThoError>>,
                     ),
                 ])
                 ,
