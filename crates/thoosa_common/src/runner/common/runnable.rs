@@ -92,6 +92,7 @@ pub trait StageWithState: SyncStage + Sync {
     }
 }
 
+///for keeping stages with different state types in the CudaWorker's installed stages map
 pub trait ErasedStageWithState<S>
 where
     S: SyncStage,

@@ -132,9 +132,9 @@ where
         Ok((TrainStep2DynSyncStage::Local(Arc::new(stage)), node_params))
     }
 
-    pub(crate) async fn new_local<NP, TMB, TMBF, RC>(device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, run_config: &RC) -> Result<(Self, NP), ThoError>
+    pub(crate) async fn new_local<NP, TMB, TMBF, RC>(device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, run_config: RC) -> Result<(Self, NP), ThoError>
     where
-        TMB: FnOnce(&RC, ThoDevice) -> TMBF,
+        TMB: FnOnce(RC, ThoDevice) -> TMBF,
         TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
     {
         let (train_module, node_params) = train_module_builder(run_config, device).await?;
@@ -730,7 +730,8 @@ mod tests {
     use std::future::ready;
     use std::marker::PhantomData;
     use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
+    use std::sync::atomic::Ordering::Relaxed;
     use async_trait::async_trait;
     use futures_util::future::BoxFuture;
     use futures_util::{stream, StreamExt};
@@ -782,7 +783,7 @@ mod tests {
     pub struct OutDimsX {}
     impl Dims for OutDimsX { type Metrics = MonoMetrics<0, 1>; }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     struct TestNetXParams {
         in_features:u32,
         layers:usize
@@ -790,25 +791,32 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct TestRunConfig {
-        lr:f64
+        pub lr:f64,
+        pub in_features:u32,
+        pub layers:usize
+    }
+
+    impl TestRunConfig {
+        pub fn new(lr: f64, in_features: u32, layers: usize) -> Self {
+            Self { lr, in_features, layers }
+        }
     }
 
     #[derive(Debug)]
-    struct TrainStepXFactory {//like TrainMotifsStep, TrainLabels, TrainFinal
-        // inner:TrainStep2<Box<dyn Fn(ThoBatch<InDims>)-> ThoBatch<InDims>+ Send + Sync + 'static>, InDims, OutDims, RunCtxImpl>
+    struct TrainStepXFactory {//X for Motifs, Label, Final in TrainMotifNet, TrainLabelNets, TrainFinalNet
     }
 
     trait TrainStepFactory {
         type NP:Send;
         type R:Send + Debug+Clone; //RunConfig
-        type InDims:Dims;
-        type OutDims:Dims;
+        type InDims:Dims + 'static;
+        type OutDims:Dims + 'static;
 
-        type C:RunCtx;
+        type C:RunCtx + 'static;
 
 
 
-        fn new(run_config:&Self::R) -> impl std::future::Future<Output = Result<(TrainStep2<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>, Self::NP), ThoError>> + std::marker::Send;
+        fn new(run_config:Self::R, ctx:Self::C) -> impl Future<Output = Result<(TrainStep2DynSyncStage<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>, Self::NP), ThoError>> + Send;
     }
 
     impl TrainStepFactory for TrainStepXFactory {
@@ -818,41 +826,56 @@ mod tests {
         type OutDims = OutDimsX;
         type C = RunCtxImpl;
 
-        fn new(run_config:&TestRunConfig) -> impl std::future::Future<Output = Result<(TrainStep2<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>, Self::NP), ThoError>> + std::marker::Send{
+        fn new(run_config:TestRunConfig, ctx:Self::C) -> impl Future<Output = Result<(TrainStep2DynSyncStage<Box<dyn Fn(ThoBatch<Self::InDims>)-> ThoBatch<Self::InDims>+ Send + Sync + 'static>, Self::InDims, Self::OutDims, Self::C>, Self::NP), ThoError>> + Send{
 
             async move {
-                TrainStep2::new_local(
-                    Cuda(0).into(),
-                    |rc, device| {
-                        let lr = rc.lr;
-                        async move {
-                            let params = TestNetXParams { in_features: 100, layers: 2 };
-                            /*
-                             * Recreate the same module topology for every
-                             * ThoTrainModule device restoration.
-                             */
-                            let config = ModConfig::new(
-                                Adam::default(),
-                                |var_store| test_net(&TestNetXParams { in_features: 100, layers: 2 })?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
-                                lr,
-                            );
-                            Ok((ThoTrainModule::new_on_device(config, device)?, params))
-                        }
-                    },
-                    Arc::new(Box::new(|t| {
-                        t
-                    }) as Box<dyn Fn(ThoBatch<InDimsX>) -> ThoBatch<InDimsX> + Send + Sync + 'static>),
-                    |pred_y: &Tensor, target: &Tensor| {
-                        Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?)
-                    },
-                    &run_config,
-                ).await
+                if GlobalCtx::global().is_ipc() {
+                    Ok((
+                        TrainStep2DynSyncStage::Proxy {
+                            stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
+                                TrainTestStep2Init{},
+                                1
+                            ).await?) as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
+                        },
+                        TestNetXParams { in_features: 100, layers: 2 }
+                    ))
+                } else {
+                    let (stage, params) = TrainStep2::new_local(
+                        ctx.tho_device_idx().into(),
+                        |rc, device| {
+                            let lr = rc.lr;
+                            async move {
+                                let params = TestNetXParams { in_features: rc.in_features, layers: rc.layers };
+                                let params_for_mod_config = params.clone();
+                                /*
+                                 * Recreate the same module topology for every
+                                 * ThoTrainModule device restoration.
+                                 */
+                                let config = ModConfig::new(
+                                    Adam::default(),
+                                    move |var_store| test_net(&params_for_mod_config)?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
+                                    lr,
+                                );
+                                Ok((ThoTrainModule::new_on_device(config, device)?, params))
+                            }
+                        },
+                        Arc::new(Box::new(|t| {
+                            t
+                        }) as Box<dyn Fn(ThoBatch<InDimsX>) -> ThoBatch<InDimsX> + Send + Sync + 'static>),
+                        |pred_y: &Tensor, target: &Tensor| {
+                            Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?)
+                        },
+                        &run_config,
+                    ).await?;
+                    Ok((TrainStep2DynSyncStage::Local(Arc::new(stage)), params))
+
+                }
             }
         }
     }
 
-    pub async fn opt_train_2<R, F, N>(
-        run_config_source:R,
+    pub async fn opt_train_2<R, F, N>(//corresponds to opt_train crates/thoosa_common/src/train_nets.rs:2037
+        run_config_source:R,//opt_train functionality should remain as is, the single run config here is for simplicity
         mut train: F
     ) ->Result<(VarStore, f32, N), ThoError>
     where
@@ -860,7 +883,7 @@ mod tests {
         F:AsyncFnMut(R)->Result<(VarStore, f32, N), ThoError> //+run_config for debug
     {
 
-        //runs few times searching for optimal run_config
+        //runs few times getting run configurations from run_config_source and searching for optimal run_config
         train(
             run_config_source.clone(),
         ).await
@@ -896,12 +919,13 @@ mod tests {
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
-        type Ctx = RunCtxImpl;
+        // Use the factory context here so the stage, train step, and batch stream share one context type.
+        type Ctx = SF::C;
         type In<'a> = TrainNet2Input;
         type Out = ();
     }
 
-    //for test only to avoid errors because of run_config_source which is not Sync and Send
+    //-->for test only to avoid errors because of run_config_source which is not Sync and Send
     unsafe impl <SF, B> Sync for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
@@ -911,7 +935,7 @@ mod tests {
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
-    {}
+    {}//<--
 
     impl <SF, B> TrainNet2<SF, B>
     where
@@ -942,8 +966,10 @@ mod tests {
 
         fn run_inner(self:Arc<Self>, run_config:SF::R, mut ctx: <Self as Stage>::Ctx)->BoxFuture<'static, Result<(VarStore, f32, SF::NP), ThoError>>{
             let selff = Arc::clone(&self);
+            let  ctx_for_run_stage = ctx.branch(false);
+            // let mut ctx = ctx.branch(false);
             Box::pin(async move {
-                let (train_step, net_params) = SF::new(&run_config).await?;
+                let (train_step, net_params) = SF::new(run_config, ctx.branch(false)).await?;
                 let train_step= Arc::new(train_step);
                 let mut best_output = None;
                 for epoch in 0..3 {
@@ -955,7 +981,12 @@ mod tests {
                         // let input = Arc::new(TrainStep2InputWrapper::new(TrainStep2Input::new(x_t_0, lengths, expected_y, true)));
                         let input = TrainStep2Input::new(x_t_0, lengths, expected_y, true);
 
-                        let r = Arc::clone(&train_step).do_run(&input, &ctx.branch(false))?;
+                        // TrainStep2 owns mutable module state, so use its stateful execution contract.
+                        // let state = StageWithState::pre_run(train_step.as_ref()).await?;
+                        // let r = StageWithState::do_run_with_state(Arc::clone(&train_step), &input, state, &ctx.branch(false))?;
+
+
+                        let r = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx_for_run_stage);
                         best_output.replace(r);
 
 
@@ -1099,7 +1130,7 @@ mod tests {
 
     impl TrainTestStep2ProxyTarget {
         pub fn new()->Self {
-            let run_config = TestRunConfig{ lr: 0.001 };
+            let run_config = TestRunConfig::new(0.001, 1000, 3);
 
             let (train_step, params) : (TrainStep2<Box<dyn Fn<_, Output = _> + std::marker::Send + Sync>, _, _, _>, TestNetXParams)=  futures::executor::block_on(TrainStep2::new_local(
                 Cuda(0).into(),
@@ -1191,8 +1222,7 @@ mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (step_stage, np) = TrainStepXFactory::new(Box::new(||TestRunConfig{ lr: 0.1 })).await?;
-        let train_step =TrainStep2DynSyncStage::Local (Arc::new(step_stage));
+        let (train_step, np) = TrainStepXFactory::new(TestRunConfig::new(0.001, 100, 3), RunCtxImpl::new(1, "test")).await?;
 
 
         do_test_train_step_2(train_step, || ready(Ok(TrainStep2Input::<InDimsX, OutDimsX>::new(
@@ -1239,17 +1269,20 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_train_net_2()->Result<(), ThoError>{
+    async fn test_train_net_2_local()->Result<(), ThoError>{
+        GlobalCtx::init_devices(2);
+        let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
+
         let train_stream_calls = Arc::new(AtomicUsize::new(0));
         let valid_stream_calls = Arc::new(AtomicUsize::new(0));
 
         let mock_test_batch = Arc::new(
             mock_async_data_batch::build::<InDimsX, OutDimsX, RunCtxImpl>()
-                .with_train_stream_calls(Arc::clone(&train_stream_calls), |_ctx| make_stream())
-                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream())
+                .with_train_stream_calls(Arc::clone(&train_stream_calls), |_ctx| make_stream(false))
+                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream(false))
                 .finish(),
         );
-        let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(||TestRunConfig{lr:0.1})));
+        let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(||TestRunConfig::new(0.001, 100, 3))));
 
         let r = train_net.run(TrainNet2Input{}, RunCtxImpl::new(1, "test")).await?;
 
@@ -1257,15 +1290,67 @@ mod tests {
 
     }
 
+    #[test]
+    fn test_train_net_2_ipc()->Result<(), ThoError>{
 
-    fn dummy_batch() -> (ThoBatch<InDimsX>, ThoBatch<OutDimsX>) {
-        let x = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
-        let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
-        (x.into(), y.into())
+        run_ipc_test(async {
+            let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
+            let test_name = format!("{module}::test_train_net_2_ipc");
+            GlobalCtx::init_devices_ipc(2, vec![test_name, "--exact".to_string(), "--nocapture".to_string()]).await?;
+            let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
+
+            let train_stream_calls = Arc::new(AtomicUsize::new(0));
+            let valid_stream_calls = Arc::new(AtomicUsize::new(0));
+
+
+            let mock_test_batch = Arc::new(
+                mock_async_data_batch::build::<InDimsX, OutDimsX, RunCtxImpl>()
+                    .with_train_stream_calls(Arc::clone(&train_stream_calls), |_ctx| make_stream(true))
+                    .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream(true))
+                    .finish(),
+            );
+            let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(||TestRunConfig::new(0.001, 100, 3))));
+
+            let r = train_net.run(TrainNet2Input{}, RunCtxImpl::new(1, "test")).await?;
+
+            Ok(())
+        }, async |sock_path| {
+            CudaWorker::run_worker(
+                sock_path,
+                HashMap::from([
+                    (
+                        TRAIN_TEST_STEP2_ENDPOINT.to_string(),
+                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                    ),
+                ]),
+                ThoDevice::from(Cuda(0)),
+            ).await
+        })
+
     }
 
-    pub fn make_stream() -> BoxStream<'static, Result<(ThoBatch<InDimsX>, Option<BatchLengths>, ThoBatch<OutDimsX>), ThoError>> {
-        let (x, y) = dummy_batch();
+
+
+    fn dummy_batch(make_refs:bool) -> (ThoBatch<InDimsX>, ThoBatch<OutDimsX>) {
+        // Match the test network's 100 input features so this fixture exercises the training path.
+        static DUMMY_TENSOR_REF_ID:AtomicU64 = AtomicU64::new(0);
+        let id = DUMMY_TENSOR_REF_ID.fetch_add(1, Relaxed);
+        if make_refs {
+            (
+                ThoTensor::new_ref(simple_id!(format!("x_{}", id)), id, vec![1, 1, 100], Float, None, 1),
+                ThoTensor::new_ref(simple_id!(format!("y_{}", id)), id, vec![1, 1, 1], Float, None, 1),
+
+            )
+        } else {
+            let x = Tensor::zeros([1, 1, 100], FLOAT_CUDA);
+            let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
+            (x.into(), y.into())
+        }
+    }
+
+    pub fn make_stream(make_refs:bool) -> BoxStream<'static, Result<(ThoBatch<InDimsX>, Option<BatchLengths>, ThoBatch<OutDimsX>), ThoError>> {
+        let (x, y) = dummy_batch(make_refs);
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }
 }
