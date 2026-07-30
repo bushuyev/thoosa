@@ -250,8 +250,6 @@ where
         }
 
         Ok(TrainStep2Output::new(loss_value))
-        // Ok(TrainStep2Output::new(0.1))
-
     }
 }
 
@@ -354,7 +352,10 @@ impl<DI: Dims, DO: Dims> WithId for TrainStep2Input<DI, DO> {
 
 impl<DI: Dims, DO: Dims> Debug for TrainStep2Input<DI, DO> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrainStep2Input").finish()
+        f.debug_struct("TrainStep2Input")
+            .field("x", &self.x)
+            .field("expected_y", &self.expected_y)
+            .finish()
     }
 }
 
@@ -965,31 +966,31 @@ mod tests {
         }
 
         fn run_inner(self:Arc<Self>, run_config:SF::R, mut ctx: <Self as Stage>::Ctx)->BoxFuture<'static, Result<(VarStore, f32, SF::NP), ThoError>>{
-            let selff = Arc::clone(&self);
+            debug!("TrainNet2::run_inner: run_config={run_config:?}");
+
+            let self_arc = Arc::clone(&self);
             let  ctx_for_run_stage = ctx.branch(false);
-            // let mut ctx = ctx.branch(false);
+
             Box::pin(async move {
                 let (train_step, net_params) = SF::new(run_config, ctx.branch(false)).await?;
                 let train_step= Arc::new(train_step);
                 let mut best_output = None;
                 for epoch in 0..3 {
-                    let self_arc = Arc::clone(&selff);
+                    let self_arc = Arc::clone(&self_arc);
                     let mut batches = self_arc.batch.train_batch_stream(ctx.branch(false));
 
 
                     while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next()).await {
-                        // let input = Arc::new(TrainStep2InputWrapper::new(TrainStep2Input::new(x_t_0, lengths, expected_y, true)));
                         let input = TrainStep2Input::new(x_t_0, lengths, expected_y, true);
 
+                        debug!("TrainNet2::run_inner: epoch={epoch} input={input:?}");
+
                         // TrainStep2 owns mutable module state, so use its stateful execution contract.
-                        // let state = StageWithState::pre_run(train_step.as_ref()).await?;
-                        // let r = StageWithState::do_run_with_state(Arc::clone(&train_step), &input, state, &ctx.branch(false))?;
+                        let r = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx_for_run_stage).await?;
 
+                        debug!("TrainNet2::run_inner: epoch={epoch} r={r:?}");
 
-                        let r = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx_for_run_stage);
                         best_output.replace(r);
-
-
                     }
 
                 }
@@ -1332,25 +1333,38 @@ mod tests {
 
 
 
-    fn dummy_batch(make_refs:bool) -> (ThoBatch<InDimsX>, ThoBatch<OutDimsX>) {
+    fn dummy_batch(make_refs:bool) -> Result<(ThoBatch<InDimsX>, ThoBatch<OutDimsX>), ThoError> {
         // Match the test network's 100 input features so this fixture exercises the training path.
-        static DUMMY_TENSOR_REF_ID:AtomicU64 = AtomicU64::new(0);
-        let id = DUMMY_TENSOR_REF_ID.fetch_add(1, Relaxed);
         if make_refs {
-            (
-                ThoTensor::new_ref(simple_id!(format!("x_{}", id)), id, vec![1, 1, 100], Float, None, 1),
-                ThoTensor::new_ref(simple_id!(format!("y_{}", id)), id, vec![1, 1, 1], Float, None, 1),
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-            )
+            futures::executor::block_on(async {
+                let x = cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[1, 1, 100], FLOAT_CPU))?, 1.into()).await?;
+                let ThoTensorInner::Ref{ key:key_x, size:size_x, kind, selector, tho_device_idx } = x.inner  else {
+                    panic!("should be ref")
+                };
+                let y = cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[1, 1, 1], FLOAT_CPU))?, 1.into()).await?;
+                let ThoTensorInner::Ref{ key:key_y, size:size_y, kind, selector, tho_device_idx } = y.inner  else {
+                    panic!("should be ref")
+                };
+                Ok(
+                    (
+                        ThoTensor::new_ref(simple_id!(format!("x_{}", key_x)), key_x, vec![1, 1, 100], Float, None, 1),
+                        ThoTensor::new_ref(simple_id!(format!("y_{}", key_y)), key_y, vec![1, 1, 1], Float, None, 1),
+
+                    )
+                )
+            })
+
         } else {
             let x = Tensor::zeros([1, 1, 100], FLOAT_CUDA);
             let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
-            (x.into(), y.into())
+            Ok((x.into(), y.into()))
         }
     }
 
-    pub fn make_stream(make_refs:bool) -> BoxStream<'static, Result<(ThoBatch<InDimsX>, Option<BatchLengths>, ThoBatch<OutDimsX>), ThoError>> {
-        let (x, y) = dummy_batch(make_refs);
+    fn make_stream(make_refs:bool) -> BoxStream<'static, Result<(ThoBatch<InDimsX>, Option<BatchLengths>, ThoBatch<OutDimsX>), ThoError>> {
+        let (x, y) = dummy_batch(make_refs).unwrap();
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }
 }
