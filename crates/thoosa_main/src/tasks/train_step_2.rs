@@ -116,26 +116,6 @@ where
     F: Fn(ThoBatch<DI>) -> ThoBatch<DI> + Send + Sync + 'static,
 {
 
-    #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep2::new"))]
-    pub(crate) async fn new<NP, TMB, TMBF, RC>(tho_device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, proxy_factory: Option<&Arc<dyn TrainStep2ProxyFactory<DI, DO, C, NP, RC>>>, run_config: &RC) -> Result<(TrainStep2DynSyncStage<F, DI, DO, C>, NP), ThoError>
-    where
-        DI: 'static,
-        DO: 'static,
-        C: 'static,
-        NP: Debug + Send + Sync + 'static,
-        RC: Debug + Send + Sync + 'static,
-        TMB: FnOnce(&RC, ThoDevice) -> TMBF,
-        TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
-    {
-        if GlobalCtx::global().is_ipc() && let Some(proxy_factory) = proxy_factory
-        {
-            let TrainStep2ProxyParts { stage, weights_sync, node_params } = proxy_factory.new_proxy(run_config, tho_device.tho_device_idx()).await?;
-            return Ok((TrainStep2DynSyncStage::Proxy { stage }, node_params));
-        }
-
-        let (stage, node_params) = Self::new_local(tho_device, train_module_builder, x_f, loss_fn, run_config).await?;
-        Ok((TrainStep2DynSyncStage::Local(Arc::new(stage)), node_params))
-    }
 
     pub(crate) async fn new_local<NP, TMB, TMBF, RC>(device: ThoDevice, train_module_builder: TMB, x_f: Arc<F>, loss_fn: LossFp, run_config: RC) -> Result<(Self, NP), ThoError>
     where
@@ -293,22 +273,7 @@ where
 
 pub(crate) type TrainStep2XFn<D> = Box<dyn Fn(ThoBatch<D>) -> ThoBatch<D> + Send + Sync + 'static>;
 
-#[async_trait]
-pub(crate) trait TrainStep2WeightsSync: Debug + Send + Sync {
-    async fn into_var_store(&self) -> Result<VarStore, ThoError>;
-}
 
-#[async_trait]
-pub(crate) trait TrainStep2ProxyFactory<DX, DY, C, NP, RC>: Debug + Send + Sync
-where
-    DX: Dims + 'static,
-    DY: Dims + 'static,
-    C: RunCtx + 'static,
-    NP: Debug + Send + Sync + 'static,
-    RC: Debug + Send + Sync + 'static,
-{
-    async fn new_proxy(&self, run_config: &RC, tho_device_idx: usize) -> Result<TrainStep2ProxyParts<DX, DY, C, NP>, ThoError>;
-}
 
 #[derive(Serialize, Deserialize)]
 pub struct TrainStep2Input<DI: Dims, DO: Dims> {
@@ -726,27 +691,6 @@ impl TrainStep2IpcRequest {
     }
 }
 
-pub(crate) struct TrainStep2ProxyParts<DX, DY, C, NP>
-where
-    DX: Dims + 'static,
-    DY: Dims + 'static,
-    C: RunCtx + 'static,
-{
-    stage: Arc<DynSyncStageBox<TrainStep2Input<DX, DY>, TrainStep2Output, C>>,
-    weights_sync: Arc<dyn TrainStep2WeightsSync>,
-    node_params: NP,
-}
-
-impl<DX, DY, C, NP> TrainStep2ProxyParts<DX, DY, C, NP>
-where
-    DX: Dims + 'static,
-    DY: Dims + 'static,
-    C: RunCtx + 'static,
-{
-    pub(crate) fn new(stage: Arc<DynSyncStageBox<TrainStep2Input<DX, DY>, TrainStep2Output, C>>, weights_sync: Arc<dyn TrainStep2WeightsSync>, node_params: NP) -> Self {
-        Self { stage, weights_sync, node_params }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -795,7 +739,7 @@ mod tests {
     use thoosa_shared::traits::{MonoMetrics, SimpleId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
-    use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2WeightsSync, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT, TrainStep2ProxyFactory};
+    use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT};
     use futures_util::FutureExt;
     use futures_util::stream::BoxStream;
     use rand::random;
@@ -817,7 +761,7 @@ mod tests {
         layers:usize
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestRunConfig {
         pub lr:f64,
         pub in_features:u32,
@@ -861,11 +805,11 @@ mod tests {
                     Ok((
                         TrainStep2DynSyncStage::Proxy {
                             stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
-                                TrainTestStep2Init{},
-                                1
+                                TrainTestStep2Init{ tho_device_idx: ctx.tho_device_idx(), run_config: run_config.clone() },
+                                ctx.tho_device_idx()
                             ).await?) as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
                         },
-                        TestNetXParams { in_features: 100, layers: 2 }
+                        TestNetXParams { in_features: run_config.in_features, layers: run_config.layers }
                     ))
                 } else {
                     let (stage, params) = TrainStep2::new_local(
@@ -1100,7 +1044,7 @@ mod tests {
             })
         }
 
-        pub fn new(batch: B, run_config_source:Box<dyn Fn()->SF::R>) -> Self {
+        pub fn new(batch: B, run_config_source:Box<dyn Fn()->SF::R>) -> Self {//here run_config_source is a closure producing the only possible run_config, in the real app run_config_source may produce many different run configs
             Self {
                 batch,
                 run_config_source,
@@ -1108,8 +1052,6 @@ mod tests {
             }
         }
     }
-
-
 
     pub fn test_net(params: &TestNetXParams) -> Result<Node, ThoError> {
         debug!("final_node: params={:?}", params);
@@ -1151,7 +1093,8 @@ mod tests {
 
     #[derive(Debug, Serialize, Deserialize)]
     struct TrainTestStep2Init {
-
+        tho_device_idx:usize,
+        run_config:TestRunConfig
     }
 
     #[derive(Debug)]
@@ -1222,6 +1165,8 @@ mod tests {
         init = "init",
         out_id = "()",
         endpoint_init = "train_test_step_2_endpoint_init",
+        init_type = "TrainTestStep2Init",
+        init_stage = "TrainTestStep2ProxyTarget::new(init)",
         wrapper = "TrainTestStep2IpcWrapper"
 
     )]
@@ -1230,22 +1175,23 @@ mod tests {
     }
 
     impl TrainTestStep2ProxyTarget {
-        pub fn new()->Self {
-            let run_config = TestRunConfig::new(0.001, 1000, 3);
+        pub fn new(init: TrainTestStep2Init)->Self {
+            debug!("TrainTestStep2ProxyTarget::init: init={init:?}");
 
             let (train_step, params) : (TrainStep2<Box<dyn Fn<_, Output = _> + std::marker::Send + Sync>, _, _, _>, TestNetXParams)=  futures::executor::block_on(TrainStep2::new_local(
-                Cuda(0).into(),
+                init.tho_device_idx.into(),//TODO assert it matches actual worker's device or pass the latter into init function
                 |rc, device|  {
                     let lr = rc.lr;
                     async move {
-                        let params = TestNetXParams { in_features: 100, layers: 2 };
+                        let params = TestNetXParams { in_features: rc.in_features, layers: rc.layers };
+                        let params_for_mod_config = params.clone();
                         /*
                          * Recreate the same module topology for every
                          * ThoTrainModule device restoration.
                          */
                         let config = ModConfig::new(
                             Adam::default(),
-                            |var_store| test_net(&TestNetXParams { in_features: 100, layers: 2 })?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
+                            move |var_store| test_net(&params_for_mod_config)?.build_tch_module::<Batch<InDimsX>, Batch<OutDimsX>>(&var_store.root()),
                             lr,
                         );
                         Ok((ThoTrainModule::new_on_device(config, device)?, params))
@@ -1257,7 +1203,7 @@ mod tests {
                 |pred_y: &Tensor, target: &Tensor|{
                     Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?)
                 },
-                &run_config,
+                &init.run_config,
             )).unwrap();
 
             Self {
@@ -1283,15 +1229,16 @@ mod tests {
                 panic!("should be ref")
             };
 
-
+            let run_config = TestRunConfig::new(0.01, 100, 3);
+            let x_params = TestNetXParams { in_features: run_config.in_features, layers: run_config.layers };
             let (train_step, params): (TrainStep2DynSyncStage<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>, TestNetXParams) = (
                 TrainStep2DynSyncStage::Proxy {
                     stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxyTrainTestStep2::new(
-                        TrainTestStep2Init{},
-                        1
+                        TrainTestStep2Init{ tho_device_idx, run_config },
+                        tho_device_idx
                     ).await?) as Arc<dyn DynSyncStage<TrainStep2Input<InDimsX, OutDimsX>, TrainStep2Output,RunCtxImpl>>)),
                 },
-                TestNetXParams { in_features: 100, layers: 2 }
+                x_params
             );
 
             do_test_train_step_2(train_step, async ||Ok(TrainStep2Input::<InDimsX, OutDimsX>::new(
