@@ -541,7 +541,7 @@ mod tests {
         let mut vs = VarStore::new(Device::Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = final_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
-        let net_id = ws_box.save_final_net(3, &vs, &params)?;
+        let net_id = ws_box.save_final_net(3, (&vs).into(), &params)?;
 
         let ws = Arc::new(RwLock::new(ws_box));
         let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from("final").join(&net_id)), precision_target);
@@ -572,7 +572,7 @@ mod tests {
         let mut vs = VarStore::new(Device::Cpu);
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = lin_label_node(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
-        let net_id = ws_box.save_label_net(3, &"label_a", &vs, &params)?;
+        let net_id = ws_box.save_label_net(3, &"label_a", (&vs).into(), &params)?;
 
         let ws = Arc::new(RwLock::new(ws_box));
         let args = ConvertPrecisionArgs::new(ConvertPrecisionBy::Path(PathBuf::from(&net_id)), precision_target);
