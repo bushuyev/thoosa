@@ -9,7 +9,7 @@ use tch::{no_grad, Kind, Tensor, Device, nn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
 use tokio::task::JoinSet;
-use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError};
+use thoosa_shared::{panic_to_err, CopyToDevice, MoveToDevice, ThoError};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Named, ThoSelector};
@@ -141,6 +141,15 @@ where
         match &self.opt_state {
             OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => vs.save_to_stream(output).map_err(ThoError::from),
         }
+    }
+
+    pub fn save_var_store<T: AsRef<std::path::Path>>(&self, path:T) -> Result<(), ThoError> {
+        match &self.opt_state {
+            OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => {
+                panic_to_err!(vs.save(&path))
+            },
+        }
+
     }
 
     pub fn set_lr(&mut self, lr: f64) {
