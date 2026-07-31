@@ -191,7 +191,7 @@ where
                     (unsafe { adam_snapshot(opt.as_raw_c_optimizer())? }, vs)
                 }
                 _ => {
-                    // return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                    // var store should be already on cpu
                     return Ok(())
                 }
             };
@@ -210,7 +210,7 @@ where
                  */
                 OptSnapshot::Snapshot { cpu_snap, vs } => (detach_adam_snapshot(cpu_snap), vs),
                 _ => {
-                    // return Err(ThoError::new(format!("Incompatible opt self.opt_state={:?} and dst device {}", self.opt_state, tho_dst_device)));
+                    // var store should be already on device
                     return Ok(())
                 }
             };

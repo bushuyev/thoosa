@@ -211,7 +211,7 @@ impl SavableResult for TrainLabelNetRunConfigResult {
             .save_label_net(
                 run_config_id,
                 &self.label,
-                &self.var_store,
+                (&self.var_store).into(),
                 &self.label_node_params,
             ))?;
 
@@ -270,7 +270,7 @@ impl SavableResult for TrainFinalNetsRunConfigResult {
         )).await?;
 
         let path = ws.read()
-            .save_final_net(run_config_id, &self.var_store, &self.final_node_params)?;
+            .save_final_net(run_config_id, (&self.var_store).into(), &self.final_node_params)?;
 
         track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await?;
 
@@ -467,6 +467,8 @@ pub fn var_store_float_precision(vs: &nn::VarStore) -> VarStoreFloatPrecision {
             counts.push((kind, 1));
         }
     }
+
+    debug!("var_store_float_precision: counts={counts:?}");
 
     match counts.len() {
         0 => VarStoreFloatPrecision::NoFloatVars,
@@ -1948,7 +1950,7 @@ impl SavableResult for TrainMotifNetResult {
             &self.channel,
             &train_motif_net_run_config_id,
             &self.motif_id,
-            &self.vs,
+           (&self.vs).into(),
             &self.params,
         ))?;
 
@@ -2660,7 +2662,7 @@ mod train_tests {
 
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", (&vs_0).into(), &params)?;
 
         debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
 
@@ -3154,7 +3156,7 @@ mod train_tests {
 
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", &vs_0, &params)?;
+            .save_label_net(1, &"test_label", (&vs_0).into(), &params)?;
 
         debug!("net_id={net_id:?} vs_0.variables().len()={}",vs_0.variables().len());
 
@@ -3195,7 +3197,7 @@ mod train_tests {
 
     async fn _test_save_load_self_attention_label_node(motif_nets: u32, all_slices: &[i32], batch: i64, self_attention_net_params: SelfAttentionNetParams, half: bool) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        debug!("test_dir={test_dir:?}");
+        debug!("_test_save_load_self_attention_label_node: test_dir={test_dir:?}");
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
@@ -3235,24 +3237,30 @@ mod train_tests {
 
         let net_id = ws
             .write()
-            .save_label_net(1, &"test_label", module_with_store.var_store(), &params)?;
+            .save_label_net(1, &"test_label", module_with_store.var_store().into(), &params)?;
 
-        debug!("net_id={net_id:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
+        debug!("_test_save_load_self_attention_label_node: net_id={net_id:?} vs_0.variables().len()={}",module_with_store.var_store().variables().len());
 
         let model_base_path = ws.read().labels_nets_path().join(&net_id);
         let params_for_builder = params.clone();
-        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load("".into(),
-                                                                                           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
-                                                                                           model_base_path.join(NET_WEIGHTS_FILE),
-                                                                                           Cpu,
-                                                                                           false,
+        let loaded_module: ThoModuleWithStore<AnyDims, AnyDims> = ThoModuleWithStore::load(
+            "".into(),
+           move |path: &nn::Path| LabelNetParams::label_net(&params_for_builder)?.build_tch_module(path),
+           model_base_path.join(NET_WEIGHTS_FILE),
+           Cpu,
+           false,
         )?;
 
         assert!(module_with_store.var_store().variables().len() > 0);
         assert_eq!(module_with_store.var_store().variables(), loaded_module.var_store().variables());
 
+        debug!("_test_save_load_self_attention_label_node: module_with_store.var_store().variables()={:?}", module_with_store.var_store().variables());
+
         if matches!(Device::cuda_if_available(), Cuda(_)) {
             let cuda_net = loaded_module.copy_to_device(1).await?;
+
+            debug!("_test_save_load_self_attention_label_node: cuda_net.var_store().variables()={:?}", cuda_net.var_store().variables());
+
             for slices in all_slices {
                 let mut lengths = BatchLengths::new(vec![*slices as i64; batch as usize]);
                 let _ = cuda_net.tho_forward(
@@ -3262,11 +3270,7 @@ mod train_tests {
                             motif_nets as i64,
                             *slices as i64,
                         ],
-                        if half {
-                            (Half, Cuda(0))
-                        } else {
-                            FLOAT_CUDA
-                        }
+                        FLOAT_CUDA
                     ).into(),
                     Some(&mut lengths),
                     false,
@@ -3683,7 +3687,7 @@ mod train_tests {
         );
 
         ws.write()
-            .save_label_net(run_config_id, &label, &vs_0, &label_node_params)?;
+            .save_label_net(run_config_id, &label, (&vs_0).into(), &label_node_params)?;
         Ok(())
     }
 
@@ -3721,7 +3725,7 @@ mod train_tests {
             &channel,
             &motif_node_params_run_config_id,
             &motif_id,
-            &vs_0,
+            (&vs_0).into(),
             &MotifNetParams::new_conv(100, 1, 1, 100, 32, 10),
         )?;
         Ok(())

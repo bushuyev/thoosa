@@ -405,10 +405,10 @@ impl Workspace for FsWorkspace {
     fn final_nets_path(&self) -> &PathBuf {
         &self.final_nets_path
     }
-    fn save_final_net(
+    fn save_final_net<'a>(
         &self,
         run_config_id: RunConfigId,
-        vs: &VarStore,
+        vs_or_path: VarStoreOrPath<'a>,
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError> {
         debug!("FsWorkspace::save_final_net: run_config_id={run_config_id}  params={params:?} final_models_path={:?}",self.final_nets_path);
@@ -418,7 +418,7 @@ impl Workspace for FsWorkspace {
 
         fs::create_dir_all(&base_path)?;
 
-        vs.save(base_path.join(NET_WEIGHTS_FILE))?;
+        panic_to_err!(vs_or_path.save(&base_path.join(NET_WEIGHTS_FILE)))?;
 
         fs::write(
             base_path.join(NET_PARAMS_FILE),
@@ -427,12 +427,12 @@ impl Workspace for FsWorkspace {
 
         Ok(net_id)
     }
-    fn save_motif_net(
+    fn save_motif_net<'a>(
         &self,
         channel: &dyn Display,
         train_motif_net_run_config_id: &dyn Display,
         motif_id: &dyn Display,
-        vs: &VarStore,
+        vs_or_path: VarStoreOrPath<'a>,
         params: &MotifNetParams,
     ) -> Result<PathBuf, ThoError> {
         let channel_part = format!("{channel}");
@@ -447,7 +447,7 @@ impl Workspace for FsWorkspace {
 
         info!("FsWorkspace::save_motif_net:  motif_id={motif_id} motif_model_run_config_id={train_motif_net_run_config_id} saved to {vs_path:?}");
 
-        vs.save(vs_path)?;
+        panic_to_err!(vs_or_path.save(&vs_path))?; //View for SafeView unwraps, it should be retried
 
         fs::write(
             base_path.join(NET_PARAMS_FILE),
@@ -645,11 +645,11 @@ impl Workspace for FsWorkspace {
         })
     }
 
-    fn save_label_net(
+    fn save_label_net<'a>(
         &self,
         label_node_run_config_id: u32,
         label: &dyn Display,
-        vs: &VarStore,
+        vs_or_path: VarStoreOrPath<'a>,
         params: &LabelNetParams,
     ) -> Result<PathBuf, ThoError> {
         let label_part = format!("{label}");
@@ -665,7 +665,7 @@ impl Workspace for FsWorkspace {
 
         info!("save_label_net:  run_config_id={label_node_run_config_id} label={label} saved to {vs_path:?}");
 
-        panic_to_err!(vs.save(vs_path))?; //View for SafeView unwraps, it should be retried
+        panic_to_err!(vs_or_path.save(&vs_path))?; //View for SafeView unwraps, it should be retried
 
         let path = base_path.join(NET_PARAMS_FILE);
         fs::write(&path, serde_json5::to_string(params)?)?;
@@ -776,6 +776,41 @@ impl Workspace for FsWorkspace {
     }
 }
 
+pub enum VarStoreOrPath<'a> {
+    VarStore(&'a VarStore),
+    Path(&'a PathBuf)
+}
+
+impl <'a> VarStoreOrPath<'a> {
+    fn save(&self, to:&PathBuf) -> Result<(), ThoError> {
+
+        match self {
+            VarStoreOrPath::VarStore(vs) => {
+                vs.save(to)?;
+            }
+            VarStoreOrPath::Path(path) => {
+                std::fs::rename(path, to)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+
+
+impl <'a>  From<&'a VarStore> for VarStoreOrPath<'a> {
+    fn from(value: &'a VarStore) -> Self {
+        Self::VarStore(value)
+    }
+}
+
+impl <'a>  From<&'a PathBuf> for VarStoreOrPath<'a> {
+    fn from(value: &'a PathBuf) -> Self {
+        Self::Path(value)
+    }
+}
+
 #[automock]
 pub trait Workspace: Sync + Send + Debug {
     fn import_tensor<'a>(
@@ -797,18 +832,18 @@ pub trait Workspace: Sync + Send + Debug {
     fn motifs_nets_path(&self) -> &PathBuf;
     fn labels_nets_path(&self) -> &PathBuf;
     fn final_nets_path(&self) -> &PathBuf;
-    fn save_final_net(
+    fn save_final_net<'a>(
         &self,
         run_config_id: RunConfigId,
-        vs: &VarStore,
+        vs_or_path: VarStoreOrPath<'a>,
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError>;
-    fn save_motif_net(
+    fn save_motif_net<'a>(
         &self,
         channel: &dyn Display,
         train_motif_net_run_config_id: &dyn Display,
         motif_id: &dyn Display,
-        vs: &VarStore,
+        vs_or_path: VarStoreOrPath<'a>,
         params: &MotifNetParams,
     ) -> Result<PathBuf, ThoError>;
     fn load_motif_net(
@@ -877,11 +912,11 @@ pub trait Workspace: Sync + Send + Debug {
         channel: u32,
         motif_id: u32,
     ) -> Result<Vec<(PathBuf, PathBuf)>, ThoError>;
-    fn save_label_net(
+    fn save_label_net<'a>(
         &self,
         label_node_run_config_id: u32,
         label: &dyn Display,
-        vs: &VarStore,
+        vs_or_path: VarStoreOrPath<'a>,
         params: &LabelNetParams,
     ) -> Result<PathBuf, ThoError>;
     fn label_models(&self) -> Result<HashMap<String, Vec<(PathBuf, PathBuf)>>, ThoError>;
@@ -1063,14 +1098,14 @@ mod tests {
 
         assert!(ws.store_path().ends_with("main_db.db3"));
 
-        ws.save_motif_net(&0, &0, &0, &VarStore::new(Cpu), &MotifNetParams::new_conv(10, 1, 1, 100, 32, 10))?;
-        ws.save_motif_net(&1, &1, &0, &VarStore::new(Cpu), &MotifNetParams::new_conv(20, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&0, &0, &0, (&VarStore::new(Cpu)).into(), &MotifNetParams::new_conv(10, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &1, &0, (&VarStore::new(Cpu)).into(), &MotifNetParams::new_conv(20, 1, 1, 100, 32, 10))?;
 
-        ws.save_motif_net(&1, &2, &2, &VarStore::new(Cpu), &MotifNetParams::new_conv(30, 1, 1, 100, 32, 10))?;
-        ws.save_motif_net(&1, &3, &2, &VarStore::new(Cpu), &MotifNetParams::new_conv(40, 1, 1, 100, 32, 10))?;
-        ws.save_motif_net(&1, &4, &2, &VarStore::new(Cpu), &MotifNetParams::new_conv(50, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &2, &2, (&VarStore::new(Cpu)).into(), &MotifNetParams::new_conv(30, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &3, &2, (&VarStore::new(Cpu)).into(), &MotifNetParams::new_conv(40, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &4, &2, (&VarStore::new(Cpu)).into(), &MotifNetParams::new_conv(50, 1, 1, 100, 32, 10))?;
 
-        ws.save_motif_net(&1, &3, &4, &VarStore::new(Cpu), &MotifNetParams::new_conv(50, 1, 1, 100, 32, 10))?;
+        ws.save_motif_net(&1, &3, &4, (&VarStore::new(Cpu)).into(), &MotifNetParams::new_conv(50, 1, 1, 100, 32, 10))?;
 
         let models = ws.motif_models(0, 0)?;
 
@@ -1092,7 +1127,7 @@ mod tests {
         ws.save_label_net(
             1,
             &"label_0",
-            &VarStore::new(Cpu),
+            (&VarStore::new(Cpu)).into(),
             &LabelNetParams::new(
                 4,
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
@@ -1101,7 +1136,7 @@ mod tests {
         ws.save_label_net(
             2,
             &"label_0",
-            &VarStore::new(Cpu),
+            (&VarStore::new(Cpu)).into(),
             &LabelNetParams::new(
                 4,
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
@@ -1110,7 +1145,7 @@ mod tests {
         ws.save_label_net(
             3,
             &"label_1",
-            &VarStore::new(Cpu),
+            (&VarStore::new(Cpu)).into(),
             &LabelNetParams::new(
                 4,
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
@@ -1119,7 +1154,7 @@ mod tests {
         ws.save_label_net(
             4,
             &"label_1",
-            &VarStore::new(Cpu),
+            (&VarStore::new(Cpu)).into(),
             &LabelNetParams::new(
                 4,
                 crate::train_nets::LabelNetTypeParams::LinNetParams(LinLenNetParams::new(20, 10)),
@@ -1152,7 +1187,7 @@ mod tests {
             })?.build_tch_module(&vs.root())?;
         vs.freeze();
 
-        let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
+        let net_id = ws.save_motif_net(&0, &0, &0, (&vs).into(), &params)?;
         debug!("net_id={net_id:?}");
 
         let (loaded_params, loaded_module) = ws.load_motif_net(&net_id, &Cpu, false)?;
@@ -1220,7 +1255,7 @@ mod tests {
 
         vs.freeze();
 
-        let net_id = ws.save_motif_net(&0, &0, &0, &vs, &params)?;
+        let net_id = ws.save_motif_net(&0, &0, &0, (&vs).into(), &params)?;
         debug!("net_id={net_id:?}");
 
         let (loaded_params, loaded_module) = ws.load_motif_net(&net_id, &Cpu, false)?;
@@ -1245,7 +1280,7 @@ mod tests {
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = LabelNetParams::label_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
 
-        let net_id = ws.save_label_net(7, &"label_0", &vs, &params)?;
+        let net_id = ws.save_label_net(7, &"label_0", (&vs).into(), &params)?;
 
         debug!("test_load_label_net:net_id={net_id:?}");
 
@@ -1268,7 +1303,7 @@ mod tests {
         let _: Box<dyn ThoModule<AnyDims, AnyDims>> = crate::train_nets::final_net(&params)?.build_tch_module(&vs.root())?;
         vs.freeze();
 
-        let net_id = ws.save_final_net(3, &vs, &params)?;
+        let net_id = ws.save_final_net(3, (&vs).into(), &params)?;
 
         let (loaded_params, loaded_module) = ws.load_final_net(&net_id, &Cpu, false)?;
 

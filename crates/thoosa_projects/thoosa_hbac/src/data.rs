@@ -1269,7 +1269,7 @@ mod tests {
         assert!(!result.train_motif_nets_results.is_empty());
 
         let train_result = result.train_motif_nets_results.first().expect("empty train_motif_nets_results");
-        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_config_id, &motif_id, &train_result.vs, &train_result.params)?;
+        let saved_path = ws.read().save_motif_net(&0u32, &train_motif_nets_run_config_id, &motif_id, (&train_result.vs).into(), &train_result.params)?;
         assert_eq!(saved_path, trained_net_path);
 
         let apply_motif_nets = Arc::new(ApplyMotifNets::new(
