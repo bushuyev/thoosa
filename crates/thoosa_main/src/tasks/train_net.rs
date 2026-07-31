@@ -369,9 +369,9 @@ where
 
                 }
 
-
                 collect_eta_record_completion(epochs_eta_guard.id());
             }
+
             GlobalCtx::global().remove_cache(step_id);
             if saved_best {
                 // let mut vs_guard = thoosa_shared::perf_log!(thoosa_shared::sync_mutex_lock!(vs)); TODO
@@ -386,7 +386,6 @@ where
 
             Ok((var_store, best_valid_loss, params))
         })
-
 
     }
 }

@@ -10,6 +10,7 @@ use std::io::Write;
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::{Deref, DerefMut};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tch::Device;
@@ -33,10 +34,12 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
-use thoosa_shared::{mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_lock, CopyToDevice, MoveToDevice, ThoError};
+use thoosa_shared::{mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_lock, CopyToDevice, MoveToDevice, ThoError, now_ms};
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
 use futures_util::StreamExt;
+use rand::random;
+use thoosa_shared::tmp_file::TmpFile;
 
 // The proxy purge path and the test worker registration must use the same
 // endpoint name in both normal and cfg(test) builds.
@@ -50,7 +53,9 @@ pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
 
     x_f: Arc<F>,
     loss_fn: LossFp,
+    best_checkpoint_path:TmpFile,
     pd: PhantomData<C>,
+
 }
 
 unsafe impl <F, DI, DO, C> Send for TrainStep2<F, DI, DO, C>
@@ -138,11 +143,17 @@ where
         TMBF: Future<Output = Result<(ThoTrainModule<DI, DO>, NP), ThoError>>,
     {
         let (train_module, node_params) = train_module_builder(run_config, device).await?;
+
+        std::fs::create_dir_all("/tmp/thoosa")?;
+        let best_checkpoint_path = TmpFile::new(PathBuf::from("/tmp/thoosa").join(format!("thoosa_train_net_best_{}_{}.safetensors", now_ms(), random::<u64>())));
+
+
         Ok((Self {
             device,
             train_module: tokio::sync::Mutex::new(train_module),
             x_f,
             loss_fn,
+            best_checkpoint_path,
             pd: PhantomData,
         }, node_params))
     }
@@ -193,8 +204,14 @@ where
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainStep2::do_run_with_state"))]
     fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        let vs_path = if input.save_vs {
+            train_module.save_var_store(&self.best_checkpoint_path)?;
+            Some(self.best_checkpoint_path.path().to_string_lossy().to_ascii_lowercase())
+        }  else {
+            None
+        };
 
-        debug!("TrainStep2::do_run: os_thread_id={}", os_thread_id());
+        debug!("TrainStep2::do_run: os_thread_id={} input={input:?}", os_thread_id());
         let x_t_0 = input.x();
         let expected_y = input.expected_y();
 
@@ -249,7 +266,7 @@ where
             drop(expected_y);
         }
 
-        Ok(TrainStep2Output::new(loss_value))
+        Ok(TrainStep2Output::new(loss_value, vs_path))
     }
 }
 
@@ -300,16 +317,18 @@ pub struct TrainStep2Input<DI: Dims, DO: Dims> {
     pub lengths: Option<BatchLengths>,
     pub expected_y: ThoBatch<DO>,
     train: bool,
+    save_vs:bool
 }
 
 impl<DI: Dims, DO: Dims> TrainStep2Input<DI, DO> {
-    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool) -> Self {
+    pub(crate) fn new(x: ThoBatch<DI>, lengths: Option<BatchLengths>, expected_y: ThoBatch<DO>, train: bool, save_vs:bool) -> Self {
         Self {
             id: SynKey::new([mono_key!("train_step", "stage")]),
             x,
             lengths,
             expected_y,
             train,
+            save_vs
         }
     }
 
@@ -353,8 +372,11 @@ impl<DI: Dims, DO: Dims> WithId for TrainStep2Input<DI, DO> {
 impl<DI: Dims, DO: Dims> Debug for TrainStep2Input<DI, DO> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TrainStep2Input")
+            .field("id", &self.id)
             .field("x", &self.x)
             .field("expected_y", &self.expected_y)
+            .field("save_vs", &self.save_vs)
+            .field("train", &self.train)
             .finish()
     }
 }
@@ -388,6 +410,7 @@ impl<DI: Dims, DO: Dims> CopyToDevice for TrainStep2Input<DI, DO> {
             lengths: self.lengths.clone(),
             expected_y: track_await(self.expected_y.copy_to_device(dst_device)).await?,
             train: self.train,
+            save_vs: self.save_vs,
         })
     }
 }
@@ -442,11 +465,12 @@ impl<DI: Dims, DO: Dims> BorrowRef for TrainStep2InputWrapper<DI, DO> {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TrainStep2Output {
     pub loss: f32,
+    pub vs_path:Option<String>
 }
 
 impl TrainStep2Output {
-    fn new(loss: f32) -> Self {
-        Self { loss}
+    fn new(loss: f32,  vs_path:Option<String>) -> Self {
+        Self { loss, vs_path}
     }
 }
 
@@ -730,6 +754,7 @@ mod tests {
     use std::fmt::{Debug, Formatter};
     use std::future::ready;
     use std::marker::PhantomData;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize};
     use std::sync::atomic::Ordering::Relaxed;
@@ -765,7 +790,7 @@ mod tests {
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_proxy_derive::Proxy;
-    use thoosa_shared::{simple_id, ThoError, CopyToDevice};
+    use thoosa_shared::{simple_id, ThoError, CopyToDevice, now_ms};
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::traits::{MonoMetrics, SimpleId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
@@ -773,7 +798,9 @@ mod tests {
     use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2WeightsSync, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT, TrainStep2ProxyFactory};
     use futures_util::FutureExt;
     use futures_util::stream::BoxStream;
+    use rand::random;
     use tokio::sync::MutexGuard;
+    use thoosa_shared::tmp_file::TmpFile;
 
     ////
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -808,7 +835,7 @@ mod tests {
     }
 
     trait TrainStepFactory {
-        type NP:Send;
+        type NP:Debug + Send;
         type R:Send + Debug+Clone; //RunConfig
         type InDims:Dims + 'static;
         type OutDims:Dims + 'static;
@@ -878,16 +905,21 @@ mod tests {
     pub async fn opt_train_2<R, F, N>(//corresponds to opt_train crates/thoosa_common/src/train_nets.rs:2037
         run_config_source:R,//opt_train functionality should remain as is, the single run config here is for simplicity
         mut train: F
-    ) ->Result<(VarStore, f32, N), ThoError>
+    ) ->Result<(String, N, R, f32), ThoError>
     where
         R:Clone,
-        F:AsyncFnMut(R)->Result<(VarStore, f32, N), ThoError> //+run_config for debug
+        F:AsyncFnMut(R)->Result<(Option<String>, f32, N), ThoError> //+run_config for debug
     {
 
         //runs few times getting run configurations from run_config_source and searching for optimal run_config
-        train(
-            run_config_source.clone(),
-        ).await
+        let run_config = run_config_source.clone();
+        let (vs_path, loss, params) = train(
+            run_config.clone(),
+
+        ).await?;
+
+
+        vs_path.map(|vs_path|(vs_path, params, run_config, loss)).ok_or(ThoError::new("no min_var_store"))
     }
 
 
@@ -915,6 +947,49 @@ mod tests {
     #[derive(Debug)]
     struct TrainNet2Input;
     impl Input for TrainNet2Input{}
+
+    #[derive(Debug)]
+    struct TrainNet2Output<P>
+    where
+        P:Debug
+    {
+        net_var_store:NetVarStorePath<P>
+    }
+
+    impl <P>  Output for TrainNet2Output<P>
+    where
+        P:Debug
+    {
+
+    }
+    impl <P> TrainNet2Output<P>
+    where
+        P:Debug
+    {
+        pub fn new(net_var_store: NetVarStorePath<P>) -> Self {
+            Self { net_var_store }
+        }
+    }
+
+    #[derive(Debug)]
+    struct NetVarStorePath<P>
+    where
+    P:Debug
+    {
+        path:String,
+        net_params:P
+    }
+
+    impl <P> NetVarStorePath<P>
+    where
+        P:Debug
+    {
+        pub fn new(path: String, net_params: P) -> Self {
+            Self { path, net_params }
+        }
+    }
+
+
     impl <SF, B> Stage for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
@@ -923,7 +998,7 @@ mod tests {
         // Use the factory context here so the stage, train step, and batch stream share one context type.
         type Ctx = SF::C;
         type In<'a> = TrainNet2Input;
-        type Out = ();
+        type Out = TrainNet2Output<SF::NP>;
     }
 
     //-->for test only to avoid errors because of run_config_source which is not Sync and Send
@@ -943,13 +1018,13 @@ mod tests {
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
-        fn run(self: Arc<Self>, input: <Self as Stage>::In<'static>, mut ctx: <Self as Stage>::Ctx) -> impl Future<Output=Result<()/*Self::Out*/, ThoError>> + Send {
+        fn run(self: Arc<Self>, input: <Self as Stage>::In<'static>, mut ctx: <Self as Stage>::Ctx) -> impl Future<Output=Result<<Self as Stage>::Out, ThoError>> + Send {
             let run_config = (self.run_config_source)();
             let self_for_train = Arc::clone(&self);
             async move {
 
 
-                opt_train_2(
+                let (var_store, node_params, run_config, loss) = opt_train_2(
                     run_config,
                     move |run_config| {
                         let self_arc = Arc::clone(&self_for_train);
@@ -961,11 +1036,11 @@ mod tests {
                     }).await?;
 
 
-                Ok(())
+                Ok(TrainNet2Output::new(NetVarStorePath::new(var_store, node_params)))
             }
         }
 
-        fn run_inner(self:Arc<Self>, run_config:SF::R, mut ctx: <Self as Stage>::Ctx)->BoxFuture<'static, Result<(VarStore, f32, SF::NP), ThoError>>{
+        fn run_inner(self:Arc<Self>, run_config:SF::R, mut ctx: <Self as Stage>::Ctx)->BoxFuture<'static, Result<(Option<String>, f32, SF::NP), ThoError>>{
             debug!("TrainNet2::run_inner: run_config={run_config:?}");
 
             let self_arc = Arc::clone(&self);
@@ -973,30 +1048,47 @@ mod tests {
 
             Box::pin(async move {
                 let (train_step, net_params) = SF::new(run_config, ctx.branch(false)).await?;
+
+
+
                 let train_step= Arc::new(train_step);
-                let mut best_output = None;
+                let mut best_valid_loss = f32::MAX;
+                let mut save_vs = false;
+                let mut best_vs_path = None;
                 for epoch in 0..3 {
                     let self_arc = Arc::clone(&self_arc);
                     let mut batches = self_arc.batch.train_batch_stream(ctx.branch(false));
 
 
                     while let Some(Ok((x_t_0, lengths, expected_y))) = cooperative(batches.next()).await {
-                        let input = TrainStep2Input::new(x_t_0, lengths, expected_y, true);
+                        let test_step_input = TrainStep2Input::new(x_t_0, lengths, expected_y, true, save_vs);
 
-                        debug!("TrainNet2::run_inner: epoch={epoch} input={input:?}");
+                        debug!("TrainNet2::run_inner: epoch={epoch} test_step_input={test_step_input:?}");
 
                         // TrainStep2 owns mutable module state, so use its stateful execution contract.
-                        let r = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).run_stage(Arc::clone(&train_step), input, ctx.tho_device_idx(), &ctx_for_run_stage).await?;
+                        let r = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).run_stage(Arc::clone(&train_step), test_step_input, ctx.tho_device_idx(), &ctx_for_run_stage).await?;
 
                         debug!("TrainNet2::run_inner: epoch={epoch} r={r:?}");
 
-                        best_output.replace(r);
+                        let TrainStep2Output { loss, vs_path } = r;
+                        if vs_path.is_some() {
+                            best_vs_path = vs_path;
+                        }
+
+                        if loss < best_valid_loss {
+                            best_valid_loss = best_valid_loss;
+                            debug!("TrainNet2::run_inner: epoch={epoch} best_valid_loss={best_valid_loss:?}");
+                            save_vs = true;
+                        } else {
+                            save_vs = false;
+                        }
                     }
 
                 }
 
-                let vs =VarStore::new(Cuda(0));
-                Ok((vs,0.1, net_params))
+                debug!("TrainNet2::run_inner: best_valid_loss={best_valid_loss:?}");
+
+                Ok((best_vs_path,best_valid_loss, net_params))
             })
         }
 
@@ -1091,7 +1183,7 @@ mod tests {
                     let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
                     let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.expected_y)?;
 
-                    let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true);
+                    let input = TrainStep2Input::new(x, input_dec.lengths, expected_y, true, input_dec.save_vs);
                     let stage = Arc::clone(&self.stage.base);
 
                     Ok(JsonIpcCodec::encode(&StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT))?)?)
@@ -1198,6 +1290,7 @@ mod tests {
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 100], FLOAT_CPU))?, 1.into()).await?.inner, "2".into()),
                 None,
                 to_tho_tensor(cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[3, 1], FLOAT_CPU))?, 1.into()).await?.inner, "3".into()),
+                false,
                 false
             ))).await?;
 
@@ -1230,6 +1323,7 @@ mod tests {
             tch::Tensor::rand(&[3, 100], FLOAT_CPU).into(),
             None,
             tch::Tensor::rand(&[3, 1], FLOAT_CPU).into(),
+            false,
             false
         )))).await?;
 
@@ -1314,6 +1408,8 @@ mod tests {
             let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(||TestRunConfig::new(0.001, 100, 3))));
 
             let r = train_net.run(TrainNet2Input{}, RunCtxImpl::new(1, "test")).await?;
+
+            debug!("test_train_net_2_ipc: r={r:?}");
 
             Ok(())
         }, async |sock_path| {
