@@ -14,7 +14,7 @@ use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::{ConvConfig, Module};
 use tch::nn::{
-    BatchNorm, BatchNormConfig, Conv, Init, LinearConfig, ModuleT, Path, batch_norm1d,
+    BatchNorm, BatchNormConfig, Conv, Init, LayerNormConfig, LinearConfig, ModuleT, Path, batch_norm1d,
 };
 use torch_sys::C_tensor;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
@@ -373,17 +373,108 @@ pub struct MyBatchNorm1d {
     batch_norm: BatchNorm,
 }
 
+/// Reuse a named tensor when rebuilding a module over an existing VarStore.
+/// `Path::f_var` creates a suffixed duplicate for an existing name, so every
+/// stateful module constructor must go through this helper.
+pub(crate) fn path_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> Result<Tensor, ThoError> {
+    if let Some(tensor) = vs.get(name) {
+        if tensor.size() != dims {
+            return Err(ThoError::new(format!("existing VarStore tensor {} has shape {:?}, expected {:?}", vs.path(name), tensor.size(), dims)));
+        }
+        return Ok(tensor);
+    }
+
+    Ok(vs.f_var(name, dims, init)?)
+}
+
+fn path_no_train_var(vs: &Path, name: &str, dims: &[i64], init: Init) -> Result<Tensor, ThoError> {
+    if let Some(tensor) = vs.get(name) {
+        if tensor.size() != dims {
+            return Err(ThoError::new(format!("existing VarStore tensor {} has shape {:?}, expected {:?}", vs.path(name), tensor.size(), dims)));
+        }
+        return Ok(tensor);
+    }
+
+    match init {
+        Init::Const(value) if value == 0.0 => Ok(vs.f_zeros_no_train(name, dims)?),
+        Init::Const(value) if value == 1.0 => Ok(vs.f_ones_no_train(name, dims)?),
+        _ => Err(ThoError::new(format!("unsupported non-trainable initialization for {}", vs.path(name)))),
+    }
+}
+
+pub(crate) fn linear_from_path(vs: &Path, in_dim: i64, out_dim: i64, config: LinearConfig) -> Result<nn::Linear, ThoError> {
+    let bs = if config.bias {
+        let bs_init = config.bs_init.unwrap_or_else(|| {
+            let bound = 1.0 / (in_dim as f64).sqrt();
+            Init::Uniform { lo: -bound, up: bound }
+        });
+        Some(path_var(vs, "bias", &[out_dim], bs_init)?)
+    } else {
+        None
+    };
+
+    Ok(nn::Linear { ws: path_var(vs, "weight", &[out_dim, in_dim], config.ws_init)?, bs })
+}
+
+pub(crate) fn conv1d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> Result<nn::Conv1D, ThoError> {
+    // tch keeps convolution metadata private, so construct only that metadata
+    // in a temporary store and bind the returned layer to the requested path.
+    let temporary_store = nn::VarStore::new(tch::Device::Cpu);
+    let mut conv = nn::conv1d(temporary_store.root(), in_dim, out_dim, kernel, config);
+    conv.bs = if config.bias { Some(path_var(vs, "bias", &[out_dim], config.bs_init)?) } else { None };
+    conv.ws = path_var(vs, "weight", &[out_dim, in_dim / config.groups, kernel], config.ws_init)?;
+    Ok(conv)
+}
+
+pub(crate) fn conv2d_from_path(vs: &Path, in_dim: i64, out_dim: i64, kernel: i64, config: ConvConfig) -> Result<nn::Conv2D, ThoError> {
+    // Keep constructor-only tensors outside the provided VarStore; only the
+    // path tensors below are retained by the module.
+    let temporary_store = nn::VarStore::new(tch::Device::Cpu);
+    let mut conv = nn::conv2d(temporary_store.root(), in_dim, out_dim, kernel, config);
+    conv.bs = if config.bias { Some(path_var(vs, "bias", &[out_dim], config.bs_init)?) } else { None };
+    conv.ws = path_var(vs, "weight", &[out_dim, in_dim / config.groups, kernel, kernel], config.ws_init)?;
+    Ok(conv)
+}
+
+fn layer_norm_from_path(vs: &Path, normalized_shape: Vec<i64>, config: LayerNormConfig) -> Result<nn::LayerNorm, ThoError> {
+    let temporary_store = nn::VarStore::new(tch::Device::Cpu);
+    let mut layer_norm = nn::layer_norm(temporary_store.root(), normalized_shape.clone(), config);
+    if config.elementwise_affine {
+        layer_norm.ws = Some(path_var(vs, "weight", normalized_shape.as_slice(), config.ws_init)?);
+        layer_norm.bs = Some(path_var(vs, "bias", normalized_shape.as_slice(), config.bs_init)?);
+    } else {
+        layer_norm.ws = None;
+        layer_norm.bs = None;
+    }
+    Ok(layer_norm)
+}
+
+fn batch_norm1d_from_path(vs: &Path, num_features: i64, config: BatchNormConfig) -> Result<BatchNorm, ThoError> {
+    let temporary_store = nn::VarStore::new(tch::Device::Cpu);
+    let mut batch_norm = batch_norm1d(temporary_store.root(), num_features, config);
+    if config.affine {
+        batch_norm.ws = Some(path_var(vs, "weight", &[num_features], config.ws_init)?);
+        batch_norm.bs = Some(path_var(vs, "bias", &[num_features], config.bs_init)?);
+    } else {
+        batch_norm.ws = None;
+        batch_norm.bs = None;
+    }
+    batch_norm.running_mean = path_no_train_var(vs, "running_mean", &[num_features], Init::Const(0.0))?;
+    batch_norm.running_var = path_no_train_var(vs, "running_var", &[num_features], Init::Const(1.0))?;
+    Ok(batch_norm)
+}
+
 impl MyBatchNorm1d {
     pub fn new<'a, P: Borrow<Path<'a>>>(
         path: P,
         num_features: u32,
         config: BatchNormConfig,
-    ) -> Self {
+    ) -> Result<Self, ThoError> {
         debug!("MyBatchNorm1d::tho_forward: path={:?} num_features={num_features}", path.borrow());
 
-        Self {
-            batch_norm: batch_norm1d(path, num_features as i64, config),
-        }
+        Ok(Self {
+            batch_norm: batch_norm1d_from_path(path.borrow(), num_features as i64, config)?,
+        })
     }
 }
 
@@ -498,46 +589,52 @@ impl MyCosineConv1d {
     ) -> Result<Self, ThoError> {
         debug!("MyCosineConv1d::new: l={l}, init_mode={init_mode:?} init={init:?}");
 
-        let kernel = match init {
-            None => {
-                // No motif slices provided: start from zeros.
-                vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?
-            }
-            Some(motif_slices) => {
-                let motif_slices = motif_slices.as_ref().as_ref(); // [N, L]
-                debug!("MyCosineConv1d::new: motif_slices={motif_slices:?} motif_slices.isnan={:?}", motif_slices.isnan().any());
-
-                let sz = motif_slices.size();
-                if sz.len() != 2 {
-                    return Err(ThoError::new(format!("motif_slices must have shape [num_slices, motif_width], got {:?}", sz)));
+        // A copied VarStore already owns the initialized kernel; rebuilding
+        // the module must bind to it without applying initialization again.
+        let kernel = if vs.get("kernel").is_some() {
+            path_var(vs, "kernel", &[1, 1, l], nn::Init::Const(0.0))?
+        } else {
+            match init {
+                None => {
+                    // No motif slices provided: start from zeros.
+                    path_var(vs, "kernel", &[1, 1, l], nn::Init::Const(0.0))?
                 }
+                Some(motif_slices) => {
+                    let motif_slices = motif_slices.as_ref().as_ref(); // [N, L]
+                    debug!("MyCosineConv1d::new: motif_slices={motif_slices:?} motif_slices.isnan={:?}", motif_slices.isnan().any());
 
-                let motif_l = sz[1];
-                if motif_l != l {
-                    return Err(ThoError::new(format!("MyCosineConv1d::new: provided l={} but motif_slices width={}", l, motif_l)));
+                    let sz = motif_slices.size();
+                    if sz.len() != 2 {
+                        return Err(ThoError::new(format!("motif_slices must have shape [num_slices, motif_width], got {:?}", sz)));
+                    }
+
+                    let motif_l = sz[1];
+                    if motif_l != l {
+                        return Err(ThoError::new(format!("MyCosineConv1d::new: provided l={} but motif_slices width={}", l, motif_l)));
+                    }
+
+                    let proto = Self::build_motif_prototype(motif_slices, init_mode)?;
+                    debug!("MyCosineConv1d::new: proto={proto:?}");
+
+                    // Final normalization for cosine matching:
+                    // zero-mean + unit-L2, then reshape to [1,1,L]
+                    let kernel_init = Self::finalize_prototype(proto, true, true)?; // [1,1,L]
+
+                    let mut kernel = path_var(vs, "kernel", &[1, 1, l], nn::Init::Const(0.0))?;
+
+                    tch::no_grad(|| -> Result<(), TchError> {
+                        kernel.f_copy_(&kernel_init)?;
+                        Ok(())
+                    })?;
+
+                    debug!("MyCosineConv1d::new: kernel={kernel:?} kernel.isnan={:?}", kernel.isnan().any());
+                    kernel
                 }
-
-                let proto = Self::build_motif_prototype(motif_slices, init_mode)?;
-                debug!("MyCosineConv1d::new: proto={proto:?}");
-
-                // Final normalization for cosine matching:
-                // zero-mean + unit-L2, then reshape to [1,1,L]
-                let kernel_init = Self::finalize_prototype(proto, true, true)?; // [1,1,L]
-
-                let mut kernel = vs.f_var("kernel", &[1, 1, l], nn::Init::Const(0.0))?;
-
-                tch::no_grad(|| -> Result<(), TchError> {
-                    kernel.f_copy_(&kernel_init)?;
-                    Ok(())
-                })?;
-
-                debug!("MyCosineConv1d::new: kernel={kernel:?} kernel.isnan={:?}", kernel.isnan().any());
-                kernel
             }
         };
 
-        let alpha = vs.f_var("alpha", &[], nn::Init::Const(a))?;
-        let beta = vs.f_var("beta", &[], nn::Init::Const(b))?;
+        let alpha = path_var(vs, "alpha", &[], nn::Init::Const(a))?;
+        let beta = path_var(vs, "beta", &[], nn::Init::Const(b))?;
 
         Ok(Self {
             kernel,
@@ -761,10 +858,10 @@ pub struct BinaryHead {
 }
 
 impl BinaryHead {
-    pub fn new(vs: &nn::Path, pool: BinaryHeadPool) -> Self {
-        let alpha = vs.var("alpha", &[], nn::Init::Const(5.0));
-        let beta = vs.var("beta", &[], nn::Init::Const(0.0));
-        Self { alpha, beta, pool }
+    pub fn new(vs: &nn::Path, pool: BinaryHeadPool) -> Result<Self, ThoError> {
+        let alpha = path_var(vs, "alpha", &[], nn::Init::Const(5.0))?;
+        let beta = path_var(vs, "beta", &[], nn::Init::Const(0.0))?;
+        Ok(Self { alpha, beta, pool })
     }
 
     pub fn forward_max(&self, sims: &Tensor) -> Result<Tensor, ThoError> {
@@ -830,7 +927,8 @@ impl MySharpeningHead1d {
         }
 
         let cfg = ConvConfig { bias: true, ..ConvConfig::default() };
-        let cls = nn::conv1d(vs / "cls", in_channels, out_channels, 1, cfg);
+        // Bind the classifier to existing copied tensors when present.
+        let cls = conv1d_from_path(&(vs / "cls"), in_channels, out_channels, 1, cfg)?;
 
         Ok(Self { cls, k_mu, k_hat, p, temperature })
     }
@@ -1149,23 +1247,11 @@ pub fn my_linear<'a, T: Borrow<Path<'a>>, DI: Dims + 'static, DO: Dims + 'static
     assert!(in_dim > 0);
     assert!(out_dim > 0);
 
-    let path = path.borrow();
-    let bs = if c.bias {
-        let bs_init = c.bs_init.unwrap_or_else(|| {
-            let bound = 1.0 / (in_dim as f64).sqrt();
-            Init::Uniform {
-                lo: -bound,
-                up: bound,
-            }
-        });
-        Some(path.f_var("bias", &[out_dim], bs_init)?)
-    } else {
-        None
-    };
+    let linear = linear_from_path(path.borrow(), in_dim, out_dim, c)?;
 
     Ok(MyLinear::new(
-        path.f_var("weight", &[out_dim, in_dim], c.ws_init)?,
-        bs,
+        linear.ws,
+        linear.bs,
         Default::default(),
         Default::default(),
         #[cfg(any(debug_assertions, tho_debug))]
@@ -1248,16 +1334,16 @@ pub struct MyAttnPool1d {
 }
 
 impl MyAttnPool1d {
-    pub fn new(vs: &nn::Path, c: i64, attn_hidden: i64) -> Self {
+    pub fn new(vs: &nn::Path, c: i64, attn_hidden: i64) -> Result<Self, ThoError> {
         let mut cfg = nn::ConvConfig { ..Default::default() };
         cfg.bias = true;
-        let proj = nn::conv1d(vs / "proj", c, attn_hidden, 1, cfg);
+        let proj = conv1d_from_path(&(vs / "proj"), c, attn_hidden, 1, cfg)?;
 
         let mut cfg2 = nn::ConvConfig { ..Default::default() };
         cfg2.bias = false;
-        let v = nn::conv1d(vs / "v", attn_hidden, 1, 1, cfg2);
+        let v = conv1d_from_path(&(vs / "v"), attn_hidden, 1, 1, cfg2)?;
 
-        Self { proj, v }
+        Ok(Self { proj, v })
     }
 
 }
@@ -1492,18 +1578,18 @@ impl SelfAttention {
         }
 
         let head_size = d_model / n_heads;
-        let lin = |name: &str| nn::linear(vs / name, d_model, d_model, Default::default());
+        let lin = |name: &str| linear_from_path(&(vs / name), d_model, d_model, Default::default());
         let ln_cfg = nn::LayerNormConfig { eps: 1e-5, ..Default::default() };
 
         Ok(Self {
-            ln1: nn::layer_norm(vs / "ln1", vec![d_model], ln_cfg),
-            ln2: nn::layer_norm(vs / "ln2", vec![d_model], ln_cfg),
-            w_q: lin("q"),
-            w_k: lin("k"),
-            w_v: lin("v"),
-            w_o: lin("o"),
-            ff1: nn::linear(vs / "ff1", d_model, d_model * ff_mult, Default::default()),
-            ff2: nn::linear(vs / "ff2", d_model * ff_mult, d_model, Default::default()),
+            ln1: layer_norm_from_path(&(vs / "ln1"), vec![d_model], ln_cfg)?,
+            ln2: layer_norm_from_path(&(vs / "ln2"), vec![d_model], ln_cfg)?,
+            w_q: lin("q")?,
+            w_k: lin("k")?,
+            w_v: lin("v")?,
+            w_o: lin("o")?,
+            ff1: linear_from_path(&(vs / "ff1"), d_model, d_model * ff_mult, Default::default())?,
+            ff2: linear_from_path(&(vs / "ff2"), d_model * ff_mult, d_model, Default::default())?,
             n_heads,
             head_size,
             dropout,
@@ -1585,7 +1671,7 @@ mod tch_tests {
     use tch::Kind::{Bool, Float};
     use tch::{Device, IndexOp, Kind, Tensor, nn};
     use tch::kind::FLOAT_CPU;
-    use tch::nn::{BatchNormConfig, ConvConfig, VarStore};
+    use tch::nn::{BatchNormConfig, ConvConfig, LinearConfig, VarStore};
     use torch_sys::C_tensor;
     use thoosa_shared::ThoError;
     use thoosa_shims::quantized_linear::FastQuantizedLinear;
@@ -1615,6 +1701,29 @@ mod tch_tests {
         let y_p = net.tho_forward(&Tensor::randn([10, 2], (Float, Cpu)).into(), None, true)?;
 
         assert_eq!(vec![10, 2], y_p.size());
+        Ok(())
+    }
+
+    #[test]
+    fn test_build_tch_module_reuses_existing_tensor() -> Result<(), ThoError> {
+        let node = Node::Linear {
+            path: "linear".to_string(),
+            in_feats: 2,
+            out_feats: 1,
+            config: Some(LinearConfig { bias: false, ..Default::default() }),
+        };
+        let vs = VarStore::new(Cpu);
+        let _first: Box<dyn ThoModule<AnyDims, AnyDims>> = node.clone().build_tch_module(&vs.root())?;
+        let existing_weight = (vs.root() / "linear").get("weight").ok_or_else(|| ThoError::new("missing linear.weight after initial module build"))?;
+        let variable_count = vs.variables().len();
+
+        // Rebuilding over the same path must point at the existing tensor and
+        // must not add a suffixed duplicate to the VarStore.
+        let rebuilt: Box<dyn ThoModule<AnyDims, AnyDims>> = node.build_tch_module(&vs.root())?;
+        let rebuilt_linear = rebuilt.as_any().downcast_ref::<MyLinear<AnyDims, AnyDims>>().ok_or_else(|| ThoError::new("rebuilt module is not MyLinear"))?;
+
+        assert!(rebuilt_linear.ws.is_set_to(&existing_weight));
+        assert_eq!(variable_count, vs.variables().len());
         Ok(())
     }
 
