@@ -91,9 +91,10 @@ where
         Ok(())
     }
 
+    //it's called when local GPU reset is requested
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TrainStep2::drop_gpu");
-        todo!()
+        todo!()//add "Empty" state to OptSnapshot and re-init in move_to_device
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
