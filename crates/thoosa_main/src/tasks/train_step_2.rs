@@ -781,7 +781,7 @@ mod tests {
     use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::runner::common::{MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::runnable::{DynSyncStage, DynSyncStageBox, Stage, StageWithState, SyncStage};
+    use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, StageWithState, SyncStage};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -835,7 +835,7 @@ mod tests {
     }
 
     trait TrainStepFactory {
-        type NP:Debug + Send;
+        type NP:Sync + Debug + Send;
         type R:Send + Debug+Clone; //RunConfig
         type InDims:Dims + 'static;
         type OutDims:Dims + 'static;
@@ -1013,10 +1013,11 @@ mod tests {
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {}//<--
 
-    impl <SF, B> TrainNet2<SF, B>
+    impl <SF, B> AsyncStage for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
+
     {
         fn run(self: Arc<Self>, input: <Self as Stage>::In<'static>, mut ctx: <Self as Stage>::Ctx) -> impl Future<Output=Result<<Self as Stage>::Out, ThoError>> + Send {
             let run_config = (self.run_config_source)();
@@ -1039,6 +1040,13 @@ mod tests {
                 Ok(TrainNet2Output::new(NetVarStorePath::new(var_store, node_params)))
             }
         }
+    }
+
+    impl <SF, B> TrainNet2<SF, B>
+    where
+        SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
+    {
 
         fn run_inner(self:Arc<Self>, run_config:SF::R, mut ctx: <Self as Stage>::Ctx)->BoxFuture<'static, Result<(Option<String>, f32, SF::NP), ThoError>>{
             debug!("TrainNet2::run_inner: run_config={run_config:?}");
