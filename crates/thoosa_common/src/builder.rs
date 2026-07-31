@@ -6,8 +6,8 @@ use tch::{Tensor, nn, no_grad};
 
 use crate::batches::BatchLengths;
 use crate::dims::{AnyDims, Dims, MotifSlices, Spectorgram};
-use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, my_linear, MotifInitMode};
-use thoosa_shared::{panic_to_err, ThoError};
+use crate::my_tch::{AdaptiveAvgPool1d, AdaptiveMaxPool1d, BinaryHead, BinaryHeadPool, Fp, MyAttnPool1d, MyAvgPool1d, MyBatchNorm1d, MyClosureModule, MyConv, MyCosineConv1d, MyDropout, MyFuncModule, MyMaxPool1d, MyParallel, MySequential, MySharpeningHead1d, SelfAttention, Split1, ThoModule, conv1d_from_path, conv2d_from_path, my_linear, MotifInitMode};
+use thoosa_shared::ThoError;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::traits::SimpleId;
 use crate::nodes::cosine_2d::MyCosineConv2d;
@@ -253,17 +253,22 @@ impl Node {
                 config,
                 init
             } => {
-                let mut conv = panic_to_err!(Ok::<_, ThoError>(nn::conv1d(
-                    vs / path,
+                let conv_path = vs / path;
+                let had_weight = conv_path.get("weight").is_some();
+                let mut conv = conv1d_from_path(
+                    &conv_path,
                     in_channels as i64,
                     out_channels as i64,
                     kernel as i64,
                     config,
-                )))?;
-                if let Some(init) = init {
-                    no_grad(|| {
-                        conv.ws.copy_(&init.t_ref().view((1, 1, kernel as i64)));
-                    });
+                )?;
+                // Initialization belongs only to a newly created variable;
+                // copied tensors must retain their existing values.
+                if !had_weight && let Some(init) = init {
+                    no_grad(|| -> Result<(), ThoError> {
+                        conv.ws.f_copy_(&init.t_ref().f_view((1, 1, kernel as i64))?)?;
+                        Ok(())
+                    })?;
 
                 }
                 Box::new(MyConv::new(conv, kernel, config))
@@ -274,13 +279,13 @@ impl Node {
                 in_channels,
                 out_channels,
                 config,
-            } => Box::new(MyConv::new(nn::conv2d(
-                vs / "cnn_2d",
+            } => Box::new(MyConv::new(conv2d_from_path(
+                &(vs / "cnn_2d"),
                 in_channels as i64,
                 out_channels as i64,
                 kernel as i64,
                 config,
-            ),
+            )?,
           0,
             ConvConfig::default())),
 
@@ -331,12 +336,12 @@ impl Node {
                 temperature as f64,
             )?),
 
-            Node::BinaryHead { path, pool } => Box::new(BinaryHead::new(&(vs / path), pool)),
+            Node::BinaryHead { path, pool } => Box::new(BinaryHead::new(&(vs / path), pool)?),
 
             Node::BatchNorm {
                 num_features,
                 config,
-            } => Box::new(MyBatchNorm1d::new(vs / "batch_norm", num_features, config)),
+            } => Box::new(MyBatchNorm1d::new(vs / "batch_norm", num_features, config)?),
 
             Node::Linear {
                 path,
@@ -411,7 +416,7 @@ impl Node {
             },
 
             Node::AttnPool1d { path, channels, attn_hidden } => {
-                Box::new(MyAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64))
+                Box::new(MyAttnPool1d::new(&(vs / path), channels as i64, attn_hidden as i64)?)
             }
         })
     }

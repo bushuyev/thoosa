@@ -8,7 +8,7 @@ use thoosa_shared::traits::SimpleId;
 use crate::batches::BatchLengths;
 use crate::debug_plot;
 use crate::dims::{Dims, MotifSlices, Spectorgram};
-use crate::my_tch::{MotifInitMode, MyCosineConv1d, ThoModule};
+use crate::my_tch::{MotifInitMode, MyCosineConv1d, ThoModule, path_var};
 use crate::tho_tensor::ThoTensor;
 use crate::utils::z_norm_dims;
 use crate::utils::plot_spectrogram;
@@ -232,46 +232,52 @@ impl MyCosineConv2d {
         b: f64,
     ) -> Result<Self, ThoError> {
         debug!("MyCosineConv2d::new: init_patches={init_patches:?} kh={kh} kw={kw} a={a} b={b}");
-        let kernel = match init_patches {
-            None => {
-                vs.f_var("kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
-            }
+        // Rebuilding over a copied VarStore must retain its kernel rather than
+        // creating and initializing a second tensor under a suffixed name.
+        let kernel = if vs.get("kernel").is_some() {
+            path_var(vs, "kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
+        } else {
+            match init_patches {
+                None => {
+                    path_var(vs, "kernel", &[1, 1, kh, kw], nn::Init::Const(0.0))?
+                }
 
-            Some(patches) => {
-                let patches = patches.as_ref().as_ref();
-                let patches = Self::ensure_motif_patches_4d(patches)?; // [N,1,KH,KW]
-                let psz = patches.size();
+                Some(patches) => {
+                    let patches = patches.as_ref().as_ref();
+                    let patches = Self::ensure_motif_patches_4d(patches)?; // [N,1,KH,KW]
+                    let psz = patches.size();
 
-                // if psz[2] != kh || psz[3] != kw {
-                //     return Err(ThoError::new(format!("init patches must have spatial size [{kh},{kw}], got {psz:?}")));
-                // }
-                let kh_freq = psz[2];//frequencies
-                let kw_time = psz[3];//time
-                debug!("MyCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
+                    // if psz[2] != kh || psz[3] != kw {
+                    //     return Err(ThoError::new(format!("init patches must have spatial size [{kh},{kw}], got {psz:?}")));
+                    // }
+                    let kh_freq = psz[2];//frequencies
+                    let kw_time = psz[3];//time
+                    debug!("MyCosineConv2d::new: kh_freq={kh_freq:?} kw_time={kw_time:?}");
 
-                // Simple mean prototype. You can replace this with your
-                // existing Mean / Median / TrimmedMean / CenteredL2NormalizedMean logic.
-                let proto = patches.f_mean_dim(&[0i64][..], false, Kind::Float)?;
-                // proto: [1,KH,KW]
+                    // Simple mean prototype. You can replace this with your
+                    // existing Mean / Median / TrimmedMean / CenteredL2NormalizedMean logic.
+                    let proto = patches.f_mean_dim(&[0i64][..], false, Kind::Float)?;
+                    // proto: [1,KH,KW]
 
-                let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?;
-                // kernel_init: [1,1,KH,KW]
+                    let kernel_init = Self::finalize_prototype_2d(&proto, true, true)?;
+                    // kernel_init: [1,1,KH,KW]
 
-                let mut kernel = vs.f_var("kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?;
+                    let mut kernel = path_var(vs, "kernel", &[1, 1, kh_freq, kw_time], nn::Init::Const(0.0))?;
 
-                tch::no_grad(|| -> Result<(), ThoError> {
-                    kernel.f_copy_(&kernel_init)?;
-                    Ok(())
-                })?;
+                    tch::no_grad(|| -> Result<(), ThoError> {
+                        kernel.f_copy_(&kernel_init)?;
+                        Ok(())
+                    })?;
 
-                debug!("MyCosineConv2d::new: kernel={kernel:?}  kernel.isnan().any={}", kernel.isnan().any());
+                    debug!("MyCosineConv2d::new: kernel={kernel:?}  kernel.isnan().any={}", kernel.isnan().any());
 
-                kernel
+                    kernel
+                }
             }
         };
 
-        let alpha = vs.f_var("alpha", &[], nn::Init::Const(a))?;
-        let beta = vs.f_var("beta", &[], nn::Init::Const(b))?;
+        let alpha = path_var(vs, "alpha", &[], nn::Init::Const(a))?;
+        let beta = path_var(vs, "beta", &[], nn::Init::Const(b))?;
 
         Ok(Self {
             kernel,
