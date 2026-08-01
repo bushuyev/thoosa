@@ -33,7 +33,7 @@ use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
-use crate::ws::{WsConfigs, FsWorkspace};
+use crate::ws::{WsConfigs, FsWorkspace, Workspace};
 
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1 << 63);
@@ -77,10 +77,7 @@ impl CudaWorker {
             let worker_cli = WorkerCli::parse();
             let ws_root:PathBuf = worker_cli.ws_path.into();
 
-            let ws = Arc::new(RwLock::new(FsWorkspace::new(
-                ws_root.clone(),
-                app_configs.clone(),
-            )?));
+
 
             let log_filename = ws_root.join("log")
                 .join(format!("thoosa_worker_{}.log", cdt).to_owned());
@@ -113,8 +110,13 @@ impl CudaWorker {
                     format!("cuda-worker-{id}")
                 })
                 .build()?;
-            rt.block_on(async {
-                CudaWorker::run_worker(sock_path, init_map, ThoDevice::from(Device::Cuda(0))).await//TODO Cuda(0)
+            rt.block_on(async move {
+                let ws = Arc::new(RwLock::new(FsWorkspace::new(
+                    ws_root.clone(),
+                    app_configs.clone(),
+                )?));
+
+                CudaWorker::run_worker(sock_path, &ws, init_map, ThoDevice::from(Device::Cuda(0))).await//TODO Cuda(0)
             })?;
 
             std::process::exit(0);
@@ -125,11 +127,12 @@ impl CudaWorker {
 
     pub async fn run_worker(
         sock_path:OsString,
+        ws:&Arc<RwLock<Box<dyn Workspace>>>,
         endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
-        GlobalCtx::init_devices(2);
+        GlobalCtx::init_devices(2);//TODO config
 
         let with_digest = false;//TODO config
 

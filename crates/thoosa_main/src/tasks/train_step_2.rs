@@ -749,12 +749,12 @@ mod tests {
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
     use thoosa_common::runs::SavableResult;
     use thoosa_common::train_nets::{FinalNetParams, MotifNetParams, ThoModuleWithStore, TrainMotifNetRunConfig};
-    use thoosa_common::ws::Workspace;
+    use thoosa_common::ws::{mock_ws_simp, MockWorkspace, Workspace};
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::tmp_file::TmpFile;
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_store::Store;
+    use thoosa_store::{MockStoreBuilder, Store};
     use crate::tasks::load_motif_net::MotifNetMeta;
 
     ////
@@ -1390,9 +1390,9 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {
-            CudaWorker::run_worker(
-                sock_path,
-                HashMap::from([
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws,
+                                   HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
                         Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
@@ -1507,8 +1507,10 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
             CudaWorker::run_worker(
                 sock_path,
+                &ws,
                 HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),

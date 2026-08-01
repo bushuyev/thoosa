@@ -1911,7 +1911,8 @@ mod tests {
 
             Ok(())
 
-        }, async |sock_path| { CudaWorker::run_worker(sock_path, train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
+        }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws,  train_motif_step_endpoint_inits(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -2122,9 +2123,9 @@ mod tests {
 
             Ok(())
         }, async |sock_path| {
-            CudaWorker::run_worker(
-                sock_path,
-                HashMap::from([
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws,
+                                   HashMap::from([
                     (
                         TRAIN_TEST_STEP_ENDPOINT.to_string(),
                         Box::new(train_test_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
