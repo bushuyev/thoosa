@@ -722,7 +722,7 @@ mod tests {
     use thoosa_common::copy_ctx::CudaActorHandle;
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-    use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::runner::common::{MockRunCtx, RunCtx};
@@ -1395,7 +1395,7 @@ mod tests {
                                    HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
-                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                        Box::new(train_test_step_2_endpoint_init) as InitFn,
                     ),
                 ]),
                 ThoDevice::from(Cuda(0)),
@@ -1514,7 +1514,7 @@ mod tests {
                 HashMap::from([
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
-                        Box::new(train_test_step_2_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                        Box::new(train_test_step_2_endpoint_init) as InitFn,
                     ),
                 ]),
                 ThoDevice::from(Cuda(0)),

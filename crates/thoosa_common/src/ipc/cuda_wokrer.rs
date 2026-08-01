@@ -41,6 +41,7 @@ static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1 << 63);
 //1 cuda device per worker
 pub struct CudaWorker;
 
+pub type InitFn = Box<dyn Fn(Vec<u8>, Arc<RwLock<Box<dyn Workspace>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >;
 
 pub trait Init {
     fn init() -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>;
@@ -65,7 +66,7 @@ pub struct WorkerCli {
 
 impl CudaWorker {
 
-    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>>) -> Result<(), ThoError>{
+    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, InitFn>) -> Result<(), ThoError>{
 
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
@@ -128,7 +129,7 @@ impl CudaWorker {
     pub async fn run_worker(
         sock_path:OsString,
         ws:&Arc<RwLock<Box<dyn Workspace>>>,
-        endpoint_inits: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >>,
+        endpoint_inits: HashMap<String, InitFn>,
         tho_device: ThoDevice
     ) -> Result<(), ThoError> {
         // Stateful capability is erased per endpoint so one worker can host unrelated state types.
@@ -344,7 +345,7 @@ impl CudaWorker {
 
                     Some(init_endpoint) => {
 
-                        match init_endpoint(init_msg) {
+                        match init_endpoint(init_msg, Arc::clone(&ws)) {
                             Ok(endpoint_wrapper) => {
                                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
                                 installed_endpoints.write().insert(endpoint_name.to_string(), endpoint_wrapper);
