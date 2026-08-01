@@ -623,7 +623,7 @@ mod tests {
     use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
-    use thoosa_common::ws::{WsConfigs, FsWorkspace};
+    use thoosa_common::ws::{WsConfigs, FsWorkspace, mock_ws_simp};
     use thoosa_main::cli::{import_resources, RunAllArgs};
     use thoosa_main::RawTensorLoader;
     use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
@@ -779,7 +779,10 @@ mod tests {
             },
             async |sock_path| {
                 // set_max_level(Debug);
-                return CudaWorker::run_worker(sock_path, crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await;
+                return {
+                    let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+                    CudaWorker::run_worker(sock_path, &ws,  crate::cuda_worker_endpoint_inits(), ThoDevice::from(Device::Cuda(0))).await
+                }
             }
         )
     }
