@@ -20,7 +20,7 @@ use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -421,35 +421,35 @@ where
     }
 }
 
-pub fn train_motif_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+pub fn train_motif_step_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([
         (
             TRAIN_MOTIF_STEP_ENDPOINT.to_string(),
-            Box::new(train_motif_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(train_motif_step_endpoint_init) as InitFn,
         ),
         (
             SYNC_MOTIF_BASTCH_ENDPOINT.to_string(),
-            Box::new(sync_motif_bastch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_motif_bastch_endpoint_init) as InitFn,
         ),
         (
             SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT.to_string(),
-            Box::new(split_motif_into_train_valid_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(split_motif_into_train_valid_endpoint_init) as InitFn,
         ),
         (
             SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT.to_string(),
-            Box::new(sync_load_motif_resources_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_load_motif_resources_endpoint_init) as InitFn,
         ),
         (
             SYNC_LOAD_RANDOM_SLICES_ENDPOINT.to_string(),
-            Box::new(sync_load_random_slices_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_load_random_slices_endpoint_init) as InitFn,
         ),
         (
             SYNC_MOTIF_LOADER_ENDPOINT.to_string(),
-            Box::new(sync_motif_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_motif_loader_endpoint_init) as InitFn,
         ),
         (
             SYNC_LABEL_BATCH_ENDPOINT.to_string(),
-            Box::new(sync_label_batch_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_label_batch_endpoint_init) as InitFn,
         ),
     ])
 }
@@ -1716,7 +1716,7 @@ mod tests {
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{encode_sync_stage_run_input, IpcCodec, JsonIpcCodec};
-    use thoosa_common::ipc::cuda_wokrer::CudaWorker;
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::my_tch::MotifInitModeFields;
@@ -2128,7 +2128,7 @@ mod tests {
                                    HashMap::from([
                     (
                         TRAIN_TEST_STEP_ENDPOINT.to_string(),
-                        Box::new(train_test_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                        Box::new(train_test_step_endpoint_init) as InitFn,
                     ),
 
                 ])

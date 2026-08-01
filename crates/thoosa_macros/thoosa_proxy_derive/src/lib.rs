@@ -129,7 +129,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
             match wrapper_name {
                 Some(wrapper_name) => quote! {
-                    pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                    pub fn #endpoint_init(init_msg: Vec<u8>,ws:Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                         #stage_init
                         Ok(Box::new(#wrapper_name {
                             stage: std::sync::Arc::new(stage),
@@ -141,7 +141,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                     let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `wrapper` requires `init_stage = \"...\"`"))?;
                     let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
                     quote! {
-                        pub fn #endpoint_init(init_msg: Vec<u8>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+                        pub fn #endpoint_init(init_msg: Vec<u8>,ws:Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                             let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
                             Ok(#common::ipc::json_ser::make_ipc_sync_stage_wrapper::<
                                 #codec,

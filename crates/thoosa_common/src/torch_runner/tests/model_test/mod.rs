@@ -26,6 +26,7 @@ use classifier::{sync_classifier_endpoint_init, Classifier, SYNC_CLASSIFIER_ENDP
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyTask;
 use loader::ABLoader;
+use crate::ipc::cuda_wokrer::InitFn;
 
 #[ctor::ctor]
 fn init() {
@@ -39,10 +40,10 @@ fn init_devices_once() {
     });
 }
 
-pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+pub(crate) fn sync_model_test_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([(
         SYNC_CLASSIFIER_ENDPOINT.to_string(),
-        Box::new(sync_classifier_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        Box::new(sync_classifier_endpoint_init) as InitFn,
     )])
 }
 

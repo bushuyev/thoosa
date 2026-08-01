@@ -18,7 +18,7 @@ use tch::nn::{Optimizer, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
@@ -1246,10 +1246,10 @@ where
     }
 }
 
-pub fn train_label_step_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+pub fn train_label_step_endpoint_inits() -> HashMap<String, InitFn> {
     HashMap::from([(
         TRAIN_LABEL_STEP_ENDPOINT.to_string(),
-        Box::new(train_label_step_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+        Box::new(train_label_step_endpoint_init) as InitFn,
     )])
 }
 
