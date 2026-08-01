@@ -763,7 +763,7 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::ws::{WsConfigs, FsWorkspace};
     use thoosa_main::cli::RunAllArgs;
     use thoosa_main::RawTensorLoader;
     use thoosa_motifs::fragments::Resolution;
@@ -795,9 +795,9 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
-            1,
-            0,
-            100,
+            WsConfigs::new(1,
+                           0,
+                           100)
         )?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;

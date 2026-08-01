@@ -518,7 +518,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::{final_net, lin_label_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams};
-    use thoosa_common::ws::{FsWorkspace, Workspace};
+    use thoosa_common::ws::{WsConfigs, FsWorkspace, Workspace};
     use thoosa_shared::{cdt_for_dir, ThoError};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -535,7 +535,7 @@ mod tests {
 
     async fn run_convert_precision_stage_final_net(precision_target: ConvertPrecisionTarget, kind: Kind) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
-        let ws_box = FsWorkspace::new(test_dir, 2, 100, 100)?;
+        let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
 
         let params = FinalNetParams::new(8, 2, 1);
         let mut vs = VarStore::new(Device::Cpu);
@@ -566,7 +566,7 @@ mod tests {
 
     async fn run_convert_precision_stage_label_net(precision_target: ConvertPrecisionTarget, kind: Kind) -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
-        let ws_box = FsWorkspace::new(test_dir, 2, 100, 100)?;
+        let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
 
         let params = LabelNetParams::new(2, LabelNetTypeParams::LinNetParams(LinLenNetParams{ motif_layers: 2, features: 10 }));
         let mut vs = VarStore::new(Device::Cpu);
@@ -602,7 +602,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         
         let test_dir = Path::new("/tmp").join(format!("convert_precision_{}", cdt_for_dir()));
-        let ws_box = FsWorkspace::new(test_dir, 2, 100, 100)?;
+        let ws_box = FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?;
         let net_dir = ws_box.motifs_nets_path().join("0").join("34603_36472");
         std::fs::create_dir_all(&net_dir)?;
         std::fs::write(net_dir.join("parameters.json"), "{}")?;

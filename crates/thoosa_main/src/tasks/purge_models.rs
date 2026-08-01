@@ -463,7 +463,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::{TrainLabelNetRunConfig, TrainMotifNetRunConfig};
-    use thoosa_common::ws::{FsWorkspace, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
+    use thoosa_common::ws::{FsWorkspace, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, WsConfigs};
     use thoosa_shared::run_configs::{RunConfig, RUN_ID};
     use thoosa_shared::{cdt_for_dir, ThoError};
     use thoosa_store::{SqlStore, Store};
@@ -612,7 +612,7 @@ mod tests {
 
     async fn test_ws_store(name: &str) -> Result<(Arc<RwLock<Box<dyn Workspace>>>, Arc<Box<dyn Store>>), ThoError> {
         let test_dir = Path::new("/tmp").join(format!("{name}_{}", cdt_for_dir()));
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 100, 100)?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 100, 100))?));
         let store = Arc::new(SqlStore::in_mem().await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         Ok((ws, store))
