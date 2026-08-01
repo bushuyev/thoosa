@@ -2333,6 +2333,7 @@ mod tests {
     use std::sync::atomic::Ordering::Relaxed;
     use std::time::Instant;
     use log::{debug, info};
+    use parking_lot::RwLock;
     use rand::random_range;
     use tch::{Device, Kind, Tensor};
     use tch::Device::Cuda;
@@ -2366,8 +2367,7 @@ mod tests {
     use crate::torch_runner::output_builders::{BuildAs, SingleDimTensorOutputBuilder};
     // use crate::torch_runner::tests::load_and_clc::loader::LoadedTensor;
     use crate::utils::{lin_for_size, tensor_digest};
-
-
+    use crate::ws::mock_ws_simp;
 
     macro_rules! pure_module_path {
         () => {{
@@ -2499,7 +2499,8 @@ mod tests {
             debug!("All ok");
 
             Ok(())
-        }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
+        }, async |sock_path| {  let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws,  HashMap::new(), ThoDevice::from(Cuda(0))).await })
     }
 
     #[test]
@@ -2552,9 +2553,9 @@ mod tests {
             debug!("test_copy_ipc_cuda_worker_propagates_oom: result={result:?}");
             Ok(())
         }, async |sock_path| {
-            CudaWorker::run_worker(
-                sock_path,
-                HashMap::from([
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws,
+               HashMap::from([
                             (
                                 "test_copy_ipc_unrecoverable_cuda_error".to_string(),
                                 Box::new(|_s|{
@@ -2583,7 +2584,10 @@ mod tests {
 
 
             Ok(())
-        }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
+        }, async |sock_path| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws, HashMap::new(), ThoDevice::from(Cuda(0))).await
+        })
     }
 
     #[test]
@@ -2640,7 +2644,10 @@ mod tests {
             info!("main: \n{}", format_perf_map(&PERF));
 
             Ok(())
-        }, async |sock_path| { CudaWorker::run_worker(sock_path, HashMap::new(), ThoDevice::from(Cuda(0))).await })
+        }, async |sock_path| {
+            let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+            CudaWorker::run_worker(sock_path, &ws, HashMap::new(), ThoDevice::from(Cuda(0))).await
+        })
     }
 
 }
