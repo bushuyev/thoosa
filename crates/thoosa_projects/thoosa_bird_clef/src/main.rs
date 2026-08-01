@@ -29,7 +29,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
-use thoosa_common::ws::Workspace;
+use thoosa_common::ws::{WsConfigs, Workspace};
 use thoosa_main::cli::{run_cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
@@ -65,8 +65,8 @@ thread_local! {
 
 fn main() -> Result<(), ThoError>{
     let cdt = cdt_for_dir();
-
-    CudaWorker::run_if_sock(&cdt, HashMap::new())?;
+    let app_configs = WsConfigs::new(1, u32::MAX, 32000);
+    CudaWorker::run_if_sock(&cdt, &app_configs, HashMap::new())?;
     // tch::set_num_threads(1);
     // tch::set_num_interop_threads(1);
 
@@ -166,6 +166,7 @@ fn main() -> Result<(), ThoError>{
     let run_result = rt.block_on(async move {
         //gpt Navigation note: run_cli is the shared thoosa entry point. The arguments below are the
         //gpt BirdCLEF adapters: label import, OGG->tensor loading, dataset-set seeding, run-all orchestration, and optional inference.
+
         track_await(run_cli(
             |source_path| data::labeled_resourses(source_path),
             resource_to_tensor,
@@ -229,9 +230,7 @@ fn main() -> Result<(), ThoError>{
                 Ok(())
             },
             &LABELS,
-            1,
-            u32::MAX,
-            32000,
+            app_configs,
             Some(async |params:&InferArgs, ws:&Arc<RwLock<Box<dyn Workspace>>>, store:&Arc<Box<dyn Store>>,|{
                 debug!("bird_clef: infer");
                 track_await(infer_labels(params, ws, store)).await
@@ -513,7 +512,7 @@ mod tests {
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
-    use thoosa_common::ws::{FsWorkspace, WsMockBuilder};
+    use thoosa_common::ws::{WsConfigs, FsWorkspace, WsMockBuilder};
     use thoosa_shared::perf_logging::{format_perf_map, PERF};
     use thoosa_shared::ThoError;
     use thoosa_shared::val::Val;
@@ -545,9 +544,9 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             "/home/bu/tmp/ws_clef",
-            1,
-            0,//not used
-            32000,
+            WsConfigs::new(1,
+                           0, //not used
+                           32000)
         )?));
         let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);
 

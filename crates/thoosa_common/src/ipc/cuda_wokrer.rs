@@ -33,6 +33,7 @@ use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use crate::ws::{WsConfigs, FsWorkspace};
 
 const WORKER_EXEC_STREAMS: usize = 32;
 static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1 << 63);
@@ -64,7 +65,7 @@ pub struct WorkerCli {
 
 impl CudaWorker {
 
-    pub fn run_if_sock(cdt:&str, init_map: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>>) -> Result<(), ThoError>{
+    pub fn run_if_sock(cdt:&str, app_configs:&WsConfigs, init_map: HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>>) -> Result<(), ThoError>{
 
         let ipc_sock = std::env::var_os(IPC_SOCK_ENV);
         println!("CudaWorker::run_if_sock: ipc_sock={ipc_sock:?}");
@@ -72,8 +73,14 @@ impl CudaWorker {
         if let Some(sock_path) = ipc_sock {
 
 
+
             let worker_cli = WorkerCli::parse();
             let ws_root:PathBuf = worker_cli.ws_path.into();
+
+            let ws = Arc::new(RwLock::new(FsWorkspace::new(
+                ws_root.clone(),
+                app_configs.clone(),
+            )?));
 
             let log_filename = ws_root.join("log")
                 .join(format!("thoosa_worker_{}.log", cdt).to_owned());

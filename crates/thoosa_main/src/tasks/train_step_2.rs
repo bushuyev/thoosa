@@ -720,7 +720,7 @@ mod tests {
     use thoosa_common::batches::{mock_async_data_batch, AsyncDataBatch, BatchLengths};
     use thoosa_common::builder::{Node, SeqBuilder};
     use thoosa_common::copy_ctx::CudaActorHandle;
-    use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, ThoBatch};
+    use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
@@ -737,7 +737,7 @@ mod tests {
     use thoosa_proxy_derive::Proxy;
     use thoosa_shared::{simple_id, ThoError, CopyToDevice, now_ms, panic_to_err};
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{MonoMetrics, SimpleId};
+    use thoosa_shared::traits::{Adjustable, MonoMetrics, SimpleId, WithId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
     use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT};
@@ -745,12 +745,17 @@ mod tests {
     use futures_util::stream::BoxStream;
     use rand::random;
     use tokio::sync::MutexGuard;
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
     use thoosa_common::runs::SavableResult;
-    use thoosa_common::train_nets::{FinalNetParams, MotifNetParams, TrainMotifNetRunConfig};
+    use thoosa_common::train_nets::{FinalNetParams, MotifNetParams, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::ws::Workspace;
+    use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::tmp_file::TmpFile;
+    use thoosa_shared::tracked_await::track_await;
     use thoosa_store::Store;
+    use crate::tasks::load_motif_net::MotifNetMeta;
 
     ////
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1248,6 +1253,102 @@ mod tests {
             }
         }
     }
+    ///////////////////////
+    #[derive(Debug)]
+    struct LoadNetX<C>
+    where
+        C: Debug + RunCtx + Adjustable + 'static,
+    {
+        stage:Arc<SyncLoadNetX<C>>,
+        pd:PhantomData<C>
+    }
+
+    #[derive(Debug)]
+    struct LoadNetXInput{
+        net_id: PathBuf
+    }
+
+    impl WithId for LoadNetXInput {
+        type ID=PathBuf;
+
+        fn id(&self) -> &Self::ID {
+            &self.net_id
+        }
+    }
+
+    impl BorrowRef for LoadNetXInput {
+        type Out<'a>
+        where
+            Self: 'a
+        = LoadNetXInput;
+
+        fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
+        where
+            Self: 'o
+        {
+            async {
+                todo!()
+            }
+        }
+    }
+    impl Input for LoadNetXInput {}
+
+    impl  <C>  Stage for LoadNetX<C>
+    where
+        C: RunCtx + Adjustable + 'static,
+    {
+        type Ctx = C;
+        type In<'a> = LoadNetXInput;
+        type Out = Arc<DevicesWrap<ThoModuleWithStore<Batch<InDimsX>, OutDimsX>>>;
+    }
+
+    impl <C> AsyncStage for LoadNetX<C>
+    where
+        C: RunCtx + Adjustable + 'static,
+    {
+        fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
+            async move {
+                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+                track_await(oom_handler.run(&Arc::clone(&self.stage), Arc::new(input), ctx.branch(false), NoContexts)).await
+            }
+        }
+    }
+    // ----
+    #[derive(Debug)]
+    struct SyncLoadNetX<C>
+    where
+        C: Debug + RunCtx + Adjustable + 'static,
+    {
+        ws: Arc<RwLock<Box<dyn Workspace>>>,
+        pd:PhantomData<C>
+    }
+
+
+
+    impl  <C>  Stage for SyncLoadNetX<C>
+    where
+        C: RunCtx + Adjustable + 'static,
+    {
+        type Ctx = C;
+        type In<'a> = LoadNetXInput;
+        type Out = Arc<DevicesWrap<ThoModuleWithStore<Batch<InDimsX>, OutDimsX>>>;
+    }
+
+    impl <C> SyncStage for SyncLoadNetX<C>
+    where
+        C: RunCtx + Adjustable + 'static,
+    {
+        fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            todo!()
+        }
+    }
+    ///////////////
+
+    struct ApplyNetX {
+
+    }
+
+    /////////////////
 
     #[test]
     fn test_train_step_2_ipc() -> Result<(), ThoError> {

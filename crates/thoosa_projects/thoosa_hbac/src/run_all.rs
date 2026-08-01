@@ -623,7 +623,7 @@ mod tests {
     use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
     use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::ws::{WsConfigs, FsWorkspace};
     use thoosa_main::cli::{import_resources, RunAllArgs};
     use thoosa_main::RawTensorLoader;
     use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
@@ -800,9 +800,9 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir.clone(),
-            1,
-            0,
-            100,
+            WsConfigs::new(1,
+                           0,
+                           100)
         )?));
         let ws_rc = Arc::clone(&ws);
         let max_y = 30.0;

@@ -1379,7 +1379,7 @@ mod tests {
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::OptConfig;
-    use thoosa_common::ws::{FsWorkspace, Workspace};
+    use thoosa_common::ws::{WsConfigs, FsWorkspace, Workspace};
     use thoosa_motifs::distance::{clc_d2_similarity, EucDistConfig, SimilarityMetric};
     use crate::cli::{plot_resource, run_opt};
     use thoosa_motifs::fragments::Resolution;
@@ -1508,9 +1508,9 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            1,
-            u32::MAX,
-            32000,
+            WsConfigs::new(1,
+                           u32::MAX,
+                           32000)
         )?));
         let motif_len = 64usize;
 
@@ -1757,9 +1757,9 @@ mod tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            3,
-            u32::MAX,
-            32000,
+            WsConfigs::new(3,
+                           u32::MAX,
+                           32000)
         )?));
 
 

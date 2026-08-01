@@ -21,7 +21,7 @@ use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::kick_register_cuda_hooks;
-use thoosa_common::ws::Workspace;
+use thoosa_common::ws::{WsConfigs, Workspace};
 use thoosa_main::cli::{run_cli, Cli, RunAllArgs};
 use thoosa_main::RawTensorLoader;
 use thoosa_main::tasks::cross_batch_clc::{sync_cross_unfold_clc_endpoint_init, CROSS_UNFOLD_CLC_ENDPOINT};
@@ -70,8 +70,9 @@ fn cuda_worker_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result
 
 fn main() -> Result<(), ThoError> {
     let cdt = cdt_for_dir();
+    let app_configs = WsConfigs::new(20, 684400, 200);
 
-    CudaWorker::run_if_sock(&cdt, cuda_worker_endpoint_inits())?;
+    CudaWorker::run_if_sock(&cdt, &app_configs, cuda_worker_endpoint_inits())?;
 
     println!("CudaWorker::run_if_sock: running main");
 
@@ -112,6 +113,7 @@ fn main() -> Result<(), ThoError> {
 
     let run_result = rt.block_on(async move {
         let cdt = cdt_for_dir();
+
         track_await(run_cli(
             |source_path| data::labeled_resourses(source_path, "train.csv"),
             |source_path, key| {
@@ -147,9 +149,7 @@ fn main() -> Result<(), ThoError> {
                 track_await(run_all(ws, store, loader, root_ctx, run_all_args, all_configs)).await
             },
             &["seizure", "lpd", "gpd", "lrda", "grda", "other"],
-            20,
-            684400,
-            200,
+            app_configs,
             Some(async |_params:&InferArgs, _ws:&Arc<RwLock<Box<dyn Workspace>>>, _store:&Arc<Box<dyn Store>>,|{
                 debug!("bird_clef: infer");
                 todo!()

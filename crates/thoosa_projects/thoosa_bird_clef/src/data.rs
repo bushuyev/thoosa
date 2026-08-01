@@ -207,7 +207,7 @@ mod tests {
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::StftRunConfig;
     use thoosa_common::utils::{from, hist_1_dim, lin_t, plot_series, plot_spectrogram, skewness_kurtosis_1_dim, to_vec_f32, z_norm};
-    use thoosa_common::ws::FsWorkspace;
+    use thoosa_common::ws::{WsConfigs, FsWorkspace};
     use thoosa_common::ws::Workspace;
     use thoosa_main::cli::Commands::{FindMotifs, SelectMotifs, TrainFinalNet, TrainLabelNets};
     use thoosa_main::cli::{import_resources, Cli};
@@ -406,9 +406,9 @@ mod tests {
     async fn test_plot_resource() -> Result<(), ThoError> {
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             "/tmp/ws_clef",
-            1,
-            999,
-            32000,
+            WsConfigs::new(1,
+                           999,
+                           32000)
         )?));
 
         let store = Arc::new(SqlStore::from_path(ws.read().store_path()).await?);

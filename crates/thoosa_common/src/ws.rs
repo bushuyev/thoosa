@@ -21,6 +21,19 @@ use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key, panic_to_err
 pub const NET_PARAMS_FILE: &str = "parameters.json";
 pub const NET_WEIGHTS_FILE: &str = "weights.safetensors";
 
+#[derive(Debug, Clone)]
+pub struct WsConfigs {
+    pub channels: u32,
+    pub max_input: u32,
+    pub sample_rate: u32,
+}
+
+impl WsConfigs {
+    pub fn new(channels: u32, max_input: u32, sample_rate: u32) -> Self {
+        Self { channels, max_input, sample_rate }
+    }
+}
+
 
 #[derive(Debug)]
 pub struct FsWorkspace {
@@ -43,9 +56,7 @@ pub struct FsWorkspace {
 impl FsWorkspace {
     pub fn new(
         base_path: impl Into<PathBuf>,
-        channels: u32,
-        max_input: u32,
-        sample_rate: u32,
+        ws_configs: WsConfigs,
     ) -> Result<Box<dyn Workspace>, ThoError> {
         let base_path = base_path.into();
         fs::create_dir_all(&base_path)?;
@@ -86,17 +97,15 @@ impl FsWorkspace {
             final_nets_path: final_models_path,
             log_path,
             tmp_path,
-            channels,
-            sample_rate,
-            max_input,
+            channels: ws_configs.channels,
+            sample_rate: ws_configs.sample_rate,
+            max_input: ws_configs.max_input,
         }))
     }
 
     pub fn new_with_models_dir(
         base_path: impl Into<PathBuf>,
-        channels: u32,
-        max_input: u32,
-        sample_rate: u32,
+        app_configs:&WsConfigs,
         models_dir:&String
     ) -> Result<Box<dyn Workspace>, ThoError> {
         let base_path = base_path.into();
@@ -138,9 +147,9 @@ impl FsWorkspace {
             final_nets_path: final_models_path,
             log_path,
             tmp_path,
-            channels,
-            sample_rate,
-            max_input,
+            channels:app_configs.channels,
+            sample_rate:app_configs.sample_rate,
+            max_input:app_configs.max_input,
         }))
     }
 
@@ -1066,7 +1075,7 @@ impl WsMockBuilder {
 #[cfg(test)]
 #[allow(unused_imports, unused_variables)]
 mod tests {
-    use super::{FsWorkspace, Workspace};
+    use super::{WsConfigs, FsWorkspace, Workspace};
     use crate::dims::AnyDims;
     use crate::my_tch::{BinaryHeadPool, InitDummy, MotifInitMode, MyCosineConv1d, ThoModule};
     use crate::train_nets::{conv_motif_node, cosine_motif_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, MotifNetParams, MotifNetTypeParams};
@@ -1092,7 +1101,7 @@ mod tests {
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
         let tensors_path = Some(test_dir.join("tensors"));
-        let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
+        let ws = FsWorkspace::new(test_dir, WsConfigs::new(2, 684400, 32000))?;
 
         debug!("store_path={:?}", ws.store_path());
 
@@ -1122,7 +1131,7 @@ mod tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         debug!("test_run_train_on_motifs: test_dir={test_dir:?}");
 
-        let ws = FsWorkspace::new(test_dir, 20, 684400, 32000)?;
+        let ws = FsWorkspace::new(test_dir, WsConfigs::new(20, 684400, 32000))?;
 
         ws.save_label_net(
             1,
@@ -1176,7 +1185,7 @@ mod tests {
     #[test]
     fn test_load_conv_motif_net() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
+        let ws = FsWorkspace::new(test_dir, WsConfigs::new(2, 684400, 32000))?;
 
         let params = MotifNetParams::new_conv(1000, 3, 1, 10, 27, 10);
         let mut vs = VarStore::new(Cpu);
@@ -1218,7 +1227,7 @@ mod tests {
     #[test]
     fn test_load_cosine_motif_net() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
+        let ws = FsWorkspace::new(test_dir, WsConfigs::new(2, 684400, 32000))?;
 
         let params = MotifNetParams::new_cosine(1234, 5.0, 0.0, MotifInitMode::Mean(InitDummy{}));
         let mut vs = VarStore::new(Cpu);
@@ -1270,7 +1279,7 @@ mod tests {
     #[test]
     fn test_load_label_net() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = FsWorkspace::new(test_dir, 20, 684400, 32000)?;
+        let ws = FsWorkspace::new(test_dir, WsConfigs::new(20, 684400, 32000))?;
 
         let params = LabelNetParams::new(
             4,
@@ -1296,7 +1305,7 @@ mod tests {
     #[test]
     fn test_load_final_net() -> Result<(), ThoError> {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = FsWorkspace::new(test_dir, 2, 684400, 32000)?;
+        let ws = FsWorkspace::new(test_dir, WsConfigs::new(2, 684400, 32000))?;
 
         let params = FinalNetParams::new(8, 2, 1);
         let mut vs = VarStore::new(Cpu);

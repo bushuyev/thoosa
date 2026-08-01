@@ -4,6 +4,7 @@ use crate::val::{GridValueSet, NamedRange, NamedVal};
 use crate::make_combos;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use std::path::PathBuf;
 use std::sync::OnceLock;
 
 #[derive(Debug, Clone)]
@@ -159,6 +160,7 @@ pub type RunConfigId = u32;
 pub type RunId = u32;
 
 impl Named for RunConfigId {}
+impl Named for PathBuf {}//TODO it's for LoadNet - add type for NetId
 
 pub trait RunConfig: Debug {
     fn set_id(&mut self, id: RunConfigId);
