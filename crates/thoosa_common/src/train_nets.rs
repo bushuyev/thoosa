@@ -2519,7 +2519,7 @@ mod train_tests {
     use crate::utils::{
         lin_t, pad_to, reset_print_options, t_0_0, tensor_mem_size,
     };
-    use crate::ws::mock_ws_simp;
+    use crate::ws::{mock_ws_simp, WsConfigs};
     use crate::ws::{FsWorkspace, Workspace, WsMockBuilder, NET_WEIGHTS_FILE};
     use crate::{train_nets, utils};
     use async_trait::async_trait;
@@ -2628,9 +2628,11 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            channels,
+            WsConfigs::new(
+                channels,
             1000,
-            32000,
+            32000
+            )
         )?));
         let params = LabelNetParams::new(
             max_motif_nodes,
@@ -3124,9 +3126,11 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            motif_nets,
+            WsConfigs::new(
+                motif_nets,
             1000,//not used
-            32000,
+            32000
+            )
         )?));
         let params = LabelNetParams::new(
           motif_nets,
@@ -3201,9 +3205,11 @@ mod train_tests {
 
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            motif_nets,
+            WsConfigs::new(
+                motif_nets,
             1000,
-            32000,
+            32000
+            )
         )?));
         let params = LabelNetParams::new(
             motif_nets,
@@ -4011,7 +4017,7 @@ mod train_tests {
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
 
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 1000, 32000))?));
         let train_motif_nets_run_config_id = store.save_run_config(None, TrainMotifNetRunConfig::type_name(), "source", HashMap::new()).await?;
 
         let mut result = crate::train_nets::TrainLabelNetRunConfigResult::new(
@@ -4043,7 +4049,7 @@ mod train_tests {
         let store = Arc::new(SqlStore::in_mem().await?);
         RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, 2, 1000, 32000)?));
+        let ws: Arc<RwLock<Box<dyn Workspace>>> = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 1000, 32000))?));
         let label_run_config_id_0 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_0", HashMap::new()).await?;
         let label_run_config_id_1 = store.save_run_config(None, TrainLabelNetRunConfig::type_name(), "label_1", HashMap::new()).await?;
         let mut result = crate::train_nets::TrainFinalNetsRunConfigResult::new(

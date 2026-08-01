@@ -10,7 +10,7 @@ use std::sync::Arc;
 use thoosa_common::runner::common::cachable::{ DevicesWrap};
 use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::common::RunCtx;
-use thoosa_common::ws::{FsWorkspace, Workspace};
+use thoosa_common::ws::{WsConfigs, FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
@@ -198,7 +198,7 @@ where
             let ws = self.ws.read();
             (ws.channels(), ws.max_input(), ws.sample_rate())
         };
-        Ok(Arc::new(RwLock::new(FsWorkspace::new(&self.args.target_dir, channels, max_input, sample_rate)?)))
+        Ok(Arc::new(RwLock::new(FsWorkspace::new(&self.args.target_dir, WsConfigs::new(channels, max_input, sample_rate))?)))
     }
 
     async fn label_net_run_config_ids(&self) -> Result<Vec<RunConfigId>, ThoError> {

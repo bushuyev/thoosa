@@ -78,7 +78,7 @@ use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{AdamWRangeOrValue, AttnPool1dArgsRangeOrValue, BinaryHeadLse, BinaryHeadLseRangeOrValue, BinaryHeadPoolArgs, BinaryHeadPoolArgsRangeOrValue, CommonTrainingRunConfig, CommonTrainingRunConfigRangeOrValue, ConvNetArgsRangeOrValue, ConvNetJointArgsRangeOrValue, FinalNetArgs, FinalNetArgsRangeOrValue, FinalNetParams, InferArgs, LabelNetParams, LabelNetTypeArgsRangeOrValue, LinNetArgs, LinNetArgsRangeOrValue, MinMaxArgsRangeOrValue, MotifCosineNetArgs, MotifCosineNetArgsRangeOrValue, MotifNetParams, MotifsBy as TrainMotifsBy, OptConfig, OptimizersRangeOrValue, PlotVecf32, SelfAttentionNetArgs, SelfAttentionNetArgsRangeOrValue, ThoModuleWithStore, TrainFinalNetArgs, TrainFinalNetRunConfig, TrainFinalNetRunConfigFields, TrainFinalNetRunConfigRangeOrValue, TrainFinalNetsRunConfigResult, TrainLabelNetRunConfig, TrainLabelNetRunConfigFields, TrainLabelNetRunConfigRangeOrValue, TrainLabelNetRunConfigResult, TrainLabelNetsArgs, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifNetRunConfigRangeOrValue, TrainMotifsNetsArgs, TrainMotifsNetsResult, load_final_model, opt_train};
 use thoosa_common::utils::{DummyListener, TrainListener, from, kick_register_cuda_hooks, lin_t, list_devices, load_run_config, plot_series, plot_series_with_sidebar_values, plot_spectrogram, reset_print_options};
-use thoosa_common::ws::{FsWorkspace, Workspace};
+use thoosa_common::ws::{WsConfigs, FsWorkspace, Workspace};
 use thoosa_motifs::find;
 use thoosa_motifs::find::{FindMotifsArgs, FixedFindMotifsConfig, SelectMotifsArgs};
 use thoosa_motifs::fragments::{
@@ -340,15 +340,14 @@ fn set_oom_score_adj(score: i32) {
     }
 }
 
+
 pub async fn run_cli<F, R, A, S, FI>(
     labeled_resources: F,
     resource_to_tensor: R,
     init_data:S,
     run_all:A,
     labels: &[&str],
-    channels: u32,
-    max_input: u32,
-    sample_rate: u32,
+    app_configs: WsConfigs,
     infer: Option<FI>,
     cdt_for_dir: String,
 ) -> Result<(), ThoError>
@@ -389,18 +388,14 @@ where
             info!("FsWorkspace: models_dir={models_dir:?}");
             Arc::new(RwLock::new(FsWorkspace::new_with_models_dir(
                 cli.ws_path.clone(),
-                channels,
-                max_input,
-                sample_rate,
-                models_dir
+                &app_configs,
+                models_dir//to run inference on kaggle with model dir mounted under different dataset
             )?))
         }
         _=> {
             Arc::new(RwLock::new(FsWorkspace::new(
                 cli.ws_path.clone(),
-                channels,
-                max_input,
-                sample_rate,
+                app_configs,
             )?))
         }
     };
@@ -2181,7 +2176,7 @@ mod cli_tests {
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
     use thoosa_common::transforms::filters::{AverageFilterParams, AverageFilterParamsRangeOrValue, BandPassFilterParams, BandPassFilterParamsRangeOrValue, InputFilter, InputFilterRangeOrValue, MedianFilterParams, NotchBandFilterParamsRangeOrValue, Padding};
     use thoosa_common::utils::{from, lin_t, local_max_1d, plot_series, reset_print_options, t_0_0, t_0_1, t_1_0, t_1_1, three_sigs_tensor, to_vec_f32, white_tophat1d};
-    use thoosa_common::ws::{FsWorkspace, Workspace, mock_ws_simp};
+    use thoosa_common::ws::{mock_ws_simp, WsConfigs, FsWorkspace, Workspace};
     use thoosa_motifs::distance::MaskMaker::LeQuantile;
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::{
@@ -2461,9 +2456,9 @@ mod cli_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            1,
-            2 * n as u32,
-            32000,
+            WsConfigs::new(1,
+                           2 * n as u32,
+                           32000)
         )?));
 
         let store = Arc::new(SqlStore::in_mem().await?);
@@ -2509,9 +2504,9 @@ mod cli_tests {
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
         let ws = Arc::new(RwLock::new(FsWorkspace::new(
             test_dir,
-            1,
-            100,
-            32000,
+            WsConfigs::new(1,
+                           100,
+                           32000)
         )?));
         let store = Arc::new(SqlStore::in_mem().await?);
         let freq_filter = Arc::new(SyncFreqFilter::<RunCtxImpl>::new_local(
