@@ -172,7 +172,7 @@ mod tests {
     use thoosa_shared::tracked_await::track_await;
     use thoosa_shared::{mono_key, ThoError, os_thread_id};
     use thoosa_shared::test_utils::init_test_logging;
-    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
     use crate::runner::common::cachable::{BorrowRef, ConsumeData, DevicesWrap};
@@ -219,15 +219,15 @@ mod tests {
         assert!(ok);
     }
 
-    fn sync_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+    fn sync_clc_endpoint_inits() -> HashMap<String, InitFn> {
         HashMap::from([
             (
                 SYNC_TEST_TENSOR_LOADER_ENDPOINT.to_string(),
-                Box::new(sync_test_tensor_loader_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                Box::new(sync_test_tensor_loader_endpoint_init) as InitFn
             ),
             (
                 SYNC_CLC_ENDPOINT.to_string(),
-                Box::new(sync_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                Box::new(sync_clc_endpoint_init) as InitFn
             )
         ])
     }
@@ -323,10 +323,10 @@ mod tests {
         }
     }
 
-    fn sync_consume_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+    fn sync_consume_endpoint_inits() -> HashMap<String, InitFn> {
         HashMap::from([(
             SYNC_CONSUME_TEST_ENDPOINT.to_string(),
-            Box::new(sync_consume_test_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+            Box::new(sync_consume_test_endpoint_init) as InitFn,
         )])
     }
 
@@ -845,7 +845,7 @@ mod tests {
         use parking_lot::RwLock;
         use tch::Device::Cuda;
         use thoosa_shared::ThoError;
-        use crate::ipc::cuda_wokrer::CudaWorker;
+        use crate::ipc::cuda_wokrer::{CudaWorker, InitFn};
         use crate::ipc::json_ser::SyncStageIpcWrapper;
         use crate::runner::global_ctx::GlobalCtx;
         use crate::tho_device::ThoDevice;
@@ -853,11 +853,11 @@ mod tests {
         use crate::torch_runner::tests::composite_input::{ab_clc_sync_with_selector, run_ab_clc_with_stage};
         use crate::ws::mock_ws_simp;
 
-        fn sync_ab_clc_endpoint_inits() -> HashMap<String, Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>> {
+        fn sync_ab_clc_endpoint_inits() -> HashMap<String, InitFn> {
             HashMap::from([
                 (
                     SYNC_AB_CLC_ENDPOINT.to_string(),
-                    Box::new(sync_ab_clc_endpoint_init) as Box<dyn Fn(Vec<u8>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>>,
+                    Box::new(sync_ab_clc_endpoint_init) as InitFn,
                 )
             ])
         }
