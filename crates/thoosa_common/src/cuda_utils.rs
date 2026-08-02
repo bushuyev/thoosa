@@ -625,7 +625,7 @@ pub fn equal_bytes(a: &Tensor, b: &Tensor) -> bool {
 /// Each row m in every output chunk is compacted to the left and padded
 /// with `pad_value`.
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="split_padded_motif_scores"))]
-pub fn split_padded_motif_scores( //TOOD move to utils.rs
+pub fn split_padded_motif_scores( //TODO move to utils.rs
     scores: &Tensor,
     real_lengths: &[i64],
     n_chunks: i64,

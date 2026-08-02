@@ -310,7 +310,7 @@ impl FsWorkspace {
 }
 
 
-fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
+pub fn net_files_from_base(base_path: &Path) -> (PathBuf, PathBuf) {
     let file_name = base_path.file_name().and_then(|v| v.to_str());
     if file_name == Some(NET_WEIGHTS_FILE) {
         let base_dir = base_path.parent().unwrap_or(base_path);

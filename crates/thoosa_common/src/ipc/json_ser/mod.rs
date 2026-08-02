@@ -160,7 +160,7 @@ where
         let input = I::decode_for_worker::<C>(&input, all_cuda_tensors)?;
         debug!("IpcSyncStageWrapper::do_run: input={input:?}");
 
-        let mut ctx = RunCtxImpl::new(1, self.endpoint_name);
+        let mut ctx = RunCtxImpl::new(1, self.endpoint_name);//TODO add CudaWOrkerRunCtx without max_other_parallel
         if let Some(max_other_parallel) = max_other_parallel {
             ctx.set_max_other_parallel(max_other_parallel);
         }

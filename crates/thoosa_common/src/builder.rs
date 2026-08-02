@@ -422,6 +422,11 @@ impl Node {
     }
 }
 
+pub trait AsNode {
+    type InitData=();
+    fn as_node(&self, init_data:Self::InitData) -> Result<Node, ThoError>;
+}
+
 #[derive(Debug)]
 pub struct SeqBuilder {
     num_features: u32,
