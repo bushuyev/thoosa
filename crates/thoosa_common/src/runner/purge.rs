@@ -112,7 +112,7 @@ where
 }
 
 #[async_trait]
-pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//
+pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//TODO remove Sync + Send
     async fn has_gpu_data(&self, device_idx: usize) -> bool;
 
     async fn purge_gpu(
@@ -122,6 +122,7 @@ pub trait FuturesRunnerMapPurger: Debug  + Sync + Send {//
         name: &str,
     ) -> Result<(), ThoError>;
 
+    //TODO remove? It's used when resetting device in local mode which doesn't really work. Allow reset in IPC mode only where stages are completely rebuilt
     async fn drop_gpu(
         &self,
         device_idx: usize,

@@ -7,6 +7,7 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
+use std::path::PathBuf;
 use std::sync::Arc;
 use log::debug;
 use thoosa_named_derive::Named;
@@ -726,4 +727,9 @@ pub fn hump(x: f64, center: f64, steepness: f64, flatness: f64) -> f64 {
     assert!(steepness > 0.0);
     assert!(flatness > 0.0);
     1.0 / (1.0 + (steepness * (x - center)).abs().powf(flatness))
+}
+
+pub trait FromJsonFile {
+    fn from_file(path: &PathBuf) -> Result<Self, ThoError>
+        where Self:Sized;
 }

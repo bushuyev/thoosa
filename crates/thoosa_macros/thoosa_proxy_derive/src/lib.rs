@@ -363,7 +363,7 @@ fn parse_tokens(lit: &syn::LitStr) -> SynResult<proc_macro2::TokenStream> {
 }
 
 fn proxy_device_param(new_args: &Punctuated<FnArg, Token![,]>) -> Option<Ident> {
-    const DEVICE_PARAM_NAMES: [&str; 4] = ["tho_device", "tho_device_idx", "device", "device_idx"];
+    const DEVICE_PARAM_NAMES: [&str; 4] = ["tho_device", "tho_device_idx", "device", "device_idx"];//TODO remove "device", "device_idx"
 
     DEVICE_PARAM_NAMES.iter().find_map(|target| {
         new_args.iter().find_map(|arg| match arg {
