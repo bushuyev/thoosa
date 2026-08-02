@@ -5,12 +5,14 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Add;
+use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use thoosa_named_derive::Named;
 use thoosa_shared::traits::DataId;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum ElvVal {
+    Path(PathBuf),//for LoadNet - so that it can be loaded by path in CudaWorker avoiding SqlStore there for getting path by net_id
     Str(String),
     Num(usize),
     Bool(bool),
@@ -28,6 +30,9 @@ impl Display for ElvVal {
             }
             ElvVal::Bool(v) => {
                 write!(f, "{}", v)
+            }
+            ElvVal::Path(path) => {
+                write!(f, "{}", path.to_string_lossy())
             }
         }
     }
@@ -66,6 +71,12 @@ impl From<&str> for ElvVal {
 impl From<bool> for ElvVal {
     fn from(v: bool) -> Self {
         ElvVal::Bool(v)
+    }
+}
+
+impl From<PathBuf> for ElvVal {
+    fn from(v: PathBuf) -> Self {
+        ElvVal::Path(v)
     }
 }
 
@@ -214,7 +225,8 @@ fn fmt_elv_val(val: &ElvVal, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     match val {
         ElvVal::Num(value) => write!(f, "{value}"),
         ElvVal::Str(value) => write!(f, "{value}"),
-        ElvVal::Bool(value) => write!(f, "{value}")
+        ElvVal::Bool(value) => write!(f, "{value}"),
+        ElvVal::Path(value) => write!(f, "{}", value.to_string_lossy())
     }
 }
 

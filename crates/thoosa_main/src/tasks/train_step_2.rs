@@ -44,6 +44,7 @@ use thoosa_shared::tmp_file::TmpFile;
 // The proxy purge path and the test worker registration must use the same
 // endpoint name in both normal and cfg(test) builds.
 pub(crate) const TRAIN_TEST_STEP2_ENDPOINT: &str = "TrainTestStep2";
+pub(crate) const APPLY_NET2_X_ENDPOINT: &str = "LoadNetX";
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
@@ -57,7 +58,7 @@ pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     pd: PhantomData<C>,
 
 }
-
+//for FuturesRunnerMapPurger
 unsafe impl <F, DI, DO, C> Send for TrainStep2<F, DI, DO, C>
 where
     DI:Dims,
@@ -94,7 +95,7 @@ where
     //it's called when local GPU reset is requested
     async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
         debug!("TrainStep2::drop_gpu");
-        todo!()//add "Empty" state to OptSnapshot and re-init in move_to_device
+        todo!()
     }
 
     async fn purge_cpu(&self, purge_until: u64) -> usize {
@@ -105,7 +106,9 @@ where
 
 impl<F, DI: Dims, DO: Dims, C: RunCtx> Debug for TrainStep2<F, DI, DO, C> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TrainStep2").finish()
+        f.debug_struct("TrainStep2")
+            .field("best_checkpoint_path", &self.best_checkpoint_path)
+            .finish()
     }
 }
 
@@ -463,7 +466,7 @@ where
     DI:Dims,
     DO:Dims,
     C:RunCtx,
-    Self:Send + Sync
+    Self:Send + Sync //TODO
 {
     async fn has_gpu_data(&self, device_idx: usize) -> bool {
         match self {
@@ -695,8 +698,9 @@ impl TrainStep2IpcRequest {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fmt::{Debug, Formatter};
+    use std::fs;
     use std::future::ready;
     use std::marker::PhantomData;
     use std::path::PathBuf;
@@ -718,15 +722,15 @@ mod tests {
     use tokio::task::coop::cooperative;
     use tracing::field::debug;
     use thoosa_common::batches::{mock_async_data_batch, AsyncDataBatch, BatchLengths};
-    use thoosa_common::builder::{Node, SeqBuilder};
+    use thoosa_common::builder::{AsNode, Node, SeqBuilder};
     use thoosa_common::copy_ctx::CudaActorHandle;
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
     use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
     use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
-    use thoosa_common::runner::common::{MockRunCtx, RunCtx};
-    use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, Stage, StageWithState, SyncStage};
+    use thoosa_common::runner::common::{MockRunCtx, OutId, RunCtx};
+    use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStage, DynSyncStageBox, ErasedStageWithState, Stage, StageWithState, SyncStage};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::purge::FuturesRunnerMapPurger;
@@ -735,27 +739,30 @@ mod tests {
     use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
     use thoosa_common::tho_varstore::{ModConfig, ThoTrainModule};
     use thoosa_proxy_derive::Proxy;
-    use thoosa_shared::{simple_id, ThoError, CopyToDevice, now_ms, panic_to_err};
+    use thoosa_shared::{simple_id, ThoError, CopyToDevice, now_ms, panic_to_err, mono_key, MoveToDevice};
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Adjustable, MonoMetrics, SimpleId, WithId};
+    use thoosa_shared::traits::{Adjustable, CachableIdTr, FromJsonFile, MonoMetrics, SimpleId, WithId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
+    use crate::tasks::train_step_2::APPLY_NET2_X_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
     use crate::tasks::train_step_2::{TrainStep2, TrainStep2DynSyncStage, TrainStep2Input, TrainStep2InputWrapper, TrainStep2Output, TrainStep2XFn, TRAIN_TEST_STEP2_ENDPOINT};
     use futures_util::FutureExt;
     use futures_util::stream::BoxStream;
     use rand::random;
     use tokio::sync::MutexGuard;
+    use thoosa_common::my_tch::{LossFp, ThoModule};
     use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
     use thoosa_common::runs::SavableResult;
     use thoosa_common::train_nets::{FinalNetParams, MotifNetParams, ThoModuleWithStore, TrainMotifNetRunConfig};
-    use thoosa_common::ws::{mock_ws_simp, MockWorkspace, Workspace};
+    use thoosa_common::ws::{mock_ws_simp, MockWorkspace, Workspace, net_files_from_base};
+    use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::tmp_file::TmpFile;
     use thoosa_shared::tracked_await::track_await;
     use thoosa_store::{MockStoreBuilder, Store};
-    use crate::tasks::load_motif_net::MotifNetMeta;
+    use crate::tasks::load_motif_net::{LoadMotifNet, MotifNetMeta};
 
     ////
     #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -766,10 +773,27 @@ mod tests {
     pub struct OutDimsX {}
     impl Dims for OutDimsX { type Metrics = MonoMetrics<0, 1>; }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
     struct TestNetXParams {
         in_features:u32,
         layers:usize
+    }
+
+    impl AsNode for TestNetXParams {
+        fn as_node(&self, init_data: Self::InitData) -> Result<Node, ThoError> {
+            test_net(&self)
+        }
+    }
+
+    impl FromJsonFile for TestNetXParams {
+        fn from_file(path: &PathBuf) -> Result<Self, ThoError>
+        where
+            Self: Sized
+        {
+            serde_json5::from_str::<TestNetXParams>(fs::read_to_string(&path)?.as_str()).map_err(
+                |serde_err| ThoError::from_error(format!("read net params from {path:?}"), serde_err),
+            )
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1210,7 +1234,6 @@ mod tests {
         init_type = "TrainTestStep2Init",
         init_stage = "TrainTestStep2ProxyTarget::new(init)",
         wrapper = "TrainTestStep2IpcWrapper"
-
     )]
     struct TrainTestStep2ProxyTarget {
         base: Arc<TrainStep2<Box<dyn Fn(ThoBatch<InDimsX>) -> ThoBatch<InDimsX> + Send + Sync + 'static>, InDimsX, OutDimsX, RunCtxImpl>>,
@@ -1246,7 +1269,7 @@ mod tests {
                     Ok(pred_y.f_binary_cross_entropy_with_logits::<Tensor>(&target.f_totype(Float)?, None, None, Reduction::Mean)?)
                 },
                 &init.run_config,
-            )).unwrap();
+            )).unwrap();//TODO unwrap
 
             Self {
                 base: Arc::new(train_step),
@@ -1254,97 +1277,347 @@ mod tests {
         }
     }
     ///////////////////////
-    #[derive(Debug)]
-    struct LoadNetX<C>
+    pub struct ApplyNetStage2<DI, DO, C>
     where
-        C: Debug + RunCtx + Adjustable + 'static,
+        DI:Dims + 'static,
+        DO:Dims + 'static,
+        C:RunCtx
     {
-        stage:Arc<SyncLoadNetX<C>>,
-        pd:PhantomData<C>
+        device: ThoDevice,
+        train_module: tokio::sync::Mutex<ThoModuleWithStore<Batch<DI>, Batch<DO>>>,
+
+        pd: PhantomData<C>,
     }
 
-    #[derive(Debug)]
-    struct LoadNetXInput{
-        net_id: PathBuf
-    }
+    //for FuturesRunnerMapPurger
+    unsafe impl <DI, DO, C> Send for ApplyNetStage2<DI, DO, C>
+    where
+        DI:Dims,
+        DO:Dims,
+        C:RunCtx
+    {}
 
-    impl WithId for LoadNetXInput {
-        type ID=PathBuf;
+    unsafe impl <DI, DO, C> Sync for ApplyNetStage2<DI, DO, C>
+    where
+        DI:Dims,
+        DO:Dims,
+        C:RunCtx
+    {}
 
-        fn id(&self) -> &Self::ID {
-            &self.net_id
+    #[async_trait]
+    impl <DI, DO, C> FuturesRunnerMapPurger for ApplyNetStage2<DI, DO, C>
+    where
+        DI:Dims,
+        DO:Dims,
+        C:RunCtx,
+        Self:Send + Sync
+    {
+        async fn has_gpu_data(&self, device_idx: usize) -> bool {
+            true
         }
-    }
 
-    impl BorrowRef for LoadNetXInput {
-        type Out<'a>
-        where
-            Self: 'a
-        = LoadNetXInput;
+        async fn purge_gpu(&self, ids_to_keep: Option<&HashSet<&dyn CachableIdTr>>, device_idx: usize, name: &str) -> Result<(), ThoError> {
+            debug!("ApplyNetStep2::purge_gpu");
+            let mut mutex_guard = self.train_module.lock().await;
+            *mutex_guard = mutex_guard.copy_to_device(0).await?;
 
-        fn borrow_to<'o>(&'o self, to_tho_device_idx: usize) -> impl Future<Output=Result<Self::Out<'o>, ThoError>> + Send
-        where
-            Self: 'o
-        {
-            async {
-                todo!()
-            }
+            Ok(())
         }
-    }
-    impl Input for LoadNetXInput {}
 
-    impl  <C>  Stage for LoadNetX<C>
-    where
-        C: RunCtx + Adjustable + 'static,
-    {
-        type Ctx = C;
-        type In<'a> = LoadNetXInput;
-        type Out = Arc<DevicesWrap<ThoModuleWithStore<Batch<InDimsX>, OutDimsX>>>;
-    }
-
-    impl <C> AsyncStage for LoadNetX<C>
-    where
-        C: RunCtx + Adjustable + 'static,
-    {
-        fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
-            async move {
-                let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-                track_await(oom_handler.run(&Arc::clone(&self.stage), Arc::new(input), ctx.branch(false), NoContexts)).await
-            }
-        }
-    }
-    // ----
-    #[derive(Debug)]
-    struct SyncLoadNetX<C>
-    where
-        C: Debug + RunCtx + Adjustable + 'static,
-    {
-        ws: Arc<RwLock<Box<dyn Workspace>>>,
-        pd:PhantomData<C>
-    }
-
-
-
-    impl  <C>  Stage for SyncLoadNetX<C>
-    where
-        C: RunCtx + Adjustable + 'static,
-    {
-        type Ctx = C;
-        type In<'a> = LoadNetXInput;
-        type Out = Arc<DevicesWrap<ThoModuleWithStore<Batch<InDimsX>, OutDimsX>>>;
-    }
-
-    impl <C> SyncStage for SyncLoadNetX<C>
-    where
-        C: RunCtx + Adjustable + 'static,
-    {
-        fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        //it's called when local GPU reset is requested
+        async fn drop_gpu(&self, device_idx: usize, name: &str) -> Result<(), ThoError> {
+            debug!("TrainStep2::drop_gpu");
             todo!()
         }
-    }
-    ///////////////
 
-    struct ApplyNetX {
+        async fn purge_cpu(&self, purge_until: u64) -> usize {
+            debug!("TrainStep2::purge_cpu");
+            0
+        }
+    }
+
+
+    impl<DI: Dims, DO: Dims, C: RunCtx> Debug for ApplyNetStage2<DI, DO, C> {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("ApplyNetStep2").finish()
+        }
+    }
+
+
+    impl<DI, DO, C> ApplyNetStage2<DI, DO, C>
+    where
+        DI: Dims,
+        DO: Dims,
+        C: RunCtx,
+    {
+
+        pub(crate) async fn new_local<NP, IDT>(device: ThoDevice, base_path:PathBuf, init_data:IDT) -> Result<Self, ThoError>
+        where
+            NP: FromJsonFile+AsNode<InitData=IDT> + Send + Sync +'static,
+            IDT: Clone + Send + Sync  +'static,
+        {
+            let (net_path, params_path) = net_files_from_base(&base_path);
+            // let (train_module, node_params) = train_module_builder(run_config, device).await?;
+            let params = NP::from_file(&params_path)?;
+            let train_module = ThoModuleWithStore::load(
+                mono_key!(net_path.to_string_lossy().to_string(), "motif_model").into(),
+                move |path: &nn::Path| params.as_node(init_data.clone())?.build_tch_module(path),//needs to be cloneable because ThoModuleWithStore re-uses it when reloading
+                net_path,
+                *device,
+                false,
+            )?;
+
+
+
+            Ok(Self {
+                device,
+                train_module: tokio::sync::Mutex::new(train_module),
+
+                pd: PhantomData,
+            })
+        }
+
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ApplyNetStage2Input<DI>
+    where
+        DI:Dims,
+    {
+        id: SynKey,
+        pub x: ThoBatch<DI>,
+        pub lengths: Option<BatchLengths>,//real lengths without padding
+    }
+
+    impl <DI> Input for ApplyNetStage2Input<DI>
+    where
+        DI:Dims
+    {}
+
+    impl <DI> WithId for ApplyNetStage2Input<DI>
+    where
+        DI:Dims,
+    {
+        type ID = SynKey;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    pub struct ApplyNetStage2Output<DO>
+    where
+        DO:Dims,
+    {
+        id: SynKey,
+        pub y: ThoBatch<DO>,
+        pub lengths: Option<BatchLengths>,
+    }
+
+    impl <DI> Output for ApplyNetStage2Output<DI>
+    where
+        DI:Dims
+    {}
+
+
+    impl <DO> WithId for ApplyNetStage2Output<DO>
+    where
+        DO:Dims,
+    {
+        type ID = SynKey;
+
+        fn id(&self) -> &Self::ID {
+            &self.id
+        }
+    }
+
+
+
+    impl <DI, DO, C> Stage for ApplyNetStage2<DI, DO, C>
+    where
+        DI: Dims,
+        DO: Dims,
+        C: RunCtx,
+    {
+        type Ctx = C;
+        type In<'a> = ApplyNetStage2Input<DI>;
+        type Out = ApplyNetStage2Output<DO>;
+    }
+
+    impl<DI, DO, C> SyncStage for ApplyNetStage2<DI, DO, C>
+    where
+        DI: Dims,
+        DO: Dims,
+        C: RunCtx,
+    {
+        fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+            // Advertise typed state execution without exposing ThoTrainModule to the common runner.
+            Some(self)
+        }
+    }
+
+    impl<DI, DO, C> StageWithState for ApplyNetStage2<DI, DO, C>
+    where
+        DI: Dims,
+        DO: Dims,
+        C: RunCtx,
+    {
+        type S = ThoModuleWithStore<Batch<DI>, Batch<DO>>;
+
+        fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+            async {
+                let mut guard = self.train_module.lock().await;
+                *guard = guard.copy_to_device(1).await?;
+                Ok(guard)
+            }.boxed()
+        }
+
+        #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "ApplyNetStep2::do_run_with_state"))]
+        fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, mut train_module: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            let y = train_module.tho_forward(&input.x, None, false)?;
+
+
+            Ok(ApplyNetStage2Output {
+                id: mono_key!(0, "todo").into(),//TODO
+                y,
+                lengths: None,
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct ApplyNetStageIpcWrapper {
+        stage: Arc<ApplyNetXStageTarget>
+    }
+
+    impl SyncStageIpcWrapper for ApplyNetStageIpcWrapper {
+        fn as_with_state(&self) -> Option<&dyn ErasedWithState> {
+            // Keep this endpoint's concrete training-module state behind the erased worker capability.
+            Some(self)
+        }
+
+        fn purge(&self, tho_device: ThoDevice) -> BoxFuture<Result<(), ThoError>>
+        where
+            Self: Sync
+        {
+            // Purge uses the application's CPU-first device index, not tch::Device.
+            self.stage.base.purge_gpu(None, tho_device.tho_device_idx(), "zzz")
+        }
+    }
+
+    impl SyncStageIpcWrapperWithState for ApplyNetStageIpcWrapper {
+        type S = ThoModuleWithStore<Batch<InDimsX>, Batch<OutDimsX>>;
+
+        fn pre_run<'a>(&'a self, _tho_device: &'a ThoDevice) -> BoxFuture<'a, Result<MutexGuard<'a, Self::S>, ThoError>> {
+            StageWithState::pre_run(self.stage.base.as_ref())
+        }
+
+        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
+                    debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
+                    let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
+                    let input_dec = JsonIpcCodec::decode::<ApplyNetStage2Input<InDimsX>>(&input.into_parts().0)?;
+
+                    let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
+
+                    let input = ApplyNetStage2Input {
+                        id: input_dec.id,
+                        x,
+                        lengths: input_dec.lengths,
+                    };
+                    let stage = Arc::clone(&self.stage.base);
+
+                    Ok(JsonIpcCodec::encode(&StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, APPLY_NET2_X_ENDPOINT))?)?)
+                })
+            }).map(SyncStageIpcResponse::Encoded)
+        }
+    }
+
+    #[derive(Debug, Serialize, Deserialize)]
+    struct ApplyNetStage2Init {
+        id: SynKey,
+        tho_device_idx: usize,
+        base_path:PathBuf
+    }
+
+    #[derive(Debug, Proxy)]
+    #[proxy(
+        common = "thoosa_common",
+        name = "ProxApplyNetXStage",
+        endpoint = "APPLY_NET2_X_ENDPOINT",
+        new_args = "id:SynKey, init: ApplyNetStage2Init, tho_device_idx: usize",
+        fields = "id: SynKey = id",
+        out_id = "self.id.clone()",
+        endpoint_init = "apply_net_stage_2_endpoint_init",
+        init_type = "ApplyNetStage2Init",
+        init_stage = "ApplyNetXStageTarget::new_in_worker(init)",
+        wrapper = "ApplyNetStageIpcWrapper"
+    )]
+    struct ApplyNetXStageTarget {
+        id:SynKey,
+        base: Arc<ApplyNetStage2<InDimsX, OutDimsX, RunCtxImpl>>
+    }
+
+    impl ApplyNetXStageTarget {
+
+        pub async fn new(id:SynKey, device: ThoDevice, base_path:PathBuf, init_data:()) -> Result<ApplyStage2DynSyncStage<InDimsX, OutDimsX, RunCtxImpl>, ThoError>{
+            if GlobalCtx::global().is_ipc() {
+                // ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await
+                // crate::tasks::train_step_2::tests::ApplyStage2DynSyncStage
+                Ok(ApplyStage2DynSyncStage::Proxy {
+                    stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxApplyNetXStage::new(
+                        id.clone(),
+                        ApplyNetStage2Init{
+                            id,
+                            tho_device_idx: 1,
+                            base_path,
+                        }, 1//TODO
+                    ).await?)))
+                })
+
+
+            } else {
+
+                Ok(ApplyStage2DynSyncStage::Local(Arc::new(ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await?)))
+            }
+
+        }
+        pub fn new_in_worker(init: ApplyNetStage2Init) -> Self {
+            let stage = futures::executor::block_on(ApplyNetStage2::new_local::<TestNetXParams, ()>(
+                init.tho_device_idx.into(),
+                init.base_path,
+                ()
+            )).unwrap();//TODO unwrap
+
+            Self {
+                id: init.id.clone(),
+                base: Arc::new(stage)
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum ApplyStage2DynSyncStage< DI, DO, C>
+    where
+        DI:Dims + 'static,
+        DO:Dims + 'static,
+        C: RunCtx + 'static
+
+    {
+        Local(Arc<ApplyNetStage2<DI, DO, C>>),
+        Proxy {
+            stage: Arc<DynSyncStageBox<ApplyNetStage2Input<DI>, ApplyNetStage2Output<DO>, C>>,
+        }
+    }
+
+    impl <DI, DO, C> ApplyStage2DynSyncStage<DI, DO, C>
+    where
+        DI:Dims + 'static,
+        DO:Dims + 'static,
+        C: RunCtx + 'static
+    {
 
     }
 
@@ -1439,7 +1712,6 @@ mod tests {
 
         GlobalCtx::global().dump_all_to_cpu(&HashMap::new(), 1, "test").await?;
 
-
         let r = GlobalCtx::global().cuda_actor(1).run_stage(Arc::clone(&train_step), input().await?, 1, &ctx).await?;
 
         debug!("do_test_train_step_2: r={r:?}");
@@ -1461,21 +1733,32 @@ mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
+        do_test_train_net_2(false).await?;
+
+        Ok(())
+
+    }
+
+    async fn do_test_train_net_2(make_refs:bool) -> Result<(), ThoError> {
         let train_stream_calls = Arc::new(AtomicUsize::new(0));
         let valid_stream_calls = Arc::new(AtomicUsize::new(0));
 
         let mock_test_batch = Arc::new(
             mock_async_data_batch::build::<InDimsX, OutDimsX, RunCtxImpl>()
-                .with_train_stream_calls(Arc::clone(&train_stream_calls), |_ctx| make_stream(false))
-                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream(false))
+                .with_train_stream_calls(Arc::clone(&train_stream_calls), move |_ctx| make_stream(make_refs))
+                .with_valid_stream_calls(Arc::clone(&valid_stream_calls), move |_ctx| make_stream(make_refs))
                 .finish(),
         );
         let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(|| TestXRunConfig::new(0.001, 100, 3))));
 
-        let r = train_net.run(TrainNet2Input{}, RunCtxImpl::new(1, "test")).await?;
+        let r = train_net.run(TrainNet2Input {}, RunCtxImpl::new(1, "test")).await?;
+        debug!("test_train_net_2_ipc: r={r:?}");
+
+        let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), r.net_var_store.path, ()).await?);
+
+        debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
 
         Ok(())
-
     }
 
     #[test]
@@ -1488,22 +1771,7 @@ mod tests {
             let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, true);
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-            let train_stream_calls = Arc::new(AtomicUsize::new(0));
-            let valid_stream_calls = Arc::new(AtomicUsize::new(0));
-
-
-            let mock_test_batch = Arc::new(
-                mock_async_data_batch::build::<InDimsX, OutDimsX, RunCtxImpl>()
-                    .with_train_stream_calls(Arc::clone(&train_stream_calls), |_ctx| make_stream(true))
-                    .with_valid_stream_calls(Arc::clone(&valid_stream_calls), |_ctx| make_stream(true))
-                    .finish(),
-            );
-            let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(|| TestXRunConfig::new(0.001, 100, 3))));
-
-            let r = train_net.run(TrainNet2Input{}, RunCtxImpl::new(1, "test")).await?;
-
-            debug!("test_train_net_2_ipc: r={r:?}");
-
+            do_test_train_net_2(true).await?;
 
             Ok(())
         }, async |sock_path| {
@@ -1522,8 +1790,6 @@ mod tests {
         })
 
     }
-
-
 
     fn dummy_batch(make_refs:bool) -> Result<(ThoBatch<InDimsX>, ThoBatch<OutDimsX>), ThoError> {
         // Match the test network's 100 input features so this fixture exercises the training path.
