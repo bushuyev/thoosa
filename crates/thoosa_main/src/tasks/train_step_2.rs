@@ -888,24 +888,24 @@ mod tests {
     }
 
     #[derive(Debug)]
-    pub struct TrainNetXResult<P, R>
+    pub struct TrainNetResult<P, R>
     where 
         P:Debug + Send + Sync +'static,
         R:Debug + Send + Sync +'static,
     {
         pub loss: f32,
 
-        pub net_var_store: NetVarStorePath<P>, //TestNetXParams,
-        run_config_values: R, //TestXRunConfig,
+        pub net_var_store: NetVarStorePath<P>,
+        run_config_values: R,
     }
 
-    impl <P, R> Output for TrainNetXResult<P,R>
+    impl <P, R> Output for TrainNetResult<P,R>
     where
         P:Debug + Send + Sync +'static,
         R:Debug + Send + Sync +'static,
     {}
 
-    impl <P, R> TrainNetXResult<P, R>
+    impl <P, R> TrainNetResult<P, R>
     where
         P:Debug + Send + Sync +'static,
         R:Debug + Send + Sync +'static,
@@ -917,7 +917,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl <P, R> SavableResult for TrainNetXResult<P, R>
+    impl <P, R> SavableResult for TrainNetResult<P, R>
     where
         P:Debug + Send + Sync +'static,
         R:Debug + Send + Sync +'static,
@@ -1011,7 +1011,7 @@ mod tests {
         // Use the factory context here so the stage, train step, and batch stream share one context type.
         type Ctx = SF::C;
         type In<'a> = TrainNet2Input;
-        type Out = TrainNetXResult<SF::NP, SF::R>;
+        type Out = TrainNetResult<SF::NP, SF::R>;
     }
 
     //-->for test only to avoid errors because of run_config_source which is not Sync and Send
@@ -1050,7 +1050,7 @@ mod tests {
 
 
                 // Ok(TrainNet2Output::new(NetVarStorePath::new(var_store_path, node_params))) - in the original application TrainMotifNetResult is built from TrainNet output in the model-specific structs like thoosa_main/src/tasks/train_motif_nets.rs:975. In the refactored app TrainNet output can implement SavableResult and be used directly
-                Ok(TrainNetXResult::new(loss, NetVarStorePath::new(var_store_path, node_params), run_config))//run config on which the result was achieved
+                Ok(TrainNetResult::new(loss, NetVarStorePath::new(var_store_path, node_params), run_config))//run config on which the result was achieved
 
             }
         }
