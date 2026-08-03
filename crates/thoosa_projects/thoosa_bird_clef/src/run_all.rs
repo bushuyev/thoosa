@@ -77,6 +77,11 @@ impl RunConfig for ClefRunConfig {
         self.id = id;
     }
 
+    // Keep the handwritten RunConfig implementation aligned with the derive.
+    fn get_id(&mut self) -> RunConfigId {
+        self.id
+    }
+
     fn type_name() -> &'static str {
         "ClefRunConfig"
     }
