@@ -876,7 +876,7 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
         quote! {}
     };
 
-    let (into_impl, set_id) = if has_run_config_opt || has_run_config_grid {
+    let (into_impl, set_id, get_id) = if has_run_config_opt || has_run_config_grid {
         (
             quote! {
                 impl <I:IntoIterator<Item=thoosa_shared::val::NamedVal<#fields_enum_ident>>> From<I> for #target_struct_ident {
@@ -896,12 +896,18 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
             quote! {
                 self.id.replace(id);
             },
+            quote! {
+                self.id.expect("run config id is not set")
+            },
         )
     } else {
         (
             quote! {},
             quote! {
                 panic!("set id should not be called on run config sub")
+            },
+            quote! {
+                panic!("get id should not be called on run config sub")
             },
         )
     };
@@ -964,6 +970,11 @@ fn thoosa_args_derive_impl(ast: DeriveInput) -> TokenStream2 {
 
             fn set_id(&mut self, id: thoosa_shared::run_configs::RunId) {
                 #set_id
+            }
+
+            // Root configs own an ID, while nested configs reject ID access.
+            fn get_id(&mut self) -> thoosa_shared::run_configs::RunConfigId {
+                #get_id
             }
 
             fn type_name() -> &'static str {
