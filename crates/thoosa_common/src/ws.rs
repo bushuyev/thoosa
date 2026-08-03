@@ -12,11 +12,13 @@ use std::fs;
 use std::fs::read_dir;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use serde::Serialize;
 use tch::nn::{self, VarStore};
 use tch::{Device, Tensor};
 use thoosa_shared::resource::{Resource, ResourceStats};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::{ThoError, cdt_for_dir, recurse_files, mono_key, panic_to_err};
+use thoosa_shared::traits::ToJsonFile;
 
 pub const NET_PARAMS_FILE: &str = "parameters.json";
 pub const NET_WEIGHTS_FILE: &str = "weights.safetensors";
@@ -442,7 +444,7 @@ impl Workspace for FsWorkspace {
         run_config_id: RunConfigId,
         vs_or_path: VarStoreOrPath<'a>,
         model_type:&str,
-        params: &FinalNetParams,
+        params: &dyn ToJsonFile,
     ) -> Result<PathBuf, ThoError> {
 
 
@@ -455,10 +457,8 @@ impl Workspace for FsWorkspace {
 
         panic_to_err!(vs_or_path.save(&dst))?;
 
-        fs::write(
-            base_path.join(NET_PARAMS_FILE),
-            serde_json5::to_string(params)?,
-        )?;
+        params.to_file(&base_path.join(NET_PARAMS_FILE))?;
+
 
         Ok(dst)
     }
@@ -883,7 +883,7 @@ pub trait Workspace: Sync + Send + Debug {
         run_config_id: RunConfigId,
         vs_or_path: VarStoreOrPath<'a>,
         model_type:&str,
-        params: &FinalNetParams,
+        params: &dyn ToJsonFile,
     ) -> Result<PathBuf, ThoError>;
     fn save_motif_net<'a>(
         &self,

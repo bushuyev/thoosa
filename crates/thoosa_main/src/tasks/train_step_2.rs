@@ -742,7 +742,7 @@ mod tests {
     use thoosa_proxy_derive::Proxy;
     use thoosa_shared::{simple_id, ThoError, CopyToDevice, now_ms, panic_to_err, mono_key, MoveToDevice, cdt_for_dir};
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Adjustable, CachableIdTr, FromJsonFile, MonoMetrics, SimpleId, WithId};
+    use thoosa_shared::traits::{Adjustable, CachableIdTr, FromJsonFile, MonoMetrics, SimpleId, ToJsonFile, WithId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step_2::APPLY_NET2_X_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
@@ -800,10 +800,27 @@ mod tests {
         }
     }
 
+    impl ToJsonFile for TestNetXParams{
+        fn to_file(&self, path: &PathBuf) -> Result<(), ThoError>
+        where
+            Self: Sized
+        {
+            fs::write(
+                path,
+                serde_json5::to_string(self)?,
+            )?;
+
+            Ok(())
+        }
+    }
+
     #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug, Clone, Serialize, Deserialize)]
+    #[run_config_grid]
     struct TestXRunConfig {
         #[in_map]
-        pub id: RunConfigId,
+        pub id: Option<RunConfigId>,
+
+
         #[in_map]
         pub lr:f64,
         #[in_map]
@@ -814,7 +831,7 @@ mod tests {
 
     impl TestXRunConfig {
         pub fn new(id: RunConfigId, lr: f64, in_features: u32, layers: usize) -> Self {
-            Self {id, lr, in_features, layers }
+            Self {id:Some(id), lr, in_features, layers }
         }
     }
 
@@ -823,7 +840,7 @@ mod tests {
     }
 
     trait TrainStepFactory {
-        type NP:Debug +Sync  + Send;
+        type NP:FromJsonFile+ToJsonFile + Debug +Sync  + Send;
         type R:RunConfig + Debug + Sync + Send + Clone;
         type InDims:Dims + 'static;
         type OutDims:Dims + 'static;
@@ -898,51 +915,54 @@ mod tests {
     #[derive(Debug)]
     pub struct TrainNetResult<P, R>
     where 
-        P:Debug + Send + Sync +'static,
+        P:ToJsonFile + Debug + Send + Sync +'static,
         R:RunConfig + Debug + Send + Sync +'static,
     {
         pub loss: f32,
 
         pub net_var_store: NetVarStorePath<P>,
-        run_config_values: R,
+        run_config: R,
     }
 
     impl <P, R> Output for TrainNetResult<P,R>
     where
-        P:Debug + Send + Sync +'static,
+        P:ToJsonFile + Debug + Send + Sync +'static,
         R:RunConfig + Debug + Send + Sync +'static,
     {}
 
     impl <P, R> TrainNetResult<P, R>
     where
-        P:Debug + Send + Sync +'static,
+        P:ToJsonFile+Debug + Send + Sync +'static,
         R:RunConfig + Debug + Send + Sync +'static,
 
     {
-        pub fn new(loss: f32, net_var_store: NetVarStorePath<P>, run_config_values: R) -> Self {
-            Self { loss, net_var_store, run_config_values }
+        pub fn new(loss: f32, net_var_store: NetVarStorePath<P>, run_config: R) -> Self {
+            Self { loss, net_var_store, run_config }
         }
     }
 
     #[async_trait]
     impl <P, R> SavableResult for TrainNetResult<P, R>
     where
-        P:Debug + Send + Sync +'static,
+        P:ToJsonFile + Debug + Send + Sync +'static,
         R:RunConfig + Debug + Send + Sync +'static,
     {
         type R = u32;
         async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
+            let run_config_id = self.run_config.get_id();
+
             //store.save_run_config skipped here, should be preserved in main app
             let path = panic_to_err!(ws.read().save_net(//save_final_net and FinalNetParams are used here to avoid adding save_X_net to production code
-                    0,
+                    run_config_id,
                 (&self.net_var_store.path.path().to_path_buf()).into(),
                 R::type_name(),
-                &FinalNetParams::new(0, 0, 0), //self.params,
+                &self.net_var_store.net_params, //self.params,
             ))?;
 
-            track_await(store.save_trained_net(self.run_config_values.get_id(), path, self.loss, None)).await?;
+            debug!("TrainNetResult::save: run_config_id={run_config_id}, path={path:?} self.loss={}",  self.loss);
 
-            Ok(0)
+
+            track_await(store.save_trained_net(run_config_id, path, self.loss, None)).await
         }
     }
 
@@ -998,7 +1018,7 @@ mod tests {
     #[derive(Debug)]
     struct NetVarStorePath<P>
     where
-    P:Debug
+    P:ToJsonFile + Debug
     {
         path:TmpFile,
         net_params:P
@@ -1006,7 +1026,7 @@ mod tests {
 
     impl <P> NetVarStorePath<P>
     where
-        P:Debug
+        P:ToJsonFile+Debug
     {
         pub fn new(path: TmpFile, net_params: P) -> Self {
             Self { path, net_params }
@@ -1771,6 +1791,7 @@ mod tests {
 
         let mut run_config = TestXRunConfig::new(0, 0.001, 100, 3);
         let run_config_id = store.save_run_config(None, "TestXRunConfig", "test", run_config.to_properties_iter(None).collect()).await?;
+        run_config.set_id(run_config_id);
         debug!("test_train_net_2_ipc: run_config_id={run_config_id:?}");
 
         let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(move || {
@@ -1782,11 +1803,15 @@ mod tests {
         debug!("test_train_net_2_ipc: r={r:?}");
 
         // let rr = TrainNetXResult::new()
-        let motif_nets = track_await(store.list_trained_nets(vec![run_config_id], None, None)).await?;
+        let x_nets = track_await(store.list_trained_nets(vec![run_config_id], None, None)).await?;
+        debug!("test_train_net_2_ipc: x_nets={x_nets:?}");
+        for x_net in x_nets {
 
-        debug!("test_train_net_2_ipc: motif_nets={motif_nets:?}");
-        // let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), r.net_var_store.path.path(), ()).await?);
-        // debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
+            let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), x_net.net_path, ()).await?);
+            debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
+        }
+
+
 
         Ok(())
     }
