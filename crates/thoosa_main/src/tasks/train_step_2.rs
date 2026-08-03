@@ -45,8 +45,8 @@ use thoosa_shared::tmp_file::TmpFile;
 
 // The proxy purge path and the test worker registration must use the same
 // endpoint name in both normal and cfg(test) builds.
-pub(crate) const TRAIN_TEST_STEP2_ENDPOINT: &str = "TrainTestStep2";
-pub(crate) const APPLY_NET2_X_ENDPOINT: &str = "LoadNetX";
+pub(crate) const TRAIN_TEST_STEP2_ENDPOINT: &str = "TRAIN_TEST_STEP2_ENDPOINT";
+pub(crate) const APPLY_NET2_X_ENDPOINT: &str = "APPLY_NET2_X_ENDPOINT";
 
 pub struct TrainStep2<F, DI: Dims, DO: Dims, C: RunCtx> {
     device: ThoDevice,
@@ -1120,7 +1120,8 @@ mod tests {
                         debug!("TrainNet2::run_inner: epoch={epoch} test_step_input={test_step_input:?}");
 
                         // TrainStep2 owns mutable module state, so use its stateful execution contract.
-                        let r = GlobalCtx::global().cuda_actor(ctx.tho_device_idx()).run_stage(Arc::clone(&train_step), test_step_input, ctx.tho_device_idx(), &ctx_for_run_stage).await?;
+                        let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+                        let r = track_await(oom_handler.run(&Arc::clone(&train_step), Arc::new(test_step_input), ctx.branch(false), NoContexts)).await?;
 
                         debug!("TrainNet2::run_inner: epoch={epoch} r={r:?}");
 
@@ -1579,6 +1580,7 @@ mod tests {
         name = "ProxApplyNetXStage",
         endpoint = "APPLY_NET2_X_ENDPOINT",
         new_args = "id:SynKey, init: ApplyNetStage2Init, tho_device_idx: usize",
+        init = "init",
         fields = "id: SynKey = id",
         out_id = "self.id.clone()",
         endpoint_init = "apply_net_stage_2_endpoint_init",
@@ -1595,16 +1597,16 @@ mod tests {
 
         pub async fn new(id:SynKey, device: ThoDevice, base_path:PathBuf, init_data:()) -> Result<ApplyStage2DynSyncStage<InDimsX, OutDimsX, RunCtxImpl>, ThoError>{
             if GlobalCtx::global().is_ipc() {
-                // ApplyNetStage2::new_local::<TestNetXParams, ()>(device, base_path, init_data).await
-                // crate::tasks::train_step_2::tests::ApplyStage2DynSyncStage
+                let init = ApplyNetStage2Init {
+                    id: id.clone(),
+                    tho_device_idx: device.tho_device_idx(),
+                    base_path,
+                };
+                debug!("ApplyNetXStageTarget::new: init={init:?}");
                 Ok(ApplyStage2DynSyncStage::Proxy {
                     stage: Arc::new(DynSyncStageBox::new(Arc::new(ProxApplyNetXStage::new(
-                        id.clone(),
-                        ApplyNetStage2Init{
-                            id,
-                            tho_device_idx: device.tho_device_idx(),
-                            base_path,
-                        },
+                        id,
+                        init,
                         device.tho_device_idx()
                     ).await?)))
                 })
@@ -1617,6 +1619,8 @@ mod tests {
 
         }
         pub fn new_in_worker(init: ApplyNetStage2Init) -> Self {
+            debug!("ApplyNetXStageTarget::new_in_worker: init={init:?}");
+
             let stage = futures::executor::block_on(ApplyNetStage2::new_local::<TestNetXParams, ()>(
                 init.tho_device_idx.into(),
                 init.base_path,
@@ -1766,7 +1770,7 @@ mod tests {
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
         // let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
         let test_dir = Path::new("/tmp").join(cdt_for_dir());
-        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 684400, 32000))?));
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 123, 123))?));
         do_test_train_net_2(false, &ws).await?;
 
         Ok(())
@@ -1809,6 +1813,8 @@ mod tests {
 
             let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), x_net.net_path, ()).await?);
             debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
+
+            // apply_net.
         }
 
 
@@ -1818,7 +1824,8 @@ mod tests {
 
     #[test]
     fn test_train_net_2_ipc()->Result<(), ThoError>{
-        let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
+        let test_dir = Path::new("/tmp").join(cdt_for_dir());
+        let ws = Arc::new(RwLock::new(FsWorkspace::new(test_dir, WsConfigs::new(2, 123, 123))?));
         run_ipc_test(async {
             let module = module_path!().split_once("::").map(|(_, module)| module).unwrap_or("");
             let test_name = format!("{module}::test_train_net_2_ipc");
@@ -1838,6 +1845,10 @@ mod tests {
                     (
                         TRAIN_TEST_STEP2_ENDPOINT.to_string(),
                         Box::new(train_test_step_2_endpoint_init) as InitFn,
+                    ),
+                    (
+                        APPLY_NET2_X_ENDPOINT.to_string(),
+                        Box::new(apply_net_stage_2_endpoint_init) as InitFn,
                     ),
                 ]),
                 ThoDevice::from(Cuda(0)),
