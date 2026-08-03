@@ -757,9 +757,12 @@ mod tests {
     use thoosa_common::runs::SavableResult;
     use thoosa_common::train_nets::{FinalNetParams, MotifNetParams, ThoModuleWithStore, TrainMotifNetRunConfig};
     use thoosa_common::ws::{mock_ws_simp, MockWorkspace, Workspace, net_files_from_base, FsWorkspace, WsConfigs};
+    use thoosa_properties_map::ToHashmap;
+    use thoosa_properties_map_derive::ThoosaPropertiesMap;
+    use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::data_with_extra::DataWithExtra;
-    use thoosa_shared::run_configs::RunConfigId;
+    use thoosa_shared::run_configs::{RunConfig, RunConfigId, RUN_ID};
     use thoosa_shared::tmp_file::TmpFile;
     use thoosa_shared::tracked_await::track_await;
     use thoosa_store::{MockStoreBuilder, SqlStore, Store};
@@ -797,16 +800,21 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Debug, Clone, Serialize, Deserialize)]
     struct TestXRunConfig {
+        #[in_map]
+        pub id: RunConfigId,
+        #[in_map]
         pub lr:f64,
+        #[in_map]
         pub in_features:u32,
+        #[in_map]
         pub layers:usize
     }
 
     impl TestXRunConfig {
-        pub fn new(lr: f64, in_features: u32, layers: usize) -> Self {
-            Self { lr, in_features, layers }
+        pub fn new(id: RunConfigId, lr: f64, in_features: u32, layers: usize) -> Self {
+            Self {id, lr, in_features, layers }
         }
     }
 
@@ -816,7 +824,7 @@ mod tests {
 
     trait TrainStepFactory {
         type NP:Debug +Sync  + Send;
-        type R:Debug + Sync + Send + Clone; //RunConfig
+        type R:RunConfig + Debug + Sync + Send + Clone;
         type InDims:Dims + 'static;
         type OutDims:Dims + 'static;
 
@@ -891,7 +899,7 @@ mod tests {
     pub struct TrainNetResult<P, R>
     where 
         P:Debug + Send + Sync +'static,
-        R:Debug + Send + Sync +'static,
+        R:RunConfig + Debug + Send + Sync +'static,
     {
         pub loss: f32,
 
@@ -902,13 +910,13 @@ mod tests {
     impl <P, R> Output for TrainNetResult<P,R>
     where
         P:Debug + Send + Sync +'static,
-        R:Debug + Send + Sync +'static,
+        R:RunConfig + Debug + Send + Sync +'static,
     {}
 
     impl <P, R> TrainNetResult<P, R>
     where
         P:Debug + Send + Sync +'static,
-        R:Debug + Send + Sync +'static,
+        R:RunConfig + Debug + Send + Sync +'static,
 
     {
         pub fn new(loss: f32, net_var_store: NetVarStorePath<P>, run_config_values: R) -> Self {
@@ -920,16 +928,19 @@ mod tests {
     impl <P, R> SavableResult for TrainNetResult<P, R>
     where
         P:Debug + Send + Sync +'static,
-        R:Debug + Send + Sync +'static,
+        R:RunConfig + Debug + Send + Sync +'static,
     {
         type R = u32;
         async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
             //store.save_run_config skipped here, should be preserved in main app
-            let path = panic_to_err!(ws.read().save_final_net(//save_final_net and FinalNetParams are used here to avoid adding save_X_net to production code
+            let path = panic_to_err!(ws.read().save_net(//save_final_net and FinalNetParams are used here to avoid adding save_X_net to production code
                     0,
                 (&self.net_var_store.path.path().to_path_buf()).into(),
+                R::type_name(),
                 &FinalNetParams::new(0, 0, 0), //self.params,
             ))?;
+
+            track_await(store.save_trained_net(self.run_config_values.get_id(), path, self.loss, None)).await?;
 
             Ok(0)
         }
@@ -1359,17 +1370,15 @@ mod tests {
             IDT: Clone + Send + Sync  +'static,
         {
             let (net_path, params_path) = net_files_from_base(&base_path);
-            // let (train_module, node_params) = train_module_builder(run_config, device).await?;
+
             let params = NP::from_file(&params_path)?;
             let train_module = ThoModuleWithStore::load(
-                mono_key!(net_path.to_string_lossy().to_string(), "motif_model").into(),
+                mono_key!(0/*TODO static count?*/, net_path.to_string_lossy().to_string()).into(),
                 move |path: &nn::Path| params.as_node(init_data.clone())?.build_tch_module(path),//needs to be cloneable because ThoModuleWithStore re-uses it when reloading
                 net_path,
                 *device,
                 false,
             )?;
-
-
 
             Ok(Self {
                 device,
@@ -1573,9 +1582,10 @@ mod tests {
                         id.clone(),
                         ApplyNetStage2Init{
                             id,
-                            tho_device_idx: 1,
+                            tho_device_idx: device.tho_device_idx(),
                             base_path,
-                        }, 1//TODO
+                        },
+                        device.tho_device_idx()
                     ).await?)))
                 })
 
@@ -1642,7 +1652,7 @@ mod tests {
                 panic!("should be ref")
             };
 
-            let run_config = TestXRunConfig::new(0.01, 100, 3);
+            let run_config = TestXRunConfig::new(0, 0.01, 100, 3);
             let x_params = TestNetXParams { in_features: run_config.in_features, layers: run_config.layers };
             let (train_step, params): (TrainStep2DynSyncStage<TrainStep2XFn<InDimsX>, InDimsX, OutDimsX, RunCtxImpl>, TestNetXParams) = (
                 TrainStep2DynSyncStage::Proxy {
@@ -1684,7 +1694,7 @@ mod tests {
         GlobalCtx::init_devices(2);
         let _ctx = MockGlobalCtxBuilder::install_global_ctx_mock(true, false);
 
-        let (train_step, np) = TrainStepXFactory::new(TestXRunConfig::new(0.001, 100, 3), RunCtxImpl::new(1, "test"), PathBuf::new() ).await?;
+        let (train_step, np) = TrainStepXFactory::new(TestXRunConfig::new(0,0.001, 100, 3), RunCtxImpl::new(1, "test"), PathBuf::new() ).await?;
 
 
         do_test_train_step_2(train_step, || ready(Ok(TrainStep2Input::<InDimsX, OutDimsX>::new(
@@ -1745,6 +1755,8 @@ mod tests {
 
     async fn do_test_train_net_2(make_refs:bool, ws:&Arc<RwLock<Box<dyn Workspace>>>) -> Result<(), ThoError> {
         let store = Arc::new(SqlStore::in_mem().await?);
+        RUN_ID.set(store.save_run("test".into()).await?).expect("can't set run id");
+
 
         let train_stream_calls = Arc::new(AtomicUsize::new(0));
         let valid_stream_calls = Arc::new(AtomicUsize::new(0));
@@ -1755,16 +1767,25 @@ mod tests {
                 .with_valid_stream_calls(Arc::clone(&valid_stream_calls), move |_ctx| make_stream(make_refs))
                 .finish(),
         );
-        let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(|| TestXRunConfig::new(0.001, 100, 3))));
+
+
+        let mut run_config = TestXRunConfig::new(0, 0.001, 100, 3);
+        let run_config_id = store.save_run_config(None, "TestXRunConfig", "test", run_config.to_properties_iter(None).collect()).await?;
+        debug!("test_train_net_2_ipc: run_config_id={run_config_id:?}");
+
+        let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(move || {
+            run_config.clone()
+        })));
 
         let mut r = train_net.run(TrainNet2Input {}, RunCtxImpl::new(1, "test")).await?;
         let saved = r.save(&store, ws, ()).await?;
         debug!("test_train_net_2_ipc: r={r:?}");
 
         // let rr = TrainNetXResult::new()
+        let motif_nets = track_await(store.list_trained_nets(vec![run_config_id], None, None)).await?;
 
-
-        // let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), r.net_var_store.path, ()).await?);
+        debug!("test_train_net_2_ipc: motif_nets={motif_nets:?}");
+        // let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), r.net_var_store.path.path(), ()).await?);
         // debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
 
         Ok(())
@@ -1834,4 +1855,6 @@ mod tests {
         let (x, y) = dummy_batch(make_refs).unwrap();
         stream::iter(vec![Ok((x, None, y))]).boxed()
     }
+    
+    
 }

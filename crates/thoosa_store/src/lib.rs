@@ -341,7 +341,7 @@ pub trait Store: ResourceStore + Debug + Sync + Send {
 
     async fn list_selected_motifs(&self, motif_selection_id: RunConfigId, channels: u32) -> Result<Vec<Vec<(u32, f64)>>, ThoError>;
 
-    async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<(), ThoError>;
+    async fn save_trained_net(&self, run_config_id: RunConfigId, path: PathBuf, loss: f32, input_net_ids: Option<Vec<u32>>) -> Result<u32, ThoError>;
 
     async fn list_trained_nets(&self, run_config_ids: Vec<RunConfigId>, loss: Option<f32>, limit: Option<usize>) -> Result<Vec<TrainedNet>, ThoError>;
     async fn list_trained_net_entries(&self) -> Result<Vec<TrainedNetEntry>, ThoError>;
@@ -557,7 +557,7 @@ mock! {
             path: PathBuf,
             loss: f32,
             input_nets:Option<Vec<u32>>
-        ) -> Result<(), ThoError>;
+        ) -> Result<u32, ThoError>;
         async fn list_trained_nets(
             &self,
             run_config_ids: Vec<RunConfigId>,
@@ -2323,7 +2323,7 @@ impl Store for SqlStore {
                                path: PathBuf,
                                loss: f32,
                                input_net_ids: Option<Vec<u32>>,
-    ) -> Result<(), ThoError> {
+    ) -> Result<u32, ThoError> {
         self.with_writer_conn("save_trained_net", move |conn| {
             let t = conn.transaction()?;
             t.execute(
@@ -2332,7 +2332,7 @@ impl Store for SqlStore {
             )?;
 
             let net_id = t.query_row("SELECT last_insert_rowid()", [], |row| {
-                row.get::<usize, RunConfigId>(0)
+                row.get::<usize, u32>(0)
             })?;
 
 
@@ -2340,7 +2340,7 @@ impl Store for SqlStore {
 
 
             t.commit()?;
-            Ok(())
+            Ok(net_id)
         })
         .await
     }
@@ -6190,7 +6190,7 @@ impl MockStoreBuilder {
                 .expect_save_trained_net()
                 .with(eq(run_config_id), eq(path), eq(loss), eq(None))
                 .times(1)
-                .return_const(Ok(()));
+                .return_const(Ok(run_config_id));
         }
         self
     }
