@@ -742,7 +742,7 @@ mod tests {
     use thoosa_proxy_derive::Proxy;
     use thoosa_shared::{simple_id, ThoError, CopyToDevice, now_ms, panic_to_err, mono_key, MoveToDevice, cdt_for_dir};
     use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Adjustable, CachableIdTr, FromJsonFile, MonoMetrics, SimpleId, ToJsonFile, WithId};
+    use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, FromJsonFile, MonoMetrics, SimpleId, ToJsonFile, WithId};
     use crate::tasks::train_motif_nets::TRAIN_MOTIF_STEP_ENDPOINT;
     use crate::tasks::train_step_2::APPLY_NET2_X_ENDPOINT;
     use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper};
@@ -752,7 +752,7 @@ mod tests {
     use rand::random;
     use tokio::sync::MutexGuard;
     use thoosa_common::my_tch::{LossFp, ThoModule};
-    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, ThoDataRef};
     use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
     use thoosa_common::runs::SavableResult;
     use thoosa_common::train_nets::{FinalNetParams, MotifNetParams, ThoModuleWithStore, TrainMotifNetRunConfig};
@@ -761,6 +761,7 @@ mod tests {
     use thoosa_properties_map_derive::ThoosaPropertiesMap;
     use thoosa_run_config_args_derive::ThoosaRunConfig;
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::data_with_extra::DataWithExtra;
     use thoosa_shared::run_configs::{RunConfig, RunConfigId, RUN_ID};
     use thoosa_shared::tmp_file::TmpFile;
@@ -1421,6 +1422,24 @@ mod tests {
         pub lengths: Option<BatchLengths>,//real lengths without padding
     }
 
+    impl<DI: Dims> Data for ApplyNetStage2Input<DI> {
+        type Metrics = <ThoBatch<DI> as Data>::Metrics;
+        type M = CpuOrGpu<Self>;
+
+        fn size(&self) -> Self::Metrics {
+            <ThoBatch<DI> as Data>::size(&self.x)
+        }
+
+        fn device(&self) -> usize {
+            self.x.tho_device_idx()
+        }
+
+        fn mem_size(&self) -> u64 {
+            self.x.mem_size()
+        }
+    }
+
+
     impl <DI> Input for ApplyNetStage2Input<DI>
     where
         DI:Dims
@@ -1434,6 +1453,41 @@ mod tests {
 
         fn id(&self) -> &Self::ID {
             &self.id
+        }
+    }
+
+    #[async_trait]
+    impl<DI: Dims> CopyToDevice for ApplyNetStage2Input<DI> {
+        async fn copy_to_device(&self, dst_device: usize) -> Result<Self, ThoError>
+        where
+            Self: Sized,
+        {
+            Ok(ApplyNetStage2Input {
+                id: self.id.clone(),
+                x: track_await(self.x.copy_to_device(dst_device)).await?,
+                lengths: self.lengths.clone(),
+            })
+        }
+    }
+
+
+    impl <DI> BorrowRef for ApplyNetStage2Input<DI>
+    where
+        DI:Dims
+    {
+        type Out<'a> = ThoDataRef<'a, Self> where Self: 'a;
+
+        fn borrow_to<'a>(&'a self, to_tho_device_idx: usize) -> impl Future<Output = Result<Self::Out<'a>, ThoError>> + Send
+        where
+            Self: 'a,
+        {
+            async move {
+                if self.device() == to_tho_device_idx {
+                    Ok(ThoDataRef::Borrowed(self))
+                } else {
+                    Ok(ThoDataRef::Owned(track_await(self.copy_to_device(to_tho_device_idx)).await?))
+                }
+            }
         }
     }
 
@@ -1657,6 +1711,64 @@ mod tests {
 
     }
 
+    impl <DI, DO, C> Stage for ApplyStage2DynSyncStage< DI, DO, C>
+    where
+        DI:Dims + 'static,
+        DO:Dims + 'static,
+        C: RunCtx + 'static
+
+    {
+        type Ctx = C;
+        type In<'a> = ApplyNetStage2Input<DI>;
+        type Out = ApplyNetStage2Output<DO>;
+    }
+
+    impl <DI, DO, C> SyncStage for ApplyStage2DynSyncStage< DI, DO, C>
+    where
+        DI:Dims + 'static,
+        DO:Dims + 'static,
+        C: RunCtx + 'static
+    {
+        fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>> {
+            // Advertise typed state execution without exposing ThoTrainModule to the common runner.
+            match self {
+                Self::Local(_) => Some(self),
+                Self::Proxy { .. } => None,
+            }
+        }
+        fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            match self.as_ref() {
+                Self::Local(stage) => Arc::clone(stage).do_run(input, ctx),
+                Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+            }
+        }
+    }
+
+    impl <DI, DO, C> StageWithState for ApplyStage2DynSyncStage< DI, DO, C>
+    where
+        DI:Dims + 'static,
+        DO:Dims + 'static,
+        C: RunCtx + 'static
+    {
+        type S = <ApplyNetStage2<DI, DO, C> as StageWithState>::S;
+
+        fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
+            match self {
+                Self::Local(stage) => StageWithState::pre_run(stage.as_ref()),
+                Self::Proxy { .. } => async {
+                    Err(ThoError::new("proxy ApplyStage2 does not have local state"))
+                }.boxed(),
+            }
+        }
+
+        fn do_run_with_state<'f>(self: Arc<Self>, input: &Self::In<'f>, state: MutexGuard<'_, Self::S>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+            match self.as_ref() {
+                Self::Local(stage) => StageWithState::do_run_with_state(Arc::clone(stage), input, state, ctx),
+                Self::Proxy { stage, .. } => Arc::clone(stage).do_run(input, ctx),
+            }
+        }
+    }
+
     /////////////////
 
     #[test]
@@ -1802,7 +1914,8 @@ mod tests {
             run_config.clone()
         })));
 
-        let mut r = train_net.run(TrainNet2Input {}, RunCtxImpl::new(1, "test")).await?;
+        let mut ctx = RunCtxImpl::new(1, "test");
+        let mut r = train_net.run(TrainNet2Input {}, ctx.branch(false)).await?;
         let saved = r.save(&store, ws, ()).await?;
         debug!("test_train_net_2_ipc: r={r:?}");
 
@@ -1813,7 +1926,13 @@ mod tests {
 
             let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), x_net.net_path, ()).await?);
             debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
-
+            let input:ApplyNetStage2Input<InDimsX> = ApplyNetStage2Input {
+                id: mono_key!(0, "").into(),
+                x: ThoTensor::new_ref(simple_id!(format!("x_{}", 0)), 0, vec![1, 1, 100], Float, None, 1),
+                lengths: None,
+            };
+            let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
+            let r = track_await(oom_handler.run(&Arc::clone(&apply_net), Arc::new(input), ctx.branch(false).branch(false), NoContexts)).await?;
             // apply_net.
         }
 
