@@ -51,7 +51,7 @@ use thoosa_common::runs::Empty;
 use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifsNetsResult, lin_motif_node, opt_train};
+use thoosa_common::train_nets::{MotifNetParams, MotifNetTypeArgs, MotifNetTypeArgsFields, MotifNetTypeParams, MotifsBy, OptConfig, StftRunConfig, TrainMotifNetResult, TrainMotifNetRunConfig, TrainMotifNetRunConfigFields, TrainMotifsNetsResult, lin_motif_node};
 use thoosa_common::utils::{DummyListener, mix_x_binary_with_labels, plot_series_with_lanes, plot_spectrogram, to_vec_f32};
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;

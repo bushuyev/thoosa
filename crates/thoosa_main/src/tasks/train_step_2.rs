@@ -882,21 +882,34 @@ mod tests {
     }
 
     #[derive(Debug)]
-    pub struct TrainNetXResult {
+    pub struct TrainNetXResult<P, R>
+    where 
+        P:Debug + Send + Sync +'static,
+        R:Debug + Send + Sync +'static,
+    {
         pub loss: f32,
-        pub vs: PathBuf,
-        pub params: TestNetXParams,
-        run_config_values: TestXRunConfig,
+
+        pub net_var_store: NetVarStorePath<P>, //TestNetXParams,
+        run_config_values: R, //TestXRunConfig,
     }
 
-    impl TrainNetXResult {
-        pub fn new(loss: f32, vs: PathBuf, params: TestNetXParams, run_config_values: TestXRunConfig) -> Self {
-            Self { loss, vs, params, run_config_values }
+    impl <P, R> TrainNetXResult<P, R>
+    where
+        P:Debug + Send + Sync +'static,
+        R:Debug + Send + Sync +'static,
+
+    {
+        pub fn new(loss: f32, net_var_store: NetVarStorePath<P>, run_config_values: R) -> Self {
+            Self { loss, net_var_store, run_config_values }
         }
     }
 
     #[async_trait]
-    impl SavableResult for TrainNetXResult {
+    impl <P, R> SavableResult for TrainNetXResult<P, R>
+    where
+        P:Debug + Send + Sync +'static,
+        R:Debug + Send + Sync +'static,
+    {
         type P<'a> =  &'a [RunConfigId];
         type R = u32;
         async fn save(&mut self, store: &Arc<Box<dyn Store>>, ws: &Arc<RwLock<Box<dyn Workspace>>>, p: Self::P<'_>) -> Result<Self::R, ThoError> {
@@ -904,7 +917,7 @@ mod tests {
 
             let path = panic_to_err!(ws.read().save_final_net(//save_final_net and FinalNetParams are used here to avoid adding save_X_net to production code
                     0,
-                (&self.vs).into(),
+                (&self.net_var_store.path).into(),
                 &FinalNetParams::new(0, 0, 0), //self.params,
             ))?;
 
@@ -913,18 +926,18 @@ mod tests {
     }
 
 
-    pub async fn opt_train_2<R, F, N>(//corresponds to opt_train crates/thoosa_common/src/train_nets.rs:2037
-        run_config_source:R,//opt_train functionality should remain as is, the single run config here is for simplicity
+    pub async fn opt_train_2<R, F, N>(//corresponds to opt_train crates/thoosa_common/src/train_nets.rs:2033
+        run_config_source:Arc<Box<dyn Fn()->R + Send + Sync>>,//opt_train functionality should remain as is, the single run config here is for simplicity
         mut train: F
     ) ->Result<(PathBuf, N, R, f32), ThoError>
     where
         R:Clone,
-        F:AsyncFnMut(R)->Result<(Option<PathBuf>, f32, N), ThoError> //+run_config for debug
+        F:AsyncFnMut(R)->Result<(Option<PathBuf>, f32, N), ThoError>
     {
 
         //runs few times getting run configurations from run_config_source and searching for optimal run_config
-        let run_config = run_config_source.clone();
-        let (vs_path, loss, params) = train(
+        let run_config = run_config_source();
+        let (vs_path, loss, params) = train( //corresponds to thoosa_common/src/train_nets.rs:2095
             run_config.clone(),
 
         ).await?;
@@ -940,7 +953,7 @@ mod tests {
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
         pd:PhantomData<SF>,
-        run_config_source:Box<dyn Fn()->SF::R>,
+        run_config_source:Arc<Box<dyn Fn()->SF::R + Send + Sync>>,
         batch:B
     }
 
@@ -1031,12 +1044,12 @@ mod tests {
 
     {
         fn run(self: Arc<Self>, input: <Self as Stage>::In<'static>, mut ctx: <Self as Stage>::Ctx) -> impl Future<Output=Result<<Self as Stage>::Out, ThoError>> + Send {
-            let run_config = (self.run_config_source)();
+            let run_config_source = Arc::clone(&self.run_config_source);
             let self_for_train = Arc::clone(&self);
             async move {
 
                 let (var_store_path, node_params, run_config, loss) = opt_train_2(
-                    run_config,
+                    run_config_source,
                     move |run_config| {
                         let self_arc = Arc::clone(&self_for_train);
 
@@ -1047,6 +1060,7 @@ mod tests {
                     }).await?;
 
 
+                let x = TrainNetXResult::new(loss, NetVarStorePath::new(var_store_path, node_params), run_config);//run config on which the result was achieved
                 Ok(TrainNet2Output::new(NetVarStorePath::new(var_store_path, node_params)))
             }
         }
@@ -1110,10 +1124,10 @@ mod tests {
             })
         }
 
-        pub fn new(batch: B, run_config_source:Box<dyn Fn()->SF::R>) -> Self {//here run_config_source is a closure producing the only possible run_config, in the real app run_config_source may produce many different run configs
+        pub fn new(batch: B, run_config_source:Box<dyn Fn()->SF::R + Send + Sync>) -> Self {//here run_config_source is a closure producing the only possible run_config, in the real app run_config_source may produce many different run configs
             Self {
                 batch,
-                run_config_source,
+                run_config_source: Arc::new(run_config_source),
                 pd: PhantomData
             }
         }
@@ -1754,9 +1768,11 @@ mod tests {
         let r = train_net.run(TrainNet2Input {}, RunCtxImpl::new(1, "test")).await?;
         debug!("test_train_net_2_ipc: r={r:?}");
 
-        let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), r.net_var_store.path, ()).await?);
+        // let rr = TrainNetXResult::new()
 
-        debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
+
+        // let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), r.net_var_store.path, ()).await?);
+        // debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
 
         Ok(())
     }
