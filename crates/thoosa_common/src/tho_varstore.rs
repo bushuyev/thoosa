@@ -143,7 +143,12 @@ where
         }
     }
 
-    pub fn save_var_store<T: AsRef<std::path::Path>>(&self, path:T) -> Result<(), ThoError> {
+    pub fn save_var_store<T>(&self, path:T) -> Result<(), ThoError>
+    where
+        T:AsRef<std::path::Path> + Debug
+    {
+        debug!("ThoTrainModule::save_var_store: path={path:?} self.opt_state={:?}", self.opt_state);
+
         match &self.opt_state {
             OptSnapshot::Opt { vs, .. } | OptSnapshot::Snapshot { vs, .. } => {
                 panic_to_err!(vs.save(&path))

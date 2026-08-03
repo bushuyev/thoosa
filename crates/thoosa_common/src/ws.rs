@@ -798,6 +798,7 @@ impl <'a> VarStoreOrPath<'a> {
                 vs.save(to)?;
             }
             VarStoreOrPath::Path(path) => {
+                debug!("VarStoreOrPath::save: path={path:?} to={to:?}");
                 std::fs::rename(path, to)?;
             }
         }
