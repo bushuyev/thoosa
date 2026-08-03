@@ -3,8 +3,10 @@ use std::{
     io,
     path::{Path, PathBuf},
 };
+use log::debug;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct TmpFile {
     path: PathBuf,
 }
@@ -35,6 +37,7 @@ impl TmpFile {
 
 impl Drop for TmpFile {
     fn drop(&mut self) {
+        debug!("TmpFile::drop: self.path={:?}", self.path);
 
         match fs::remove_file(&self.path) {
             Ok(()) => {}
