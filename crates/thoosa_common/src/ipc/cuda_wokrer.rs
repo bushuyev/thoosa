@@ -341,6 +341,7 @@ impl CudaWorker {
                 let (endpoint_name, init_msg) = cuda_process::split_endpoint_payload_bytes(init_msg)?;
                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} init_msg_len={} endpoint_inits.contains_key={}", init_msg.len(), endpoint_inits.contains_key(endpoint_name));
 
+
                 let payload = match endpoint_inits.get(endpoint_name) {
 
                     Some(init_endpoint) => {
