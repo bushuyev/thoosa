@@ -733,3 +733,7 @@ pub trait FromJsonFile {
     fn from_file(path: &PathBuf) -> Result<Self, ThoError>
         where Self:Sized;
 }
+
+pub trait ToJsonFile:Debug {
+    fn to_file(&self, path: &PathBuf) -> Result<(), ThoError>;
+}
