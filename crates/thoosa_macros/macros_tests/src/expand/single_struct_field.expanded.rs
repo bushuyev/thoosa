@@ -278,6 +278,9 @@ impl thoosa_shared::run_configs::RunConfig for SingleField {
     fn set_id(&mut self, id: thoosa_shared::run_configs::RunId) {
         self.id.replace(id);
     }
+    fn get_id(&mut self) -> thoosa_shared::run_configs::RunConfigId {
+        self.id.expect("run config id is not set")
+    }
     fn type_name() -> &'static str {
         "SingleField"
     }
@@ -737,6 +740,9 @@ impl<
 impl thoosa_shared::run_configs::RunConfig for Outer {
     fn set_id(&mut self, id: thoosa_shared::run_configs::RunId) {
         self.id.replace(id);
+    }
+    fn get_id(&mut self) -> thoosa_shared::run_configs::RunConfigId {
+        self.id.expect("run config id is not set")
     }
     fn type_name() -> &'static str {
         "Outer"
