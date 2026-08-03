@@ -436,6 +436,33 @@ impl Workspace for FsWorkspace {
 
         Ok(net_id)
     }
+
+    fn save_net<'a>(
+        &self,
+        run_config_id: RunConfigId,
+        vs_or_path: VarStoreOrPath<'a>,
+        model_type:&str,
+        params: &FinalNetParams,
+    ) -> Result<PathBuf, ThoError> {
+
+
+        let net_id = PathBuf::from(format!("{run_config_id}"));
+        let base_path = self.models_path().join(model_type).join(&net_id);
+
+        fs::create_dir_all(&base_path)?;
+        let dst = base_path.join(NET_WEIGHTS_FILE);
+        debug!("FsWorkspace::save_final_net: run_config_id={run_config_id}  params={params:?} dst={dst:?}");
+
+        panic_to_err!(vs_or_path.save(&dst))?;
+
+        fs::write(
+            base_path.join(NET_PARAMS_FILE),
+            serde_json5::to_string(params)?,
+        )?;
+
+        Ok(dst)
+    }
+
     fn save_motif_net<'a>(
         &self,
         channel: &dyn Display,
@@ -839,13 +866,23 @@ pub trait Workspace: Sync + Send + Debug {
     fn tensor_path(&self, key: &Resource) -> PathBuf;
     fn models_path(&self) -> &PathBuf;
     fn plots_path(&self) -> &PathBuf;
+    //should be replaced by generic save_net
     fn motifs_nets_path(&self) -> &PathBuf;
+    //should be replaced by generic save_net
     fn labels_nets_path(&self) -> &PathBuf;
+    //should be replaced by generic save_net
     fn final_nets_path(&self) -> &PathBuf;
     fn save_final_net<'a>(
         &self,
         run_config_id: RunConfigId,
         vs_or_path: VarStoreOrPath<'a>,
+        params: &FinalNetParams,
+    ) -> Result<PathBuf, ThoError>;
+    fn save_net<'a>(
+        &self,
+        run_config_id: RunConfigId,
+        vs_or_path: VarStoreOrPath<'a>,
+        model_type:&str,
         params: &FinalNetParams,
     ) -> Result<PathBuf, ThoError>;
     fn save_motif_net<'a>(
