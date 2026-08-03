@@ -97,6 +97,7 @@ pub trait ErasedStageWithState<S>
 where
     S: SyncStage,
 {
+    //TODO add device param
     fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
 }
 
