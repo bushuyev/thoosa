@@ -714,7 +714,7 @@ mod tests {
     use log::debug;
     use mockall::PredicateBoxExt;
     use parking_lot::{Mutex, RwLock};
-    use serde::{Deserialize, Serialize};
+    use serde::{Deserialize, Serialize, Serializer};
     use tch::Device::Cuda;
     use tch::Kind::Float;
     use tch::nn::{Adam, AdamW, OptimizerConfig, VarStore};
@@ -727,7 +727,7 @@ mod tests {
     use thoosa_common::copy_ctx::CudaActorHandle;
     use thoosa_common::dims::{AnyDims, AnyMetrics, Batch, Dims, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WorkerStageOutput};
     use thoosa_common::ipc::json_ser::{ErasedWithState, SyncStageIpcResponse, SyncStageIpcWrapper, SyncStageIpcWrapperWithState};
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::runner::common::{MockRunCtx, OutId, RunCtx};
@@ -1492,6 +1492,7 @@ mod tests {
     }
 
     #[derive(Debug, Serialize, Deserialize)]
+    #[serde(bound(serialize = ""))]
     pub struct ApplyNetStage2Output<DO>
     where
         DO:Dims,
@@ -1518,6 +1519,20 @@ mod tests {
         }
     }
 
+
+    impl <DO> WorkerStageOutput for ApplyNetStage2Output<DO>
+    where
+        DO:Dims,
+    {
+        fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+            let output = ApplyNetStage2Output {
+                id: self.id,
+                y: self.y.worker_tensor_to_ref(all_cuda_tensors, tho_device)?,
+                lengths: self.lengths,
+            };
+            C::encode(&output)
+        }
+    }
 
 
     impl <DI, DO, C> Stage for ApplyNetStage2<DI, DO, C>
@@ -1554,7 +1569,9 @@ mod tests {
         fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>> {
             async {
                 let mut guard = self.train_module.lock().await;
-                *guard = guard.copy_to_device(1).await?;
+                if guard.device() != 1 { //TODO pass device to pre_run
+                    *guard = guard.copy_to_device(1).await?;
+                }
                 Ok(guard)
             }.boxed()
         }
@@ -1599,11 +1616,13 @@ mod tests {
             StageWithState::pre_run(self.stage.base.as_ref())
         }
 
-        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, _tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+        fn do_run_with_state(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, state: MutexGuard<'_, Self::S>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async move {
-                    debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
+
                     let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
+                    debug!("TrainTestStep2IpcWrapper::do_run_with_state: input={:?}", input);
+
                     let input_dec = JsonIpcCodec::decode::<ApplyNetStage2Input<InDimsX>>(&input.into_parts().0)?;
 
                     let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
@@ -1615,7 +1634,10 @@ mod tests {
                     };
                     let stage = Arc::clone(&self.stage.base);
 
-                    Ok(JsonIpcCodec::encode(&StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, APPLY_NET2_X_ENDPOINT))?)?)
+                    let output = StageWithState::do_run_with_state(Arc::clone(&stage), &input, state, &RunCtxImpl::new(1, APPLY_NET2_X_ENDPOINT))?;
+                    debug!("TrainTestStep2IpcWrapper::do_run_with_state: output={:?}", output);
+
+                    output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
                 })
             }).map(SyncStageIpcResponse::Encoded)
         }
@@ -1908,7 +1930,7 @@ mod tests {
         let mut run_config = TestXRunConfig::new(0, 0.001, 100, 3);
         let run_config_id = store.save_run_config(None, "TestXRunConfig", "test", run_config.to_properties_iter(None).collect()).await?;
         run_config.set_id(run_config_id);
-        debug!("test_train_net_2_ipc: run_config_id={run_config_id:?}");
+        debug!("do_test_train_net_2: run_config_id={run_config_id:?}");
 
         let train_net = Arc::new(TrainNet2::<TrainStepXFactory, _>::new(mock_test_batch, Box::new(move || {
             run_config.clone()
@@ -1917,28 +1939,44 @@ mod tests {
         let mut ctx = RunCtxImpl::new(1, "test");
         let mut r = train_net.run(TrainNet2Input {}, ctx.branch(false)).await?;
         let saved = r.save(&store, ws, ()).await?;
-        debug!("test_train_net_2_ipc: r={r:?}");
+        debug!("do_test_train_net_2: r={r:?}");
 
         // let rr = TrainNetXResult::new()
         let x_nets = track_await(store.list_trained_nets(vec![run_config_id], None, None)).await?;
-        debug!("test_train_net_2_ipc: x_nets={x_nets:?}");
+        debug!("do_test_train_net_2: x_nets={x_nets:?}");
         for x_net in x_nets {
 
             let apply_net = Arc::new(ApplyNetXStageTarget::new(mono_key!(0, "").into(), 1.into(), x_net.net_path, ()).await?);
-            debug!("test_train_net_2_ipc: apply_net={apply_net:?}");
-            let input:ApplyNetStage2Input<InDimsX> = ApplyNetStage2Input {
-                id: mono_key!(0, "").into(),
-                x: ThoTensor::new_ref(simple_id!(format!("x_{}", 0)), 0, vec![1, 1, 100], Float, None, 1),
-                lengths: None,
-            };
+            debug!("do_test_train_net_2: apply_net={apply_net:?}");
+            let input = make_input_batch(make_refs).await?;
             let oom_handler: OOMHandler<'_, '_, NoInputAdjuster, NoTaskAdjuster, NoRunCtxAdjuster, ()> = OOMHandler::new(vec![], None);
-            let r = track_await(oom_handler.run(&Arc::clone(&apply_net), Arc::new(input), ctx.branch(false).branch(false), NoContexts)).await?;
-            // apply_net.
+            let apply_result = track_await(oom_handler.run(&Arc::clone(&apply_net), Arc::new(input), ctx.branch(false).branch(false), NoContexts)).await?;
+            debug!("do_test_train_net_2: apply_result={apply_result:?}");
         }
 
-
-
         Ok(())
+    }
+
+    async fn make_input_batch(make_refs: bool) -> Result<ApplyNetStage2Input<InDimsX>, ThoError> {
+        if make_refs {
+            let cuda_actor = GlobalCtx::global().cuda_actor(1);
+            let x = create_worker_tensor(&cuda_actor, &[1, 1, 100], FLOAT_CPU).await?;
+            let key_x = extract_key(&x);
+            debug!("make_input_batch: key_x={key_x}");
+            let input: ApplyNetStage2Input<InDimsX> = ApplyNetStage2Input {
+                id: mono_key!(0, "").into(),
+                x: ThoTensor::new_ref(simple_id!(format!("x_{}", key_x)), key_x, vec![1, 1, 100], Float, None, 1),
+                lengths: None,
+            };
+            Ok(input)
+        } else {
+            let input: ApplyNetStage2Input<InDimsX> = ApplyNetStage2Input {
+                id: mono_key!(0, "").into(),
+                x: ThoTensor::new(simple_id!(format!("x_{}", 0)), tch::Tensor::rand(&[1, 1, 100], FLOAT_CPU).f_contiguous()?)?,
+                lengths: None,
+            };
+            Ok(input)
+        }
     }
 
     #[test]
@@ -1982,27 +2020,34 @@ mod tests {
             let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
             futures::executor::block_on(async {
-                let x = cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[1, 1, 100], FLOAT_CPU))?, 1.into()).await?;
-                let ThoTensorInner::Ref{ key:key_x, size:size_x, kind, selector, tho_device_idx } = x.inner  else {
-                    panic!("should be ref")
-                };
-                let y = cuda_actor.copy(ThoTensor::new((), tch::Tensor::rand(&[1, 1, 1], FLOAT_CPU))?, 1.into()).await?;
-                let ThoTensorInner::Ref{ key:key_y, size:size_y, kind, selector, tho_device_idx } = y.inner  else {
-                    panic!("should be ref")
-                };
-                Ok(
-                    (
-                        ThoTensor::new_ref(simple_id!(format!("x_{}", key_x)), key_x, vec![1, 1, 100], Float, None, 1),
-                        ThoTensor::new_ref(simple_id!(format!("y_{}", key_y)), key_y, vec![1, 1, 1], Float, None, 1),
+                let x = create_worker_tensor(&cuda_actor, &[1, 1, 100], FLOAT_CPU).await?;
+                let y = create_worker_tensor(&cuda_actor, &[1, 1, 1], FLOAT_CPU).await?;
 
-                    )
-                )
-            })
+                let key_x = extract_key(&x);
+                let key_y = extract_key(&y);
+
+                Ok::<_, ThoError>((
+                    ThoTensor::new_ref(simple_id!(format!("x_{}", key_x)), key_x, vec![1, 1, 100], Float, None, 1),
+                    ThoTensor::new_ref(simple_id!(format!("y_{}", key_y)), key_y, vec![1, 1, 1], Float, None, 1),
+                ))
+            }).map_err(Into::into)
 
         } else {
             let x = Tensor::zeros([1, 1, 100], FLOAT_CUDA);
             let y = Tensor::zeros([1, 1, 1], FLOAT_CUDA);
             Ok((x.into(), y.into()))
+        }
+    }
+
+    async fn create_worker_tensor(cuda_actor: &Box<dyn CudaActorHandle>, shape: &[i64], kind: (tch::Kind, Device)) -> Result<ThoTensor, ThoError> {
+        let tensor = tch::Tensor::rand(shape, kind).f_contiguous()?;
+        cuda_actor.copy(ThoTensor::new((), tensor)?, 1.into()).await
+    }
+
+    fn extract_key(tho_tensor: &ThoTensor) -> u64 {
+        match &tho_tensor.inner {
+            ThoTensorInner::Ref { key, .. } => *key,
+            _ => panic!("should be ref"),
         }
     }
 
