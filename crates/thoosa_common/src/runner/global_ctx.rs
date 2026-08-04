@@ -2,6 +2,14 @@ use crate::runner::purge::FuturesRunnerMapPurger;
 use log::{debug, error, info};
 #[allow(unused_imports)]
 use mockall::automock;
+use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
+use crate::ipc::cuda_process::CudaIPCActorHandle;
+use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
+use crate::runner::dyn_mpsc::DynamicTaskExecutor;
+use crate::runner::purger::Purger;
+use crate::tho_device::ThoDevice;
+use futures::FutureExt;
+use futures_util::future::BoxFuture;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::ready;
@@ -9,21 +17,13 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use futures_util::future::BoxFuture;
-use thoosa_shared::traits::CachableIdTr;
-use thoosa_shared::{async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock, ThoError};
-use tokio::sync::RwLock as AsyncRwLock;
-use crate::runner::cache_areas::{CacheAreaId, CacheAreasKeeper};
-use crate::runner::purger::Purger;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use crate::copy_ctx::{CopyCtx, CudaActorHandle, CudaLocalActorHandle};
-use crate::runner::dyn_mpsc::DynamicTaskExecutor;
-use crate::tho_device::ThoDevice;
-use futures::FutureExt;
-use thoosa_shims::context::ThoCudaContext;
-use tracing::Instrument;
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
 use thoosa_shared::tracked_await::track_await;
-use crate::ipc::cuda_process::CudaIPCActorHandle;
+use thoosa_shared::traits::CachableIdTr;
+use thoosa_shared::{ThoError, async_perf_log, async_read_owned_lock, async_write_owned_lock, perf_log, sync_read_lock, sync_write_lock};
+use thoosa_shims::context::ThoCudaContext;
+use tokio::sync::RwLock as AsyncRwLock;
+use tracing::Instrument;
 
 pub static GLB_SHUTTING_DOWN:AtomicBool = AtomicBool::new(false);
 
@@ -457,11 +457,11 @@ impl GlobalCtx {
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
 pub mod mock_global_ctx {
+    use crate::runner::dyn_mpsc::DynamicTaskExecutor;
+    use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::global_ctx::{GlobalCtx, RegisteredCacheHandle};
     use log::debug;
     use tokio::task::block_in_place;
-    use crate::runner::dyn_mpsc::DynamicTaskExecutor;
-    use crate::runner::global_ctx::MockGlobalCtx;
 
     #[derive(Clone, Copy, Debug)]
     pub enum AcquireBehavior {
@@ -672,8 +672,8 @@ pub mod mock_global_ctx {
             is_ipc: bool,
         ) -> impl GlobalCtxMockGuard {
             use crate::runner::global_ctx::{
-                mock_global_ctx,
                 MockGlobalCtx,
+                mock_global_ctx,
             };
 
             debug!("install_global_ctx_mock");
@@ -782,33 +782,33 @@ impl MockGlobalCtx {
 
 #[cfg(test)]
 mod tests {
+    use crate as thoosa_common;
+    use crate::dims::AnyDims;
+    use crate::runner::common::cachable::{DevicesWrap, SelectRef};
+    use crate::runner::global_ctx::CopyCtx;
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::tmp_cache::TmpCached;
+    use crate::tho_tensor::ThoTensor;
+    use futures_util::{StreamExt, TryStreamExt};
+    use log::debug;
+    use parking_lot::{Condvar, Mutex};
+    use rand::{RngExt, rng};
     use std::collections::HashMap;
     use std::future;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
-    use futures_util::{StreamExt, TryStreamExt};
-    use log::debug;
-    use parking_lot::{Condvar, Mutex};
-    use rand::{rng, RngExt};
     use tch::Device::{Cpu, Cuda};
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Kind::Float;
     use tch::Tensor;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use thoosa_shared::ThoError;
+    use thoosa_shared::traits::RangeSelector;
+    use thoosa_shared::traits::RunCtx;
+    use thoosa_shims::context::ThoCudaContext;
     use tokio::task::spawn_blocking;
     use tracing::Instrument;
-    use thoosa_shared::ThoError;
-    use thoosa_shims::context::ThoCudaContext;
-    use crate::runner::common::cachable::{SelectRef, DevicesWrap};
-    use crate::runner::common::RunCtx;
-    use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::run_ctx_2::RunCtxImpl;
-    use crate::runner::global_ctx::CopyCtx;
-    use crate as thoosa_common;
-    use crate::dims::AnyDims;
-    use thoosa_shared::traits::RangeSelector;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::tmp_cache::TmpCached;
-    use crate::tho_tensor::ThoTensor;
 
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

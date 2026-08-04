@@ -2,51 +2,52 @@
 #![allow(deprecated)]
 #![allow(unused_imports, unused_variables, unused_mut, noop_method_call)]
 
+use crate::data::{ogg_to_tensor, resource_to_tensor};
+use crate::labels::LABELS;
+use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
+use clap::Parser;
+use futures::{StreamExt, TryStreamExt};
+use log::{LevelFilter, debug, error, info, trace, warn};
+use parking_lot::RwLock;
 use std::any::Any;
 use std::backtrace::Backtrace;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use crate::data::{ogg_to_tensor, resource_to_tensor};
-use crate::labels::LABELS;
-use log::{debug, error, info, trace, warn, LevelFilter};
 use std::time::{Duration, Instant};
-use futures::{StreamExt, TryStreamExt};
-use parking_lot::RwLock;
-use tch::{Cuda, Device, IndexOp, Kind, Tensor};
 use tch::Kind::{BFloat16, Float};
 use tch::kind::FLOAT_CPU;
-use tokio::task::JoinHandle;
+use tch::{Cuda, Device, IndexOp, Kind, Tensor};
 use thoosa_common::dims::{ChannelsData, LabelProbability};
-use thoosa_common::runner::common::{mock_run_ctx, RunCtx};
-use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
-use thoosa_common::runner::common::runnable::AsyncStage;
+use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
+use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
+use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+use thoosa_common::runner::common::mock_run_ctx;
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::InferArgs;
 use thoosa_common::utils::{kick_register_cuda_hooks, pad_to_2, to_vec_f32};
-use thoosa_common::ws::{WsConfigs, Workspace};
-use thoosa_main::cli::{run_cli, RunAllArgs};
+use thoosa_common::ws::{Workspace, WsConfigs};
 use thoosa_main::RawTensorLoader;
+use thoosa_main::cli::{RunAllArgs, run_cli};
+use thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
 use thoosa_main::tasks::apply_label_nets::ApplyLabelNets;
 use thoosa_main::tasks::stft::SyncStftSelector;
-use thoosa_shared::{cdt_for_dir, collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id, FuturesOrdering, ThoError};
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::AsyncStage;
+use thoosa_shared::traits::RunCtx;
+use thoosa_shared::{FuturesOrdering, ThoError, cdt_for_dir, collect_futures_with_progress, last_trace_line, mono_key, n_trace_line, os_thread_id};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_store::rusqlite::Transaction;
 use thoosa_store::{LimitBy, SqlStore, Store};
-use crate::run_all::{run_all, run_all_config_0, run_labels_config_0};
-use std::cell::Cell;
-use clap::Parser;
-use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
-use thoosa_common::ipc::cuda_wokrer::{CudaWorker, WorkerCli};
-use thoosa_common::tho_device::ThoDevice;
-use thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use thoosa_shared::tracked_await::track_await;
+use tokio::task::JoinHandle;
 
 mod data;
 mod labels;
@@ -502,24 +503,24 @@ fn write_csv_field<W: Write>(w: &mut W, s: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use crate::labels::LABELS;
+    use crate::{infer_labels, write_birdclef_submission_csv};
+    use log::LevelFilter::Trace;
+    use log::{debug, info, set_max_level};
+    use parking_lot::RwLock;
+    use polars::prelude::{AnyValue, CsvReadOptions, PolarsError, PolarsResult, SerReader};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
-    use log::{debug, info, set_max_level};
-    use log::LevelFilter::Trace;
-    use parking_lot::RwLock;
-    use polars::prelude::{AnyValue, CsvReadOptions, PolarsError, PolarsResult, SerReader};
     use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_common::train_nets::InferArgs;
-    use thoosa_common::ws::{WsConfigs, FsWorkspace, WsMockBuilder};
-    use thoosa_shared::perf_logging::{format_perf_map, PERF};
+    use thoosa_common::ws::{FsWorkspace, WsConfigs, WsMockBuilder};
+    use thoosa_main::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use thoosa_shared::ThoError;
+    use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::val::Val;
-    use thoosa_store::{MockStoreBuilder, SqlStore};
     use thoosa_store::rusqlite::fallible_iterator::FallibleIterator;
-    use crate::{infer_labels, write_birdclef_submission_csv};
-    use crate::labels::LABELS;
+    use thoosa_store::{MockStoreBuilder, SqlStore};
 
     #[ctor::ctor]
     fn init() {

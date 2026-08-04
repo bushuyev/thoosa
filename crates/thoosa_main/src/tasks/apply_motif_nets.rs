@@ -7,30 +7,29 @@ use mockall_double::double;
 use parking_lot::{Mutex, RwLock};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{format, Debug};
+use std::fmt::{Debug, format};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
+use tch::Kind::Float;
 use tch::kind::FLOAT_CPU;
 use tch::nn::VarStore;
-use tch::Kind::Float;
-use tch::{nn, Device, IndexOp, Kind, Tensor};
+use tch::{Device, IndexOp, Kind, Tensor, nn};
 use thoosa_common::batches::BatchLengths;
 use thoosa_common::builder::SeqBuilder;
 use thoosa_common::debug_plot;
 use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
 use thoosa_common::my_tch::ThoModule;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::SplitsAdjusterContext;
 use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, ConsumeData, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, ConsumeResult, Stage, SyncStage};
-use thoosa_common::runner::common::{DropIf, OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::common::DropIf;
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, ConsumeData, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::{MotifNetParams, StftRunConfig, ThoModuleWithStore, TrainMotifsNetsResult};
@@ -44,8 +43,9 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DataId, Metrics, MonoMetrics, Select, SimpleId, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
+use thoosa_shared::traits::ConsumeResult;
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, WithId};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 use thoosa_store::{Store, TrainedNet};
 
 #[cfg(any(test, feature = "mock_global_ctx"))]
@@ -1236,8 +1236,9 @@ pub fn dummy_motif_net<DI: Dims + Send + 'static, DO: Dims + Send + 'static, I:I
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::tasks::apply_motif_nets::{dummy_motif_net, motif_test_net_, valid_partial_output_len, ApplyMotifNets};
+    use crate::tasks::apply_motif_nets::{ApplyMotifNets, dummy_motif_net, motif_test_net_, valid_partial_output_len};
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::stft::SyncStftSelector;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use log::LevelFilter::{Debug, Trace};
     use log::{debug, trace};
@@ -1246,21 +1247,20 @@ pub(crate) mod tests {
     use plotters::style::{BLUE, GREEN};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
+    use tch::Device::Cpu;
     use tch::kind::FLOAT_CPU;
     use tch::nn::{LinearConfig, VarStore};
-    use tch::Device::Cpu;
-    use tch::{nn, Device, IndexOp, Kind, Tensor};
+    use tch::{Device, IndexOp, Kind, Tensor, nn};
     use thoosa_common::builder::SeqBuilder;
     use thoosa_common::debug_plot;
     use thoosa_common::dims::{AnyDims, Batch, ChannelsData, Dims, MotifProbability, Slice};
     use thoosa_common::my_tch::ThoModule;
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
-    use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::common::{MaxParallelCtx, RunCtx};
+    use thoosa_shared::traits::MaxParallelCtx;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
+    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::tch_test_utils;
     use thoosa_common::tch_test_utils::Interval;
     use thoosa_common::tho_tensor::ThoTensor;
@@ -1274,11 +1274,11 @@ pub(crate) mod tests {
     use thoosa_shared::perf_logging::PERF;
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
-    use thoosa_shared::test_utils::{gen_motif, MotifKind};
-    use thoosa_shared::traits::{Adjustable, Named, SimpleId};
+    use thoosa_shared::test_utils::{MotifKind, gen_motif};
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::{Adjustable, Named, RunCtx, SimpleId};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_store::{MockStoreBuilder, RunConfigRow, Store, TrainedNet};
-    use crate::tasks::stft::SyncStftSelector;
 
     #[ctor::ctor]
     fn init() {

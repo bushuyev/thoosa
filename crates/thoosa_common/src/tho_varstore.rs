@@ -1,27 +1,26 @@
+use crate::builder::{Node, SeqBuilder};
+use crate::dims::{AnyDims, Batch, Dims};
+use crate::my_tch::ThoModule;
+use crate::runner::global_ctx::GlobalCtx;
+use crate::tho_device::ThoDevice;
+use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use async_trait::async_trait;
+use log::debug;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
-use async_trait::async_trait;
-use log::debug;
-use tch::{no_grad, Kind, Tensor, Device, nn};
 use tch::Device::{Cpu, Cuda};
 use tch::nn::{Module, Optimizer, OptimizerConfig, Path, VarStore};
-use tokio::task::JoinSet;
-use thoosa_shared::{panic_to_err, CopyToDevice, MoveToDevice, ThoError};
+use tch::{Device, Kind, Tensor, nn, no_grad};
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{AsyncStage, RunCtx, Stage, SyncStage};
 use thoosa_shared::traits::{Named, ThoSelector};
-use thoosa_shims::optimizers::{restore_adam_snapshot, AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot};
-use crate::builder::{Node, SeqBuilder};
-use crate::dims::{AnyDims, Batch, Dims};
-use crate::my_tch::ThoModule;
-use crate::runner::common::RunCtx;
-use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use crate::runner::global_ctx::GlobalCtx;
-use crate::tho_device::ThoDevice;
-use crate::tho_tensor::{ThoTensor, ThoTensorInner};
+use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, panic_to_err};
+use thoosa_shims::optimizers::{AdamGroupSnapshot, AdamOptimizerSnapshot, AdamOptionsSnapshot, AdamParamStateSnapshot, adam_snapshot, restore_adam_snapshot};
+use tokio::task::JoinSet;
 
 
 pub struct ModConfig<DI, DO>
@@ -757,26 +756,26 @@ pub async fn do_test_reset_adam() -> Result<(), ThoError>{
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use std::io::Cursor;
-    use std::sync::{Arc, Mutex};
-    use log::debug;
-    use tch::Device::{Cpu, Cuda};
-    use tch::kind::FLOAT_CPU;
-    use tch::nn::{Init, Module, OptimizerConfig, VarStore, Variables};
-    use tch::{nn, Tensor, Kind, Device};
-    use thoosa_shared::{CopyToDevice, ThoError};
-    use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tho_varstore::{clone_adam_snapshot_to, clone_var_store_to, replace_data, ThoTrainModule, ModConfig, OptSnapshot, do_test_reset_adam};
-    use thoosa_shims::optimizers::*;
     use crate::builder::{Node, SeqBuilder};
     use crate::dims::{AnyDims, Batch};
     use crate::ipc::cuda_wokrer::CudaWorker;
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::run_ipc_test;
+    use crate::runner::global_ctx::GlobalCtx;
+    use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
+    use crate::tho_varstore::{ModConfig, OptSnapshot, ThoTrainModule, clone_adam_snapshot_to, clone_var_store_to, do_test_reset_adam, replace_data};
+    use log::debug;
+    use std::collections::HashMap;
+    use std::io::Cursor;
+    use std::sync::{Arc, Mutex};
+    use tch::Device::{Cpu, Cuda};
+    use tch::kind::FLOAT_CPU;
+    use tch::nn::{Init, Module, OptimizerConfig, VarStore, Variables};
+    use tch::{Device, Kind, Tensor, nn};
+    use thoosa_shared::{CopyToDevice, ThoError};
+    use thoosa_shims::optimizers::*;
 
     fn create_variables(vs: &VarStore) {
         let p = vs.root().sub("my_module");

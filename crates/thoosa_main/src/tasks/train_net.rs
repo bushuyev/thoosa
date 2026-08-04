@@ -3,9 +3,8 @@ use thoosa_common::dims::ChannelsData;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
 use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
-use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
 use crate::tasks::train_step::{TrainStep, TrainStepInput, TrainStepInputWrapper, TrainStepOutput, TrainStepProxyFactory, TrainStepWeightsSync, TrainStepXFn};
@@ -51,7 +50,7 @@ use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig};
 use thoosa_shared::tmp_file::TmpFile;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{ThoError, panic_to_err};
 use thoosa_shared::{cdt_for_dir, mono_key, now_ms, os_thread_id, perf_log, sync_mutex_lock};
@@ -487,8 +486,8 @@ pub mod tests {
     use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_shared::traits::AsyncStage;
     #[allow(unused_imports)]
     use thoosa_common::train_nets::{CommonTrainingRunConfig, CommonTrainingRunConfigBuilder, CommonTrainingRunConfigFields, CommonTrainingRunConfigRangeOrValue, OptConfig, OptimizersRangeOrValue};
     use crate::tasks::train_net::{TrainNet, TrainNetInput};

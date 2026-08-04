@@ -1,15 +1,15 @@
 use crate::dims::{Dims, ThoBatch};
-use futures_util::stream::BoxStream;
 use futures_util::StreamExt;
+use futures_util::stream::BoxStream;
+use log::debug;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
-use log::debug;
-use serde::{Deserialize, Serialize};
-use crate::runner::common::RunCtx;
-use tracing::Instrument;
 use thoosa_shared::ThoError;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::RunCtx;
+use tracing::Instrument;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Carries the per-sample valid time lengths for a padded batch.
@@ -182,10 +182,10 @@ pub mod mock_async_data_batch {
     use crate::dims::{Dims, ThoBatch};
     use futures::stream::BoxStream;
     use mockall::mock;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
-    use crate::runner::common::RunCtx;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use thoosa_shared::ThoError;
+    use thoosa_shared::traits::RunCtx;
 
     mock! {
         #[derive(Debug)]

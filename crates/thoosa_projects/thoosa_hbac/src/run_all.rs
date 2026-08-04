@@ -1,11 +1,9 @@
-use std::ops::Range;
-use std::sync::Arc;
 use log::{debug, info};
 use parking_lot::RwLock;
+use std::ops::Range;
+use std::sync::Arc;
 use tch::Device::Cpu;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
-use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
@@ -13,25 +11,27 @@ use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeO
 use thoosa_common::transforms::filters::AverageFilterParamsRangeOrValue;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::AverageFilter;
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot, RunAllArgs};
-use thoosa_main::{ApplyMotifNets, tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+use thoosa_main::cli::{RunAllArgs, dyn_step_find_and_select, median_window_from_find_and_select, run_grid, run_opt, run_plot};
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::extend_motifs::ExtendMotifsStage;
 use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue, FindAndSelectMotifsStage};
+use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, ExtendMotifsConfigRangeOrValue, ExtendMotifsRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PeriodicityAcfRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_main::tasks::motif_loader::MotifLoader;
 use thoosa_main::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use thoosa_main::tasks::train_final_net::new_train_final_net;
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
+use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, tasks};
 use thoosa_motifs::distance::{DotProductConfigRangeOrValue, EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
-use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{RangeOrValue, ThoError};
 use thoosa_shared::hyperparameter::FieldName;
+use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::RunCtx;
 use thoosa_shared::val::NamedVal;
+use thoosa_shared::{RangeOrValue, ThoError};
 use thoosa_store::Store;
 use tracing::Instrument;
-use thoosa_main::tasks::train_final_net::new_train_final_net;
-use thoosa_shared::tracked_await::track_await;
 
 #[derive(Debug)]
 pub enum FindAndSelect {
@@ -591,6 +591,13 @@ fn run_all_select_motifs_config_opt_0<P: FieldName + 'static>() -> SelectMotifsR
 
 #[cfg(test)]
 mod tests {
+    use crate::run_all::{AllConfigs, FindAndSelect, run_all};
+    use futures::executor::block_on;
+    use futures::future::BoxFuture;
+    use log::LevelFilter::Debug;
+    use log::{debug, info, set_max_level};
+    use parking_lot::RwLock;
+    use rand::{RngExt, rng};
     use std::collections::HashMap;
     use std::ffi::OsString;
     use std::fs;
@@ -598,51 +605,43 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use futures::executor::block_on;
-    use futures::future::BoxFuture;
-    use log::{debug, info, set_max_level};
-    use log::LevelFilter::Debug;
-    use parking_lot::RwLock;
-    use rand::{rng, RngExt};
     use tch::{Device, Tensor};
-    use thoosa_common::{debug_plot, train_nets};
-    use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
-    use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
-    use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::common::cachable::BorrowRef;
-    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_common::runner::common::OutId;
-    use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::ipc::cuda_process::IPC_SOCK_ENV;
     use thoosa_common::ipc::cuda_wokrer::CudaWorker;
     use thoosa_common::ipc::tests::run_ipc_test;
-    use thoosa_common::tch_test_utils::{resource_tensor_two_easy_motifs, Interval};
+    use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue};
+    use thoosa_common::runner::common::cachable::BorrowRef;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::tch_test_utils::{Interval, resource_tensor_two_easy_motifs};
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfigRangeOrValue};
-    use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
     use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
-    use thoosa_common::ws::{WsConfigs, FsWorkspace, mock_ws_simp};
-    use thoosa_main::cli::{import_resources, RunAllArgs};
+    use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZeroPaddingRangeOrValue};
+    use thoosa_common::ws::{FsWorkspace, WsConfigs, mock_ws_simp};
+    use thoosa_common::{debug_plot, train_nets};
     use thoosa_main::RawTensorLoader;
+    use thoosa_main::cli::{RunAllArgs, import_resources};
     use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsRunConfigFields, FindAndSelectMotifsRunConfigRangeOrValue};
+    use thoosa_main::tasks::find_motifs_run_config::{AggrRangeOrValue, CoherenceRunConfigRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, InlierRatioRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, PrecalculateStatsRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
     use thoosa_motifs::distance::{EucDistConfigRangeOrValue, SimilarityMetricRangeOrValue};
     use thoosa_motifs::find::FixedFindMotifsConfig;
     use thoosa_motifs::fragments::Resolution;
-    use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::copy_mode::CpuOnly;
-    use thoosa_shared::{mono_key, panic_to_err_async, RangeOrValue, ThoError};
     use thoosa_shared::hyperparameter::FieldName;
-    use thoosa_shared::traits::{Adjustable, Data, WithId};
-    use thoosa_shared::perf_logging::{format_perf_map, PERF};
+    use thoosa_shared::perf_logging::{PERF, format_perf_map};
     use thoosa_shared::run_configs::RUN_ID;
     use thoosa_shared::test_utils::MotifKind;
+    use thoosa_shared::traits::{Adjustable, Data, WithId};
+    use thoosa_shared::traits::{OutId, Stage, SyncStage};
+    use thoosa_shared::{RangeOrValue, ThoError, mono_key, panic_to_err_async};
     use thoosa_shims::context::ThoCudaContext;
-    use thoosa_store::rusqlite::Transaction;
     use thoosa_store::SqlStore;
-    use crate::run_all::{run_all, AllConfigs, FindAndSelect};
+    use thoosa_store::rusqlite::Transaction;
 
     #[derive(Clone, Debug)]
     struct PrepareRunAllDataInput {

@@ -1,6 +1,6 @@
 use crate::dims::{AnyDims, Dims};
-use crate::runner::common::RunCtx;
 use crate::runner::common::cachable::ThoDataRef;
+use thoosa_shared::traits::RunCtx;
 #[double]
 use crate::runner::global_ctx::GlobalCtx;
 use crate::tho_device::ThoDevice;

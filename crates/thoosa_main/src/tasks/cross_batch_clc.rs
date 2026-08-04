@@ -1,39 +1,38 @@
-use std::any::Any;
-use std::collections::HashMap;
-use thoosa_common::dims::ChannelsData;
 use crate::tasks::dists_tracker::DistsMask;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::slices_iter::{ResourceSlices, SlicesIter};
 use async_trait::async_trait;
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::runnable::{Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, MaxParallelCtx, RunCtx};
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use log::{debug, trace, warn};
 use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
+use std::any::Any;
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::Range;
 use std::sync::Arc;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
-use serde::{Deserialize, Serialize};
-use tch::{TchError, Tensor};
 use tch::kind::FLOAT_CPU;
+use tch::{TchError, Tensor};
+use thoosa_common::dims::ChannelsData;
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_shared::traits::MaxParallelCtx;
+use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::tho_device::ThoDevice;
+use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::tensor_mem_size;
 use thoosa_motifs::distance::clc_dist_d2;
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::resource::Resource;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, Data, ThoSelector, WithId};
-use thoosa_shared::{mono_key, TensorIdSliceIdx, ThoError};
-use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::tracked_await::track_await;
 use thoosa_proxy_derive::Proxy;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::comp_id::{MonoKey, SynKey};
+use thoosa_shared::copy_mode::CpuOnly;
+use thoosa_shared::resource::Resource;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, Data, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::{TensorIdSliceIdx, ThoError, mono_key};
 
 pub(crate) const SYNC_CROSS_UNFOLD_CLC_ENDPOINT: &str = "CrossUnfoldClc";
 
@@ -834,28 +833,28 @@ pub fn unfold_and_cat(input: &[&ThoTensor<ChannelsData, SynKey>], unfold_params:
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
-    use crate::tasks::cross_batch_clc::{ unfold_and_cat, CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams};
+    use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossInput, CrossUnfoldClc, UnfoldParams, unfold_and_cat};
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
     use crate::tasks::find_motifs::{MasksCtx, MeanDistsCtx};
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::runner::common::MockRunCtx;
-    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
     use log::debug;
     use parking_lot::RwLock;
+    use std::marker::PhantomData;
     use std::sync::Arc;
     use tch::Device::{Cpu, Cuda};
     use tch::Kind::{Bool, Uint8};
-    use tch::{Kind, Tensor};
     use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::{Kind, Tensor};
+    use thoosa_common::dims::ChannelsData;
+    use thoosa_common::runner::common::MockRunCtx;
+    use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_common::utils::lin_t;
     use thoosa_shared::ThoError;
-    use thoosa_shared::resource::Resource;
-    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::dims::ChannelsData;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::{Stage, SyncStage};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_cross_batch_clc() -> Result<(), ThoError> {

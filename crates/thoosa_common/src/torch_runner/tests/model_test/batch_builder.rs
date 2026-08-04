@@ -1,21 +1,19 @@
 use std::sync::Arc;
 
 use rand::seq::SliceRandom;
-use rand::{rngs::StdRng, SeedableRng};
+use rand::{SeedableRng, rngs::StdRng};
 use tch::Tensor;
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::WithId;
+use thoosa_shared::traits::{AsyncStage, OutId, RunCtx, Stage, WithId};
 use thoosa_shared::{Cause, ThoError};
 
 use crate as thoosa_common;
-use crate::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
-use crate::runner::common::runnable::{AsyncStage, Stage};
-use crate::runner::common::{OutId, RunCtx};
+use crate::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_tensor::ThoTensor;
 
 use super::common::{ABData, FileListInput, ModelTestId};
-use super::loader::{new_file_input_cache, ABLoader};
+use super::loader::ABLoader;
 
 #[derive(Debug, cached_derive::Cached, Named)]
 #[cache_name = "ABBatchId"]

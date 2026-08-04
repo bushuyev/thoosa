@@ -1,5 +1,6 @@
+use crate::runner::adjusters::dump_to_cpu::*;
 use crate::runner::oom_handler::{Adjuster, AdjusterError, RunCtxContext};
-use ambassador::{delegatable_trait, Delegate};
+use ambassador::{Delegate, delegatable_trait};
 use async_trait::async_trait;
 use log::debug;
 use std::collections::HashMap;
@@ -7,11 +8,10 @@ use std::collections::HashSet;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
+use thoosa_shared::traits::RunCtx;
 // use tokio::io::{AsyncReadExt, AsyncWriteExt};
 // use crate::common::runnable::Runnable;
 use thoosa_shared::traits::{Adjustable, CachableIdTr};
-use crate::runner::common::RunCtx;
-use crate::runner::adjusters::dump_to_cpu::*;
 
 
 #[derive(Debug)]
@@ -164,7 +164,7 @@ impl<'a> RunCtxContext for MaxParallelAndDumpToCpuAdjustableContex<'a> {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runner::common::MaxParallelCtx;
+    use thoosa_shared::traits::MaxParallelCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::run_ctx_2::RunCtxImpl;
 
