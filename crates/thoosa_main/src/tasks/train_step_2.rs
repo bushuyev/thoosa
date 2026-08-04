@@ -1229,7 +1229,7 @@ mod tests {
                 tokio::runtime::Handle::current().block_on(async move {
                     debug!("TrainTestStep2IpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
                     let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
-                    let input_dec = JsonIpcCodec::decode::<TrainStep2Input<InDimsX, OutDimsX>>(&input.into_parts().0)?;
+                    let input_dec = JsonIpcCodec::decode::<TrainStep2Input<InDimsX, OutDimsX>>(&input.input())?;
 
                     let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
                     let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.expected_y)?;
@@ -1623,7 +1623,7 @@ mod tests {
                     let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
                     debug!("TrainTestStep2IpcWrapper::do_run_with_state: input={:?}", input);
 
-                    let input_dec = JsonIpcCodec::decode::<ApplyNetStage2Input<InDimsX>>(&input.into_parts().0)?;
+                    let input_dec = JsonIpcCodec::decode::<ApplyNetStage2Input<InDimsX>>(&input.input())?;
 
                     let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
 

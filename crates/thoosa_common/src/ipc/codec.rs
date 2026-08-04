@@ -43,27 +43,25 @@ impl IpcCodec for JsonIpcCodec {
 #[derive(Debug, Deserialize, Serialize)]
 pub struct IpcSyncStageRunInput {
     input: Vec<u8>,
-    max_other_parallel: Option<MaxParallel>,
 }
 
 impl IpcSyncStageRunInput {
-    pub fn new(input: Vec<u8>, ctx: &RunCtxImpl) -> Self {
+    pub fn new(input: Vec<u8>) -> Self {
         Self {
             input,
-            max_other_parallel: Some(ctx.max_other_parallel()),
         }
     }
 
-    pub fn into_parts(self) -> (Vec<u8>, Option<MaxParallel>) {
-        (self.input, self.max_other_parallel)
+    pub fn input(self) -> Vec<u8> {
+        self.input
     }
 }
 
-pub fn encode_sync_stage_run_input<C>(input: &[u8], ctx: &RunCtxImpl) -> Result<Vec<u8>, ThoError>
+pub fn encode_sync_stage_run_input<C>(input: &[u8]) -> Result<Vec<u8>, ThoError>
 where
     C: IpcCodec,
 {
-    C::encode(&IpcSyncStageRunInput::new(input.to_vec(), ctx))
+    C::encode(&IpcSyncStageRunInput::new(input.to_vec()))
 }
 
 //invoked form Proxy macro
@@ -162,7 +160,6 @@ pub async fn invoke_ipc_sync_stage<C, I, O>(
     actor: &dyn CudaActorHandle,
     endpoint_name: &str,
     input: &I,
-    ctx: &RunCtxImpl,
 ) -> Result<O, ThoError>
 where
     C: IpcCodec,
@@ -172,7 +169,7 @@ where
     debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}  input={input:?}");
 
     let input = C::encode(input)?;
-    let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
+    let input = encode_sync_stage_run_input::<C>(&input)?;
 
     let response = actor.invoke_endpoint_bytes(
         encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()
@@ -217,7 +214,7 @@ where
     debug!("consume_ipc_sync_stage: endpoint_name={endpoint_name} input={input:?}");
 
     let input = C::encode(input)?;
-    let input = encode_sync_stage_run_input::<C>(&input, ctx)?;
+    let input = encode_sync_stage_run_input::<C>(&input)?;
     let response = actor.consume_endpoint_bytes(encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()).await?;
     let result = C::decode(&response);
 
