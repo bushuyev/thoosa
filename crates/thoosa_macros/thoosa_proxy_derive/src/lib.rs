@@ -24,7 +24,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
     let new_args = attrs.new_args.unwrap_or_default();
     let device_param = proxy_device_param(&new_args).ok_or_else(|| syn::Error::new_spanned(&base_ident, "proxy constructor arguments must include one of `tho_device`, `tho_device_idx`, `device`, or `device_idx` for endpoint installation"))?;
     let fields = attrs.fields.unwrap_or_default();
-    let out_id = attrs.out_id.ok_or_else(|| syn::Error::new_spanned(&base_ident, "missing `out_id = \"...\"` in `proxy` attribute"))?;
+    let out_id = attrs.out_id; 
     let prepare = attrs.prepare.unwrap_or_default();
     let pre_run = attrs.pre_run.unwrap_or_default();
     let run_input = attrs.run_input;
@@ -84,8 +84,6 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                 #endpoint,
 
                 input,
-
-                ctx,
 
             ).await
         },
@@ -214,6 +212,25 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
         }
     };
 
+    let out_id_impl = match out_id {
+
+        Some(out_id) => {
+            quote!{
+                impl thoosa_shared::traits::OutId for #proxy_ident {
+                    fn out_id<'a>(
+                        &self,
+                        input_id: &<<Self as thoosa_shared::traits::Stage>::In<'a> as thoosa_shared::traits::WithId>::ID,
+                    ) -> <<Self as thoosa_shared::traits::Stage>::Out as thoosa_shared::traits::WithId>::ID {
+                        #out_id
+                    }
+                }
+            }
+        }
+        None => {
+            quote!{}
+        }
+    };
+
     Ok(quote! {
         #[derive(Debug)]
         pub struct #proxy_ident {
@@ -235,14 +252,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
         impl thoosa_shared::traits::Adjustable for #proxy_ident {}
 
-        impl thoosa_shared::traits::OutId for #proxy_ident {
-            fn out_id<'a>(
-                &self,
-                input_id: &<<Self as thoosa_shared::traits::Stage>::In<'a> as thoosa_shared::traits::WithId>::ID,
-            ) -> <<Self as thoosa_shared::traits::Stage>::Out as thoosa_shared::traits::WithId>::ID {
-                #out_id
-            }
-        }
+        #out_id_impl
 
         impl thoosa_shared::traits::Stage for #proxy_ident {
             type Ctx = <#base_ty as thoosa_shared::traits::Stage>::Ctx;

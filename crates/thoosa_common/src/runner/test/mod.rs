@@ -21,6 +21,7 @@ use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoRunCtxAdjuster, N
 use crate::tho_tensor::ThoTensor;
 use thoosa_shared::comp_id::SynKey;
 
+mod proxy_tests;
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
 // type StageInStatic<S> = StageIn<'static, S>;
@@ -576,7 +577,6 @@ mod tests {
     use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId, MetricsRangeSelector};
     use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
     use crate::runner::adjusters::splits::OutputBuilder;
-    use thoosa_shared::traits::MaxParallelCtx;
     use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
     use crate::runner::global_ctx::MockGlobalCtx;
     use crate::runner::purge::FuturesRunnerMapPurger;
@@ -600,6 +600,7 @@ mod tests {
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
+    use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_shared::traits::{Adjustable, AsyncStage, Stage, SyncStage};
     use thoosa_shared::traits::{Data, OutId, RunCtx, WithId};
     use thoosa_shared::{Cause, ThoError};

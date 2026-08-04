@@ -1930,7 +1930,7 @@ mod tests {
                 debug!("TrainTestStepIpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
                 let ctx = RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT);
                 let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
-                let input_dec = JsonIpcCodec::decode::<TrainStepInput<InDims, OutDims>>(&input.into_parts().0)?;
+                let input_dec = JsonIpcCodec::decode::<TrainStepInput<InDims, OutDims>>(&input.input())?;
 
 
                 let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
