@@ -1,26 +1,24 @@
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, /*WrappedRunInputStage, WrappedRunOutputStage*/};
-use thoosa_common::runner::common::{OutId, RunCtx};
-use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use crate::runner::common::cachable::CachedPurgeOutput;
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures_util::future::{BoxFuture, Shared};
-use parking_lot::RwLock;
 use log::debug;
-use thoosa_named_derive::Named;
+use parking_lot::RwLock;
+use std::fmt::Debug;
+use std::marker::PhantomData;
+use std::sync::Arc;
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
+use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::*;
-use thoosa_shared::{ThoError, ThoosaError};
-use thoosa_shared::traits::{Data, WithId};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
-use crate::runner::common::cachable::CachedPurgeOutput;
+use thoosa_shared::traits::{AsyncStage, Data, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::{ThoError, ThoosaError};
 
 #[derive(Debug, Named)]
-pub struct ABStage<A, B, C>//TODO rename to Pair/Chained
+pub struct ABStage<A, B, C> //TODO rename to Pair/Chained
 where
-    C:RunCtx + 'static,
+    C: RunCtx + 'static,
 
     A:Cached<Ctx=C> + OutId + Sync + Send + 'static,
     for <'i> A::In<'i>:  WithId + Send + Sync,

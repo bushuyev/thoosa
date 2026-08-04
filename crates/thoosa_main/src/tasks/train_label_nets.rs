@@ -21,14 +21,13 @@ use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::cuda_wokrer::{InitFn, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
-use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig, build_resource_maps};
-use thoosa_shared::traits::{Adjustable, Data, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 
 use mockall_double::double;
 #[double]
@@ -1279,10 +1278,9 @@ mod tests {
     use thoosa_common::dims::ChannelsData;
     use thoosa_common::dims::{Batch, LabelProbability, MotifProbability};
     use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::MaxParallelCtx;
+    use thoosa_shared::traits::MaxParallelCtx;
     use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
-    use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::common::{MockRunCtx, RunCtx, mock_run_ctx};
+    use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::{Labeled, NetResources};
@@ -1301,7 +1299,8 @@ mod tests {
     use thoosa_shared::resource::Resource;
     use thoosa_shared::run_configs::RunConfigId;
     use thoosa_shared::test_utils::MotifKind;
-    use thoosa_shared::traits::Named;
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::{Named, RunCtx};
     use thoosa_shared::val::{NamedVal, Val};
     use thoosa_shared::{TensorIdSliceIdx, ThoError};
     use thoosa_store::{MockStoreBuilder, TrainedNet};

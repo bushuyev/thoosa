@@ -1,50 +1,50 @@
+use log::{debug, error, info};
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt::format;
 use std::ops::Range;
-use parking_lot::RwLock;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use log::{debug, error, info};
 use tch::Device::Cpu;
-use tracing::Instrument;
 use thoosa_common::my_tch::{InitDummyRangeOrValue, MotifInitModeRangeOrValue, TrimmedMeanRangeOrValue};
-use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FinderKindRangeOrValue, FindMotifsRunConfigRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue, Metrics, NormThicknessRunConfig};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_common::runner::common::RunCtx;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::Simple;
+use thoosa_common::stages_seq::ABStage;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets;
 use thoosa_common::train_nets::{AdamWRangeOrValue, CommonTrainingRunConfigRangeOrValue, FinalNetArgsRangeOrValue, LabelNetTypeArgsRangeOrValue, LinNetArgsRangeOrValue, MotifCosine2DNetArgsRangeOrValue, MotifCosineNetArgsRangeOrValue, MotifsBy, OptConfig, OptimizersRangeOrValue, SelfAttentionNetArgsRangeOrValue, StftRunConfig, StftRunConfigRangeOrValue, TrainFinalNetRunConfigRangeOrValue, TrainLabelNetRunConfig, TrainLabelNetRunConfigRangeOrValue, TrainMotifNetRunConfig, TrainMotifNetRunConfigRangeOrValue};
-use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZNormFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::BandPassFilter;
 use thoosa_common::transforms::filters::InputFilterRangeOrValue::ZNorm;
+use thoosa_common::transforms::filters::{BandPassFilterParamsRangeOrValue, PaddingRangeOrValue, ZNormFilterParamsRangeOrValue, ZeroPaddingRangeOrValue};
 use thoosa_common::ws::Workspace;
-use thoosa_main::cli::{run_grid, run_opt, run_plot, RunAllArgs};
-use thoosa_main::{ApplyMotifNets, tasks, RawTensorLoader, TrainMotifNetInput, TrainMotifNets};
+use thoosa_main::cli::{RunAllArgs, run_grid, run_opt, run_plot};
 use thoosa_main::tasks::apply_cosine2d_motif_nets::ApplyCosine2DMotifNets;
-use thoosa_main::tasks::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, PlainBandAggregationMeanRangeOrValue, PlainConfigRangeOrValue};
 use thoosa_main::tasks::bucketing::PlainBandAggregationRangeOrValue::Mean;
+use thoosa_main::tasks::bucketing::{BucketRunConfigRangeOrValue, BucketingConfigRangeOrValue, PlainBandAggregationMeanRangeOrValue, PlainConfigRangeOrValue};
 use thoosa_main::tasks::cross_loader::ResourcesConfigInput;
 use thoosa_main::tasks::find_and_select_motifs::{FindAndSelectMotifsInput, FindAndSelectMotifsRunConfig, FindAndSelectMotifsRunConfigRangeOrValue};
+use thoosa_main::tasks::find_motifs_run_config::{AccumulateStatsRangeOrValue, AggrRangeOrValue, CrossLoaderRunConfigRangeOrValue, FindMotifsRunConfigRangeOrValue, FinderKindRangeOrValue, MaxSlicesAbsRangeOrValue, MaxSlicesRangeOrValue, Metrics, MetricsRangeOrValue, MotifCriterionConstraintRangeOrValue, NormThicknessRunConfig, NormThicknessRunConfigRangeOrValue, QuantileAggrRangeOrValue, SelectMotifsRunConfigRangeOrValue, SlicesFilterRangeOrValue};
 use thoosa_main::tasks::motif_loader::MotifLoader;
 use thoosa_main::tasks::motif_stats::{MotifStats, MotifStatsInput};
 use thoosa_main::tasks::select_buckets::{BestSelectionModeRangeOrValue, FilterSelectionModeRangeOrValue, SelectBucketsRunConfigRangeOrValue, SelectBucketsStage, SelectionModeRangeOrValue};
-use thoosa_main::tasks::select_motifs::{SelectMotifsInput};
-use thoosa_common::stages_seq::ABStage;
+use thoosa_main::tasks::select_motifs::SelectMotifsInput;
 use thoosa_main::tasks::stft::Stft;
 use thoosa_main::tasks::train_label_nets::new_train_label_nets;
+use thoosa_main::{ApplyMotifNets, RawTensorLoader, TrainMotifNetInput, TrainMotifNets, tasks};
 use thoosa_motifs::distance::{PearsonCorrConfigRangeOrValue, SimilarityMetricRangeOrValue};
 use thoosa_motifs::find::FixedFindMotifsConfig;
 use thoosa_motifs::fragments::{DataBy, PlotDataArgs};
-use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, RangeOrValue, ResourceType, FuturesOrdering, ThoError};
-use thoosa_shared::futures_limits::ENTRY;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shared::math::unordered_sets_of_size;
 use thoosa_shared::ResourceType::NotInGroup;
-use thoosa_shared::run_configs::{run_id, RunConfig, RunConfigId};
-use thoosa_store::Store;
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
+use thoosa_shared::futures_limits::ENTRY;
+use thoosa_shared::math::unordered_sets_of_size;
+use thoosa_shared::run_configs::{RunConfig, RunConfigId, run_id};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::RunCtx;
+use thoosa_shared::{FuturesOrdering, RangeOrValue, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async};
+use thoosa_store::Store;
+use tracing::Instrument;
 
 pub enum RunMode {
     RunAll {
@@ -756,10 +756,10 @@ pub(crate) fn run_all_config_0(run_all_params: &RunAllArgs) -> RunMode {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
     use crate::run_all::{run_all, run_all_config_0};
     use log::debug;
     use parking_lot::RwLock;
+    use std::collections::HashMap;
     use std::fs;
     use std::path::Path;
     use std::sync::Arc;
@@ -768,13 +768,13 @@ mod tests {
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
     use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::ws::{WsConfigs, FsWorkspace};
-    use thoosa_main::cli::RunAllArgs;
+    use thoosa_common::ws::{FsWorkspace, WsConfigs};
     use thoosa_main::RawTensorLoader;
+    use thoosa_main::cli::RunAllArgs;
     use thoosa_motifs::fragments::Resolution;
     use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::resource::ResourceStats;
+    use thoosa_shared::{ThoError, mono_key};
     use thoosa_store::SqlStore;
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

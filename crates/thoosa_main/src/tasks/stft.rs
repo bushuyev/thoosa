@@ -1,18 +1,16 @@
 use cached_derive::Cached;
 use log::debug;
+use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use serde::{Deserialize, Serialize};
 use tch::Kind::Float;
 use tch::Tensor;
 use thoosa_common::dims::{Batch, Dims, LocalSelect, MotifSlices, Spectorgram};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::train_nets::StftRunConfig;
 use thoosa_named_derive::Named;
@@ -20,8 +18,8 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, Data, Select, ThoSelector, WithId};
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::{ThoError, mono_key};
 
 use crate::tasks::stage_ids::STFT;
 use thoosa_shared::tracked_await::track_await;
@@ -263,14 +261,12 @@ fn stft_stage_id(run_config: &StftRunConfig) -> SynKey {
 
 #[cfg(test)]
 mod tests {
-    use log::debug;
     use tch::{Device, Kind, Tensor};
-    use tch::kind::FLOAT_CUDA;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::StftRunConfig;
     use thoosa_shared::ThoError;
 
-    use crate::tasks::stft::{stft_stage_id, SyncStft};
+    use crate::tasks::stft::{SyncStft, stft_stage_id};
 
     #[test]
     fn test_sync_stft_build_spectrogram_stacks_batched_motifs() -> Result<(), ThoError> {

@@ -1,13 +1,22 @@
 #![allow(unused_assignments)]
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::cli::run_plot;
+use crate::tasks::cross_loader::ResourcesConfigInput;
+use crate::tasks::find_motifs::FindMotifsStage;
+use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SelectMotifsSavableResult};
+use crate::tasks::motif_loader::MotifLoader;
+use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
+use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 use parking_lot::RwLock;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tch::Device::Cpu;
-use crate::tasks::find_motifs_run_config::{FindMotifsRunConfig, FindMotifsRunConfigBuilder, FindMotifsRunConfigFields, FindMotifsRunConfigRangeOrValue, SelectMotifsRunConfig, SelectMotifsRunConfigBuilder, SelectMotifsRunConfigFields, SelectMotifsRunConfigRangeOrValue, SelectMotifsSavableResult};
 use thoosa_common::parzen::optimizer::{AsyncTPEOptimizer, ConfigurationSpace};
+use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::cachable::DevicesWrap;
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runs::{SavableResult, Simple};
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::train_nets::OptConfig;
@@ -19,25 +28,15 @@ use thoosa_properties_map::ToHashmap;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::hyperparameter::Hyperparameter;
-use thoosa_common::runner::cache_areas::CacheArea;
-use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::runner::common::RunCtx;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
-use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::val::{NamedRange, NamedVal, Val};
-use thoosa_shared::{collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources, ResourceType, FuturesOrdering, ThoError};
-use thoosa_store::Store;
-use crate::tasks::cross_loader::ResourcesConfigInput;
-use crate::tasks::find_motifs::FindMotifsStage;
-use crate::tasks::motif_loader::MotifLoader;
-use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsStage};
-use crate::tasks::tensor_loader::RawTensorLoader;
 use thoosa_shared::comp_id::SynKey;
-use crate::cli::run_plot;
+use thoosa_shared::hyperparameter::Hyperparameter;
+use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, WithId};
+use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
+use thoosa_shared::val::{NamedRange, NamedVal, Val};
+use thoosa_shared::{FuturesOrdering, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources};
+use thoosa_store::Store;
 
 #[allow(non_snake_case, unused_assignments, unused_variables)]
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug)]

@@ -1,23 +1,23 @@
 pub mod tho_tensor;
 
+use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec, encode_sync_stage_run_input};
+use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use thoosa_shared::traits::MaxParallelCtx;
+use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::tho_device::ThoDevice;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Write;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use futures_util::future::BoxFuture;
-use futures_util::FutureExt;
-use tokio::sync::MutexGuard;
 use tch::Tensor;
-use tracing::debug;
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::{Stage, SyncStage};
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
-use crate::ipc::codec::{encode_sync_stage_run_input, IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
-use crate::runner::common::MaxParallelCtx;
-use crate::runner::common::runnable::{Stage, SyncStage};
-use crate::runner::run_ctx_2::RunCtxImpl;
-use crate::tho_device::ThoDevice;
+use tokio::sync::MutexGuard;
+use tracing::debug;
 
 pub struct SyncStageIpcStreamResponse {
     write: Option<Box<dyn FnOnce(&mut dyn Write) -> Result<(), ThoError> + Send>>,
@@ -180,11 +180,11 @@ where
             ctx.set_max_other_parallel(max_other_parallel);
         }
         match Arc::clone(&self.sync_stage).consume(input, ctx) {
-            crate::runner::common::runnable::ConsumeResult::Ok(output) => {
+            thoosa_shared::traits::ConsumeResult::Ok(output) => {
                 let response = output.encode_from_worker::<C>(all_cuda_tensors, tho_device)?;
                 Ok(SyncStageIpcConsumeResponse::encoded(response, consumed_tensor_keys))
             }
-            crate::runner::common::runnable::ConsumeResult::Failed { error, .. } => Err(error),
+            thoosa_shared::traits::ConsumeResult::Failed { error, .. } => Err(error),
         }
     }
 }

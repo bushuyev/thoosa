@@ -1,28 +1,26 @@
+use async_trait::async_trait;
+use cached_derive::Cached;
+use log::debug;
+use parking_lot::RwLock;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::Arc;
-use async_trait::async_trait;
-use log::debug;
-use parking_lot::RwLock;
-use cached_derive::Cached;
-use thoosa_named_derive::Named;
+use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::common::{OutId, RunCtx};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::dims::{Batch, Dims, MotifProbability, Slice};
 use thoosa_common::train_nets::{MotifNetParams, ThoModuleWithStore};
 use thoosa_common::ws::{FsWorkspace, Workspace};
 use thoosa_dummy_data_derive::DummyData;
+use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::Input;
+use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::{mono_key, perf_log, simple_id, sync_read_lock, ThoError};
-use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::{ThoError, mono_key, perf_log, simple_id, sync_read_lock};
 #[derive(Debug, Clone, DummyData)]
 pub struct LoadMotifNetInput {
     id: SynKey,

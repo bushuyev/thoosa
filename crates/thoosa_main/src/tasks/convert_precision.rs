@@ -10,17 +10,16 @@ use std::sync::Arc;
 use tch::nn::VarStore;
 use tch::{Device, Kind, Tensor};
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::runner::common::RunCtx;
-use thoosa_common::ws::{Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
+use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, FuturesOrdering, ThoError};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
+use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, recurse_files};
 
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -505,21 +504,20 @@ fn is_float_like(kind: Kind) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{ConvertPrecisionArgs, ConvertPrecisionBy, ConvertPrecisionInput, ConvertPrecisionNetType, ConvertPrecisionStage, ConvertPrecisionTarget};
+    use parking_lot::RwLock;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use parking_lot::RwLock;
     use tch::nn::VarStore;
     use tch::{Device, Kind, Tensor};
     use thoosa_common::dims::AnyDims;
     use thoosa_common::my_tch::ThoModule;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use thoosa_common::train_nets::{final_net, lin_label_node, FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams};
-    use thoosa_common::ws::{WsConfigs, FsWorkspace, Workspace};
-    use thoosa_shared::{cdt_for_dir, ThoError};
+    use thoosa_common::train_nets::{FinalNetParams, LabelNetParams, LabelNetTypeParams, LinLenNetParams, final_net, lin_label_node};
+    use thoosa_common::ws::{FsWorkspace, Workspace, WsConfigs};
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::{ThoError, cdt_for_dir};
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_convert_precision_stage_converts_saved_final_net() -> Result<(), ThoError> {

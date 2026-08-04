@@ -10,3 +10,4 @@ pub use thoosa_run_config_args_derive::ThoosaRunConfig;
     unused_variables
 )]
 mod run_config_tests;
+mod proxy_tests;

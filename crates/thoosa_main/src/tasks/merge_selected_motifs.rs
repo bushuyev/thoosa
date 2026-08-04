@@ -1,15 +1,13 @@
+use crate::tasks::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
+use clap::Args;
+use log::debug;
+use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use clap::Args;
-use log::debug;
-use parking_lot::RwLock;
-use crate::tasks::find_motifs_run_config::{Aggr as FindMotifsAggr, FindMotifsRunConfig, MeanAggr, Metrics, SlicesFilter, StatsKeys};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::runner::common::{OutId, RunCtx};
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
@@ -18,8 +16,8 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::group_slices;
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::{mono_key, ThoError};
+use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::{ThoError, mono_key};
 use thoosa_store::{IdSlice, Store};
 
 use crate::tasks::motif_loader::MotifLoaderInput;
@@ -389,15 +387,15 @@ mod tests {
     use tch::Tensor;
     use thoosa_common::runner::cache_areas::CacheArea;
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_store::{CheckGroups, MockStoreBuilder, RunConfigRow};
     use thoosa_shared::TensorIdSliceIdx;
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_store::{CheckGroups, MockStoreBuilder, RunConfigRow};
 
-    use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
+    use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};
     use crate::tasks::motif_stats::MotifStats;
     use crate::tasks::tensor_loader::mock_tensor_loader;
 

@@ -1,56 +1,54 @@
-use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 #[cfg(test)]
 use crate::tasks::cross_batch_clc::{CrossBatchFn, CrossUnfoldClc};
+use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossInput, CrossInputBatch1Selector, CrossUnfoldClcOutput};
 use crate::tasks::cross_dims::ChannelsDataSelector;
-use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use crate::tasks::tensor_loader::RawTensorLoader;
 use async_trait::async_trait;
-use std::collections::{HashMap, HashSet};
-use thoosa_common::runner::common::cachable::{BorrowRef, SelectRef, Cached, DevicesWrap, ThoDataRef};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, RunCtx};
+use futures_util::FutureExt;
 use futures_util::future::BoxFuture;
 use futures_util::{StreamExt, TryStreamExt};
 use log::{debug, info, warn};
+use mockall_double::double;
 use parking_lot::RwLock;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, Range};
 use std::sync::Arc;
 use std::vec;
-use futures_util::FutureExt;
-use mockall_double::double;
-use tch::{IndexOp, Tensor};
 use tch::Device::Cpu;
+use tch::{IndexOp, Tensor};
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
-use thoosa_common::runs::Simple;
-use thoosa_motifs::find::FindMotifsSavableResult;
-use thoosa_shared::{simple_id, CopyToDevice, ThoError};
-use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::cache_areas::CacheArea;
+use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap, SelectRef, ThoDataRef};
+use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::runs::Simple;
+use thoosa_motifs::find::FindMotifsSavableResult;
+use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::resource::{Resource, ResourceStore, ResourcesConfig};
+use thoosa_shared::{CopyToDevice, ThoError, simple_id};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoopRunCtxContext, NoopRunnableContext, OOMHandler};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, Select, ThoSelector, WithId};
-use thoosa_shared::comp_id::{MonoKey, SynKey};
-use thoosa_shared::mono_key;
-use thoosa_store::Store;
-use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
-use thoosa_shared::traits::MonoMetrics;
-use thoosa_dummy_data_derive::DummyData;
-use thoosa_shared::collect_futures_eta::{collect_eta_record_completion, CollectEtaInvocationGuard};
-use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-use thoosa_shared::run_configs::RunConfigId;
 use crate::tasks::dists_tracker::DistsMask;
 use crate::tasks::slices_iter::SlicesIter;
-use tracing::Instrument;
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, InputContext, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunCtxContext, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
+use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::torch_runner::output_builders::SingleDimTensorOutputBuilder;
+use thoosa_dummy_data_derive::DummyData;
+use thoosa_shared::collect_futures_eta::{CollectEtaInvocationGuard, collect_eta_record_completion};
+use thoosa_shared::comp_id::{MonoKey, SynKey};
+use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
+use thoosa_shared::mono_key;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, OutId, RunCtx, Select, ThoSelector, WithId};
+use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage, SyncStage};
+use thoosa_store::Store;
+use tracing::Instrument;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CrossUnfoldClcOutputMergeMode {
@@ -1000,8 +998,6 @@ impl  SelectRef<CrossInputSelector> for CrossInputSelectorWrap {
 
 #[cfg(test)]
 pub(crate) mod mock_cross_loader_clc {
-    use thoosa_common::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_common::runner::common::{OutId, RunCtx};
     use crate::tasks::cross_batch_clc::{CrossInput, CrossUnfoldClcOutput};
     use std::fmt::Debug;
     use std::marker::PhantomData;
@@ -1009,7 +1005,7 @@ pub(crate) mod mock_cross_loader_clc {
     use thoosa_shared::ThoError;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::{Adjustable, WithId};
+    use thoosa_shared::traits::{Adjustable, OutId, RunCtx, Stage, SyncStage, WithId};
 
     type RunBatchFn<Out, C> = dyn for<'a> Fn(
         &CrossInput<'a, Arc<Resource>>,
@@ -1140,9 +1136,9 @@ pub(crate) mod mock_cross_loader_receiver {
     use mockall::mock;
     use std::fmt::Debug;
     use std::sync::Arc;
-    use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
-    use thoosa_common::runner::common::RunCtx;
     use thoosa_shared::applicables_runner::{Input, Output};
+    use thoosa_shared::traits::ConsumeResult;
+    use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
 
     trait CrossLoaderReceiverMockApi<In, C>
     where
@@ -1242,21 +1238,19 @@ pub(crate) mod mock_cross_loader_receiver {
 mod tests {
     use super::mock_cross_loader_clc;
     use super::mock_cross_loader_receiver;
-    use thoosa_common::runner::common::runnable::ConsumeResult;
-    use crate::tasks::tensor_loader::mock_tensor_loader;
     use super::*;
     use crate::tasks::cross_batch_clc::{CrossUnfoldClc, CrossUnfoldClcOutput, UnfoldParams};
     use crate::tasks::cross_loader::{
         CrossLoader, CrossUnfoldClcOutputMergeMode, ResourcesConfigInput,
     };
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType, DistsTracker};
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use crate::tasks::tensor_loader::RawTensorLoader;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
     use crate::tasks::slices_iter::SlicesIter;
-    use thoosa_common::runner::common::{mock_run_ctx, MockRunCtx};
-    use thoosa_common::runner::cache_areas::CacheArea;
+    use crate::tasks::tensor_loader::RawTensorLoader;
+    use crate::tasks::tensor_loader::mock_tensor_loader;
     // use thoosa_common::runner::global_ctx::GlobalCtx;
     use futures_util::FutureExt;
+    use log::LevelFilter::{Debug, Info};
     use log::{debug, set_max_level};
     use parking_lot::RwLock;
     use std::collections::HashMap;
@@ -1265,32 +1259,34 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
-    use log::LevelFilter::{Debug, Info};
-    use tch::{Device, Kind, Tensor};
     use tch::Device::Cuda;
-    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
     use tch::Kind::{Float, Uint8};
-    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use tch::kind::{FLOAT_CPU, FLOAT_CUDA};
+    use tch::{Device, Kind, Tensor};
+    use thoosa_common::copy_ctx::CopyCtx;
+    use thoosa_common::runner::cache_areas::CacheArea;
+    use thoosa_common::runner::common::{MockRunCtx, mock_run_ctx};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_device::ThoDevice;
-    use thoosa_common::ws::{WsConfigs, FsWorkspace};
+    use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::ws::{FsWorkspace, WsConfigs};
     use thoosa_motifs::find::FixedFindMotifsConfig;
+    use thoosa_shared::Cause::SomethingElse;
     use thoosa_shared::applicables_runner::Input;
-    use thoosa_shared::resource::{Resource, ResourceStats};
-    use thoosa_shared::{cdt_for_dir, ResourceType, ThoError};
-    use thoosa_shared::mono_key;
     use thoosa_shared::comp_id::SynKey;
+    use thoosa_shared::mono_key;
+    use thoosa_shared::perf_logging::set_perf_log_level;
+    use thoosa_shared::resource::{Resource, ResourceStats};
+    use thoosa_shared::run_configs::RUN_ID;
+    use thoosa_shared::traits::ConsumeResult;
+    use thoosa_shared::{ResourceType, ThoError, cdt_for_dir};
     use thoosa_store::fs_store::ChunkedSlicesReader;
     use thoosa_store::{MockStoreBuilder, SlicesMatch, SqlStore};
     use tokio::task::yield_now;
     use tokio::time::sleep;
     use tracing::subscriber::NoSubscriber;
-    use thoosa_common::copy_ctx::CopyCtx;
-    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_shared::Cause::SomethingElse;
-    use thoosa_shared::perf_logging::set_perf_log_level;
-    use thoosa_shared::run_configs::RUN_ID;
 
     #[ctor::ctor]
     fn init() {

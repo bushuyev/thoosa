@@ -2,13 +2,11 @@ use std::sync::Arc;
 
 use tch::{Device, Kind, Tensor};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::WithId;
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::{AsyncStage, OutId, Stage, WithId};
 
 use crate as thoosa_common;
 use crate::runner::common::cachable::DevicesWrap;
-use crate::runner::common::runnable::{AsyncStage, Stage};
-use crate::runner::common::{OutId, RunCtx};
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test_utils::parse_numeric_part;
 use crate::tho_tensor::ThoTensor;

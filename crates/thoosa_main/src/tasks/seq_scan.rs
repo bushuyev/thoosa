@@ -1,37 +1,35 @@
-use thoosa_common::dims::ChannelsData;
 use crate::tasks::cross_loader::ResourcesConfigInput;
 use crate::tasks::find_motifs::{FilteredLoaderStage, LoaderStageChoice};
-use thoosa_common::stages_seq::{ABStage, StageChainOption};
+use crate::tasks::stft::SyncStftSelector;
 use crate::tasks::transforms::freq_filter::FreqFilter;
+use async_trait::async_trait;
 use log::{debug, info};
 use parking_lot::RwLock;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::kind::Kind;
 use tch::Device::Cpu;
 use tch::Tensor;
-use thoosa_common::transforms::filters::InputFilter;
-use thoosa_common::runner::common::cachable::{SelectRef, Cached, DevicesWrap};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::runner::common::{OutId, RunCtx};
+use tch::kind::Kind;
+use thoosa_common::dims::ChannelsData;
+use thoosa_common::runner::common::cachable::{Cached, DevicesWrap, SelectRef};
+use thoosa_common::runs::SavableResult;
 use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
+use thoosa_common::stages_seq::{ABStage, StageChainOption};
 use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::transforms::filters::InputFilter;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
+use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::Output;
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::mono_key;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
-use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::ThoError;
-use thoosa_store::Store;
-use crate::tasks::stft::SyncStftSelector;
-use thoosa_common::runs::SavableResult;
-use async_trait::async_trait;
-use tokio::task::JoinSet;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
+use thoosa_store::Store;
+use tokio::task::JoinSet;
 
 #[derive(Debug, Clone, DummyData)]
 #[dummy_data(clone)]
@@ -575,24 +573,23 @@ where
 #[cfg(test)]
 mod tests {
     use crate::tasks::cross_loader::ResourcesConfigInput;
-    use crate::tasks::seq_scan::{assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx, SeqScanOutput, SeqScanStage};
+    use crate::tasks::seq_scan::{SeqScanOutput, SeqScanStage, assign_resource_to_buckets, assign_resource_to_buckets_chunked, bucket_idx};
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::Tensor;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::Simple;
     use thoosa_common::seq_scan_run_config::{MeanAbsSeqScanMetricConfig, MeanPowerSeqScanMetricConfig, SeqScanMetric, SeqScanRunConfig};
+    use thoosa_common::transforms::filters::InputFilter;
     use thoosa_common::ws::mock_ws_simp;
-    use thoosa_shared::resource::Resource;
-    use thoosa_shared::traits::WithId;
     use thoosa_shared::ResourceType;
     use thoosa_shared::ThoError;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::traits::WithId;
     use thoosa_store::MockStoreBuilder;
 
     #[ctor::ctor]

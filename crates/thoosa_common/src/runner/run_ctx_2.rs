@@ -1,25 +1,25 @@
+use thoosa_shared::traits::MaxParallelCtx;
 use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use log::{debug, warn};
+use mockall_double::double;
 use parking_lot::Mutex;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use mockall_double::double;
 use thoosa_named_derive::Named;
 use thoosa_shared::comp_id::SynKey;
-use crate::runner::common::{MaxParallelCtx, RunCtx};
 
-use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_shared::{perf_log, sync_mutex_lock, ThoError};
+use thoosa_shared::traits::{Adjustable, RunCtx, WithId};
+use thoosa_shared::{ThoError, perf_log, sync_mutex_lock};
 use tracing::error;
 
 use crate as thoosa_common;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
+use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel};
 use thoosa_shared::mono_key;
-use crate::runner::adjusters::max_parallel::{MaxParallel, MAX_PARALLEL};
 
 type PurgeGpuClosure = Box<dyn Fn()->BoxFuture<'static, Result<(), ThoError>> + Send + Sync>;
 type SharedPurgeGpuClosures = Arc<Mutex<Vec<PurgeGpuClosure>>>;

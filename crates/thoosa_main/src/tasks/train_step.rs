@@ -15,9 +15,8 @@ use thoosa_common::batches::BatchLengths;
 use thoosa_common::copy_ctx::CudaActorHandle;
 use thoosa_common::dims::{Batch, Dims, ThoBatch};
 use thoosa_common::my_tch::{LossFp, ThoModule};
+use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, ThoDataRef};
-use thoosa_common::runner::common::runnable::{DynSyncStageBox, Stage, SyncStage};
-use thoosa_common::runner::common::{MaxParallelCtx, OutId, RunCtx};
 use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::runner::purge::FuturesRunnerMapPurger;
 use thoosa_common::tho_device::ThoDevice;
@@ -27,7 +26,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOrGpu;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError, mono_key, os_thread_id, panic_to_err, perf_log, sync_mutex_lock};
 
 pub struct TrainStep<F, DI: Dims, DO: Dims, C: RunCtx> {

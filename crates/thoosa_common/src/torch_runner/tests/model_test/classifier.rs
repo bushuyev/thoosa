@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use log::debug;
 use serde::{Deserialize, Serialize};
-use tch::{nn, nn::OptimizerConfig, Kind, Tensor};
+use tch::{Kind, Tensor, nn, nn::OptimizerConfig};
 use thoosa_named_derive::Named;
-use thoosa_shared::traits::{Adjustable, Data, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DynSyncStageBox, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
 
 use crate as thoosa_common;
-use crate::runner::common::cachable::{DevicesWrap};
-use crate::runner::common::runnable::{AsyncStage, DynSyncStageBox, Stage, SyncStage};
-use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
+use thoosa_shared::traits::MaxParallelCtx;
+use crate::runner::common::cachable::DevicesWrap;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;

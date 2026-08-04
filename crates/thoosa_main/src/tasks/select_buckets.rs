@@ -1,10 +1,10 @@
 #![allow(non_camel_case_types)]
 
-use thoosa_common::dims::ChannelsData;
 use crate::tasks::find_motifs_run_config::{EnergyMetric, FindMotifsRunConfig, Metrics, MotifCriterionConstraint, SelectMotifsRunConfig, SelectMotifsRunResult, SelectMotifsSavableResult};
 use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta};
 use crate::tasks::motif_stats::{MotifStats, MotifStatsInput, MotifStatsOutput};
-use crate::tasks::select_motifs::{clc_constraint_metrics, SelectMotifsInput, SelectMotifsOutputMode};
+use crate::tasks::select_motifs::{SelectMotifsInput, SelectMotifsOutputMode, clc_constraint_metrics};
+use crate::tasks::stage_ids::SELECT_BUCKETS;
 use log::{debug, info};
 use parking_lot::RwLock;
 use serde::Deserialize;
@@ -12,30 +12,28 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use thoosa_common::dims::ChannelsData;
 use thoosa_common::dims::MotifSlices;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, RunCtx};
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, run_ctx_adjuster, Adjusters, Contexts, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext};
+use thoosa_common::runner::oom_handler::{Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopInputContext, NoopRunnableContext, OOMHandler, WithRunCtxContext, run_ctx_adjuster};
 use thoosa_common::tho_tensor::ThoTensor;
 use thoosa_common::utils::load_run_config;
 use thoosa_common::ws::Workspace;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
+use thoosa_shared::applicables_runner::Input;
 use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::applicables_runner::Input;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, FuturesOrdering, ThoError};
-use thoosa_store::Store;
-use crate::tasks::stage_ids::SELECT_BUCKETS;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
+use thoosa_store::Store;
 
 
 #[derive(ThoosaRunConfig, ThoosaPropertiesMap, Clone, PartialEq, Debug, Deserialize, DummyData)]
@@ -588,24 +586,23 @@ mod tests {
     use super::{BestSelectionMode, BucketEvaluation, SelectBucketsRunConfig, SelectBucketsStage, SelectionMode};
     use crate::tasks::cross_loader::ResourcesConfigInput;
     use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
-    use crate::tasks::motif_loader::{mock_motif_loader, MotifLoaderInput, MotifMeta};
+    use crate::tasks::motif_loader::{MotifLoaderInput, MotifMeta, mock_motif_loader};
     use crate::tasks::select_motifs::SelectMotifsInput;
     use crate::tasks::tensor_loader::mock_tensor_loader;
     use parking_lot::RwLock;
     use std::sync::Arc;
     use tch::{Kind, Tensor};
-    use thoosa_common::runner::common::cachable::DevicesWrap;
     use thoosa_common::runner::common::mock_run_ctx;
-    use thoosa_common::runner::common::runnable::AsyncStage;
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::global_ctx::GlobalCtx;
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runs::Simple;
     use thoosa_common::ws::mock_ws_simp;
     use thoosa_properties_map::ToHashmap;
-    use thoosa_shared::resource::Resource;
-    use thoosa_shared::run_configs::{RunConfig, RunConfigId};
     use thoosa_shared::ResourceType::NotInGroup;
     use thoosa_shared::ThoError;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::run_configs::{RunConfig, RunConfigId};
+    use thoosa_shared::traits::AsyncStage;
     use thoosa_store::{MockStoreBuilder, RunConfigRow};
 
     #[test]

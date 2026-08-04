@@ -2,35 +2,33 @@ use std::any::Any;
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use thoosa_common::runner::common::{OutId, RunCtx};
 
 use mockall_double::double;
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
+use log::debug;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
-use log::debug;
 use tch::{Device, Tensor};
+use thoosa_common::dims::Dims;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
-use thoosa_common::tho_device::ThoDevice;
-use thoosa_common::dims::Dims;
-use thoosa_shared::{mono_key, ThoError};
-use thoosa_shared::applicables_runner::{Input, Output};
-use thoosa_shared::resource::Resource;
-use thoosa_shared::traits::{Adjustable, WithId};
-use thoosa_named_derive::Named;
-use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::tracked_await::track_await;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
+use thoosa_common::tho_device::ThoDevice;
+use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_named_derive::Named;
 use thoosa_proxy_derive::Proxy;
-use crate::tasks::stage_ids::RAW_TENSOR_LOADER;
+use thoosa_shared::applicables_runner::{Input, Output};
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::resource::Resource;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::{ThoError, mono_key};
 // use crate::tasks::stages_seq::StagesSeq;
 
 pub const SYNC_RAW_TENSOR_LOADER_ENDPOINT: &str = "SyncRawTensorLoader";
@@ -323,26 +321,22 @@ where
 
 #[cfg(test)]
 pub(crate) mod mock_tensor_loader {
-    use std::collections::HashMap;
     use async_trait::async_trait;
+    use dashmap::DashMap;
     use futures_util::future::{BoxFuture, Shared};
     use mockall::mock;
+    use std::collections::HashMap;
     use std::sync::Arc;
+    use tch::Tensor;
+    use thoosa_common::dims::ChannelsData;
+    use thoosa_common::runner::common::MockRunCtx;
     use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::common::{MockRunCtx, OutId};
-    use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
+    use thoosa_common::tho_tensor::ThoTensor;
     use thoosa_shared::ThoError;
-    use thoosa_shared::resource::Resource;
-    use thoosa_named_derive::Named;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_shared::traits::WithId;
-    use thoosa_common::tho_tensor::ThoTensor;
-    use thoosa_common::dims::ChannelsData;
-    use dashmap::DashMap;
-    use parking_lot::RwLock;
-    use tch::Tensor;
+    use thoosa_shared::resource::Resource;
+    use thoosa_shared::traits::{AsyncStage, OutId, Stage, SyncStage, WithId};
     mock! {
         #[derive(Debug, Named)]
         pub TensorLoader {}
@@ -428,23 +422,7 @@ pub(crate) mod mock_tensor_loader {
 
 #[cfg(test)]
 mod tests {
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use crate::tasks::tensor_loader::RawTensorLoader;
-    use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-    use thoosa_common::runner::cache_areas::CacheArea;
-    use thoosa_common::runner::global_ctx::GlobalCtx;
-    use thoosa_common::runner::common::RunCtx;
-    use rand::{Fill, Rng, RngExt};
-    use parking_lot::RwLock;
-    use std::sync::Arc;
-    use tch::{Device, Tensor};
-    use thoosa_common::dims::ChannelsData;
-    use thoosa_common::tho_device::ThoDevice;
-    use thoosa_shared::ThoError;
-    use thoosa_shared::resource::Resource;
-    use thoosa_shared::comp_id::SynKey;
-    use thoosa_shared::mono_key;
-    use thoosa_common::tho_tensor::ThoTensor;
+
 
     //TODO
     // #[tokio::test]

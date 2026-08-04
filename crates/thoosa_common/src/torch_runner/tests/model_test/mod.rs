@@ -6,14 +6,14 @@ use thoosa_shared::ThoError;
 
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use crate::runner::common::runnable::AsyncStage;
-use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx as RealGlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::runner::test::FailUntil;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
+use thoosa_shared::traits::AsyncStage;
+use thoosa_shared::traits::RunCtx;
 
 pub(crate) mod batch_builder;
 pub(crate) mod classifier;
@@ -22,11 +22,11 @@ pub(crate) mod join_and_classify;
 pub(crate) mod loader;
 
 
-use classifier::{sync_classifier_endpoint_init, Classifier, SYNC_CLASSIFIER_ENDPOINT};
+use crate::ipc::cuda_wokrer::InitFn;
+use classifier::{Classifier, SYNC_CLASSIFIER_ENDPOINT, sync_classifier_endpoint_init};
 use common::{ClsOut, FileListInput, ModelTestId};
 use join_and_classify::JoinAndClassifyTask;
 use loader::ABLoader;
-use crate::ipc::cuda_wokrer::InitFn;
 
 #[ctor::ctor]
 fn init() {
