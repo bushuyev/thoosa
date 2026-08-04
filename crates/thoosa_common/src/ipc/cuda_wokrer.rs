@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use clap::Parser;
 use dashmap::DashMap;
 use log::{debug, error, LevelFilter};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
@@ -611,13 +611,25 @@ where
     Id: Named + Debug + Clone + Serialize,
 {
     fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        let tho_tensor_ref = self.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?;
+
+        C::encode(&tho_tensor_ref)
+    }
+}
+
+impl<D, Id> ThoTensor<D, Id>
+where
+    D: Dims,
+    Id: Clone + Debug + Named + Serialize,
+{
+    pub fn worker_tensor_to_ref(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<ThoTensor<D, Id>, ThoError> {
         let out_id = self.id().clone();
         let out_tensor = self.t();
         let size = out_tensor.size();
         let kind = out_tensor.kind();
         let out_key = insert_worker_tensor(all_cuda_tensors, out_tensor)?;
 
-        C::encode(&ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.tho_device_idx()))
+        Ok(ThoTensor::<D, Id>::new_ref(out_id, out_key, size, kind, None, tho_device.tho_device_idx()))
     }
 }
 
