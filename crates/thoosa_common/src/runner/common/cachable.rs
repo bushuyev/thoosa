@@ -1,8 +1,8 @@
 #![allow(unused_parens)]
 #![allow(async_fn_in_trait)]
 
-use std::borrow::Borrow;
 use crate as thoosa_common;
+use std::borrow::Borrow;
 
 use mockall_double::double;
 #[double]
@@ -21,18 +21,17 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use thoosa_shared::{async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock, CopyToDevice};
 use thoosa_shared::Cause;
-use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
+use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::data_with_extra::DataWithExtra;
-use thoosa_shared::traits::{Data, Named, Select, ThoSelector};
-use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, ConsumeResult, Stage};
-use thoosa_shared::ThoError;
-use thoosa_shared::traits::WithId;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::ConsumeResult;
+use thoosa_shared::traits::{AsyncStage, Stage, WithId};
+use thoosa_shared::traits::{Data, Named, OutId, RunCtx, Select, ThoSelector};
+use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock, async_write_lock, perf_log, sync_mutex_lock, sync_read_lock, sync_write_lock};
 use thoosa_shims::stream::ThoStreamGuard;
+use tokio::sync::{Notify, RwLockReadGuard, futures::OwnedNotified};
 
 trait DeviceCopier<O>: Debug + Send + Sync {
     fn copy<'a>(&self, src: &'a O, dst_device: usize) -> BoxFuture<'a, Result<O, ThoError>>;
@@ -1073,28 +1072,26 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crate::runner::global_ctx::MockGlobalCtx;
+    use async_trait::async_trait;
+    use parking_lot::Mutex;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use async_trait::async_trait;
-    use parking_lot::Mutex;
-    use tokio::sync::{Notify, Semaphore};
-    use tokio::time::timeout;
-    use thoosa_shared::{CopyToDevice, async_perf_log, async_read_lock};
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::copy_mode::CpuOrGpu;
     use thoosa_shared::tracked_await::track_await;
-    use thoosa_shared::traits::{DummyCachableId, RangeSelector, WithId};
-    use crate::runner::global_ctx::MockGlobalCtx;
+    use thoosa_shared::traits::{DummyCachableId, RangeSelector, RunCtx, WithId};
+    use tokio::sync::{Notify, Semaphore};
+    use tokio::time::timeout;
     extern crate self as caching_runner;
     pub use crate::runner::common::*;
-    use crate::runner::cache_areas::CacheArea;
-    use crate::runner::global_ctx::mock_global_ctx;
-    use crate::runner::global_ctx;
-    use crate::runner::common::cachable::{DevicesWrap, InflightRole, join_or_start_inflight, SelectRef};
+    use crate::runner::common::cachable::{DevicesWrap, InflightRole, SelectRef, join_or_start_inflight};
     use crate::runner::common::mock_run_ctx;
+    use crate::runner::global_ctx;
+    use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use crate::runner::test_utils::MockDataWithId;
-    use crate as thoosa_common;
 
     #[derive(Clone, Copy, Debug)]
     enum CopyBehavior {

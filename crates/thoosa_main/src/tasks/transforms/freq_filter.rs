@@ -1,45 +1,44 @@
-use std::collections::{HashMap, HashSet};
-use std::any::Any;
-use std::marker::PhantomData;
-use std::sync::Arc;
 use async_trait::async_trait;
+use cached_derive::Cached;
 use log::debug;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
-use tch::{Device, Kind, Tensor};
+use std::any::Any;
+use std::collections::{HashMap, HashSet};
+use std::marker::PhantomData;
+use std::sync::Arc;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::Float;
-use cached_derive::Cached;
+use tch::{Device, Kind, Tensor};
 use thoosa_common::debug_plot;
-use thoosa_named_derive::Named;
 use thoosa_common::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use thoosa_common::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use thoosa_common::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use thoosa_common::runner::adjusters::splits::{OutputBuilder, SplitsAdjusterContext, SplitsAdjusterContextImpl};
 use thoosa_common::runner::common::cachable::{Cached, DevicesWrap};
-use thoosa_common::runner::common::OutId;
-use thoosa_common::runner::common::RunCtx;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage, SyncStage};
 use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_common::runner::oom_handler::{Adjuster, AdjusterError, Adjusters, Contexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, NoopRunnableContext, OOMHandler, input_adjuster, run_ctx_adjuster};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-use thoosa_common::runner::oom_handler::{NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, input_adjuster, run_ctx_adjuster, Adjuster, AdjusterError, Adjusters, Contexts, NoopRunnableContext, OOMHandler};
+use thoosa_named_derive::Named;
+use thoosa_shared::traits::RunCtx;
+use thoosa_shared::traits::{AsyncStage, OutId, Stage, SyncStage};
 
 use thoosa_common::dims::{AnyDims, AnyMetrics, ChannelsData, Dims};
 use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, NotchBandFilterParams, SavGolFilterParams, ZNormFilterParams};
 
-use thoosa_common::transforms::filters::{band_pass_filter, notch_band_rfft, Padding};
-use thoosa_shared::{mono_key, CopyToDevice, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
-use thoosa_shared::comp_id::SynKey;
-use thoosa_common::tho_tensor::ThoTensor;
-use thoosa_common::utils::z_norm;
-use thoosa_common::ws::Workspace;
-use thoosa_proxy_derive::Proxy;
-use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::math::sg_smoothing_coeffs;
 use crate::tasks::cross_dims::ChannelsDataSelector;
 use crate::tasks::stage_ids::FREQ_FILTER;
 use crate::tasks::transforms::smoothing::{median, moving_average};
+use thoosa_common::tho_tensor::ThoTensor;
+use thoosa_common::transforms::filters::{Padding, band_pass_filter, notch_band_rfft};
+use thoosa_common::utils::z_norm;
+use thoosa_common::ws::Workspace;
+use thoosa_proxy_derive::Proxy;
+use thoosa_shared::comp_id::SynKey;
+use thoosa_shared::math::sg_smoothing_coeffs;
+use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Metrics, MonoMetrics, WithId};
+use thoosa_shared::{CopyToDevice, ThoError, mono_key};
 
 pub const SYNC_FREQ_FILTER_ENDPOINT: &str = "SyncFreqFilter";
 
@@ -804,33 +803,31 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+    use crate::tasks::stft::SyncStftSelector;
+    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter};
+    use crate::tasks::transforms::smoothing::{median, moving_average};
     use log::debug;
     use parking_lot::RwLock;
-    use thoosa_common::dims::ChannelsData;
-    use tch::kind::FLOAT_CPU;
+    use std::sync::Arc;
     use tch::Tensor;
-    use thoosa_common::runner::common::cachable::{SelectRef, DevicesWrap};
-    use thoosa_common::runner::common::runnable::{AsyncStage, SyncStage};
-    use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
-    use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
-    use thoosa_shared::ThoError;
+    use tch::kind::FLOAT_CPU;
+    use thoosa_common::dims::ChannelsData;
+    use thoosa_common::runner::common::cachable::{DevicesWrap, SelectRef};
+    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
+    use thoosa_common::runner::global_ctx::{GlobalCtx, mock_global_ctx};
+    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::tho_tensor::ThoTensor;
+    use thoosa_common::transforms::filters::{AverageFilterParams, BandPassFilterParams, InputFilter, MedianFilterParams, Padding, SavGolFilterParams};
     use thoosa_common::utils::from;
     use thoosa_common::ws::mock_ws_simp;
+    use thoosa_shared::ThoError;
     use thoosa_shared::comp_id::SynKey;
     use thoosa_shared::mono_key;
-    use thoosa_common::runner::run_ctx_2::RunCtxImpl;
-    use crate::tasks::transforms::smoothing::{median, moving_average};
-    use crate::tasks::transforms::freq_filter::{FreqFilter, SyncFreqFilter};
-    use thoosa_common::runner::common::RunCtx;
-    use thoosa_common::runner::global_ctx::{mock_global_ctx, GlobalCtx};
-    use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::tasks::stft::SyncStftSelector;
+    use thoosa_shared::traits::{AsyncStage, RunCtx, SyncStage};
 
     #[tokio::test]
-    async fn test_band_pass() ->Result<(), ThoError> {
-
+    async fn test_band_pass() -> Result<(), ThoError> {
         let filter_configs = vec![
             // InputFilter::NotchBandFilter(thoosa_common::transforms::filters::NotchBandFilterParams {
             //     low_hz: 58.0,

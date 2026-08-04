@@ -8,7 +8,7 @@ use thoosa_shared::ThoError;
 use crate::copy_ctx::CudaActorHandle;
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::runner::adjusters::max_parallel::MaxParallel;
-use crate::runner::common::MaxParallelCtx;
+use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 
 pub trait IpcCodec: Debug + Send + Sync + 'static {

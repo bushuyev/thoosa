@@ -1,11 +1,11 @@
+use crate as thoosa_common;
+use thoosa_shared::traits::MaxParallelCtx;
+use crate::runner::common::cachable::{BorrowRef, ConsumeData, SelectRef};
+use mockall_double::double;
 use std::borrow::Borrow;
 use thoosa_shared::collect_futures_eta::{collect_eta_record_oom_all_failed, collect_eta_record_oom_success};
-use crate::runner::common::{MaxParallelCtx, RunCtx};
-use crate::runner::common::cachable::{BorrowRef, SelectRef, ConsumeData};
-use crate::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
-use crate::runner::common::OutId;
-use crate as thoosa_common;
-use mockall_double::double;
+use thoosa_shared::traits::ConsumeResult;
+use thoosa_shared::traits::{OutId, Stage, SyncStage};
 #[double]
 use thoosa_common::runner::global_ctx::GlobalCtx;
 
@@ -13,19 +13,19 @@ use crate::runner::statistics::Statistics;
 use async_trait::async_trait;
 use dashmap::DashSet;
 use log::{debug, error, info, trace, warn};
-use mockall::{automock, Any};
+use mockall::{Any, automock};
 use std::any::TypeId;
 use std::fmt::Debug;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use tokio::task::spawn_blocking;
-use thoosa_shared::{os_thread_id, panic_to_err_async};
-use thoosa_shared::traits::{Adjustable, Data, ThoSelector, WithId};
-use thoosa_shared::{Cause, ThoError};
-use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{Adjustable, Data, RunCtx, ThoSelector, WithId};
+use thoosa_shared::{Cause, ThoError};
+use thoosa_shared::{os_thread_id, panic_to_err_async};
+use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
+use tokio::task::spawn_blocking;
 
 #[derive(Debug)]
 pub enum AdjusterError<A: Adjustable> {
@@ -1305,13 +1305,13 @@ where
 #[cfg(test)]
 pub mod test_types {
     use super::*;
-    use thoosa_named_derive::Named;
     // use crate::common::Data;
     use crate::runner::test_utils::DummyTensor;
+    use thoosa_named_derive::Named;
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use thoosa_shared::traits::{RangeSelector, Select, ThoSelector, WithId};
-    use thoosa_shared::CopyToDevice;
+    use thoosa_shared::traits::{RangeSelector, Select, WithId};
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     pub struct TestId(&'static str);
@@ -1467,8 +1467,7 @@ pub mod mock_runnable {
     use mockall::mock;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use thoosa_shared::traits::WithId;
-    use crate::runner::common::runnable::{Stage, SyncStage};
+    use thoosa_shared::traits::{Stage, SyncStage, WithId};
 
     mock! {
         #[derive(Clone, Debug)]
@@ -1529,7 +1528,6 @@ pub mod mock_runnable {
 
 #[cfg(test)]
 pub mod mock_input_adjuster {
-    use super::test_types::TestInput;
     use super::*;
     use mockall::mock;
     use std::sync::Arc;
@@ -1642,25 +1640,21 @@ pub mod mock_context_adjuster {
 #[cfg(test)]
 mod tests {
     use super::mock_context_adjuster::build as mock_context_adjuster;
-    use super::mock_input_adjuster::{build as mock_input_adjuster, MockInputAdjuster};
+    use super::mock_input_adjuster::{MockInputAdjuster, build as mock_input_adjuster};
     use super::mock_runnable::build as mock_runnable;
     use super::mock_task_adjuster::build as mock_task_adjuster;
     use super::test_types::{TestId, TestInput, TestOutput};
-    use super::{AdjusterError, Adjusters, Contexts, OOMHandler};
-    use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
+    use super::{Adjusters, Contexts, OOMHandler};
+    use super::{InputContext, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext, input_adjuster, run_ctx_adjuster, task_adjuster};
     // use crate::common::runnable::Runnable;
-    use crate::runner::common::{DropIf, MockRunCtx, OutId};
-    use crate::runner::common::runnable::{AsyncStage, Stage};
-    use std::collections::VecDeque;
-    use std::ops::Range;
-    use std::sync::{Arc, Mutex};
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use async_trait::async_trait;
-    use thoosa_shared::{Cause, ThoError};
+    use crate::runner::common::MockRunCtx;
+    use crate::runner::common::cachable::{BorrowRef, DevicesWrap};
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use thoosa_shared::traits::{Adjustable, Data, Metrics, RangeSelector, ThoSelector, WithId};
-    use crate::runner::test::fixtures::{DLoadedTensor, MetricsRangeSelector};
-    use super::{input_adjuster, run_ctx_adjuster, task_adjuster, Adjuster, InputContext, NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, WithInputContext, WithRunCtxContext, WithRunnableContext};
+    use std::collections::VecDeque;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
+    use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RangeSelector, Stage, WithId};
+    use thoosa_shared::{Cause, ThoError};
     // type Selector = Range<[usize; 1]>;
 
     #[derive(Debug)]

@@ -1,41 +1,41 @@
-use std::collections::HashMap;
-use std::io::Cursor;
 use crate::tasks::cross_batch_clc::{CrossClcResultMerge, CrossUnfoldClcOutput};
+use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+use futures::{FutureExt, future::BoxFuture};
 use log::{debug, info, trace};
 use parking_lot::RwLock;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::io::Cursor;
 use std::marker::PhantomData;
 use std::sync::Arc;
-use tch::{Kind, Tensor};
-use futures::{future::BoxFuture, FutureExt};
 use tch::Device;
 use tch::Device::{Cpu, Cuda};
 use tch::Kind::{Bool, Uint8};
+use tch::{Kind, Tensor};
 use thoosa_common::copy_ctx::CopyCtx;
 use thoosa_common::cuda_utils::{pack_bits_bool, unpack_bits_u8};
 use thoosa_common::dims::AnyDims;
-use thoosa_common::ipc::cuda_wokrer::{insert_worker_tensor, WorkerStageOutput};
 use thoosa_common::ipc::codec::IpcCodec;
-use crate::tasks::find_motifs_run_config::FindMotifsRunConfig;
+use thoosa_common::ipc::cuda_wokrer::{WorkerStageOutput, insert_worker_tensor};
+use thoosa_common::runner::global_ctx::GlobalCtx;
 use thoosa_common::tho_device::ThoDevice;
 use thoosa_common::tho_tensor::{ThoTensor, ThoTensorInner};
 use thoosa_common::utils::tensor_mem_size;
-use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Data, WithId};
 use thoosa_common::ws::Workspace;
 use thoosa_motifs::find::{FixedFindMotifsConfig, SimpleMotifTracker};
 use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::run_configs::RunConfigId;
-use thoosa_common::runner::common::runnable::{ConsumeResult, Stage, SyncStage};
-use thoosa_common::runner::common::RunCtx;
-use thoosa_common::runner::global_ctx::GlobalCtx;
+use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::rayon_pool::rayon_pool;
+use thoosa_shared::run_configs::RunConfigId;
+use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::ConsumeResult;
+use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::traits::{RunCtx, Stage, SyncStage};
 use thoosa_store::fs_store::FileMotifTrackerStore;
 use thoosa_store::{SlicesMatch, SqlMotifTrackerStore, Store};
-use thoosa_shared::tracked_await::track_await;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 type DistsMaskTensor = ThoTensor<AnyDims, SynKey>;
 
@@ -1707,16 +1707,16 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures_util::StreamExt;
-    use log::debug;
     use crate::tasks::cross_batch_clc::CrossClcResultMerge;
     use crate::tasks::dists_tracker::{DistsMask, DistsMaskType};
-    use tch::{Device, Kind, Tensor};
+    use futures_util::StreamExt;
+    use log::debug;
     use tch::Device::Cuda;
     use tch::kind::FLOAT_CPU;
+    use tch::{Device, Kind, Tensor};
+    use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::utils::reset_print_options;
     use thoosa_shared::{Cause, ThoError};
-    use thoosa_common::runner::global_ctx::GlobalCtx;
 
     #[ctor::ctor]
     pub fn init() {

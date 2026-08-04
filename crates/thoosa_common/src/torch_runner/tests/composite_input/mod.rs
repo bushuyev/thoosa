@@ -1,10 +1,4 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use log::debug;
-use tch::Tensor;
-use thoosa_shared::ThoError;
 use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-use crate::runner::common::RunCtx;
 use crate::runner::global_ctx::GlobalCtx;
 use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -12,6 +6,12 @@ use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStage
 // use crate::torch_runner::tests::composite_input::ab_clc::{ABClcStage, ABClcStageInput, ABClcStageOutput, ABClcSyncStageInput};
 use crate::torch_runner::tests::composite_input::loader_a::{AStageInput, AStageOutput};
 use crate::torch_runner::tests::composite_input::loader_b::{BStageInput, BStageOutput};
+use log::debug;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tch::Tensor;
+use thoosa_shared::ThoError;
+use thoosa_shared::traits::RunCtx;
 // use crate::torch_runner::tests::composite_input::loader_b::BStageInput;
 // use crate::torch_runner::tests::load_and_clc::LoadAndClcStage;
 
@@ -48,12 +48,12 @@ pub(crate) async fn run_ab_clc_with_current_ctx() -> Result<(), ThoError> {
 
 pub(crate) async fn run_ab_clc_with_stage<S, F>(ab_stage: Arc<ABClcStage<S>>, num_calls: F) -> Result<(), ThoError>
 where
-    for<'a> ABClcStage<S>: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = Arc<DevicesWrap<ABClcStageOutput>>>,
+    for<'a> ABClcStage<S>:  thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'a> = ABClcStageInput, Out = Arc<DevicesWrap<ABClcStageOutput>>>,
     // ABClcStage<S>: crate::runner::common::runnable::AsyncStage<In<'static> = Arc<ABClcStageInput>>,
     // ABClcStage<S>: Cached + crate::runner::common::OutId,
-    S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
+    S:  thoosa_shared::traits::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
     S::Ctx: thoosa_shared::traits::Adjustable + Send + Sync + 'static,
-    for<'f> S: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+    for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
     F: Fn() -> usize,
 {
     let mut ctx = RunCtxImpl::new(1, "root");
@@ -115,8 +115,8 @@ async fn test_ab_clc_sync_with_selector() -> Result<(), ThoError> {
 
 pub async fn ab_clc_sync_with_selector<S>(ab_stage: Arc<ABClcStage<S>>) -> Result<(), ThoError>
 where
-    S: crate::runner::common::runnable::SyncStage + thoosa_shared::traits::Adjustable + crate::runner::common::OutId + Send + Sync + 'static,
-    for<'f> S: crate::runner::common::runnable::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
+    S:  thoosa_shared::traits::SyncStage + thoosa_shared::traits::Adjustable + thoosa_shared::traits::OutId + Send + Sync + 'static,
+    for<'f> S: thoosa_shared::traits::Stage<Ctx = RunCtxImpl, In<'f> = ABClcSyncStageInput<'f>, Out = ABClcStageOutput>,
 {
     let mut run_ctx = RunCtxImpl::new(1, "root");
     let cuda_actor = GlobalCtx::global().cuda_actor(1);

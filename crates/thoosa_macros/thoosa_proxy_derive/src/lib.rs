@@ -66,9 +66,9 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     let run_call = match run_input.as_ref() {
         Some(run_input) => quote! {
-            #common::ipc::codec::invoke_ipc_endpoint::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+            #common::ipc::codec::invoke_ipc_endpoint::<#codec, _, <Self as thoosa_shared::traits::Stage>::Out>(
 
-                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref(),
 
                 #endpoint,
 
@@ -77,9 +77,9 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
             ).await
         },
         None => quote! {
-            #common::ipc::codec::invoke_ipc_sync_stage::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
+            #common::ipc::codec::invoke_ipc_sync_stage::<#codec, _, <Self as thoosa_shared::traits::Stage>::Out>(
 
-                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(ctx)).as_ref(),
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(ctx)).as_ref(),
 
                 #endpoint,
 
@@ -93,8 +93,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     let consume_call = match run_input.as_ref() {
         Some(run_input) => quote! {
-            #common::ipc::codec::consume_ipc_endpoint::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
-                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(&ctx)).as_ref(),
+            #common::ipc::codec::consume_ipc_endpoint::<#codec, _, <Self as thoosa_shared::traits::Stage>::Out>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(&ctx)).as_ref(),
 
                 #endpoint,
 
@@ -102,8 +102,8 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
             ).await
         },
         None => quote! {
-            #common::ipc::codec::consume_ipc_sync_stage::<#codec, _, <Self as #common::runner::common::runnable::Stage>::Out>(
-                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(#common::runner::common::RunCtx::tho_device_idx(&ctx)).as_ref(),
+            #common::ipc::codec::consume_ipc_sync_stage::<#codec, _, <Self as thoosa_shared::traits::Stage>::Out>(
+                #common::runner::global_ctx::GlobalCtx::global().cuda_actor(thoosa_shared::traits::RunCtx::tho_device_idx(&ctx)).as_ref(),
 
                 #endpoint,
 
@@ -139,7 +139,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                 None => {
                     let init_type = init_type.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `wrapper` requires `init_type = \"...\"`"))?;
                     let init_stage = init_stage.ok_or_else(|| syn::Error::new_spanned(&base_ident, "`endpoint_init` without `wrapper` requires `init_stage = \"...\"`"))?;
-                    let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as #common::runner::common::runnable::Stage>::In<'static>));
+                    let in_type = in_type.unwrap_or_else(|| syn::parse_quote!(<#base_ty as thoosa_shared::traits::Stage>::In<'static>));
                     quote! {
                         pub fn #endpoint_init(init_msg: Vec<u8>,ws:Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn #common::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
                             let init = <#codec as #common::ipc::codec::IpcCodec>::decode::<#init_type>(&init_msg)?;
@@ -147,7 +147,7 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                                 #codec,
                                 #base_ty,
                                 #in_type,
-                                <#base_ty as #common::runner::common::runnable::Stage>::Out,
+                                <#base_ty as thoosa_shared::traits::Stage>::Out,
                             >(
                                 #endpoint,
                                 #init_stage,
@@ -171,12 +171,12 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
     let sync_stage_impl = if consume {
         quote! {
-            impl #common::runner::common::runnable::SyncStage for #proxy_ident {
+            impl thoosa_shared::traits::SyncStage for #proxy_ident {
                 fn consume<'a>(
                     self: std::sync::Arc<Self>,
                     input: Self::In<'a>,
                     ctx: Self::Ctx,
-                ) -> #common::runner::common::runnable::ConsumeResult<Self::In<'a>, Self::Out>
+                ) -> thoosa_shared::traits::ConsumeResult<Self::In<'a>, Self::Out>
                 where
                     Self: Sized,
                 {
@@ -186,15 +186,15 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
                         })
                     });
                     match result {
-                        Ok(output) => #common::runner::common::runnable::ConsumeResult::Ok(output),
-                        Err(error) => #common::runner::common::runnable::ConsumeResult::Failed { input, error },
+                        Ok(output) => thoosa_shared::traits::ConsumeResult::Ok(output),
+                        Err(error) => thoosa_shared::traits::ConsumeResult::Failed { input, error },
                     }
                 }
             }
         }
     } else {
         quote! {
-            impl #common::runner::common::runnable::SyncStage for #proxy_ident {
+            impl thoosa_shared::traits::SyncStage for #proxy_ident {
                 fn do_run<'a>(
                     self: std::sync::Arc<Self>,
                     input: &Self::In<'a>,
@@ -235,19 +235,19 @@ fn expand_proxy(input: DeriveInput) -> SynResult<proc_macro2::TokenStream> {
 
         impl thoosa_shared::traits::Adjustable for #proxy_ident {}
 
-        impl #common::runner::common::OutId for #proxy_ident {
+        impl thoosa_shared::traits::OutId for #proxy_ident {
             fn out_id<'a>(
                 &self,
-                input_id: &<<Self as #common::runner::common::runnable::Stage>::In<'a> as thoosa_shared::traits::WithId>::ID,
-            ) -> <<Self as #common::runner::common::runnable::Stage>::Out as thoosa_shared::traits::WithId>::ID {
+                input_id: &<<Self as thoosa_shared::traits::Stage>::In<'a> as thoosa_shared::traits::WithId>::ID,
+            ) -> <<Self as thoosa_shared::traits::Stage>::Out as thoosa_shared::traits::WithId>::ID {
                 #out_id
             }
         }
 
-        impl #common::runner::common::runnable::Stage for #proxy_ident {
-            type Ctx = <#base_ty as #common::runner::common::runnable::Stage>::Ctx;
-            type In<'a> = <#base_ty as #common::runner::common::runnable::Stage>::In<'a>;
-            type Out = <#base_ty as #common::runner::common::runnable::Stage>::Out;
+        impl thoosa_shared::traits::Stage for #proxy_ident {
+            type Ctx = <#base_ty as thoosa_shared::traits::Stage>::Ctx;
+            type In<'a> = <#base_ty as thoosa_shared::traits::Stage>::In<'a>;
+            type Out = <#base_ty as thoosa_shared::traits::Stage>::Out;
         }
 
         #sync_stage_impl

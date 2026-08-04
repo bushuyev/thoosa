@@ -1,5 +1,14 @@
+use crate::ThoError;
+use crate::applicables_runner::{Input, Output};
+use crate::copy_mode::CpuOnly;
 use ambassador::delegatable_trait;
+use async_trait::async_trait;
+use futures_util::FutureExt;
+use futures_util::future::BoxFuture;
+use log::debug;
 use mockall::automock;
+use parking_lot::RwLock;
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 #[cfg(any(debug_assertions, tho_debug))]
 use std::borrow::Cow;
@@ -9,16 +18,10 @@ use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign, Deref, DivAssign, Range};
 use std::path::PathBuf;
 use std::sync::Arc;
-use log::debug;
-use thoosa_named_derive::Named;
-use crate::applicables_runner::Input;
-use crate::ThoError;
-use uuid::Uuid;
-use async_trait::async_trait;
-use parking_lot::RwLock;
-use serde::{Deserialize, Serialize};
 use thoosa_dummy_data_derive::DummyData;
-use crate::copy_mode::CpuOnly;
+use thoosa_named_derive::Named;
+use tokio::sync::MutexGuard;
+use uuid::Uuid;
 
 #[delegatable_trait]
 pub trait CachableIdTr: Any + Debug + Send + Sync {
@@ -736,4 +739,247 @@ pub trait FromJsonFile {
 
 pub trait ToJsonFile:Debug {
     fn to_file(&self, path: &PathBuf) -> Result<(), ThoError>;
+}
+
+#[delegatable_trait]
+pub trait MaxParallelCtx: Named + Debug + Send + Sync {
+    fn set_max_other_parallel(&mut self, permit: u8);//u8 - MaxParallel
+
+    fn max_other_parallel(&self) -> u8;
+}
+
+pub trait RunCtx: MaxParallelCtx + WithId {
+    fn tho_device_idx(&self) -> usize;
+
+    fn branch(&mut self, with_new_cache_area: bool) -> Self
+    where
+        Self: Sized;
+
+    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
+
+}
+
+pub trait OutId: Stage
+where
+        for<'a> <Self as Stage>::In<'a>: WithId,
+        <Self as Stage>::Out: WithId,
+{
+    fn out_id<'a>(
+        &self,
+        input_id: &<<Self as Stage>::In<'a> as WithId>::ID,
+    ) -> <Self::Out as WithId>::ID;
+
+}
+
+/// a Stage is just a function with explicitly defined state, execution context and input so that all three can be adjusted to handle OOM
+/// see ['thoosa_common::runner::oom_handler::Adjusters'] enum
+pub trait Stage: Debug {
+    type Ctx: RunCtx;
+
+    type In<'a>: Input;
+
+    type Out: Output;
+
+}
+
+impl <S> Stage for Arc<S>
+where
+S:Stage{
+    type Ctx = S::Ctx;
+    type In<'a> = S::In<'a>;
+    type Out = S::Out;
+}
+
+pub trait AsyncStage:Stage + Debug + Send + Sync + 'static
+where
+        for <'a> Self::In<'a>:  Send + Sync,
+        Self::Out: Send + Sync,
+{
+
+
+    //the DevicesWrap is in input and output so that data could be dumped to CPU at any time (if other stage wins 100 GPU)
+    //plain inputs can override RunInput to avoid DevicesWrap. Tensor-holding inputs should keep the default so they can be dumped/loaded by device.
+    // Returning DevicesWrap also forces callers to specify the device to load data from, keeping the logic clear and transparent (as opposed to implicitly taking the device from the stage context).
+    fn run(self: Arc<Self>, _input: Self::In<'static>, _ctx: Self::Ctx) -> impl Future<Output = Result<Self::Out, ThoError>> + Send
+
+    {
+        async {
+            unimplemented!()
+        }
+    }
+}
+
+pub trait SyncStage: Stage + Debug {
+    fn as_with_state(&self) -> Option<&dyn ErasedStageWithState<Self>>
+    where
+        Self: Sized,
+    {
+        None
+    }
+
+    fn do_run<'f>(self: Arc<Self>, _input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {//TODO remove _ctx - it's used for logging and in tests
+        unimplemented!()
+    }
+
+    fn consume<'f>(
+        self: Arc<Self>,
+        _input: Self::In<'f>,
+        _ctx: Self::Ctx,
+    ) -> ConsumeResult<Self::In<'f>, Self::Out> {
+        unimplemented!()
+    }
+}
+
+pub trait StageWithState: SyncStage + Sync {
+    type S: Debug + Send + Sync;
+
+    fn pre_run(&self) -> BoxFuture<'_, Result<MutexGuard<'_, Self::S>, ThoError>>;
+
+    fn do_run_with_state<'f>(self: Arc<Self>, _input: &Self::In<'f>, _state: MutexGuard<'_, Self::S>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        unimplemented!()
+    }
+}
+
+pub trait ErasedStageState<S>: Send
+where
+    S: SyncStage,
+{
+    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError>;
+}
+
+//for switching between ipc proxy and local
+pub trait DynSyncStage<I, O, C>: Debug + Send + Sync + 'static
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError>;
+
+    fn out_id_dyn(&self, input_id: &I::ID) -> O::ID;
+}
+
+impl<T, I, O, C> DynSyncStage<I, O, C> for T
+where
+    T: SyncStage + OutId + Send + Sync + 'static,
+    for<'a> T: Stage<In<'a> = I, Out = O, Ctx = C>,
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run_dyn(self: Arc<Self>, input: &I, ctx: &C) -> Result<O, ThoError> {
+        self.do_run(input, ctx)
+    }
+
+    fn out_id_dyn(&self, input_id: &I::ID) -> O::ID {
+        self.out_id(input_id)
+    }
+}
+
+#[derive(Debug)]
+pub struct DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    inner: Arc<dyn DynSyncStage<I, O, C>>,
+}
+
+impl<I, O, C> DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    pub fn new(inner: Arc<dyn DynSyncStage<I, O, C>>) -> Self {
+        Self { inner }
+    }
+}
+
+impl<I, O, C> Stage for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    type Ctx = C;
+    type In<'a> = I;
+    type Out = O;
+}
+
+impl<I, O, C> SyncStage for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
+        Arc::clone(&self.inner).do_run_dyn(input, ctx)
+    }
+}
+
+impl<I, O, C> OutId for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+    fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
+        self.inner.out_id_dyn(input_id)
+    }
+}
+
+impl<I, O, C> Adjustable for DynSyncStageBox<I, O, C>
+where
+    I: Input + WithId + 'static,
+    O: Output + WithId + 'static,
+    C: RunCtx + 'static,
+{
+}
+
+#[derive(Debug)]
+pub enum ConsumeResult<I, O> {
+    Failed{input:I, error:ThoError},
+    Ok(O)
+}
+
+///for keeping stages with different state types in the CudaWorker's installed stages map
+pub trait ErasedStageWithState<S>
+where
+    S: SyncStage,
+{
+    //TODO add device param
+    fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>>;
+}
+
+impl<S> ErasedStageWithState<S> for S
+where
+    S: StageWithState,
+{
+    fn pre_run(&self) -> BoxFuture<'_, Result<Box<dyn ErasedStageState<S> + '_>, ThoError>> {
+        async move {
+            let state = StageWithState::pre_run(self).await?;
+            // Keep the concrete guard type inside the erased value while it spans later async preparation.
+            Ok(Box::new(StageStateGuard::<S> { state }) as Box<dyn ErasedStageState<S>>)
+        }.boxed()
+    }
+}
+
+
+struct StageStateGuard<'a, S>
+where
+    S: StageWithState,
+{
+    state: MutexGuard<'a, S::S>,
+}
+
+impl<S> ErasedStageState<S> for StageStateGuard<'_, S>
+where
+    S: StageWithState,
+{
+    fn do_run_with_state<'f>(self: Box<Self>, stage: Arc<S>, input: &S::In<'f>, ctx: &S::Ctx) -> Result<S::Out, ThoError> {
+        let Self { state } = *self;
+        StageWithState::do_run_with_state(stage, input, state, ctx)
+    }
 }

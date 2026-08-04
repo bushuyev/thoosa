@@ -1,35 +1,30 @@
-use std::sync::Arc;
+use crate as thoosa_common;
+use crate::runner::common::cachable::DevicesWrap;
+use crate::runner::run_ctx_2::RunCtxImpl;
+use crate::tho_tensor::ThoTensor;
+use crate::torch_runner::tests::composite_input::A_STAGE_ID;
+use crate::torch_runner::tests::composite_input::dims::AStageOutputDims;
 use async_trait::async_trait;
+use cached_derive::Cached;
+use std::sync::Arc;
 use tch::kind::FLOAT_CPU;
 use tch::{IndexOp, Tensor};
-use cached_derive::Cached;
 use thoosa_common::dims::LocalSelect;
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_named_derive::Named;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::{ElvVal, MonoKey, SynKey};
 use thoosa_shared::copy_mode::CpuOrGpu;
-use thoosa_shared::{mono_key, ThoError};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Data, RangeSelector, Select, WithId};
-use crate::dims::MotifSlices;
-use crate::runner::common::cachable::DevicesWrap;
-use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, Stage};
-use crate::runner::run_ctx_2::RunCtxImpl;
-use crate::tho_tensor::ThoTensor;
-use crate::torch_runner::tests::composite_input::dims::AStageOutputDims;
-use crate as thoosa_common;
-use crate::runner::oom_handler::test_types::TestInput;
-use crate::runner::test_utils::DummyTensor;
-use crate::torch_runner::tests::composite_input::A_STAGE_ID;
+use thoosa_shared::traits::{AsyncStage, Data, OutId, RangeSelector, Select, Stage, WithId};
+use thoosa_shared::{ThoError, mono_key};
 
 #[derive(Debug, Clone, DummyData, Hash, Eq, PartialEq, Named)]
 #[dummy_data(clone)]
 pub(super) struct AStageInput {
-    id:MonoKey,
-    db_id:u32,
-    token:String,
+    id: MonoKey,
+    db_id: u32,
+    token: String,
 }
 
 impl AStageInput {

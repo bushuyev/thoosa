@@ -1,4 +1,4 @@
-
+use crate::runner::oom_handler::AdjusterError;
 use crate::runner::oom_handler::{Adjuster, InputContext};
 use ambassador::delegatable_trait;
 use async_trait::async_trait;
@@ -7,10 +7,9 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::ops::{AddAssign, DivAssign, Range};
 use thoosa_shared::ThoError;
-use thoosa_shared::traits::{Adjustable, Data, Metrics};
-use crate::runner::common::runnable::Stage;
-use crate::runner::oom_handler::AdjusterError;
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::Stage;
+use thoosa_shared::traits::{Adjustable, Data, Metrics};
 
 ///A - Selector (range, etc), M - its metrics
 #[derive(Debug)]
@@ -213,21 +212,20 @@ pub trait OutputBuilder: Debug + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-    use std::sync::Arc;
+    use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
+    use crate::runner::common::MockRunCtx;
+    use crate::runner::oom_handler::{Adjuster, InputContext};
     use async_trait::async_trait;
     use mockall::mock;
     use parking_lot::RwLock;
-    use thoosa_shared::{Cause, ThoError};
+    use std::ops::Range;
+    use std::sync::Arc;
+    use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::CopyToDevice;
-    use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-    use crate::runner::common::MockRunCtx;
-    use crate::runner::common::runnable::{Stage, SyncStage};
-    use thoosa_shared::traits::{Adjustable, Data, WithId};
     use thoosa_shared::traits::mock_cachable_id::MockCachableId;
-    use crate::runner::oom_handler::{Adjuster, AdjusterError, InputContext};
+    use thoosa_shared::traits::{Adjustable, Data, Stage, SyncStage, WithId};
+    use thoosa_shared::{Cause, ThoError};
 
     mock! {
         #[derive(Debug)]

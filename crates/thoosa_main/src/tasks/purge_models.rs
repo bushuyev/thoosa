@@ -8,17 +8,16 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
 use thoosa_common::runner::common::cachable::DevicesWrap;
-use thoosa_common::runner::common::runnable::{AsyncStage, Stage};
-use thoosa_common::runner::common::RunCtx;
-use thoosa_common::ws::{Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE};
+use thoosa_common::ws::{NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace};
 use thoosa_dummy_data_derive::DummyData;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::copy_mode::CpuOnly;
-use thoosa_shared::traits::{Data, WithId};
-use thoosa_shared::{collect_futures_with_progress, mono_key, recurse_files, FuturesOrdering, ThoError};
-use thoosa_store::{Store, TrainedNetEntry};
 use thoosa_shared::tracked_await::track_await;
+use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
+use thoosa_shared::traits::{Data, WithId};
+use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, recurse_files};
+use thoosa_store::{Store, TrainedNetEntry};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -457,15 +456,14 @@ mod tests {
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use thoosa_common::runner::common::cachable::DevicesWrap;
-    use thoosa_common::runner::common::runnable::AsyncStage;
     use thoosa_common::runner::global_ctx::GlobalCtx;
     use thoosa_common::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
     use thoosa_common::runner::run_ctx_2::RunCtxImpl;
     use thoosa_common::train_nets::{TrainLabelNetRunConfig, TrainMotifNetRunConfig};
-    use thoosa_common::ws::{FsWorkspace, Workspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, WsConfigs};
-    use thoosa_shared::run_configs::{RunConfig, RUN_ID};
-    use thoosa_shared::{cdt_for_dir, ThoError};
+    use thoosa_common::ws::{FsWorkspace, NET_PARAMS_FILE, NET_WEIGHTS_FILE, Workspace, WsConfigs};
+    use thoosa_shared::run_configs::{RUN_ID, RunConfig};
+    use thoosa_shared::traits::AsyncStage;
+    use thoosa_shared::{ThoError, cdt_for_dir};
     use thoosa_store::{SqlStore, Store};
 
     #[test]

@@ -1,14 +1,11 @@
 // removed unused feature gate to reduce warnings
 
-use ambassador::delegatable_trait;
-use futures_util::future::BoxFuture;
-use runnable::Stage;
 use std::fmt::Debug;
 use thoosa_shared::ThoError;
+use thoosa_shared::traits::Stage;
 use thoosa_shared::traits::{Named, WithId};
 pub mod cachable;
 pub mod runnable;
-
 
 
 #[derive(Debug)]
@@ -17,36 +14,17 @@ pub enum DropIf {
     IfNotMax,
 }
 
-#[delegatable_trait]
-pub trait MaxParallelCtx: Named + Debug + Send + Sync {
-    fn set_max_other_parallel(&mut self, permit: MaxParallel);
-
-    fn max_other_parallel(&self) -> MaxParallel;
-}
-
-pub trait RunCtx: MaxParallelCtx + WithId {
-    fn tho_device_idx(&self) -> usize;
-
-    fn branch(&mut self, with_new_cache_area: bool) -> Self
-    where
-        Self: Sized;
-
-    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>);
-
-}
-
 #[cfg_attr(test, allow(dead_code))]
 pub mod mock_run_ctx {
-    use super::{MaxParallelCtx, RunCtx};
+    use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel};
     use futures_util::future::BoxFuture;
     use log::debug;
     use mockall::mock;
     use mockall::predicate::always;
-    use thoosa_shared::traits::{Adjustable, Named};
-    use thoosa_shared::{mono_key, ThoError};
     use thoosa_shared::comp_id::MonoKey;
-    use thoosa_shared::traits::WithId;
-    use crate::runner::adjusters::max_parallel::{MaxParallel, MAX_PARALLEL};
+    use thoosa_shared::traits::{Adjustable, Named, RunCtx};
+    use thoosa_shared::traits::{MaxParallelCtx, WithId};
+    use thoosa_shared::{ThoError, mono_key};
     mock! {
         #[derive(Debug)]
         pub RunCtx {}
@@ -166,15 +144,4 @@ pub mod mock_run_ctx {
 }
 
 pub use mock_run_ctx::MockRunCtx;
-use crate::runner::adjusters::max_parallel::MaxParallel;
-pub trait OutId: Stage
-where
-        for<'a> <Self as Stage>::In<'a>: WithId,
-        <Self as Stage>::Out: WithId,
-{
-    fn out_id<'a>(
-        &self,
-        input_id: &<<Self as Stage>::In<'a> as WithId>::ID,
-    ) -> <Self::Out as WithId>::ID;
 
-}

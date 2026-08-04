@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use log::debug;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::marker::PhantomData;
@@ -8,20 +9,17 @@ use std::ops::{AddAssign, DivAssign, Range};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use serde::{Deserialize, Serialize};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, ThoError};
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Select, ThoSelector, WithId};
 use tokio::task::JoinSet;
 
-use thoosa_shared::comp_id::SynKey;
 use crate::runner::adjusters::dump_to_cpu::{DumpToCpu, DumpToCpuContextImpl};
-use crate::runner::adjusters::max_parallel::{MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep, MAX_PARALLEL};
+use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallel, MaxParallelAdjustContextImpl, MaxParallelAdjuster, MaxParallelAndDumpToCpuAdjustableContex, MaxParallelStep};
 use crate::runner::adjusters::splits::{OutputBuilder, SplitsAdjuster, SplitsAdjusterContextImpl};
-use crate::runner::common::cachable::{BorrowRef, SelectRef, Cached, CachedPurgeOutput, DevicesWrap};
-use crate::runner::common::{OutId, RunCtx};
-use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-use crate::runner::oom_handler::{input_adjuster, run_ctx_adjuster, Adjusters, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithInputContext, WithRunCtxContext};
+use crate::runner::common::cachable::{BorrowRef, Cached, CachedPurgeOutput, DevicesWrap, SelectRef};
+use crate::runner::oom_handler::{Adjusters, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler, WithInputContext, WithRunCtxContext, input_adjuster, run_ctx_adjuster};
 use crate::tho_tensor::ThoTensor;
+use thoosa_shared::comp_id::SynKey;
 
 
 type StageIn<'a, S> = <S as Stage>::In<'a>;
@@ -329,25 +327,24 @@ where
 pub mod fixtures {
     use std::cmp::min;
     use std::ops::{Deref, Range};
+    use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
-    use std::sync::Arc;
 
+    use crate as thoosa_common;
+    use crate::runner::common::cachable::DevicesWrap;
+    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::test_utils::{DummyTensor, parse_numeric_part};
     use async_trait::async_trait;
     use serde::{Deserialize, Serialize};
     use thoosa_named_derive::Named;
     use thoosa_shared::CopyToDevice;
-    use thoosa_shared::applicables_runner::{Input, Output};
-    use thoosa_shared::traits::{Data, Metrics, Select, ThoSelector, WithId};
     use thoosa_shared::ThoError;
+    use thoosa_shared::applicables_runner::{Input, Output};
     use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
-    use crate::runner::common::OutId;
-    use crate::runner::common::cachable::DevicesWrap;
-    use crate::runner::common::runnable::{AsyncStage, Stage};
-    use crate::runner::run_ctx_2::RunCtxImpl;
-    use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
-    use thoosa_shared::traits::Adjustable;
-    use crate as thoosa_common;
+    use thoosa_shared::traits::OutId;
+    use thoosa_shared::traits::{Adjustable, AsyncStage, Stage};
+    use thoosa_shared::traits::{Data, Metrics, Select, ThoSelector, WithId};
 
     #[derive(Debug, Clone, Hash, Eq, PartialEq, Named)]
     #[name = "MulTaskOutputId"]
@@ -576,44 +573,43 @@ pub mod fixtures {
 
 #[cfg(test)]
 mod tests {
+    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId, MetricsRangeSelector};
+    use super::{ClcOOMRunner, FailUntil, OOMRunnerConfig, run_mul_task_invocations};
+    use crate::runner::adjusters::splits::OutputBuilder;
+    use thoosa_shared::traits::MaxParallelCtx;
+    use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
+    use crate::runner::global_ctx::MockGlobalCtx;
+    use crate::runner::purge::FuturesRunnerMapPurger;
+    use crate::runner::run_ctx_2::RunCtxImpl;
+    use crate::runner::test_utils::{DummyTensor, parse_numeric_part};
+    use async_trait::async_trait;
+    use cached_derive::Cached;
+    use clap::{Args, Parser, Subcommand};
+    use crossbeam::deque::Worker;
+    use dashmap::DashMap;
+    use futures_util::future::{BoxFuture, Shared};
+    use log::{debug, error};
+    use mockall_double::double;
     use std::collections::{HashMap, HashSet};
     use std::process::Stdio;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering::Relaxed;
     use std::sync::{Arc, LazyLock, OnceLock};
     use std::time::Duration;
-    use super::fixtures::{DLoadedTensor, DLoadedTensorId, DLoaderInput, DLoaderInputId, DMulTaskOutputId, MetricsRangeSelector};
-    use super::{run_mul_task_invocations, ClcOOMRunner, FailUntil, OOMRunnerConfig};
-    use async_trait::async_trait;
-    use clap::{Args, Parser, Subcommand};
-    use crossbeam::deque::Worker;
-    use cached_derive::Cached;
-    use dashmap::DashMap;
-    use futures_util::future::{BoxFuture, Shared};
-    use log::{debug, error};
     use thoosa_named_derive::Named;
-    use mockall_double::double;
-    use tokio::process::{Child, Command};
     use thoosa_shared::CopyToDevice;
     use thoosa_shared::applicables_runner::Output;
     use thoosa_shared::copy_mode::CpuOrGpu;
-    use thoosa_shared::traits::{Data, WithId};
+    use thoosa_shared::traits::{Adjustable, AsyncStage, Stage, SyncStage};
+    use thoosa_shared::traits::{Data, OutId, RunCtx, WithId};
     use thoosa_shared::{Cause, ThoError};
-    use crate::runner::adjusters::splits::OutputBuilder;
-    use crate::runner::common::{MaxParallelCtx, OutId, RunCtx};
-    use crate::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
-    use crate::runner::common::runnable::{AsyncStage, Stage, SyncStage};
-    use crate::runner::global_ctx::MockGlobalCtx;
-    use crate::runner::purge::FuturesRunnerMapPurger;
-    use crate::runner::run_ctx_2::RunCtxImpl;
-    use crate::runner::test_utils::{parse_numeric_part, DummyTensor};
-    use thoosa_shared::traits::Adjustable;
+    use tokio::process::{Child, Command};
     #[double]
     use crate::runner::global_ctx::GlobalCtx;
-    use crate::runner::global_ctx::mock_global_ctx;
     use crate as thoosa_common;
-    use crate::runner::adjusters::max_parallel::{MaxParallelStep, MAX_PARALLEL};
+    use crate::runner::adjusters::max_parallel::{MAX_PARALLEL, MaxParallelStep};
     use crate::runner::cache_areas::CacheArea;
+    use crate::runner::global_ctx::mock_global_ctx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
 
     #[ctor::ctor]
