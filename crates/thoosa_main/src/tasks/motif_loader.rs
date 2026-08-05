@@ -24,7 +24,7 @@ use crate::tasks::tensor_loader::RawTensorLoader;
 use ambassador::Delegate;
 use thoosa_common::dims::{ChannelsData, Dims, MotifSlices};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::WorkerStageOutput;
+use thoosa_common::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
 use thoosa_common::runner::tmp_cache::TmpCached;
@@ -518,15 +518,15 @@ struct SyncMotifLoaderIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SyncMotifLoaderIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncMotifLoaderIpcInput>(input)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncMotifLoaderIpcInput>(_input)?;
         let input_tensor_keys = input.loaded_resources.iter().filter_map(|resource| resource.raw_tensor.ref_key()).collect::<Vec<_>>();
         let loaded_resources = input.loaded_resources.into_iter().map(|resource| {
             Ok(LoadedMotifResource {
                 id: LoadedMotifResourceId::new(resource.resource_id),
                 resource_id: resource.resource_id,
                 slices: resource.slices,
-                raw_tensor: ThoTensor::ref_to_tensor(all_cuda_tensors, resource.raw_tensor)?,
+                raw_tensor: ThoTensor::ref_to_tensor(_all_cuda_tensors, resource.raw_tensor)?,
             })
         }).collect::<Result<Vec<_>, ThoError>>()?;
         let stage_input = SyncMotifLoaderInput::new(
@@ -539,17 +539,17 @@ impl SyncStageIpcWrapper for SyncMotifLoaderIpcWrapper {
             loaded_resources,
             input.descr,
         );
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_MOTIF_LOADER_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_MOTIF_LOADER_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
         drop(stage_input);
         {
-            let mut tensors = all_cuda_tensors.lock();
+            let mut tensors = _all_cuda_tensors.lock();
             for key in input_tensor_keys {
                 tensors.remove(&key);
             }
         }
-        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
     }
 }
 
@@ -1101,9 +1101,9 @@ struct SyncLoadMotifResourcesIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SyncLoadMotifResourcesIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncLoadMotifResourcesIpcInput>(input)?;
-        let raw_tensor = ThoTensor::ref_to_tensor(all_cuda_tensors, input.raw_tensor)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncLoadMotifResourcesIpcInput>(_input)?;
+        let raw_tensor = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.raw_tensor)?;
         let stage_input = SyncLoadMotifResourcesInput {
             id: input.id,
             raw_tensor: ThoDataRef::Borrowed(&raw_tensor),
@@ -1115,10 +1115,10 @@ impl SyncStageIpcWrapper for SyncLoadMotifResourcesIpcWrapper {
             slices: input.slices,
             descr: input.descr,
         };
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_LOAD_MOTIF_RESOURCES_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
     }
 }
 
@@ -1373,9 +1373,9 @@ struct SyncLoadRandomSlicesIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SyncLoadRandomSlicesIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncLoadRandomSlicesIpcInput>(input)?;
-        let raw_tensor = ThoTensor::ref_to_tensor(all_cuda_tensors, input.raw_tensor)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncLoadRandomSlicesIpcInput>(_input)?;
+        let raw_tensor = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.raw_tensor)?;
         let stage_input = SyncLoadRandomSlicesInput {
             id: input.id,
             raw_tensor: ThoDataRef::Borrowed(&raw_tensor),
@@ -1386,10 +1386,10 @@ impl SyncStageIpcWrapper for SyncLoadRandomSlicesIpcWrapper {
             slices: input.slices,
             descr: input.descr,
         };
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_LOAD_RANDOM_SLICES_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
     }
 }
 

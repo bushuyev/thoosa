@@ -16,6 +16,7 @@ use std::sync::Arc;
 use tch::kind::FLOAT_CPU;
 use tch::{TchError, Tensor};
 use thoosa_common::dims::ChannelsData;
+use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, DevicesWrap, SelectRef, ThoDataRef};
@@ -427,8 +428,9 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
     fn do_run(
         &self,
         _input: &[u8],
-        all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
-        tho_device: &ThoDevice,
+        _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>,
+        _tho_device: &ThoDevice,
+        _run_ctx: &WokerRunCtx,
     ) -> Result<Vec<u8>, ThoError> {
         type __ProxyIpcCodec = thoosa_common::ipc::codec::JsonIpcCodec;
         let input = <__ProxyIpcCodec as thoosa_common::ipc::codec::IpcCodec>::decode::<CrossInputFindMotifsIpcInput>(_input)?;
@@ -439,7 +441,7 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
             .tensors
             .into_iter()
             .map(|tensor| {
-                ThoTensor::<ChannelsData, SynKey>::ref_to_tensor(&all_cuda_tensors, tensor)
+                ThoTensor::<ChannelsData, SynKey>::ref_to_tensor(&_all_cuda_tensors, tensor)
 
             })
             .collect::<Result<Vec<_>, ThoError>>()?;
@@ -459,7 +461,7 @@ impl thoosa_common::ipc::json_ser::SyncStageIpcWrapper for CrossUnfoldClcFindMot
 
         debug!("CrossUnfoldClcFindMotifsIpcWrapper::do_run: out={out:?}");
 
-        <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, all_cuda_tensors, tho_device)
+        <CrossUnfoldClcOutput<DistsMask> as thoosa_common::ipc::cuda_wokrer::WorkerStageOutput>::encode_from_worker::<__ProxyIpcCodec>(out, _all_cuda_tensors, _tho_device)
     }
 }
 

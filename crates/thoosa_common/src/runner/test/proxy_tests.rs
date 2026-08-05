@@ -16,7 +16,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, SyncStage, WithId};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
 use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -45,6 +45,14 @@ pub struct TestOutput{
     value: ThoTensor
 }
 impl Output for TestOutput{}
+
+impl WorkerStageOutput for TestOutput {
+    fn encode_from_worker<C: IpcCodec>(self, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+        JsonIpcCodec::encode(&TestOutput{
+            value: self.value.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?,
+        })
+    }
+}
 
 
 #[derive(Debug)]
@@ -177,7 +185,10 @@ impl thoosa_shared::traits::SyncStage for ProxyTestStage {
 
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
-    Ok(Box::new(SimpWrapper { base: std::sync::Arc::new(TestStage::new()) }))
+    Ok(Box::new(SimpWrapper {
+        base: std::sync::Arc::new(TestStage::<()>::new()),
+        pd: PhantomData::<(JsonIpcCodec, TestRunCtx)>
+    }))
 }
 
 #[derive(Debug)]
@@ -194,21 +205,41 @@ impl TestStageSimpTarget {
 }
 
 #[derive(Debug)]
-struct SimpWrapper {
-    base:Arc<TestStage<()>>
+struct SimpWrapper<C, S, I, O, Cx>
+where
+    C: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = TestRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+    Cx: RunCtx
+{
+    base:Arc<S>,
+    pd:PhantomData<(C, Cx)>
 }
-impl SyncStageIpcWrapper for SimpWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        debug!("SimpWrapper::do_run: 0. input={input:?}");
-        let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(input, all_cuda_tensors)?;
+
+impl <Co, S, I, O, Cx>SyncStageIpcWrapper for SimpWrapper<Co, S, I, O, Cx>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = TestRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
+    Cx: RunCtx
+{
+    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        debug!("SimpWrapper::do_run: 0. input={_input:?}");
+        let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(_input, all_cuda_tensors)?;
 
         debug!("SimpWrapper::do_run: 2. input={input:?}");
-        let mut ctx = TestRunCtx;
-        let out = Arc::clone(&self.base).do_run(&input, &ctx)?;
+        let out = Arc::clone(&self.base).do_run(&input, &TestRunCtx)?;
 
-        JsonIpcCodec::encode(&TestOutput{
-            value: out.value.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?,
-        })
+
+        out.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, _tho_device)
 
     }
 }
