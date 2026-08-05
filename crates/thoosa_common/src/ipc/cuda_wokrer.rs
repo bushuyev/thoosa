@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Serializer;
+use tracing::field::debug;
 use thoosa_shared::traits::Named;
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
@@ -36,7 +37,7 @@ use crate::tho_tensor::ThoTensor;
 use crate::ws::{WsConfigs, FsWorkspace, Workspace};
 
 const WORKER_EXEC_STREAMS: usize = 32;
-static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1 << 63);
+static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
 
 //1 cuda device per worker
 pub struct CudaWorker;
@@ -578,6 +579,8 @@ where
 
         let tensors = all_cuda_tensors.lock();
 
+        debug!("ThoTensor::ref_to_tensor: input_key={input_key:?} keys={:?}", tensors.keys());
+
         let source = tensors
             .get(&input_key)
             .ok_or_else(|| ThoError::new(format!("worker sync stage could not find tensor ref key={input_key}")))?;
@@ -639,6 +642,9 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
         let key = NEXT_WORKER_TENSOR_KEY
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |key| key.checked_add(1))
             .map_err(|_| ThoError::new("worker tensor key space exhausted"))?;
+
+        debug!("insert_worker_tensor: key={key}");
+
         if let std::collections::hash_map::Entry::Vacant(entry) = tensors.entry(key) {
             entry.insert(tensor);
             return Ok(key);
