@@ -21,7 +21,7 @@ thoosa_properties_map_derive = {path = "../thoosa_properties_map_derive" }
 serde = { version = "1", features = ["derive"] }
 log = "0"
 ctor = "0"
-futures-util.workspace = true
+futures-util = "0.3"
 [dev-dependencies]
 macrotest = "1"
 serde_json5 = "0.2"

@@ -198,7 +198,6 @@ fn test_cat_range() -> Result<(), ThoError>{
         ])
     };
 
-    debug!("conf={}", serde_json5::to_string(&test_config)?);
 
 
     let opt_configs = test_config.opt_run_configs()?;
