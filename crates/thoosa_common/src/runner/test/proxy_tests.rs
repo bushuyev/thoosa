@@ -15,6 +15,7 @@ use thoosa_shared::ThoError;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, Stage, SyncStage, WithId};
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec};
+use crate::ipc::cuda_process::encode_endpoint_payload_bytes;
 use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
 use crate::ipc::json_ser::SyncStageIpcWrapper;
 use crate::runner::run_ctx_2::RunCtxImpl;
@@ -27,13 +28,17 @@ pub struct TestInput{
 }
 impl Input for TestInput{}
 
-// impl WorkerStageInput for TestInput {
-//     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-//         TestInput {
-//             value: (),
-//         }
-//     }
-// }
+impl WorkerStageInput for TestInput {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let mut input = JsonIpcCodec::decode::<TestInput>(&input)?;
+
+        debug!("SimpWrapper::do_run: 1. input={input:?}");
+
+        input.value = ThoTensor::ref_to_tensor(all_cuda_tensors, input.value)?;
+
+        Ok(input)
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TestOutput{
@@ -120,14 +125,62 @@ where
 
 const TEST_ENDPOINT: &str = "TestStage";
 
-#[derive(Debug, Proxy)]
-#[proxy(
-    name = "ProxyTestStage",
-    endpoint = "TEST_ENDPOINT",
-    new_args = "tho_device_idx: usize",
-    endpoint_init = "test_simp_init",
-    wrapper = "SimpWrapper"
-)]
+// #[derive(Debug, Proxy)]
+// #[proxy(
+//     name = "ProxyTestStage",
+//     endpoint = "TEST_ENDPOINT",
+//     new_args = "tho_device_idx: usize",
+//     endpoint_init = "test_simp_init",
+//     wrapper = "SimpWrapper"
+// )]
+#[derive(Debug)]
+pub struct ProxyTestStage {}
+impl ProxyTestStage {
+    pub async fn new(tho_device_idx: usize) -> Result<Self, thoosa_shared::ThoError> {
+        crate::ipc::codec::install_empty_ipc_endpoint(
+            crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
+            TEST_ENDPOINT,
+        ).await?;
+        Ok(Self {})
+    }
+}
+impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
+impl thoosa_shared::traits::Stage for ProxyTestStage {
+    type Ctx = <Arc<TestStage<()>> as thoosa_shared::traits::Stage>::Ctx;
+    type In<'a> = <Arc<TestStage<()>> as thoosa_shared::traits::Stage>::In<'a>;
+    type Out = <Arc<TestStage<()>> as thoosa_shared::traits::Stage>::Out;
+}
+impl thoosa_shared::traits::SyncStage for ProxyTestStage {
+    fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
+    where
+        Self: Sized,
+    {
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+
+                let actor = crate::runner::global_ctx::GlobalCtx::global().cuda_actor(
+                    ctx.tho_device_idx()
+                );
+
+                let input = JsonIpcCodec::encode(input)?;
+
+                let response = actor.invoke_endpoint_bytes(
+                    encode_endpoint_payload_bytes(TEST_ENDPOINT, &input).into_bytes()
+                ).await?;
+
+                JsonIpcCodec::decode(&response)
+
+            })
+        })
+    }
+}
+
+pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+
+    Ok(Box::new(SimpWrapper { base: std::sync::Arc::new(TestStage::new()) }))
+}
+
+#[derive(Debug)]
 struct TestStageSimpTarget {
     base:Arc<TestStage<()>>
 }
@@ -142,24 +195,16 @@ impl TestStageSimpTarget {
 
 #[derive(Debug)]
 struct SimpWrapper {
-    stage:Arc<TestStageSimpTarget>
+    base:Arc<TestStage<()>>
 }
 impl SyncStageIpcWrapper for SimpWrapper {
     fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<IpcSyncStageRunInput>(input)?;
         debug!("SimpWrapper::do_run: 0. input={input:?}");
-
-        let input = JsonIpcCodec::decode::<TestInput>(&input.input())?;
-
-        debug!("SimpWrapper::do_run: 1. input={input:?}");
-
-        let input = TestInput {
-            value: ThoTensor::ref_to_tensor(all_cuda_tensors, input.value)?,
-        };
+        let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(input, all_cuda_tensors)?;
 
         debug!("SimpWrapper::do_run: 2. input={input:?}");
         let mut ctx = TestRunCtx;
-        let out = Arc::clone(&self.stage.base).do_run(&input, &ctx)?;
+        let out = Arc::clone(&self.base).do_run(&input, &ctx)?;
 
         JsonIpcCodec::encode(&TestOutput{
             value: out.value.worker_tensor_to_ref(all_cuda_tensors, &tho_device)?,
