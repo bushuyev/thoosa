@@ -166,10 +166,14 @@ where
     I: Debug + Serialize + ?Sized,
     O: Debug + DeserializeOwned,
 {
-    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name}  input={input:?}");
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 0. input={input:?}");
 
     let input = C::encode(input)?;
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 1. input={input:?}");
+
     let input = encode_sync_stage_run_input::<C>(&input)?;
+
+    debug!("invoke_ipc_sync_stage: endpoint_name={endpoint_name} 2. input={input:?}");
 
     let response = actor.invoke_endpoint_bytes(
         encode_endpoint_payload_bytes(endpoint_name, &input).into_bytes()

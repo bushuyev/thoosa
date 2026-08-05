@@ -54,7 +54,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 use tracing::field::debug;
 use tub::{Guard, Pool};
-
+use crate::ipc::cuda_wokrer::insert_worker_tensor;
 
 pub const CUDA_VISIBLE_DEVICES: &str = "CUDA_VISIBLE_DEVICES";//it's set to '' for main process to make sure it doesn't use GPU
 pub const IPC_SOCK_ENV: &str = "THOOSA_WORKER_IPC_SOCK";
@@ -151,6 +151,7 @@ fn hex_value(byte: u8) -> Result<u8, ThoError> {
 #[derive(Debug, Serialize, Deserialize)]
 struct WorkerCopyDonePayload {
     transfer_id: u64,
+    tensor_ref:u64,
     tensor_digest_hex: Option<String>,
 }
 
@@ -325,7 +326,7 @@ pub(crate) struct WorkerD2hChunk {
 
 pub(crate) struct PendingWorkerD2hTransfer {
     request_id: u64,
-    tensor_key: u64,
+    tensor_ref: u64,
     metadata: Option<IpcTensorTransferMetadata>,
     received_bytes: usize,
     seen_chunks: HashSet<usize>,
@@ -336,7 +337,7 @@ impl PendingWorkerD2hTransfer {
     pub(crate) fn new(request_id: u64, tensor_key: u64) -> Self {
         Self {
             request_id,
-            tensor_key,
+            tensor_ref: tensor_key,
             metadata: None,
             received_bytes: 0,
             seen_chunks: HashSet::new(),
@@ -646,11 +647,16 @@ pub(crate) fn spawn_worker_h2d_copy_task(
         let payload = match copy_result {
             Ok((transfer_id, tensor, tensor_digest_hex)) => {
                 //TODO should tensors have their own id generator?
-                all_cuda_tensors.lock().insert(transfer_id, tensor);
-                let done = WorkerCopyDonePayload { transfer_id, tensor_digest_hex };
-                match serde_json::to_string(&done) {
-                    Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
-                    Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("failed to encode worker copy result for request {request_id}: {e}")))),
+                // all_cuda_tensors.lock().insert(transfer_id, tensor);
+                match insert_worker_tensor(&all_cuda_tensors, tensor) {
+                    Ok(tensor_ref) => {
+                        let done = WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex };
+                        match serde_json::to_string(&done) {
+                            Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
+                            Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("failed to encode worker copy result for request {request_id}: {e}")))),
+                        }
+                    }
+                    Err(e) => {OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("can't insert worker tensor {request_id}: {e}"))))}
                 }
             }
             Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&e)),
@@ -683,19 +689,19 @@ fn copy_worker_d2h_transfer_to_memfd_blocking(
     // bind_worker_copy_cuda_context(cuda_device)?;
     let _stream_guard = ThoStreamGuard::new(&stream)?;
     if source.kind() != metadata.tch_kind() {
-        return Err(ThoError::new(format!("worker tensor key={} kind {:?} does not match D2H metadata {:?}", transfer.tensor_key, source.kind(), metadata.kind)));
+        return Err(ThoError::new(format!("worker tensor key={} kind {:?} does not match D2H metadata {:?}", transfer.tensor_ref, source.kind(), metadata.kind)));
     }
     if source.size() != metadata.shape {
-        return Err(ThoError::new(format!("worker tensor key={} shape {:?} does not match D2H metadata {:?}", transfer.tensor_key, source.size(), metadata.shape)));
+        return Err(ThoError::new(format!("worker tensor key={} shape {:?} does not match D2H metadata {:?}", transfer.tensor_ref, source.size(), metadata.shape)));
     }
     if !source.is_contiguous() {
-        return Err(ThoError::new(format!("worker tensor key={} is not contiguous", transfer.tensor_key)));
+        return Err(ThoError::new(format!("worker tensor key={} is not contiguous", transfer.tensor_ref)));
     }
     let Cuda(source_cuda_device) = source.device() else {
-        return Err(ThoError::new(format!("worker tensor key={} is not on CUDA: {:?}", transfer.tensor_key, source.device())));
+        return Err(ThoError::new(format!("worker tensor key={} is not on CUDA: {:?}", transfer.tensor_ref, source.device())));
     };
     if source_cuda_device != cuda_device {
-        return Err(ThoError::new(format!("worker tensor key={} device={source_cuda_device} does not match D2H metadata cuda_device={cuda_device}", transfer.tensor_key)));
+        return Err(ThoError::new(format!("worker tensor key={} device={source_cuda_device} does not match D2H metadata cuda_device={cuda_device}", transfer.tensor_ref)));
     }
 
     transfer.chunks.sort_by_key(|chunk| chunk.metadata.tensor_offset);
@@ -755,22 +761,22 @@ pub(crate) fn spawn_worker_d2h_copy_task(
 ) {
     tokio::spawn(async move {
         let request_id = transfer.request_id;
-        let tensor_key = transfer.tensor_key;
+        let tensor_ref = transfer.tensor_ref;
         let source = {
             let tensors = all_cuda_tensors.lock();
-            tensors.get(&tensor_key).map(Tensor::shallow_clone)
+            tensors.get(&tensor_ref).map(Tensor::shallow_clone)
         };
         let copy_result = match source {
             Some(source) => {
 
                 copy_worker_d2h_transfer_to_memfd(transfer, resources, source, with_digest).await
             }
-            None => Err(ThoError::new(format!("worker tensor key={tensor_key} not found"))),
+            None => Err(ThoError::new(format!("worker tensor key={tensor_ref} not found"))),
         };
 
         let payload = match copy_result {
             Ok((transfer_id, tensor_digest_hex)) => {
-                let done = WorkerCopyDonePayload { transfer_id, tensor_digest_hex };
+                let done = WorkerCopyDonePayload { transfer_id, tensor_ref, tensor_digest_hex };
                 match serde_json::to_string(&done) {
                     Ok(done_json) => OutgoingRequestPayload::Msg(format!("{COPY_DONE_PAYLOAD_PREFIX}{done_json}")),
                     Err(e) => OutgoingRequestPayload::Msg(encode_worker_copy_error(&ThoError::new(format!("failed to encode worker D2H result for request {request_id}: {e}")))),
@@ -1615,7 +1621,7 @@ impl CudaIPCActor {
                         debug!("CudaIPCActor::handle_h2d_copy: worker copied tensor digest matched: transfer_id={} digest={}", done.transfer_id, hex);
                     }
 
-                    Ok::<_, ThoError>(ThoTensor::new_ref((), transfer_id/*it's used as key for all_cuda_tensorsat crates/thoosa_common/src/torch_runner/cuda_process.rs:370 */, src_shape, src_kind, None, dst_device.tho_device_idx()))
+                    Ok::<_, ThoError>(ThoTensor::new_ref((), done.tensor_ref, src_shape, src_kind, None, dst_device.tho_device_idx()))
                 }.await;
 
                 if final_result.is_err() {
