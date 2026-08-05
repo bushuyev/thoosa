@@ -20,7 +20,7 @@ use tch::kind::FLOAT_CUDA;
 use tch::nn::{AdamW, Optimizer, OptimizerConfig, VarStore};
 use tch::{IndexOp, Reduction, Tensor};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
@@ -233,15 +233,15 @@ struct TrainMotifStepIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        match JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)? {
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        match JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(_input)? {
             TrainMotifStepIpcRequest::Run { x, lengths, expected_y, train, max_other_parallel } => {
-                let stage = self.stage.stage(all_cuda_tensors)?;
+                let stage = self.stage.stage(_all_cuda_tensors)?;
                 let remove_x = x.remove_after_run.then_some(x.ref_key);
                 let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
 
-                let x = ThoTensor::ref_to_tensor(all_cuda_tensors, x.into_tensor::<Slice>()?)?;
-                let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, expected_y.into_tensor::<MotifProbability>()?)?;
+                let x = ThoTensor::ref_to_tensor(_all_cuda_tensors, x.into_tensor::<Slice>()?)?;
+                let expected_y = ThoTensor::ref_to_tensor(_all_cuda_tensors, expected_y.into_tensor::<MotifProbability>()?)?;
 
                 let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
 
@@ -250,7 +250,7 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
                 let result = stage.do_run(&input, &ctx);
                 drop(input);
                 if remove_x.is_some() || remove_expected_y.is_some() {
-                    let mut tensors = all_cuda_tensors.lock();
+                    let mut tensors = _all_cuda_tensors.lock();
                     if let Some(key) = remove_x {
                         tensors.remove(&key);
                     }
@@ -266,12 +266,12 @@ impl SyncStageIpcWrapper for TrainMotifStepIpcWrapper {
         }
     }
 
-    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
         // if matches!(JsonIpcCodec::decode::<TrainMotifStepIpcRequest>(input)?, TrainMotifStepIpcRequest::ExportWeights) {
         //     let stage = self.stage.stage(all_cuda_tensors)?;
         //     Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
         // } else {
-            self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+            self.do_run(input, all_cuda_tensors, tho_device, &run_ctx).map(SyncStageIpcResponse::Encoded)
         // }
     }
 }
@@ -1133,10 +1133,10 @@ struct SyncMotifBatchIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SyncMotifBatchIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncMotifBatchIpcInput>(input)?;
-        let motifs = ThoTensor::ref_to_tensor(all_cuda_tensors, input.motifs)?;
-        let random_slices = ThoTensor::ref_to_tensor(all_cuda_tensors, input.random_slices)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncMotifBatchIpcInput>(_input)?;
+        let motifs = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.motifs)?;
+        let random_slices = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.random_slices)?;
         let stage_input = SyncMotifBatchInput {
             id: input.id,
             motifs: ThoDataRef::Borrowed(&motifs),
@@ -1144,10 +1144,10 @@ impl SyncStageIpcWrapper for SyncMotifBatchIpcWrapper {
             num_slices: input.num_slices,
             descr: input.descr,
         };
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
     }
 }
 
@@ -1397,14 +1397,14 @@ struct SplitMotifIntoTrainValidIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SplitMotifIntoTrainValidIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SplitMotifIntoTrainValidIpcInput>(input)?;
-        let motif = ThoTensor::ref_to_tensor(all_cuda_tensors, input.motif)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SplitMotifIntoTrainValidIpcInput>(_input)?;
+        let motif = ThoTensor::ref_to_tensor(_all_cuda_tensors, input.motif)?;
         let stage_input = SplitMotifIntoTrainValidInput { id: input.id, motif: SplitMotifTensorRef::Plain(ThoDataRef::Borrowed(&motif)) };
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
     }
 }
 
@@ -1715,7 +1715,7 @@ mod tests {
     use thoosa_common::dims::MotifSlices;
     use thoosa_common::dims::{Batch, Dims, LabelProbability, LabelsProbabilities, MotifProbability, Slice, ThoBatch};
     use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec, encode_sync_stage_run_input};
-    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn};
+    use thoosa_common::ipc::cuda_wokrer::{CudaWorker, InitFn, WokerRunCtx};
     use thoosa_common::ipc::json_ser::SyncStageIpcWrapper;
     use thoosa_common::ipc::tests::run_ipc_test;
     use thoosa_common::my_tch::MotifInitModeFields;
@@ -1926,15 +1926,15 @@ mod tests {
             stage: Arc<TrainTestStepProxyTarget>,
         }
         impl SyncStageIpcWrapper for TrainTestStepIpcWrapper {
-            fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-                debug!("TrainTestStepIpcWrapper::do_run:input={:?}", String::from_utf8_lossy(input));
+            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+                debug!("TrainTestStepIpcWrapper::do_run:input={:?}", String::from_utf8_lossy(_input));
                 let ctx = RunCtxImpl::new(1, TRAIN_MOTIF_STEP_ENDPOINT);
-                let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&input)?;
+                let input = JsonIpcCodec::decode::<thoosa_common::ipc::codec::IpcSyncStageRunInput>(&_input)?;
                 let input_dec = JsonIpcCodec::decode::<TrainStepInput<InDims, OutDims>>(&input.input())?;
 
 
-                let x = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.x)?;
-                let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, input_dec.expected_y)?;
+                let x = ThoTensor::ref_to_tensor(_all_cuda_tensors, input_dec.x)?;
+                let expected_y = ThoTensor::ref_to_tensor(_all_cuda_tensors, input_dec.expected_y)?;
 
                 let input = TrainStepInput::new(x, input_dec.lengths, expected_y, true);
 

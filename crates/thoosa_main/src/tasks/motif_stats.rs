@@ -52,6 +52,7 @@ use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, O
 use thoosa_shared::{CopyToDevice, TensorIdSliceIdx, ThoError, mono_key};
 use thoosa_store::Store;
 use tracing::error;
+use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
 
 pub const RANDOM_STATS_GROUP: &str = "random_avg_dist"; //dummy group to load random resources, TODO - add proper method to SqlStore
 
@@ -874,20 +875,20 @@ impl MotifStatsSyncStageIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for MotifStatsSyncStageIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<MotifStatsSyncStageIpcInput>(input)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<MotifStatsSyncStageIpcInput>(_input)?;
         let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>()?;
         let output = match input.data {
             MotifStatsIpcData::Managed(motif) => {
-                let motif = Self::decode_motif(motif, all_cuda_tensors)?;
+                let motif = Self::decode_motif(motif, _all_cuda_tensors)?;
                 let stage_input = MotifStatsCalcInput::from_managed(input.id, &motif, metrics, input.quantiles);
-                self.run_stage(&stage_input, input.max_other_parallel, tho_device)?
+                self.run_stage(&stage_input, input.max_other_parallel, _tho_device)?
             }
             MotifStatsIpcData::Motifs(motifs) => {
-                let motifs = motifs.into_iter().map(|motif| Self::decode_motif(motif, all_cuda_tensors)).collect::<Result<Vec<_>, _>>()?;
+                let motifs = motifs.into_iter().map(|motif| Self::decode_motif(motif, _all_cuda_tensors)).collect::<Result<Vec<_>, _>>()?;
                 let motif_refs = motifs.iter().collect();
                 let stage_input = MotifStatsCalcInput::from_motifs(input.id, motif_refs, metrics, input.quantiles);
-                self.run_stage(&stage_input, input.max_other_parallel, tho_device)?
+                self.run_stage(&stage_input, input.max_other_parallel, _tho_device)?
             }
         };
         JsonIpcCodec::encode(&output)
@@ -1076,13 +1077,13 @@ struct MotifStatsConsumeStageIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for MotifStatsConsumeStageIpcWrapper {
-    fn consume_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
-        let input = JsonIpcCodec::decode::<MotifStatsConsumeStageIpcInput>(input)?;
+    fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
+        let input = JsonIpcCodec::decode::<MotifStatsConsumeStageIpcInput>(_input)?;
         let consumed_tensor_keys = input.channels_motifs_slices.iter().map(|tensor| tensor.ref_key().ok_or_else(|| ThoError::new(format!("MotifStatsConsumeStage expected worker tensor ref, got {tensor:?}")))).collect::<Result<Vec<_>, _>>()?;
-        let channels_motifs_slices = input.channels_motifs_slices.into_iter().map(|tensor| ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)).collect::<Result<Vec<_>, _>>()?;
+        let channels_motifs_slices = input.channels_motifs_slices.into_iter().map(|tensor| ThoTensor::ref_to_tensor(_all_cuda_tensors, tensor)).collect::<Result<Vec<_>, _>>()?;
         let metrics = input.metrics.into_iter().map(metric_from_ipc).collect::<Result<Vec<_>, _>>()?;
         let stage_input = MotifStatsLoadedChannelsInput::new(input.id, channels_motifs_slices, metrics, input.quantiles);
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), MOTIF_STATS_CONSUME_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), MOTIF_STATS_CONSUME_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         match Arc::clone(&self.stage).consume(stage_input, ctx) {
             ConsumeResult::Ok(output) => Ok(SyncStageIpcConsumeResponse::encoded(JsonIpcCodec::encode(&output)?, consumed_tensor_keys)),

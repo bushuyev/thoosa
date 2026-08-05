@@ -1,7 +1,7 @@
 pub mod tho_tensor;
 
 use crate::ipc::codec::{IpcCodec, IpcSyncStageRunInput, JsonIpcCodec, encode_sync_stage_run_input};
-use crate::ipc::cuda_wokrer::{WorkerStageInput, WorkerStageOutput};
+use crate::ipc::cuda_wokrer::{WokerRunCtx, WorkerStageInput, WorkerStageOutput};
 use thoosa_shared::traits::MaxParallelCtx;
 use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
@@ -64,17 +64,17 @@ pub trait SyncStageIpcWrapper:Sync + Debug {
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run"))]
-    fn do_run(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) ->Result<Vec<u8>, ThoError> {
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors:&Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) ->Result<Vec<u8>, ThoError> {
         Err(ThoError::new("IPC endpoint does not support do_run"))
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::do_run_response"))]
-    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
-        self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
+        self.do_run(input, all_cuda_tensors, tho_device, &run_ctx).map(SyncStageIpcResponse::Encoded)
     }
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SyncStageIpcWrapper::consume_response"))]
-    fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
+    fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
         Err(ThoError::new("IPC endpoint does not support consume"))
     }
 
@@ -142,28 +142,28 @@ where
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
 {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        debug!("IpcSyncStageWrapper::do_run: input.len={}", input.len());
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        debug!("IpcSyncStageWrapper::do_run: input.len={}", _input.len());
 
-        let input = C::decode::<IpcSyncStageRunInput>(input)?;
-        let input = I::decode_for_worker::<C>(&input.input(), all_cuda_tensors)?;
+        let input = C::decode::<IpcSyncStageRunInput>(_input)?;
+        let input = I::decode_for_worker::<C>(&input.input(), _all_cuda_tensors)?;
         debug!("IpcSyncStageWrapper::do_run: input={input:?}");
 
         let mut ctx = RunCtxImpl::new(1, self.endpoint_name);//TODO add CudaWOrkerRunCtx without max_other_parallel
 
         let out = Arc::clone(&self.sync_stage).do_run(&input, &ctx)?;
         debug!("IpcSyncStageWrapper::do_run: out={out:?}");
-        out.encode_from_worker::<C>(all_cuda_tensors, tho_device)
+        out.encode_from_worker::<C>(_all_cuda_tensors, _tho_device)
     }
 
-    fn consume_response(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcConsumeResponse, ThoError> {
+    fn consume_response(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _ctx: &WokerRunCtx) -> Result<SyncStageIpcConsumeResponse, ThoError> {
 
-        let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<C>(&C::decode::<IpcSyncStageRunInput>(_input)?.input(), all_cuda_tensors)?;
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), self.endpoint_name);
+        let (input, consumed_tensor_keys) = I::decode_for_worker_consuming::<C>(&C::decode::<IpcSyncStageRunInput>(_input)?.input(), _all_cuda_tensors)?;
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), self.endpoint_name);
 
         match Arc::clone(&self.sync_stage).consume(input, ctx) {
             thoosa_shared::traits::ConsumeResult::Ok(output) => {
-                let response = output.encode_from_worker::<C>(all_cuda_tensors, tho_device)?;
+                let response = output.encode_from_worker::<C>(_all_cuda_tensors, _tho_device)?;
                 Ok(SyncStageIpcConsumeResponse::encoded(response, consumed_tensor_keys))
             }
             thoosa_shared::traits::ConsumeResult::Failed { error, .. } => Err(error),

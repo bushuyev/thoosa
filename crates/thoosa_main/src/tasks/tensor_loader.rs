@@ -16,6 +16,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 use tch::{Device, Tensor};
 use thoosa_common::dims::Dims;
+use thoosa_common::ipc::cuda_wokrer::WokerRunCtx;
 use thoosa_common::runner::common::cachable::{BorrowRef, Cached, DevicesWrap};
 use thoosa_common::runner::oom_handler::{NoContexts, NoInputAdjuster, NoRunCtxAdjuster, NoTaskAdjuster, OOMHandler};
 use thoosa_common::runner::run_ctx_2::RunCtxImpl;
@@ -100,10 +101,10 @@ struct SyncRawTensorLoaderIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SyncRawTensorLoaderIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input_ref = JsonIpcCodec::decode::<ThoTensor<ChannelsData, SynKey>>(input)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input_ref = JsonIpcCodec::decode::<ThoTensor<ChannelsData, SynKey>>(_input)?;
         let input_key = input_ref.ref_key().ok_or_else(|| ThoError::new("SyncRawTensorLoader IPC input must be a worker tensor reference"))?;
-        if !all_cuda_tensors.lock().contains_key(&input_key) {
+        if !_all_cuda_tensors.lock().contains_key(&input_key) {
             return Err(ThoError::new(format!("SyncRawTensorLoader IPC tensor key={input_key} was not found")));
         }
         JsonIpcCodec::encode(&input_ref)
