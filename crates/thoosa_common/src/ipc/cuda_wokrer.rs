@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use clap::Parser;
 use dashmap::DashMap;
+use futures_util::future::BoxFuture;
 use log::{debug, error, LevelFilter};
 use parking_lot::{Mutex, RwLock};
 use thoosa_shared::{panic_to_err, panic_to_err_async, ThoError};
@@ -19,7 +20,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::Serializer;
 use tracing::field::debug;
-use thoosa_shared::traits::Named;
+use thoosa_shared::traits::{MaxParallelCtx, Named, RunCtx, WithId};
 use thoosa_shims::context::ThoCudaContext;
 use thoosa_shims::stream::{ThoCudaStream, ThoStreamGuard};
 use tub::Pool;
@@ -32,6 +33,7 @@ use crate::ipc::cuda_process::{DeviceInfo, IpcChunkWriter, OutgoingRequestPayloa
 use crate::ipc::ipc_cuda_utils::{recv_fd, IpcTensorTransferMetadata, IpcTransferDirection, SharedMemfdBuffer};
 use crate::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcWrapper};
 use crate::runner::global_ctx::GlobalCtx;
+use crate::runner::run_ctx_2::RunCtxImpl;
 use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 use crate::ws::{WsConfigs, FsWorkspace, Workspace};
@@ -384,10 +386,11 @@ impl CudaWorker {
                             } else {
                                 panic_to_err!({
                                     let _guard = ThoStreamGuard::new(&stream)?;
+                                    let run_ctx = WokerRunCtx;
                                     let response = if consume {
-                                        endpoint.consume_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response.response, response.consumed_tensor_keys))
+                                        endpoint.consume_response(&input, &all_cuda_tensors, &tho_device, &run_ctx).map(|response| (response.response, response.consumed_tensor_keys))
                                     } else {
-                                        endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device).map(|response| (response, Vec::new()))
+                                        endpoint.do_run_response(&input, &all_cuda_tensors, &tho_device, &run_ctx).map(|response| (response, Vec::new()))
                                     };
                                     let sync_result = stream.synchronize();
                                     match (response, sync_result) {
@@ -649,5 +652,42 @@ pub fn insert_worker_tensor(all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u6
             entry.insert(tensor);
             return Ok(key);
         }
+    }
+}
+
+
+
+#[derive(Debug)]
+pub struct WokerRunCtx;
+
+impl Named for WokerRunCtx {}
+
+impl MaxParallelCtx for WokerRunCtx{
+    fn set_max_other_parallel(&mut self, permit: u8) {}
+
+    fn max_other_parallel(&self) -> u8 { 0 }
+}
+
+impl WithId for WokerRunCtx{
+    type ID = ();
+
+    fn id(&self) -> &Self::ID {
+        &()
+    }
+}
+
+impl RunCtx for WokerRunCtx {
+    fn tho_device_idx(&self) -> usize {
+        1
+    }
+
+    fn branch(&mut self, with_new_cache_area: bool) -> Self
+    where
+        Self: Sized
+    {
+        WokerRunCtx
+    }
+
+    fn add_purge_gpu_closure(&mut self, cl: Box<dyn Fn() -> BoxFuture<'static, Result<(), ThoError>> + Send + Sync>) {
     }
 }

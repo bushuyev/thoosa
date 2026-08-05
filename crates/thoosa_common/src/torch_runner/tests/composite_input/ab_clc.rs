@@ -30,6 +30,7 @@ use thoosa_shared::tracked_await::track_await;
 use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MonoMetrics, OutId, RangeSelector, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 use tracing::debug;
+use crate::ipc::cuda_wokrer::WokerRunCtx;
 
 pub(crate) const SYNC_AB_CLC_ENDPOINT: &str = "ABClcSyncStage";
 
@@ -302,11 +303,11 @@ struct ABClcSyncStageIpcWrapper {
     stage: std::sync::Arc<ABClcSyncStage>,
 }
 impl crate::ipc::json_ser::SyncStageIpcWrapper for ABClcSyncStageIpcWrapper {
-    fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, ctx:&WokerRunCtx) -> Result<Vec<u8>, ThoError> {
         type __ProxyIpcCodec = crate::ipc::codec::JsonIpcCodec;
         let input = <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::decode::<ABClcSyncStageIpcInput>(_input)?;
-        let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, all_cuda_tensors)?;
-        let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, all_cuda_tensors)?;
+        let from_a = <ThoTensor<AStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_a)?, _all_cuda_tensors)?;
+        let from_b = <ThoTensor<BStageOutputDims, ()> as crate::ipc::cuda_wokrer::WorkerStageInput>::decode_for_worker::<__ProxyIpcCodec>(&<__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&input.from_b)?, _all_cuda_tensors)?;
         let out = self.stage.do_run_values(&input.id, &from_a, &from_b)?;
         <__ProxyIpcCodec as crate::ipc::codec::IpcCodec>::encode(&out)
     }

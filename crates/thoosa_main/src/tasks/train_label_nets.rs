@@ -18,7 +18,7 @@ use tch::nn::{Optimizer, VarStore};
 use tch::{Reduction, Tensor};
 use thoosa_common::dims::ChannelsData;
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::{InitFn, WorkerStageOutput};
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx, WorkerStageOutput};
 use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
@@ -227,13 +227,13 @@ struct SyncLabelBatchIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for SyncLabelBatchIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        let input = JsonIpcCodec::decode::<SyncLabelBatchIpcInput>(input)?;
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        let input = JsonIpcCodec::decode::<SyncLabelBatchIpcInput>(_input)?;
         if input.x_1.len() != input.x_1_lengths.len() || input.x_0.len() != input.x_0_lengths.len() {
             return Err(ThoError::new("SyncLabelBatch: tensor and length metadata counts differ"));
         }
-        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
-        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_1 = input.x_1.into_iter().zip(input.x_1_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(_all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
+        let x_0 = input.x_0.into_iter().zip(input.x_0_lengths).map(|(tensor, lengths)| Ok(DataWithExtra::new(ThoTensor::ref_to_tensor(_all_cuda_tensors, tensor)?, lengths))).collect::<Result<Vec<_>, ThoError>>()?;
         let stage_input = SyncLabelBatchInput {
             id: input.id,
             x_1: x_1.iter().map(ThoDataRef::Borrowed).collect(),
@@ -241,10 +241,10 @@ impl SyncStageIpcWrapper for SyncLabelBatchIpcWrapper {
             num_nets: input.num_nets,
             label: input.label,
         };
-        let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
+        let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
         ctx.set_max_other_parallel(input.max_other_parallel);
         let output = Arc::clone(&self.stage).do_run(&stage_input, &ctx)?;
-        output.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, tho_device)
+        output.encode_from_worker::<JsonIpcCodec>(_all_cuda_tensors, _tho_device)
     }
 }
 
@@ -1095,22 +1095,22 @@ struct TrainLabelStepIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for TrainLabelStepIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        match JsonIpcCodec::decode::<TrainStepIpcRequest>(input)? {
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        match JsonIpcCodec::decode::<TrainStepIpcRequest>(_input)? {
             TrainStepIpcRequest::Run { x, lengths, expected_y, train, max_other_parallel } => {
                 let stage = self.stage.stage()?;
                 let remove_x = x.remove_after_run.then_some(x.ref_key);
                 let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
-                let x = ThoTensor::ref_to_tensor(all_cuda_tensors, x.into_tensor::<MotifProbability>()?)?;
-                let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, expected_y.into_tensor::<LabelProbability>()?)?;
+                let x = ThoTensor::ref_to_tensor(_all_cuda_tensors, x.into_tensor::<MotifProbability>()?)?;
+                let expected_y = ThoTensor::ref_to_tensor(_all_cuda_tensors, expected_y.into_tensor::<LabelProbability>()?)?;
                 let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
-                let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), TRAIN_LABEL_STEP_ENDPOINT);
+                let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), TRAIN_LABEL_STEP_ENDPOINT);
                 ctx.set_max_other_parallel(max_other_parallel);
                 let result = stage.do_run(&input, &ctx);
                 drop(input);
                 // Request-owned copies are removed only after the synchronous train step releases them.
                 if remove_x.is_some() || remove_expected_y.is_some() {
-                    let mut tensors = all_cuda_tensors.lock();
+                    let mut tensors = _all_cuda_tensors.lock();
                     if let Some(key) = remove_x {
                         tensors.remove(&key);
                     }
@@ -1124,12 +1124,12 @@ impl SyncStageIpcWrapper for TrainLabelStepIpcWrapper {
         }
     }
 
-    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
         // if matches!(JsonIpcCodec::decode::<TrainStepIpcRequest>(input)?, TrainStepIpcRequest::ExportWeights) {
         //     let stage = self.stage.stage()?;
         //     Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
         // } else {
-            self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+            self.do_run(input, all_cuda_tensors, tho_device, &run_ctx).map(SyncStageIpcResponse::Encoded)
         // }
     }
 }

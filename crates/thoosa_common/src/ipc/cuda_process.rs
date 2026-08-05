@@ -2334,7 +2334,7 @@ mod tests {
     use crate::copy_ctx::CudaActorHandle;
     use crate::cuda_utils::{cuda_mem, fail_with_unrecoverable_error, speed_gb_per_s};
     use crate::ipc::cuda_process::{CudaIPCActor, DeviceInfo, IPC_SOCK_ENV, encode_endpoint_payload, read_text_frame, write_text_frame};
-    use crate::ipc::cuda_wokrer::CudaWorker;
+    use crate::ipc::cuda_wokrer::{CudaWorker, WokerRunCtx};
     use crate::ipc::json_ser::SyncStageIpcWrapper;
     use crate::ipc::tests::{init_ipc_test, run_ipc_test};
     use crate::runner::adjusters::max_parallel::{MaxParallelAdjustContextImpl, MaxParallelAdjuster};
@@ -2519,7 +2519,7 @@ mod tests {
         }
 
         impl SyncStageIpcWrapper for _SyncStageJsonWrapper {
-            fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
+            fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
                 debug!("test_copy_ipc_cuda_worker_propagates_oom: do_run={_input:?}");
                 if _input.eq(b"fail") {
                     fail_with_unrecoverable_error();

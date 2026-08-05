@@ -26,7 +26,7 @@ use tch::{Reduction, Tensor};
 use thoosa_common::batches::{AsyncDataBatch, BatchLengths, prefetch_next_batch_stream};
 use thoosa_common::dims::{Batch, LabelProbability, LabelsProbabilities, ThoBatch};
 use thoosa_common::ipc::codec::{IpcCodec, JsonIpcCodec};
-use thoosa_common::ipc::cuda_wokrer::InitFn;
+use thoosa_common::ipc::cuda_wokrer::{InitFn, WokerRunCtx};
 use thoosa_common::ipc::json_ser::{SyncStageIpcResponse, SyncStageIpcStreamResponse, SyncStageIpcWrapper};
 use thoosa_common::runner::cache_areas::CacheArea;
 use thoosa_shared::traits::MaxParallelCtx;
@@ -602,22 +602,22 @@ struct TrainFinalStepIpcWrapper {
 }
 
 impl SyncStageIpcWrapper for TrainFinalStepIpcWrapper {
-    fn do_run(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<Vec<u8>, ThoError> {
-        match JsonIpcCodec::decode::<TrainStepIpcRequest>(input)? {
+    fn do_run(&self, _input: &[u8], _all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, _run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
+        match JsonIpcCodec::decode::<TrainStepIpcRequest>(_input)? {
             TrainStepIpcRequest::Run { x, lengths, expected_y, train, max_other_parallel } => {
                 let stage = self.stage.stage()?;
                 let remove_x = x.remove_after_run.then_some(x.ref_key);
                 let remove_expected_y = expected_y.remove_after_run.then_some(expected_y.ref_key);
-                let x = ThoTensor::ref_to_tensor(all_cuda_tensors, x.into_tensor::<LabelProbability>()?)?;
-                let expected_y = ThoTensor::ref_to_tensor(all_cuda_tensors, expected_y.into_tensor::<LabelsProbabilities>()?)?;
+                let x = ThoTensor::ref_to_tensor(_all_cuda_tensors, x.into_tensor::<LabelProbability>()?)?;
+                let expected_y = ThoTensor::ref_to_tensor(_all_cuda_tensors, expected_y.into_tensor::<LabelsProbabilities>()?)?;
                 let input = TrainStepInput::new(x, lengths.map(BatchLengths::new), expected_y, train);
-                let mut ctx = RunCtxImpl::new(tho_device.tho_device_idx(), TRAIN_FINAL_STEP_ENDPOINT);
+                let mut ctx = RunCtxImpl::new(_tho_device.tho_device_idx(), TRAIN_FINAL_STEP_ENDPOINT);
                 ctx.set_max_other_parallel(max_other_parallel);
                 let result = stage.do_run(&input, &ctx);
                 drop(input);
                 // Request-owned copies can be released once the synchronous forward/backward call returns.
                 if remove_x.is_some() || remove_expected_y.is_some() {
-                    let mut tensors = all_cuda_tensors.lock();
+                    let mut tensors = _all_cuda_tensors.lock();
                     if let Some(key) = remove_x {
                         tensors.remove(&key);
                     }
@@ -631,12 +631,12 @@ impl SyncStageIpcWrapper for TrainFinalStepIpcWrapper {
         }
     }
 
-    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice) -> Result<SyncStageIpcResponse, ThoError> {
+    fn do_run_response(&self, input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<SyncStageIpcResponse, ThoError> {
         // if matches!(JsonIpcCodec::decode::<TrainStepIpcRequest>(input)?, TrainStepIpcRequest::ExportWeights) {
         //     let stage = self.stage.stage()?;
         //     Ok(SyncStageIpcResponse::Stream(SyncStageIpcStreamResponse::new(move |output| stage.save_var_store_to_stream(output))))
         // } else {
-            self.do_run(input, all_cuda_tensors, tho_device).map(SyncStageIpcResponse::Encoded)
+            self.do_run(input, all_cuda_tensors, tho_device, &run_ctx).map(SyncStageIpcResponse::Encoded)
         // }
     }
 }
