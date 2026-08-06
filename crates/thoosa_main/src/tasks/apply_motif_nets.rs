@@ -44,7 +44,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DataId, MaxParallelCtx, Metrics, MonoMetrics, OutId, RunCtx, Select, SimpleId, Stage, SyncStage, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 use thoosa_store::{Store, TrainedNet};
 
@@ -66,7 +66,7 @@ use thoosa_shared::tracked_await::track_await;
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
     ws:Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
@@ -172,7 +172,7 @@ impl ApplyMotifNetSplitsContext {
 
 impl<'a, C> InputContext<'a, ApplyMotifNet<C>> for ApplyMotifNetSplitsContext
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     async fn add_partial_output(&mut self, partial: ThoTensor<MotifProbability, SynKey>) {
         let input_len = self.input_len.dim::<1>();
@@ -265,7 +265,7 @@ where
 
 impl <C> ApplyMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
@@ -280,7 +280,7 @@ where
         quantize: bool
     ) -> Result<Self, ThoError>
     where
-        R:RunCtx + Adjustable + 'static
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static
     {
 
         // Load all motif nets matching max_loss and trained_nets_limit for the provided train_motif_nets_run_config_ids.
@@ -303,7 +303,7 @@ where
         quantize: bool
     ) -> Result<ApplyMotifNets<C>, ThoError>
     where
-        R: RunCtx + Adjustable + 'static
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws, quantize));//TODO move to new
         let trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
@@ -423,7 +423,7 @@ where
 
 impl <C>Stage for ApplyMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     type Ctx = C;
     type In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
@@ -434,7 +434,7 @@ where
 
 impl <C>AsyncStage for ApplyMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
 
 
@@ -615,7 +615,7 @@ where
 
 impl <C>OutId for ApplyMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -974,7 +974,7 @@ impl SelectRef<ChannelsDataSelector> for ApplyMotifNetInputWrapper {
 #[derive(Debug)]
 struct ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
     net_wrapper:Arc<DevicesWrap<DataWithExtra<ThoModuleWithStore<Batch<Slice>, MotifProbability>, MotifNetMeta>>>,
@@ -989,7 +989,7 @@ where
 }
 impl <C> ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     pub fn new(
         motif_id:u32,
@@ -1022,14 +1022,14 @@ where
 
 impl <C> Adjustable for ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
 
 }
 
 impl <C> OutId for ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.motif_id + input_id//it's assumed that there can be only one net for a motif
@@ -1039,14 +1039,14 @@ where
 
 impl <C>  Stage for ApplyMotifNet<C>
 where
-    C: RunCtx + Adjustable + 'static{
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static{
     type Ctx = C;
     type In<'a> = ApplyMotifNetInput<'a>;
     type Out = ThoTensor<MotifProbability, SynKey>;
 }
 
 impl <C> SyncStage for ApplyMotifNet<C> where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyMotifNet::run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {

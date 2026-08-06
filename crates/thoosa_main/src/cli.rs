@@ -90,7 +90,7 @@ use thoosa_shared::hyperparameter::{FieldName, Hyperparameter};
 use thoosa_shared::resource::{Resource, ResourceId, ResourceStats, ResourceStore, ResourcesConfig};
 use thoosa_shared::run_configs::{OptRunConfigs, RUN_ID, RunConfig, RunConfigId, run_id};
 use thoosa_shared::traits::AsyncStage;
-use thoosa_shared::traits::{Adjustable, Data, DataId, OutId, RunCtx, Select, SimpleId, WithId};
+use thoosa_shared::traits::{Adjustable, Data, DataId, MaxParallelCtx, OutId, RunCtx, Select, SimpleId, WithId};
 use thoosa_shared::val::{NamedRange, NamedVal};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, RangeOrValue, collect_futures_with_progress, cuda_activity_gate, mono_key, panic_to_err_async, parse_resources, simple_id};
 use thoosa_shared::{ResourceType, ThoError, cdt, cdt_for_dir};
@@ -1251,7 +1251,7 @@ pub async fn run_plot<C>(
     mut ctx:C
 ) -> Result<(), ThoError>
 where
-    C:RunCtx + Adjustable{
+    C: RunCtx + MaxParallelCtx + Adjustable {
 
     let print_to_stdout = plot_params.print_to_stdout();
 
@@ -1465,7 +1465,7 @@ async fn plot_found_motifs<C>(
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let motifs = track_await(store.list_motifs(find_motifs_run_config_id)).await?;
     let motifs_len = motifs.len();
@@ -1519,7 +1519,7 @@ async fn plot_selected_motifs<C>(
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let channels = ws.read().channels();
     debug!("plot_selected_motifs: select_motifs_run_config_id={select_motifs_run_config_id} channels={channels}");
@@ -1584,7 +1584,7 @@ async fn load_resource_tensor_for_plot<C>(
     mut ctx: C,
 ) -> Result<Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, ThoError>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let resource = track_await(store
         .list_resources_by_ids(&vec![resource_id])).await?
@@ -1622,7 +1622,7 @@ fn plot_resource_channels<C>(
     print_to_stdout: bool,
 ) -> Result<(), ThoError>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let total_channels = tensor.size()[0] as u32;
     let channels_to_plot = channels.cloned().unwrap_or_else(|| (0..total_channels).collect());
@@ -1698,7 +1698,7 @@ pub async fn plot_resource<C>(
     prefix: &str,
 ) -> Result<(), ThoError>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).await?;
 
@@ -1740,7 +1740,7 @@ async fn plot_motif_net_applied<C>(
     mut ctx: C,
 ) -> Result<(), ThoError>
 where
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     let raw = track_await(load_resource_tensor_for_plot(store, loader, resource_id, ctx.branch(false))).await?;
 
@@ -1833,7 +1833,7 @@ pub async fn plot_motif<C>(
     print_to_stdout: bool,
 ) -> Result<(), ThoError>
 where
-    C:RunCtx + Adjustable{
+    C: RunCtx + MaxParallelCtx + Adjustable {
     let select_motif_run_config_ids_sfx = select_motif_run_config_ids.as_ref().map(|v|v.iter().map(|v|format!("_{}", v)).collect::<String>()).unwrap_or("".to_string());
     let motif_loader_input = MotifLoaderInput::new(((motif_id as u32), "motif_id").into(), select_motif_run_config_ids);
     let motif_id_arc = Arc::new(motif_loader_input.clone());

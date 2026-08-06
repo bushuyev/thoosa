@@ -59,7 +59,7 @@ use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::rayon_pool::rayon_pool;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId, hump};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, DataId, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId, hump};
 use thoosa_shared::{FuturesOrdering, ThoError, async_perf_log, async_write_lock, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{IdSlice, Store};
 
@@ -213,7 +213,7 @@ pub struct SelectMotifsStage<L, ML, C>//TODO rename to SelectMotifs
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
 
     id: SynKey,
@@ -233,7 +233,7 @@ impl <L, ML, C> Debug for SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static {
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SelectMotifsStage")
             .field("id", self.id())
@@ -247,7 +247,7 @@ impl  <L, ML, C> WithId for SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     type ID = SynKey;
 
@@ -261,7 +261,7 @@ impl <L, ML, C> SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
 
     pub async fn new(
@@ -406,7 +406,7 @@ impl <L,ML, C> Stage  for  SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 
 {
     type Ctx = C;
@@ -419,7 +419,7 @@ impl <L, ML, C> AsyncStage  for  SelectMotifsStage<L, ML, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     ML: for <'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="SelectMotifsStage::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {

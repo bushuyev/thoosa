@@ -28,7 +28,7 @@ use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::resource::Resource;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{ThoError, mono_key};
 // use crate::tasks::stages_seq::StagesSeq;
 
@@ -237,7 +237,7 @@ where
 #[cache_name = "RawTensors"]
 pub struct RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     id: SynKey,
     device: ThoDevice,
@@ -247,7 +247,7 @@ where
 
 impl<C> Debug for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TensorLoader")
@@ -259,7 +259,7 @@ where
 
 impl<C> Stage for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     type In<'a> = Arc<Resource>;
     type Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
@@ -269,7 +269,7 @@ where
 // #[async_trait]
 impl<C> AsyncStage for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
 
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="RawTensorLoader::run"))]
@@ -293,7 +293,7 @@ where
 
 impl<C> OutId for RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     fn out_id(&self, input_id: &<Self::In<'static> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + mono_key!(input_id.id(), format!("loaded_{}", input_id.id()))
@@ -302,7 +302,7 @@ where
 
 impl<C> RawTensorLoader<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     pub fn new<F>(loader_fn: F, device: ThoDevice) -> Self
     where

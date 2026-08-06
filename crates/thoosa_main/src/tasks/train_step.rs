@@ -656,7 +656,7 @@ impl TrainStepIpcRequest {
     where
         DI: Dims,
         DO: Dims,
-        C: RunCtx,
+        C: RunCtx + MaxParallelCtx,
     {
         Ok(Self::Run {
             x: track_await(TrainStepTensorRef::from_tensor(input.x_ref(), ctx.tho_device_idx())).await?,

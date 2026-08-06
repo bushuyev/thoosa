@@ -18,7 +18,7 @@ use thoosa_properties_map_derive::ThoosaPropertiesMap;
 use thoosa_run_config_args_derive::ThoosaRunConfig;
 use thoosa_shared::applicables_runner::{Input, Output};
 use thoosa_shared::comp_id::SynKey;
-use thoosa_shared::traits::{Adjustable, AsyncStage, Data, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, Data, MaxParallelCtx, OutId, RunCtx, Select, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{ThoError, mono_key};
 
 use crate::tasks::stage_ids::STFT;
@@ -28,7 +28,7 @@ use thoosa_shared::tracked_await::track_await;
 #[cache_name = "Stft"]
 pub struct Stft<C, InD = Batch<MotifSlices>, OutD = Spectorgram>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
@@ -40,7 +40,7 @@ where
 
 impl<C> Stft<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub fn new(run_config: StftRunConfig) -> Result<Self, ThoError> {
         Self::new_for_dims(run_config)
@@ -49,7 +49,7 @@ where
 
 impl<C, InD, OutD> Stft<C, InD, OutD>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
@@ -66,7 +66,7 @@ where
 
 impl<C, InD, OutD> WithId for Stft<C, InD, OutD>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
@@ -79,7 +79,7 @@ where
 
 impl<C, InD, OutD> OutId for Stft<C, InD, OutD>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
@@ -90,7 +90,7 @@ where
 
 impl<C, InD, OutD> Stage for Stft<C, InD, OutD>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {
@@ -101,7 +101,7 @@ where
 
 impl<C, InD, OutD> AsyncStage for Stft<C, InD, OutD>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     InD: Dims + 'static,
     OutD: Dims + 'static,
 {

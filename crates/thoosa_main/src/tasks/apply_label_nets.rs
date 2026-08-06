@@ -29,7 +29,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MonoMetrics, OutId, RunCtx, SimpleId, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, SyncStage, WithId};
 use thoosa_shared::{FuturesOrdering, ThoError, collect_futures_with_progress, mono_key, perf_log, sync_read_lock};
 use thoosa_store::{Store, TrainedNet};
 
@@ -58,7 +58,7 @@ where
 #[derive(Debug, Cached, Named)]
 pub struct ApplyLabelNets<C, AMN>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
@@ -70,7 +70,7 @@ where
 
 impl<C> ApplyLabelNets<C, ApplyCosine2DMotifNets<C>>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -81,7 +81,7 @@ where
         batch_in_chunks: usize, run_stft: bool,
     ) -> Result<Self, ThoError>
     where
-        R: RunCtx + Adjustable + 'static,
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
     {
         let motif_ws = Arc::clone(ws);
         let motif_store = Arc::clone(store);
@@ -115,7 +115,7 @@ where
 
 impl<C> ApplyLabelNets<C, ApplyMotifNets<C>>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new_with_apply_motif_nets<R>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -126,7 +126,7 @@ where
         batch_in_chunks: usize,
     ) -> Result<Self, ThoError>
     where
-        R: RunCtx + Adjustable + 'static,
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static,
     {
         let motif_ws = Arc::clone(ws);
         let motif_store = Arc::clone(store);
@@ -159,7 +159,7 @@ where
 
 impl<C, AMN> ApplyLabelNets<C, AMN>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
@@ -233,7 +233,7 @@ where
 
 impl<C, AMN> Stage for ApplyLabelNets<C, AMN>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
@@ -244,7 +244,7 @@ where
 
 impl<C, AMN> AsyncStage for ApplyLabelNets<C, AMN>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {
@@ -376,7 +376,7 @@ where
 
 impl<C, AMN> OutId for ApplyLabelNets<C, AMN>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     AMN: AsyncStage<Ctx = C, Out = Arc<DevicesWrap<MotifNetsOutput>>>, // + thoosa_common::runner::common::runnable::WrappedRunInputStage,
     for<'a> AMN: Stage<In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>>,
 {

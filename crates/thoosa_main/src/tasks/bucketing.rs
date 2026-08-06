@@ -34,7 +34,7 @@ use thoosa_shared::copy_mode::CpuOnly;
 use thoosa_shared::resource::{Resource, ResourceId, ResourcesConfig};
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, Named, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Stage, SyncStage, ThoSelector, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, TensorIdSliceIdx, ThoError, collect_futures_with_progress, panic_to_err};
 use thoosa_store::{IdSlice, Store};
 
@@ -961,7 +961,7 @@ where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<D, Id>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     D: Dims + Send + Sync + 'static,
     Id: CachableIdTr + Named + Debug + Clone + Send + Sync + Eq + Hash + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "BucketingStage::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
