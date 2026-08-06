@@ -91,35 +91,38 @@ impl RunCtx for TestRunCtx {
 }
 
 #[derive(Debug)]
-pub struct TestStage<P>
+pub struct TestStage<P, C>
 where
-    P:Debug
+    P:Debug,
+    C:RunCtx
 {
-    pd:PhantomData<P>
+    pd:PhantomData<(P, C)>
 }
 
-impl <P> TestStage<P>
+impl <P, C> TestStage<P, C>
 where
-    P:Debug
+    P:Debug,
+    C:RunCtx
 {
     pub fn new() -> Self {
         Self { pd: PhantomData }
     }
 }
 
-impl <P> Stage for TestStage<P>
+impl <P, C> Stage for TestStage<P, C>
 where
-    P:Debug
-
+    P:Debug,
+    C:RunCtx
 {
-    type Ctx = TestRunCtx;
+    type Ctx = C;
     type In<'a> = TestInput;
     type Out = TestOutput;
 }
 
-impl <P> SyncStage for TestStage<P>
+impl <P, C> SyncStage for TestStage<P, C>
 where
-    P:Debug
+    P:Debug,
+    C:RunCtx
 {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         Ok(TestOutput{
@@ -154,9 +157,9 @@ impl ProxyTestStage {
 }
 impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
 impl thoosa_shared::traits::Stage for ProxyTestStage {
-    type Ctx = <Arc<TestStage<()>> as thoosa_shared::traits::Stage>::Ctx;
-    type In<'a> = <Arc<TestStage<()>> as thoosa_shared::traits::Stage>::In<'a>;
-    type Out = <Arc<TestStage<()>> as thoosa_shared::traits::Stage>::Out;
+    type Ctx = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::Ctx;
+    type In<'a> = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::In<'a>;
+    type Out = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::Out;
 }
 impl thoosa_shared::traits::SyncStage for ProxyTestStage {
     fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
@@ -186,14 +189,14 @@ impl thoosa_shared::traits::SyncStage for ProxyTestStage {
 pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
     Ok(Box::new(SimpWrapper {
-        base: std::sync::Arc::new(TestStage::<()>::new()),
-        pd: PhantomData::<(JsonIpcCodec, TestRunCtx)>
+        base: std::sync::Arc::new(TestStage::<(), WokerRunCtx>::new()),
+        pd: PhantomData::<JsonIpcCodec>
     }))
 }
 
 #[derive(Debug)]
 struct TestStageSimpTarget {
-    base:Arc<TestStage<()>>
+    base:Arc<TestStage<(), TestRunCtx>>
 }
 
 impl TestStageSimpTarget {
@@ -205,38 +208,36 @@ impl TestStageSimpTarget {
 }
 
 #[derive(Debug)]
-struct SimpWrapper<C, S, I, O, Cx>
-where
-    C: IpcCodec,
-// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
-// must be both Send and Sync at this IPC boundary.
-    S: SyncStage + Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = TestRunCtx>,
-    I: WorkerStageInput + 'static,
-    O: WorkerStageOutput + 'static,
-    Cx: RunCtx
-{
-    base:Arc<S>,
-    pd:PhantomData<(C, Cx)>
-}
-
-impl <Co, S, I, O, Cx>SyncStageIpcWrapper for SimpWrapper<Co, S, I, O, Cx>
+struct SimpWrapper<Co, S, I, O>
 where
     Co: IpcCodec,
 // SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
 // must be both Send and Sync at this IPC boundary.
     S: SyncStage + Debug + Send + Sync + 'static,
-    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = TestRunCtx>,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
     I: WorkerStageInput + 'static,
     O: WorkerStageOutput + 'static,
-    Cx: RunCtx
+{
+    base:Arc<S>,
+    pd:PhantomData<(Co)>
+}
+
+impl <Co, S, I, O>SyncStageIpcWrapper for SimpWrapper<Co, S, I, O>
+where
+    Co: IpcCodec,
+// SyncStageIpcWrapper is Sync and stores the stage in Arc, so the stage
+// must be both Send and Sync at this IPC boundary.
+    S: SyncStage + Debug + Send + Sync + 'static,
+    for<'a> S: Stage<In<'a> = I, Out = O, Ctx = WokerRunCtx>,
+    I: WorkerStageInput + 'static,
+    O: WorkerStageOutput + 'static,
 {
     fn do_run(&self, _input: &[u8], all_cuda_tensors: &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>, _tho_device: &ThoDevice, run_ctx: &WokerRunCtx) -> Result<Vec<u8>, ThoError> {
         debug!("SimpWrapper::do_run: 0. input={_input:?}");
         let input = WorkerStageInput::decode_for_worker::<JsonIpcCodec>(_input, all_cuda_tensors)?;
 
         debug!("SimpWrapper::do_run: 2. input={input:?}");
-        let out = Arc::clone(&self.base).do_run(&input, &TestRunCtx)?;
+        let out = Arc::clone(&self.base).do_run(&input, run_ctx)?;
 
 
         out.encode_from_worker::<JsonIpcCodec>(all_cuda_tensors, _tho_device)
@@ -261,13 +262,15 @@ mod tests {
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::test::proxy_tests::{ProxyTestStage, TestStageSimpTarget, TEST_ENDPOINT, test_simp_init};
+    use crate::runner::test::proxy_tests::{ProxyTestStage, TestStageSimpTarget, TEST_ENDPOINT, test_simp_init, TestOutput};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::ws::{mock_ws_simp, FsWorkspace, WsConfigs};
 
     #[test]
     fn test_simp_target() -> Result<(), ThoError>{
+
+
         let ws = Arc::new(RwLock::new(mock_ws_simp(None, 2, 100, 1000)));
 
         run_ipc_test(
