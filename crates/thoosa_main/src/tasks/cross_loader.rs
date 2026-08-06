@@ -45,7 +45,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::mono_key;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, Named, OutId, RunCtx, Select, ThoSelector, WithId};
+use thoosa_shared::traits::{Adjustable, CachableIdTr, Data, MaxParallelCtx, Named, OutId, RunCtx, Select, ThoSelector, WithId};
 use thoosa_shared::traits::{AsyncStage, MonoMetrics, Stage, SyncStage};
 use thoosa_store::Store;
 use tracing::Instrument;
@@ -147,7 +147,7 @@ where
 
 pub struct CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<
         In<'i> = Arc<Resource>,
@@ -184,7 +184,7 @@ where
 
 impl<ResC, L, CLC, RSV, R, C> Debug for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     R: Debug + Send + Sync + 'static,
@@ -198,7 +198,7 @@ where
 
 impl<ResC, L, CLC, RSV, R, C> CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     R: CrossClcResultMerge + Debug + Send + Sync + 'static,
@@ -428,7 +428,7 @@ impl<RC: ResourcesConfig + Debug + Send + Sync + Clone> Input for ResourcesConfi
 
 impl<ResC, L, CLC, RSV, R, C> Stage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     ResC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> Cached<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + AsyncStage + OutId + 'static,
     CLC: for<'i> SyncStage<In<'i> = CrossInput<'i, Arc<Resource>>, Out = CrossUnfoldClcOutput<R>, Ctx=C, > + Adjustable + OutId + Send + Sync + 'static,
@@ -446,7 +446,7 @@ where
 // #[async_trait]
 impl<ResC, L, CLC, RSV, R, C> AsyncStage for CrossLoader<ResC, L, CLC, RSV, R, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     for<'a> Self::In<'a>: Data + WithId + Send + Sync,
     ResourcesConfigInput<ResC>: Data<M=CpuOnly<ResourcesConfigInput<ResC>>> + WithId + Send + Sync,
     Self::Out: Data + WithId + Send + Sync,

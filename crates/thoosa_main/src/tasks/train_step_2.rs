@@ -682,7 +682,7 @@ impl TrainStep2IpcRequest {
     where
         DI: Dims,
         DO: Dims,
-        C: RunCtx,
+        C: RunCtx + MaxParallelCtx,
     {
         Ok(Self::Run {
             x: track_await(TrainStep2TensorRef::from_tensor(input.x_ref(), ctx.tho_device_idx())).await?,
@@ -762,7 +762,7 @@ mod tests {
     use thoosa_shared::tmp_file::TmpFile;
     use thoosa_shared::tracked_await::track_await;
     use thoosa_shared::traits::ErasedStageWithState;
-    use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStage, DynSyncStageBox, FromJsonFile, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, ToJsonFile, WithId};
+    use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, DynSyncStage, DynSyncStageBox, FromJsonFile, MaxParallelCtx, MonoMetrics, OutId, RunCtx, SimpleId, Stage, StageWithState, SyncStage, ToJsonFile, WithId};
     use thoosa_shared::{CopyToDevice, MoveToDevice, ThoError, cdt_for_dir, mono_key, now_ms, panic_to_err, simple_id};
     use thoosa_store::{MockStoreBuilder, SqlStore, Store};
     use tokio::sync::MutexGuard;
@@ -992,6 +992,7 @@ mod tests {
     struct TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
         pd:PhantomData<SF>,
@@ -1002,6 +1003,7 @@ mod tests {
     impl <SF, B> Debug for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -1038,6 +1040,7 @@ mod tests {
     impl <SF, B> Stage for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
         // Use the factory context here so the stage, train step, and batch stream share one context type.
@@ -1050,17 +1053,20 @@ mod tests {
     unsafe impl <SF, B> Sync for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {}
     unsafe impl <SF, B> Send for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {}//<--
 
     impl <SF, B> AsyncStage for TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
 
     {
@@ -1091,6 +1097,7 @@ mod tests {
     impl <SF, B> TrainNet2<SF, B>
     where
         SF:TrainStepFactory + Debug + Send + Sync  +'static,
+        SF::C: MaxParallelCtx,
         B:AsyncDataBatch<SF::InDims, SF::OutDims, SF::C>+ Debug + 'static,
     {
 

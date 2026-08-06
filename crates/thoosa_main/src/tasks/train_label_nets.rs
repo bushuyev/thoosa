@@ -352,7 +352,7 @@ where
 
 impl<C> SyncStage for SyncLabelBatchDynStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_LABEL_BATCH_ENDPOINT);
@@ -391,7 +391,7 @@ where
 
 pub trait AppliedMotifNetsStage<C>: for<'i> AsyncStage<In<'i> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx = C> + Cached + OutId + 'static
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn num_nets(&self) -> usize;
     fn motif_nets_ids(&self) -> Vec<u32>;
@@ -399,7 +399,7 @@ where
 
 impl<C> AppliedMotifNetsStage<C> for ApplyMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn num_nets(&self) -> usize {
         self.num_nets()
@@ -412,7 +412,7 @@ where
 
 impl<C> AppliedMotifNetsStage<C> for ApplyCosine2DMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn num_nets(&self) -> usize {
         self.num_nets()
@@ -436,7 +436,7 @@ pub async fn new_train_label_nets<L, AMN, C>(
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
     AMN: AppliedMotifNetsStage<C>,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     let id = mono_key!(RAW_TENSOR_LOADER, "stage") + &SynKey::new(train_motif_net_run_config_ids.iter().map(|run_config_id| mono_key!(*run_config_id, format!("train_motif_nets_run_config_ids_{run_config_id}"))).collect::<Vec<_>>());
 
@@ -630,7 +630,7 @@ impl<L, LM, C> AsyncStage for TrainLabelNets<L, LM, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     LM: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifProbability, SynKey>, Vec<i64>>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainLabelNets::run"))]
     fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
@@ -1184,7 +1184,7 @@ where
 
 impl<C> SyncStage for TrainLabelStepProxyCtx<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), TRAIN_LABEL_STEP_ENDPOINT);
@@ -1234,7 +1234,7 @@ impl TrainLabelNetProxyFactory {
 #[async_trait]
 impl<C> TrainStepProxyFactory<MotifProbability, LabelProbability, C, LabelNetParams, TrainLabelNetRunConfig> for TrainLabelNetProxyFactory
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     async fn new_proxy(&self, run_config: &TrainLabelNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<MotifProbability, LabelProbability, C, LabelNetParams>, ThoError> {
         let node_params = train_label_step_params(run_config, self.num_nets);

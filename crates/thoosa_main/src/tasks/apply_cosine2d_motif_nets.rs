@@ -36,7 +36,7 @@ use thoosa_shared::copy_mode::{CpuOnly, CpuOrGpu};
 use thoosa_shared::data_with_extra::DataWithExtra;
 use thoosa_shared::run_configs::RunConfigId;
 use thoosa_shared::traits::ConsumeResult;
-use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, CachableIdTr, Data, MaxParallelCtx, MonoMetrics, OutId, RunCtx, Stage, SyncStage, WithId};
 use thoosa_shared::{CopyToDevice, FuturesOrdering, ThoError, collect_futures_with_progress, mono_key};
 use thoosa_store::{Store, TrainedNet};
 use tokio::io::AsyncWriteExt;
@@ -49,7 +49,7 @@ use thoosa_shared::tracked_await::track_await;
 #[derive(Debug, cached_derive::Cached, Named)]
 pub struct ApplyCosine2DMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
     pd:PhantomData<C>,
@@ -63,7 +63,7 @@ where
 
 impl <C>OutId for ApplyCosine2DMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         &self.id + input_id
@@ -73,7 +73,7 @@ where
 
 impl<C> ApplyCosine2DMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     pub async fn new<R>(
         ws: &Arc<parking_lot::RwLock<Box<dyn Workspace>>>,
@@ -88,7 +88,7 @@ where
         quantize: bool
     ) -> Result<Self, ThoError>
     where
-        R:RunCtx + Adjustable + 'static
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static
     {
         debug!("ApplyMotifNets::new: train_motif_net_run_config_ids={train_motif_net_run_config_ids:?} trained_nets_limit={trained_nets_limit:?} quantize={quantize} slice_step={slice_step}");
 
@@ -114,7 +114,7 @@ where
         run_stft: bool
     ) -> Result<ApplyCosine2DMotifNets<C>, ThoError>
     where
-        R: RunCtx + Adjustable + 'static
+        R: RunCtx + MaxParallelCtx + Adjustable + 'static
     {
         let load_motif_net = Arc::new(LoadMotifNet::<R>::new(&ws, quantize));//TODO move to new
         let trained_net_ids = trained_nets.iter().map(|v|v.id).collect::<Vec<_>>();
@@ -254,7 +254,7 @@ where
 
 impl<C> Stage for ApplyCosine2DMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     type Ctx = C;
     type In<'a> = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>;
@@ -265,7 +265,7 @@ where
 
 impl<C> AsyncStage for ApplyCosine2DMotifNets<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> impl Future<Output=Result<Self::Out, ThoError>> + Send {
         let input_id = input.id().clone();
@@ -300,7 +300,7 @@ where
 #[derive(Debug)]
 pub struct ApplyCosine2DMotifNetsSync<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     id: SynKey,
     apply_cosine2d_motif_nets: Arc<ApplyCosine2DMotifNets<C>>,
@@ -308,7 +308,7 @@ where
 
 impl<C> ApplyCosine2DMotifNetsSync<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn new(id: SynKey, apply_cosine2d_motif_nets: Arc<ApplyCosine2DMotifNets<C>>) -> Self {
         Self { id, apply_cosine2d_motif_nets }
@@ -317,7 +317,7 @@ where
 
 impl<C> OutId for ApplyCosine2DMotifNetsSync<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, _input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         self.id.clone()
@@ -326,7 +326,7 @@ where
 
 impl<C> Stage for ApplyCosine2DMotifNetsSync<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = ApplyCosine2DMotifNetsSyncInput<'a>;
@@ -335,7 +335,7 @@ where
 
 impl<C> SyncStage for ApplyCosine2DMotifNetsSync<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="ApplyCosine2DMotifNetsSync::run"))]
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {

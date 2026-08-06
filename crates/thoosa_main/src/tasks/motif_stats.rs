@@ -1025,7 +1025,7 @@ where
 
 impl<C> SyncStage for MotifStatsDynSyncStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         match self.as_ref() {
@@ -1220,7 +1220,7 @@ where
 
 impl<C> SyncStage for MotifStatsDynConsumeStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn consume<'a>(self: Arc<Self>, input: Self::In<'a>, ctx: Self::Ctx) -> ConsumeResult<Self::In<'a>, Self::Out> {
         match self.as_ref() {
@@ -1237,7 +1237,7 @@ where
 #[derive(Cached, Named)]
 pub struct MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
@@ -1251,7 +1251,7 @@ where
 
 impl<ML, L, C> Debug for MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
@@ -1262,7 +1262,7 @@ where
 
 impl<ML, L, C> MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
@@ -1285,7 +1285,7 @@ where
 
 impl<ML, L, C> OutId for MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
@@ -1296,7 +1296,7 @@ where
 
 impl<ML, L, C> Stage for MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
@@ -1307,7 +1307,7 @@ where
 
 impl<ML, L, C> AsyncStage for MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {
@@ -1474,7 +1474,7 @@ where
 
 impl<ML, L, C> Adjustable for MotifStats<ML, L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
     ML: for<'i> AsyncStage<In<'i> = Arc<MotifLoaderInput>, Out = Arc<DevicesWrap<LoadedMotif>>, Ctx = C> + Cached + OutId + 'static,
 {}

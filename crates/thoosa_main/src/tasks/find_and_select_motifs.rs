@@ -32,7 +32,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::hyperparameter::Hyperparameter;
 use thoosa_shared::run_configs::{OptRunConfigs, RunConfig, RunConfigId};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, WithId};
+use thoosa_shared::traits::{Adjustable, MaxParallelCtx, WithId};
 use thoosa_shared::traits::{AsyncStage, RunCtx, Stage};
 use thoosa_shared::val::{NamedRange, NamedVal, Val};
 use thoosa_shared::{FuturesOrdering, ResourceType, ThoError, collect_futures_with_progress, mono_key, panic_to_err_async, parse_resources};
@@ -206,7 +206,7 @@ impl FindAndSelectMotifsStage {
         Ok(run_config_id)
     }
 
-    async fn run_find_and_select<C:RunCtx + Adjustable>(
+    async fn run_find_and_select<C: RunCtx + MaxParallelCtx + Adjustable>(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
         store: &Arc<Box<dyn Store>>,
         loader: Arc<RawTensorLoader<C>>,
@@ -289,7 +289,7 @@ impl FindAndSelectMotifsStage {
         Ok(FindAndSelectEvalMetrics { score_sum })
     }
 
-    async fn eval_opt_config<C: RunCtx + Adjustable>(
+    async fn eval_opt_config<C: RunCtx + MaxParallelCtx + Adjustable>(
         const_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         grid_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],
         opt_vals: &[NamedVal<FindAndSelectMotifsRunConfigFields>],

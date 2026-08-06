@@ -27,7 +27,7 @@ use thoosa_shared::comp_id::SynKey;
 use thoosa_shared::mono_key;
 use thoosa_shared::resource::{Resource, ResourcesConfig};
 use thoosa_shared::tracked_await::track_await;
-use thoosa_shared::traits::{Adjustable, AsyncStage, OutId, RunCtx, Stage, WithId};
+use thoosa_shared::traits::{Adjustable, AsyncStage, MaxParallelCtx, OutId, RunCtx, Stage, WithId};
 use thoosa_store::Store;
 use tokio::task::JoinSet;
 
@@ -114,7 +114,7 @@ fn ensure_channel_buckets(buckets_by_channel: &mut SeqScanBucketsByChannel, chan
 struct SeqScanConfiguredStage<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     run_config: Arc<SeqScanRunConfig>,
     configured_loader: Arc<LoaderStageChoice<L, C>>,
@@ -127,7 +127,7 @@ pub struct SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     store: Arc<Box<dyn Store>>,
     run_config_stages: Vec<SeqScanConfiguredStage<L, C>>,
@@ -139,7 +139,7 @@ impl<RC, L, C> SeqScanStage<RC, L, C>
 where
     RC: ResourcesConfig<R = Vec<Resource>> + Debug + Clone,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     pub async fn new(
         ws: &Arc<RwLock<Box<dyn Workspace>>>,
@@ -192,7 +192,7 @@ where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = Arc<ResourcesConfigInput<RC>>
@@ -206,7 +206,7 @@ where
     RC: ResourcesConfig<R = Vec<Resource>> + Send + Sync + Debug + Clone + 'static,
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + Send + Sync + 'static,
     LoaderStageChoice<L, C>: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "SeqScanStage::run"))]
     async fn run(self: Arc<Self>, input: Self::In<'static>, mut ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
@@ -551,7 +551,7 @@ fn reduce_slice_scores(values: &Tensor) -> Result<Tensor, ThoError> {
 #[tracing::instrument(level = "debug", skip_all, fields(agg_perf = "seq_scan_config_to_stage"))]
 pub async fn config_to_stage<L, C>(loader: &Arc<L>, run_config: &SeqScanRunConfig, ws: &Arc<RwLock<Box<dyn Workspace>>>) -> Result<Arc<LoaderStageChoice<L, C>>, ThoError>
 where
-    C: 'static + RunCtx + Adjustable,
+    C: 'static + RunCtx + MaxParallelCtx + Adjustable,
     L: 'static + Cached + OutId + for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C>,
 {
     let configurable_loader: Arc<LoaderStageChoice<L, C>> = match run_config.freq_filter.as_deref() {

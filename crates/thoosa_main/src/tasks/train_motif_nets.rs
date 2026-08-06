@@ -326,7 +326,7 @@ where
 
 impl<C> SyncStage for TrainMotifStepProxyCtx<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut proxy_ctx = RunCtxImpl::new(ctx.tho_device_idx(), TRAIN_MOTIF_STEP_ENDPOINT);
@@ -399,7 +399,7 @@ fn train_motif_step_params(run_config: &TrainMotifNetRunConfig, motif_width: u32
 #[async_trait]
 impl<C> TrainStepProxyFactory<Slice, MotifProbability, C, MotifNetParams, TrainMotifNetRunConfig> for TrainMotifStepProxyFactory<C>
 where
-    C: RunCtx + 'static,
+    C: RunCtx + MaxParallelCtx + 'static,
 {
     async fn new_proxy(&self, run_config: &TrainMotifNetRunConfig, tho_device_idx: usize) -> Result<TrainStepProxyParts<Slice, MotifProbability, C, MotifNetParams>, ThoError> {
         let (node_params, stft_config) = train_motif_step_params(run_config, self.motif_width)?;
@@ -460,7 +460,7 @@ type RandomSlicesLoaderWithStft<L, C> = ABStage<RandomSlicesLoader<L, C>, Random
 enum RandomSlicesStage<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     Raw(Arc<RandomSlicesLoader<L, C>>),
     WithStft(Arc<RandomSlicesLoaderWithStft<L, C>>),
@@ -469,7 +469,7 @@ where
 impl<L, C> Stage for RandomSlicesStage<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     type Ctx = C;
     type In<'a> = Arc<SlicesLoaderInput>;
@@ -479,7 +479,7 @@ where
 impl<L, C> OutId for RandomSlicesStage<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
         match self {
@@ -492,7 +492,7 @@ where
 impl<L, C> AsyncStage for RandomSlicesStage<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     async fn run(self: Arc<Self>, input: Self::In<'static>, ctx: Self::Ctx) -> Result<Self::Out, ThoError> {
         match &*self {
@@ -512,7 +512,7 @@ struct CurrentRandomSlices {
 pub struct TrainMotifNets<L, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     id: SynKey,
     run_configs: Arc<OptRunConfigs<
@@ -535,7 +535,7 @@ where
 impl <L, C> OutId for TrainMotifNets<L, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
 
     fn out_id<'a>(&self, input_id: &<<Self as Stage>::In<'a> as WithId>::ID) -> <Self::Out as WithId>::ID {
@@ -580,7 +580,7 @@ async fn run_stft_as_motif_slices<C>(
     _branch_name: &'static str,
 ) -> Result<ThoTensor<MotifSlices, SynKey>, ThoError>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     let device_idx = ctx.tho_device_idx();
     let out_id = input.id().clone();
@@ -598,7 +598,7 @@ where
 impl <L, C> Stage for TrainMotifNets<L, C>
 where
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static
 {
     type Ctx = C;
     type In<'a> = TrainMotifNetInput;//MotifID
@@ -607,7 +607,7 @@ where
 
 impl <L, C> TrainMotifNets<L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
 {
     pub fn new(
@@ -717,7 +717,7 @@ fn val_to_f32(val: &Val) -> Option<f32> {
 
 impl <L, C> AsyncStage for TrainMotifNets<L, C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
     L: for <'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx=C> + Cached + OutId + 'static,
 {
     #[tracing::instrument(level = "debug", skip_all, fields(agg_perf="TrainMotifNets::run"))]
@@ -1264,7 +1264,7 @@ where
 
 impl<C> SyncStage for SyncMotifBatchDynStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SYNC_MOTIF_BASTCH_ENDPOINT);
@@ -1519,7 +1519,7 @@ where
 
 impl<C> SyncStage for SplitMotifIntoTrainValidDynStage<C>
 where
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         let mut stage_ctx = RunCtxImpl::new(ctx.tho_device_idx(), SPLIT_MOTIF_INTO_TRAIN_VALID_ENDPOINT);
@@ -1536,7 +1536,7 @@ where
 pub struct MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable + 'static,
+    C: RunCtx + MaxParallelCtx + Adjustable + 'static,
 {
     motif_id: SynKey,
     batch_size: u32,
@@ -1553,7 +1553,7 @@ where
 impl<L, C> MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     pub async fn new(
         motif: Arc<DevicesWrap<DataWithExtra<ThoTensor<MotifSlices, SynKey>, MotifMeta>>>,
@@ -1627,7 +1627,7 @@ where
 impl<L, C> AsyncDataBatch<Slice, MotifProbability, C> for MotifsBatch<L, C>
 where
     L: for<'i> AsyncStage<In<'i> = Arc<Resource>, Out = Arc<DevicesWrap<ThoTensor<ChannelsData, SynKey>>>, Ctx = C> + Cached + OutId + 'static,
-    C: RunCtx + Adjustable,
+    C: RunCtx + MaxParallelCtx + Adjustable,
 {
     fn train_batch_stream<'a>(&'a self, mut ctx: C) -> BoxStream<'a, Result<(ThoBatch<Slice>, Option<BatchLengths>, ThoBatch<MotifProbability>), ThoError>> {
         debug!("MotifsBatch::train_batch_stream: 0. self.epoch_size={}", self.epoch_size);
