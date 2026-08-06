@@ -183,7 +183,7 @@ impl ProxyTestStage {
     {
         if GlobalCtx::global().is_ipc() {
             crate::ipc::codec::install_empty_ipc_endpoint(
-                crate::runner::global_ctx::GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
+                GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
                 TEST_ENDPOINT,
             ).await?;
             Ok(Arc::new(Self {}))
@@ -194,20 +194,21 @@ impl ProxyTestStage {
 }
 
 impl thoosa_shared::traits::Adjustable for ProxyTestStage {}
-impl thoosa_shared::traits::Stage for ProxyTestStage {
-    type Ctx = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::Ctx;
-    type In<'a> = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::In<'a>;
-    type Out = <Arc<TestStage<(), TestRunCtx>> as thoosa_shared::traits::Stage>::Out;
+impl Stage for ProxyTestStage {
+    type Ctx = <Arc<TestStage<(), TestRunCtx>> as Stage>::Ctx;
+    type In<'a> = <Arc<TestStage<(), TestRunCtx>> as Stage>::In<'a>;
+    type Out = <Arc<TestStage<(), TestRunCtx>> as Stage>::Out;
 }
-impl thoosa_shared::traits::SyncStage for ProxyTestStage {
-    fn do_run<'a>(self: std::sync::Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, thoosa_shared::ThoError>
+
+impl SyncStage for ProxyTestStage {
+    fn do_run<'a>(self: Arc<Self>, input: &Self::In<'a>, ctx: &Self::Ctx ) -> Result<Self::Out, ThoError>
     where
         Self: Sized,
     {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
 
-                let actor = crate::runner::global_ctx::GlobalCtx::global().cuda_actor(
+                let actor = GlobalCtx::global().cuda_actor(
                     ctx.tho_device_idx()
                 );
 
