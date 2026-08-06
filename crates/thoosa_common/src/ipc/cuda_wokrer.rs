@@ -44,7 +44,7 @@ static NEXT_WORKER_TENSOR_KEY: AtomicU64 = AtomicU64::new(1);
 //1 cuda device per worker
 pub struct CudaWorker;
 
-pub type InitFn = Box<dyn Fn(Vec<u8>, Arc<RwLock<Box<dyn Workspace>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >;
+pub type InitFn = Box<dyn Fn(Vec<u8>, Arc<RwLock<Box<dyn Workspace>>>, &Arc<parking_lot::Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>  >;
 
 pub trait Init {
     fn init() -> Result<Box<dyn SyncStageIpcWrapper>, ThoError>;
@@ -349,7 +349,7 @@ impl CudaWorker {
 
                     Some(init_endpoint) => {
 
-                        match init_endpoint(init_msg, Arc::clone(&ws)) {
+                        match init_endpoint(init_msg, Arc::clone(&ws), &all_cuda_tensors) {
                             Ok(endpoint_wrapper) => {
                                 debug!("run_worker: install endpoint endpoint_name={endpoint_name:?} endpoint_wrapper={endpoint_wrapper:?}");
                                 installed_endpoints.write().insert(endpoint_name.to_string(), endpoint_wrapper);
