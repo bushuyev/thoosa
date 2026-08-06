@@ -24,14 +24,22 @@ use crate::tho_device::ThoDevice;
 use crate::tho_tensor::ThoTensor;
 
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct TestStageInit {
-    k:f32
+    k:i64
 }
 
 impl TestStageInit {
-    pub fn new(k: f32) -> Self {
+    pub fn new(k: i64) -> Self {
         Self { k }
+    }
+}
+
+impl WorkerStageInput for TestStageInit {
+    fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
+        let mut input = JsonIpcCodec::decode::<Self>(&input)?;
+
+        Ok(input)
     }
 }
 
@@ -51,7 +59,7 @@ impl WithId for TestInput {
 
 impl WorkerStageInput for TestInput {
     fn decode_for_worker<C: IpcCodec>(input: &[u8], all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Self, ThoError> {
-        let mut input = JsonIpcCodec::decode::<TestInput>(&input)?;
+        let mut input = JsonIpcCodec::decode::<Self>(&input)?;
 
         debug!("SimpWrapper::do_run: 1. input={input:?}");
 
@@ -86,7 +94,7 @@ impl WorkerStageOutput for TestOutput {
 
 
 #[derive(Debug)]
-pub struct TestRunCtx;
+pub struct TestRunCtx;//corresponds to RunCtxImpl
 
 impl Named for TestRunCtx {}
 
@@ -127,6 +135,7 @@ where
     P:Debug,
     C:RunCtx
 {
+    k:i64,
     pd:PhantomData<(P, C)>
 }
 
@@ -135,8 +144,8 @@ where
     P:Debug,
     C:RunCtx
 {
-    pub fn new() -> Self {
-        Self { pd: PhantomData }
+    pub fn new(init:TestStageInit) -> Self {
+        Self { k: init.k, pd: PhantomData }
     }
 }
 
@@ -158,7 +167,7 @@ where
 {
     fn do_run<'f>(self: Arc<Self>, input: &Self::In<'f>, _ctx: &Self::Ctx) -> Result<Self::Out, ThoError> {
         Ok(TestOutput{
-            value: (input.value.as_ref() * 2).into(),
+            value: (input.value.as_ref() * self.k).into(),
         })
     }
 }
@@ -175,20 +184,21 @@ const TEST_ENDPOINT: &str = "TestStage";
 //     wrapper = "SimpWrapper"
 // )]
 #[derive(Debug)]
-pub struct ProxyTestStage {}
+pub struct ProxyTestStage;
 impl ProxyTestStage {
 
-    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<Arc<dyn DynSyncStage<TestInput, TestOutput, TestRunCtx>>, thoosa_shared::ThoError> //no need to wrap in DynSyncStageBox
+    pub async fn new<'a>(tho_device_idx: usize, init:TestStageInit) -> Result<Arc<dyn DynSyncStage<TestInput, TestOutput, TestRunCtx>>, ThoError> //no need to wrap in DynSyncStageBox
 
     {
         if GlobalCtx::global().is_ipc() {
-            crate::ipc::codec::install_empty_ipc_endpoint(
+            crate::ipc::codec::install_ipc_endpoint::<JsonIpcCodec, TestStageInit>(
                 GlobalCtx::global().cuda_actor(tho_device_idx).as_ref(),
                 TEST_ENDPOINT,
+                &init
             ).await?;
             Ok(Arc::new(Self {}))
         } else {
-            Ok(Arc::new(TestStage::<u32, TestRunCtx>::new()))
+            Ok(Arc::new(TestStage::<u32, TestRunCtx>::new(init)))
         }
     }
 }
@@ -226,26 +236,14 @@ impl SyncStage for ProxyTestStage {
 }
 
 
-pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
+pub fn test_simp_init(init_msg: Vec<u8>, ws: Arc<parking_lot::RwLock<Box<dyn thoosa_common::ws::Workspace>>>, all_cuda_tensors: &Arc<Mutex<HashMap<u64, Tensor>>>) -> Result<Box<dyn crate::ipc::json_ser::SyncStageIpcWrapper>, thoosa_shared::ThoError> {
 
     Ok(Box::new(SimpWrapper {
-        base: Arc::new(TestStage::<(), WokerRunCtx>::new()),
+        base: Arc::new(TestStage::<(), WokerRunCtx>::new(TestStageInit::decode_for_worker::<JsonIpcCodec>(&init_msg, all_cuda_tensors)?)),
         pd: PhantomData::<JsonIpcCodec>
     }))
 }
 
-#[derive(Debug)]
-struct TestStageSimpTarget {
-    base:Arc<TestStage<(), TestRunCtx>>
-}
-
-impl TestStageSimpTarget {
-    pub fn new() -> Self {
-        Self {
-            base: Arc::new(TestStage::new()),
-        }
-    }
-}
 
 #[derive(Debug)]
 struct SimpWrapper<Co, S, I, O>
@@ -302,7 +300,7 @@ mod tests {
     use crate::ipc::tests::run_ipc_test;
     use crate::runner::global_ctx::GlobalCtx;
     use crate::runner::global_ctx::mock_global_ctx::MockGlobalCtxBuilder;
-    use crate::runner::test::proxy_tests::{ProxyTestStage, TestStageSimpTarget, TEST_ENDPOINT, test_simp_init, TestOutput, TestStageInit};
+    use crate::runner::test::proxy_tests::{ProxyTestStage, TEST_ENDPOINT, test_simp_init, TestOutput, TestStageInit};
     use crate::tho_device::ThoDevice;
     use crate::tho_tensor::ThoTensor;
     use crate::ws::{mock_ws_simp, FsWorkspace, WsConfigs};
@@ -357,14 +355,14 @@ mod tests {
     async fn do_test_simp() -> Result<(), ThoError> {
         let cuda_actor = GlobalCtx::global().cuda_actor(1);
 
-        let test_stage = ProxyTestStage::new(1, TestStageInit::new(2.0)).await?;
+        let test_stage = ProxyTestStage::new(1, TestStageInit::new(2)).await?;
 
-        let worker_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
+        let cuda_tensor = cuda_actor.copy(ThoTensor::new((), Tensor::ones(&[1, 3], FLOAT_CPU))?, 1.into()).await?;
 
-        debug!("test_simp_target: worker_tensor={worker_tensor:?}");
+        debug!("test_simp_target: cuda_tensor={cuda_tensor:?}");
 
         let input = TestInput {
-            value: worker_tensor,
+            value: cuda_tensor,
         };
         let ctx = TestRunCtx;
         let result = test_stage.do_run_dyn(&input, &ctx)?;
